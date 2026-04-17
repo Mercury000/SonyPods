@@ -278,9 +278,10 @@ object RfcommController {
                 delay(300)
                 queryStatus()
 
-                // Auto-enable game mode if preference is set
-                val prefs = context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE)
-                if (prefs.getBoolean("auto_game_mode", false)) {
+                // Auto-enable game mode if preference is set.
+                // Read via YukiHookPrefsBridge since we're in com.android.bluetooth's
+                // process — context.getSharedPreferences would read the wrong file.
+                if (mPrefsBridge.name("oppopods_settings").getBoolean("auto_game_mode", false)) {
                     delay(100)
                     sendPacketSafe(Enums.GAME_MODE_ON)
                 }
