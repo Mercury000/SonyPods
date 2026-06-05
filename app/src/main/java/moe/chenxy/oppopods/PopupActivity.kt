@@ -47,6 +47,7 @@ import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 
 class PopupActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: Context) {
+        AppLocale.rememberDeviceLocale(newBase)
         AppLocale.apply(newBase, newBase.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE).getInt("app_language", AppLocale.SYSTEM))
         super.attachBaseContext(newBase)
     }

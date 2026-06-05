@@ -135,9 +135,13 @@ fun MainUI(
     val backgroundColor = appBackground(colorMode)
     val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
     val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
-    val backdrop = rememberLayerBackdrop {
-        drawRect(backgroundColor)
-        drawContent()
+    val backdrop = if (blurBottomBar.value) {
+        rememberLayerBackdrop {
+            drawRect(backgroundColor)
+            drawContent()
+        }
+    } else {
+        null
     }
 
     // Auto game mode preference (persisted)
@@ -377,7 +381,7 @@ fun MainUI(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(backgroundColor)
-                        .layerBackdrop(backdrop)
+                        .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                         .padding(contentPadding),
                 ) {
                     AnimatedContent(
@@ -409,7 +413,8 @@ fun MainUI(
                                         modifier = Modifier
                                             .overScrollVertical()
                                             .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
-                                        contentPadding = PaddingValues(bottom = pageBottomContentPadding),
+                                        contentPadding = PaddingValues(0.dp),
+                                        bottomContentPadding = pageBottomContentPadding,
                                         batteryParams = displayBattery,
                                         ancMode = displayAnc,
                                         onAncModeChange = { setAncMode(it) },
@@ -596,10 +601,10 @@ private fun BottomNavigation(
     selectedTab: MainTab,
     floating: Boolean,
     blur: Boolean,
-    backdrop: LayerBackdrop,
+    backdrop: LayerBackdrop?,
     onTabClick: (MainTab) -> Unit,
 ) {
-    val barModifier = if (blur) {
+    val barModifier = if (blur && backdrop != null) {
         Modifier.textureBlur(
             backdrop = backdrop,
             shape = RoundedCornerShape(if (floating) 50.dp else 0.dp),
