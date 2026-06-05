@@ -97,6 +97,16 @@ fun SettingsPage(
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
                 BasicComponent(
+                    title = "OppoPods-Enhanced",
+                    summary = "https://github.com/1812z/OppoPods",
+                    onClick = {
+                        Intent(Intent.ACTION_VIEW).apply {
+                            this.data = Uri.parse("https://github.com/1812z/OppoPods")
+                            context.startActivity(this)
+                        }
+                    }
+                )
+                BasicComponent(
                     title = "OppoPods",
                     summary = "https://github.com/Leaf-lsgtky/OppoPods",
                     onClick = {
