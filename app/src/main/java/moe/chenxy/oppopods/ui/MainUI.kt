@@ -1,5 +1,6 @@
 package moe.chenxy.oppopods.ui
 
+import android.content.res.Configuration
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
@@ -382,6 +384,9 @@ fun MainUI(
     val entryProvider = entryProvider<Screen> {
         entry<Screen.Main> {
             val topAppBarScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val isLandscapeDetail = selectedTab == MainTab.Earphones &&
+                    showEarphoneDetail &&
+                    LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
             val title = when (selectedTab) {
                 MainTab.Module -> stringResource(R.string.app_name)
                 MainTab.Earphones -> mainTitle.value.ifEmpty { stringResource(R.string.pod_info) }
@@ -390,37 +395,39 @@ fun MainUI(
 
             Scaffold(
                 topBar = {
-                    TopAppBar(
-                        title = title,
-                        largeTitle = title,
-                        scrollBehavior = topAppBarScrollBehavior,
-                        navigationIcon = {
-                            if (selectedTab == MainTab.Earphones && showEarphoneDetail) {
-                                IconButton(onClick = { backToDevicePicker() }) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Back,
-                                        contentDescription = "Back"
-                                    )
-                                }
-                            }
-                        },
-                        actions = {
-                            if (selectedTab == MainTab.Module) {
-                                IconButton(
-                                    onClick = {
-                                        if (!restartingScopes) {
-                                            showRestartScopeDialog = true
-                                        }
+                    if (!isLandscapeDetail) {
+                        TopAppBar(
+                            title = title,
+                            largeTitle = title,
+                            scrollBehavior = topAppBarScrollBehavior,
+                            navigationIcon = {
+                                if (selectedTab == MainTab.Earphones && showEarphoneDetail) {
+                                    IconButton(onClick = { backToDevicePicker() }) {
+                                        Icon(
+                                            imageVector = MiuixIcons.Back,
+                                            contentDescription = "Back"
+                                        )
                                     }
-                                ) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Refresh,
-                                        contentDescription = "Restart scope"
-                                    )
+                                }
+                            },
+                            actions = {
+                                if (selectedTab == MainTab.Module) {
+                                    IconButton(
+                                        onClick = {
+                                            if (!restartingScopes) {
+                                                showRestartScopeDialog = true
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = MiuixIcons.Refresh,
+                                            contentDescription = "Restart scope"
+                                        )
+                                    }
                                 }
                             }
-                        }
-                    )
+                        )
+                    }
                 },
                 bottomBar = {
                     BottomNavigation(
@@ -470,6 +477,7 @@ fun MainUI(
                                             .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
                                         contentPadding = PaddingValues(0.dp),
                                         bottomContentPadding = pageBottomContentPadding,
+                                        podName = displayTitle.ifEmpty { stringResource(R.string.pod_info) },
                                         batteryParams = displayBattery,
                                         ancMode = displayAnc,
                                         onAncModeChange = { setAncMode(it) },
@@ -564,6 +572,20 @@ fun MainUI(
                                 },
                                 onOpenTheme = { backStack.add(Screen.Theme) },
                                 onOpenAbout = { backStack.add(Screen.About) },
+                            )
+                        }
+                    }
+
+                    if (isLandscapeDetail) {
+                        IconButton(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 8.dp, end = 8.dp),
+                            onClick = { backToDevicePicker() }
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.Back,
+                                contentDescription = "Back"
                             )
                         }
                     }
