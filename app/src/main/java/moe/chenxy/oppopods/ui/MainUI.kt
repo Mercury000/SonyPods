@@ -18,7 +18,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -146,10 +149,12 @@ fun MainUI(
     val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
     val autoGameMode = remember { mutableStateOf(prefs.getBoolean("auto_game_mode", false)) }
-    val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
+    val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
+    val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
+    val islandMode = remember { mutableStateOf(appConfig.islandMode) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
 
@@ -508,6 +513,13 @@ fun MainUI(
                                     broadcastConfigChanged(context, "com.milink.service")
                                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                                 },
+                                islandMode = islandMode,
+                                onIslandModeChange = {
+                                    islandMode.value = it
+                                    ConfigManager.updateIslandMode(prefs, xposedService, it)
+                                    broadcastConfigChanged(context, "com.android.bluetooth")
+                                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                                },
                                 appLanguage = appLanguage,
                                 onAppLanguageChange = {
                                     appLanguage.value = it
@@ -518,10 +530,16 @@ fun MainUI(
                                     autoGameMode.value = it
                                     prefs.edit().putBoolean("auto_game_mode", it).apply()
                                 },
-                                openHeyTap = openHeyTap,
-                                onOpenHeyTapChange = {
-                                    openHeyTap.value = it
-                                    prefs.edit().putBoolean("open_heytap", it).apply()
+                                notificationClickAction = notificationClickAction,
+                                onNotificationClickActionChange = {
+                                    notificationClickAction.value = it
+                                    ConfigManager.updateNotificationClickAction(prefs, xposedService, it)
+                                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                                },
+                                moreClickAction = moreClickAction,
+                                onMoreClickActionChange = {
+                                    moreClickAction.value = it
+                                    ConfigManager.updateMoreClickAction(prefs, xposedService, it)
                                 },
                                 adaptiveMode = adaptiveMode,
                                 onAdaptiveModeChange = {

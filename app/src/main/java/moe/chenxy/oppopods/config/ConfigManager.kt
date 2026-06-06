@@ -9,7 +9,10 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class AppConfig(
     val fakeDeviceId: String = ConfigManager.DEFAULT_FAKE_DEVICE_ID,
-    val logLevel: Int = ConfigManager.LOG_LEVEL_BASIC
+    val logLevel: Int = ConfigManager.LOG_LEVEL_BASIC,
+    val islandMode: Int = ConfigManager.ISLAND_MODE_OFFICIAL,
+    val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
+    val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE
 )
 
 object ConfigManager {
@@ -18,10 +21,22 @@ object ConfigManager {
     const val PREF_KEY_CONFIG_JSON = "config_json"
     const val PREF_KEY_FAKE_DEVICE_ID = "fake_device_id"
     const val PREF_KEY_LOG_LEVEL = "log_level"
+    const val PREF_KEY_ISLAND_MODE = "island_mode"
+    const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
+    const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val DEFAULT_FAKE_DEVICE_ID = "01010607"
     const val LOG_LEVEL_OFF = 0
     const val LOG_LEVEL_BASIC = 1
     const val LOG_LEVEL_DEBUG = 2
+    const val ISLAND_MODE_NONE = 0
+    const val ISLAND_MODE_OFFICIAL = 1
+    const val ISLAND_MODE_MODULE = 2
+    const val NOTIFICATION_CLICK_MODULE_POPUP = 0
+    const val NOTIFICATION_CLICK_SYSTEM_SETTINGS = 1
+    const val NOTIFICATION_CLICK_HEYTAP = 2
+    const val MORE_CLICK_HEYTAP = 0
+    const val MORE_CLICK_SYSTEM_SETTINGS = 1
+    const val MORE_CLICK_MODULE = 2
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -51,6 +66,12 @@ object ConfigManager {
 
     fun logLevel(): Int = current().logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)
 
+    fun islandMode(): Int = current().islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)
+
+    fun notificationClickAction(): Int = current().notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP)
+
+    fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
+
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
     fun updateFakeDeviceId(prefs: SharedPreferences, fakeDeviceId: String) {
@@ -65,6 +86,21 @@ object ConfigManager {
 
     fun updateLogLevel(prefs: SharedPreferences, service: XposedService?, logLevel: Int) {
         val config = current().copy(logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG))
+        save(prefs, service, config)
+    }
+
+    fun updateIslandMode(prefs: SharedPreferences, service: XposedService?, islandMode: Int) {
+        val config = current().copy(islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE))
+        save(prefs, service, config)
+    }
+
+    fun updateNotificationClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
+        val config = current().copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
+        save(prefs, service, config)
+    }
+
+    fun updateMoreClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
+        val config = current().copy(moreClickAction = action.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE))
         save(prefs, service, config)
     }
 
@@ -93,32 +129,48 @@ object ConfigManager {
             .putString(PREF_KEY_CONFIG_JSON, json.encodeToString(AppConfig.serializer(), config))
             .putString(PREF_KEY_FAKE_DEVICE_ID, config.fakeDeviceId)
             .putInt(PREF_KEY_LOG_LEVEL, config.logLevel)
+            .putInt(PREF_KEY_ISLAND_MODE, config.islandMode)
+            .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
+            .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .commit()
     }
 
     private fun readConfig(prefs: SharedPreferences, source: String): AppConfig {
         val directFakeDeviceId = prefs.getString(PREF_KEY_FAKE_DEVICE_ID, null)
         val directLogLevel = prefs.getInt(PREF_KEY_LOG_LEVEL, Int.MIN_VALUE)
+        val directIslandMode = prefs.getInt(PREF_KEY_ISLAND_MODE, Int.MIN_VALUE)
+        val directNotificationClickAction = prefs.getInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, Int.MIN_VALUE)
+        val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val raw = prefs.getString(PREF_KEY_CONFIG_JSON, null)
         logPrefsSnapshot(source, prefs, directFakeDeviceId, raw)
         val config = raw?.let {
             runCatching { json.decodeFromString(AppConfig.serializer(), it) }.getOrNull()
         } ?: AppConfig()
+        val migratedMoreClickAction = if (prefs.getBoolean("open_heytap", false)) MORE_CLICK_HEYTAP else config.moreClickAction
         if (!directFakeDeviceId.isNullOrBlank()) {
             return config.copy(
                 fakeDeviceId = directFakeDeviceId.normalizedFakeDeviceId(),
                 logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
+                islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
+                notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
+                moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             ).normalized()
         }
         return config.copy(
             fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId(),
             logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
+            islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
+            notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
+            moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
         ).normalized()
     }
 
     private fun AppConfig.normalized(): AppConfig = copy(
         fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId(),
         logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG),
+        islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
+        notificationClickAction = notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP),
+        moreClickAction = moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE),
     )
 
     private fun String.normalizedFakeDeviceId(): String = trim().takeIf { it.isNotEmpty() } ?: DEFAULT_FAKE_DEVICE_ID
@@ -148,6 +200,15 @@ object ConfigManager {
             }
             if (oldConfig.logLevel != newConfig.logLevel) {
                 add("logLevel=${oldConfig.logLevel}->${newConfig.logLevel}")
+            }
+            if (oldConfig.islandMode != newConfig.islandMode) {
+                add("islandMode=${oldConfig.islandMode}->${newConfig.islandMode}")
+            }
+            if (oldConfig.notificationClickAction != newConfig.notificationClickAction) {
+                add("notificationClickAction=${oldConfig.notificationClickAction}->${newConfig.notificationClickAction}")
+            }
+            if (oldConfig.moreClickAction != newConfig.moreClickAction) {
+                add("moreClickAction=${oldConfig.moreClickAction}->${newConfig.moreClickAction}")
             }
         }
     }

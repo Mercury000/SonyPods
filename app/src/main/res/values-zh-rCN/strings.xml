@@ -13,8 +13,14 @@
     <string name="enable_game_mode">打开游戏模式</string>
     <string name="disable_game_mode">关闭游戏模式</string>
     <string name="auto_game_mode">连接时自动开启游戏模式</string>
-    <string name="open_heytap">点击更多时打开欢律</string>
-    <string name="open_heytap_summary">点击弹窗的更多按钮时跳转至欢律而非打开主页面</string>
+    <string name="notification_click_action">点击通知时行为</string>
+    <string name="notification_click_action_summary">选择点击耳机通知时打开的位置</string>
+    <string name="more_click_action">点击更多时行为</string>
+    <string name="more_click_action_summary">选择点击模块弹窗“更多”按钮时打开的位置</string>
+    <string name="notification_click_module_popup">模块弹窗</string>
+    <string name="click_action_system_settings">系统设置</string>
+    <string name="click_action_heytap">欢律</string>
+    <string name="click_action_module">模块</string>
     <string name="off">关闭</string>
     <string name="noise_cancellation_title">降噪</string>
     <string name="noise_cancellation_smart">智能</string>
@@ -44,8 +50,6 @@
     <string name="more">更多</string>
     <string name="done">完成</string>
     <string name="confirm">确认</string>
-    <string name="heytap_warning">由于我也不知道的原因，在连接欢律后将无法正常使用本模块，手动放回盒子里重新连接即可恢复。</string>
-    <string name="heytap_warning_title">注意</string>
     <string name="theme_title">主题</string>
     <string name="theme_follow_system">跟随系统</string>
     <string name="theme_light">浅色</string>
@@ -73,6 +77,11 @@
     <string name="cycle_anc">切换降噪</string>
     <string name="adaptive_mode">自适应模式</string>
     <string name="adaptive_mode_summary">为兼容耳机启用自适应降噪模式，关闭后将隐藏该选项并禁用相关音频处理</string>
+    <string name="island_mode">超级岛</string>
+    <string name="island_mode_summary">选择要显示的电量超级岛</string>
+    <string name="island_mode_none">不显示</string>
+    <string name="island_mode_official">官方</string>
+    <string name="island_mode_module">模块</string>
     <string name="fake_device_id">伪装耳机型号</string>
     <string name="fake_device_id_summary">留空时默认使用 01010607</string>
     <string name="notification_btn_disconnect">断开连接</string>

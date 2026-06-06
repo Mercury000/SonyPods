@@ -8,7 +8,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -16,11 +15,8 @@ import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.config.ConfigManager
 import moe.chenxy.oppopods.ui.AppLocale
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 
@@ -32,12 +28,16 @@ fun SettingsPage(
     onDesktopIconHiddenChange: (Boolean) -> Unit = {},
     logLevel: MutableState<Int> = mutableStateOf(ConfigManager.LOG_LEVEL_BASIC),
     onLogLevelChange: (Int) -> Unit = {},
+    islandMode: MutableState<Int> = mutableStateOf(ConfigManager.ISLAND_MODE_OFFICIAL),
+    onIslandModeChange: (Int) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     autoGameMode: MutableState<Boolean> = mutableStateOf(false),
     onAutoGameModeChange: (Boolean) -> Unit = {},
-    openHeyTap: MutableState<Boolean> = mutableStateOf(false),
-    onOpenHeyTapChange: (Boolean) -> Unit = {},
+    notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
+    onNotificationClickActionChange: (Int) -> Unit = {},
+    moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
+    onMoreClickActionChange: (Int) -> Unit = {},
     adaptiveMode: MutableState<Boolean> = mutableStateOf(true),
     onAdaptiveModeChange: (Boolean) -> Unit = {},
     fakeDeviceId: MutableState<String> = mutableStateOf(ConfigManager.DEFAULT_FAKE_DEVICE_ID),
@@ -45,7 +45,6 @@ fun SettingsPage(
     onOpenTheme: () -> Unit = {},
     onOpenAbout: () -> Unit = {}
 ) {
-    val showHeyTapWarning = remember { mutableStateOf(false) }
     val languageOptions = listOf(
         stringResource(R.string.language_system),
         stringResource(R.string.language_chinese),
@@ -56,6 +55,32 @@ fun SettingsPage(
         stringResource(R.string.log_level_off),
         stringResource(R.string.log_level_basic),
         stringResource(R.string.log_level_debug),
+    )
+    val islandModeValues = listOf(ConfigManager.ISLAND_MODE_NONE, ConfigManager.ISLAND_MODE_OFFICIAL, ConfigManager.ISLAND_MODE_MODULE)
+    val islandModeOptions = listOf(
+        stringResource(R.string.island_mode_none),
+        stringResource(R.string.island_mode_official),
+        stringResource(R.string.island_mode_module),
+    )
+    val notificationClickActionValues = listOf(
+        ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
+        ConfigManager.NOTIFICATION_CLICK_SYSTEM_SETTINGS,
+        ConfigManager.NOTIFICATION_CLICK_HEYTAP,
+    )
+    val notificationClickActionOptions = listOf(
+        stringResource(R.string.notification_click_module_popup),
+        stringResource(R.string.click_action_system_settings),
+        stringResource(R.string.click_action_heytap),
+    )
+    val moreClickActionValues = listOf(
+        ConfigManager.MORE_CLICK_HEYTAP,
+        ConfigManager.MORE_CLICK_SYSTEM_SETTINGS,
+        ConfigManager.MORE_CLICK_MODULE,
+    )
+    val moreClickActionOptions = listOf(
+        stringResource(R.string.click_action_heytap),
+        stringResource(R.string.click_action_system_settings),
+        stringResource(R.string.click_action_module),
     )
 
     LazyColumn(
@@ -111,23 +136,34 @@ fun SettingsPage(
                     checked = adaptiveMode.value,
                     onCheckedChange = { onAdaptiveModeChange(it) }
                 )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.island_mode),
+                    summary = stringResource(R.string.island_mode_summary),
+                    items = islandModeOptions,
+                    selectedIndex = islandModeValues.indexOf(islandMode.value).coerceAtLeast(0),
+                    onSelectedIndexChange = { onIslandModeChange(islandModeValues[it]) }
+                )
                 SwitchPreference(
                     title = stringResource(R.string.auto_game_mode),
                     checked = autoGameMode.value,
                     onCheckedChange = { onAutoGameModeChange(it) }
                 )
-                SwitchPreference(
-                    title = stringResource(R.string.open_heytap),
-                    summary = stringResource(R.string.open_heytap_summary),
-                    checked = openHeyTap.value,
-                    onCheckedChange = {
-                        if (it) {
-                            showHeyTapWarning.value = true
-                        } else {
-                            onOpenHeyTapChange(false)
-                        }
-                    }
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.notification_click_action),
+                    summary = stringResource(R.string.notification_click_action_summary),
+                    items = notificationClickActionOptions,
+                    selectedIndex = notificationClickActionValues.indexOf(notificationClickAction.value).coerceAtLeast(0),
+                    onSelectedIndexChange = { onNotificationClickActionChange(notificationClickActionValues[it]) }
                 )
+                if (notificationClickAction.value == ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.more_click_action),
+                        summary = stringResource(R.string.more_click_action_summary),
+                        items = moreClickActionOptions,
+                        selectedIndex = moreClickActionValues.indexOf(moreClickAction.value).coerceAtLeast(0),
+                        onSelectedIndexChange = { onMoreClickActionChange(moreClickActionValues[it]) }
+                    )
+                }
                 BasicComponent(
                     title = stringResource(R.string.fake_device_id),
                     summary = stringResource(R.string.fake_device_id_summary)
@@ -151,24 +187,5 @@ fun SettingsPage(
                 )
             }
         }
-    }
-
-    OverlayDialog(
-        title = stringResource(R.string.heytap_warning_title),
-        summary = stringResource(R.string.heytap_warning),
-        show = showHeyTapWarning.value,
-        onDismissRequest = {
-            showHeyTapWarning.value = false
-        }
-    ) {
-        TextButton(
-            text = stringResource(R.string.confirm),
-            onClick = {
-                showHeyTapWarning.value = false
-                onOpenHeyTapChange(true)
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.textButtonColorsPrimary()
-        )
     }
 }

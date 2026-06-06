@@ -9,12 +9,15 @@ import android.content.IntentFilter
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Bundle
 import android.os.Parcel
 import java.lang.reflect.Method
+import moe.chenxy.oppopods.config.ConfigManager
 import moe.chenxy.oppopods.pods.RfcommController
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
+import org.json.JSONObject
 
 @SuppressLint("MissingPermission")
 object BluetoothUpstreamHeadsetHook : HookContext() {
@@ -36,6 +39,87 @@ object BluetoothUpstreamHeadsetHook : HookContext() {
 
     override fun onHook() {
         hookHeadsetServiceBinder()
+        hookNotificationBatteryUpstream()
+    }
+
+    private fun hookNotificationBatteryUpstream() {
+        val notificationApiClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotificationApi")
+        if (notificationApiClass != null) {
+            runCatching {
+                hookBefore(
+                    notificationApiClass.method(
+                        "showNewConnectedToast",
+                        Int::class.java,
+                        Int::class.java,
+                        Int::class.java,
+                        Int::class.java,
+                        BluetoothDevice::class.java,
+                        String::class.java
+                    )
+                ) {
+                    val device = args[4] as? BluetoothDevice
+                    if (!isOppoPod(device)) return@hookBefore
+                    val battery = effectiveBattery() ?: return@hookBefore
+                    val leftBattery = displayBattery(battery.left) ?: (args[1] as? Int ?: 0)
+                    val rightBattery = displayBattery(battery.right) ?: (args[2] as? Int ?: 0)
+                    val wearState = displayWearState(battery, args[3] as? Int ?: 1)
+                    val notification = currentMiuiBluetoothNotification() ?: return@hookBefore
+                    result = null
+                    callMethod(
+                        notification,
+                        "showConnectedToast",
+                        args[0] as? Int ?: 2,
+                        leftBattery,
+                        rightBattery,
+                        wearState,
+                        device,
+                        args[5] as? String
+                    )
+                    Log.d(TAG, "showNewConnectedToast patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState oldLeft=${args[1]} oldRight=${args[2]} oldWear=${args[3]}")
+                }
+                Log.d(TAG, "MiuiBluetoothNotificationApi.showNewConnectedToast hook installed")
+            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotificationApi.showNewConnectedToast skipped", it) }
+        }
+
+        val notificationClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotification")
+        val requestClass = findClassOrNull("com.android.bluetooth.ble.app.C4705R2")
+        if (notificationClass != null) {
+            runCatching {
+                hookBefore(notificationClass.method("invokeStatusBar", Context::class.java, String::class.java, Bundle::class.java)) {
+                    val bundle = args[2] as? Bundle
+                    if (shouldInterceptHeadsetWearIsland(bundle)) {
+                        when (ConfigManager.islandMode()) {
+                            ConfigManager.ISLAND_MODE_NONE, ConfigManager.ISLAND_MODE_MODULE -> {
+                                result = null
+                                Log.d(TAG, "invokeStatusBar swallowed headset_wear_notification island mode=${ConfigManager.islandMode()}")
+                                return@hookBefore
+                            }
+                        }
+                    }
+                    patchHeadsetWearIslandBundle(bundle)
+                    Log.d(TAG, "invokeStatusBar upstream action=${args[1]} bundle=$bundle focus=${bundle?.getString("miui.focus.param")}")
+                }
+                Log.d(TAG, "MiuiBluetoothNotification.invokeStatusBar debug hook installed")
+            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotification.invokeStatusBar skipped", it) }
+        }
+        if (notificationClass != null && requestClass != null) {
+            runCatching {
+                hookAfter(notificationClass.method("updateParameters", requestClass)) {
+                    val request = args[0] ?: return@hookAfter
+                    val device = getObjectField(request, "f18110e") as? BluetoothDevice
+                    if (!isOppoPod(device)) return@hookAfter
+                    val battery = effectiveBattery() ?: return@hookAfter
+                    val leftBattery = displayBattery(battery.left)
+                    val rightBattery = displayBattery(battery.right)
+                    val wearState = displayWearState(battery, getObjectField(request, "f18109d") as? Int ?: 1)
+                    leftBattery?.let { setObjectField(request, "f18107b", it) }
+                    rightBattery?.let { setObjectField(request, "f18108c", it) }
+                    setObjectField(request, "f18109d", wearState)
+                    Log.d(TAG, "updateParameters patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState")
+                }
+                Log.d(TAG, "MiuiBluetoothNotification.updateParameters hook installed")
+            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotification.updateParameters skipped", it) }
+        }
     }
 
     private fun hookHeadsetServiceBinder() {
@@ -590,6 +674,77 @@ object BluetoothUpstreamHeadsetHook : HookContext() {
         }
         localSnapshot?.deviceName?.let { currentName = it }
         return RfcommController.miuiRefreshPayload(battery, anc, transparencyVocalEnhancement)
+    }
+
+    private fun effectiveBattery(): BatteryParams? {
+        return runCatching { RfcommController.currentStatusSnapshot().battery }.getOrNull() ?: currentBattery
+    }
+
+    private fun displayBattery(params: PodParams?): Int? {
+        if (params?.isConnected != true) return null
+        return params.battery.coerceIn(0, 100)
+    }
+
+    private fun displayWearState(battery: BatteryParams, fallback: Int): Int {
+        val leftConnected = battery.left?.isConnected == true
+        val rightConnected = battery.right?.isConnected == true
+        return when {
+            leftConnected && rightConnected -> 1
+            leftConnected -> 3
+            rightConnected -> 2
+            fallback != 0 -> fallback
+            else -> 1
+        }
+    }
+
+    private fun currentMiuiBluetoothNotification(): Any? {
+        return runCatching {
+            findClass("com.android.bluetooth.ble.app.headset.BluetoothHeadsetService")
+                .getField("mMiuiBluetoothNotification")
+                .apply { isAccessible = true }
+                .get(null)
+        }.getOrNull()
+    }
+
+    private fun patchHeadsetWearIslandBundle(bundle: Bundle?) {
+        if (bundle == null) return
+        if (!shouldInterceptHeadsetWearIsland(bundle)) return
+        if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_OFFICIAL) return
+        val battery = effectiveBattery() ?: return
+        val leftText = displayBattery(battery.left)?.let { "$it%" }
+        val rightText = displayBattery(battery.right)?.let { "$it%" }
+        if (leftText == null && rightText == null) return
+        patchIslandJson(bundle, "param", leftText, rightText)
+        patchIslandJson(bundle, "island_param", leftText, rightText)
+        Log.d(TAG, "patched headset_wear_notification island text left=$leftText right=$rightText")
+    }
+
+    private fun shouldInterceptHeadsetWearIsland(bundle: Bundle?): Boolean {
+        return bundle?.getString("notifyId") == "headset_wear_notification"
+    }
+
+    private fun patchIslandJson(bundle: Bundle, key: String, leftText: String?, rightText: String?) {
+        val raw = bundle.getString(key) ?: return
+        runCatching {
+            val json = JSONObject(raw)
+            leftText?.let { putTextParams(json.optJSONObject("left"), it) }
+            rightText?.let { putTextParams(json.optJSONObject("right"), it) }
+            bundle.putString(key, json.toString())
+        }.onFailure {
+            Log.w(TAG, "patch island json failed key=$key raw=$raw", it)
+        }
+    }
+
+    private fun putTextParams(area: JSONObject?, text: String) {
+        if (area == null) return
+        area.put(
+            "textParams",
+            JSONObject().apply {
+                put("text", text)
+                put("textColor", -1)
+                put("turnAnim", true)
+            }
+        )
     }
 
     private fun requestBluetoothStatus(reason: String) {

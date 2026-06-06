@@ -4,12 +4,14 @@ import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -68,52 +70,71 @@ fun HomePage(
 
 @Composable
 private fun StatusGrid(active: Boolean, bluetoothEnabled: Boolean, bondedDeviceCount: Int) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val statusColor = if (active) Color(0xFF36D167) else Color(0xFFFF5A52)
-        val statusBackground = if (active) Color(0xFFDFFAE4) else Color(0xFFFFE5E3)
-        Card(
-            modifier = Modifier.weight(1f).aspectRatio(1f),
-            colors = CardDefaults.defaultColors(color = statusBackground),
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier.fillMaxSize().offset(34.dp, 38.dp),
-                    contentAlignment = Alignment.BottomEnd,
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (maxWidth >= 600.dp) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusCard(active = active, modifier = Modifier.weight(1f).height(112.dp))
+                StatCard(title = "蓝牙状态", value = if (bluetoothEnabled) "已开启" else "未开启", modifier = Modifier.weight(1f).height(112.dp))
+                StatCard(title = "配对蓝牙", value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f).height(112.dp))
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusCard(active = active, modifier = Modifier.weight(1f).aspectRatio(1f))
+                Column(
+                    modifier = Modifier.weight(1f).aspectRatio(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Icon(
-                        modifier = Modifier.size(136.dp),
-                        imageVector = AppIcons.Headphones,
-                        contentDescription = null,
-                        tint = statusColor.copy(alpha = 0.78f),
-                    )
-                }
-                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                    Text(
-                        text = if (active) "模块已激活" else "模块未激活",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF101010),
-                    )
-                    Text(
-                        text = if (active) "LSPosed 服务已连接" else "等待 LSPosed 服务连接",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF2F3A32).copy(alpha = 0.78f),
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
+                    StatCard(title = "蓝牙状态", value = if (bluetoothEnabled) "已开启" else "未开启", modifier = Modifier.weight(1f))
+                    StatCard(title = "配对蓝牙", value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f))
                 }
             }
         }
-        Column(
-            modifier = Modifier.weight(1f).aspectRatio(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            StatCard(title = "蓝牙状态", value = if (bluetoothEnabled) "已开启" else "未开启", modifier = Modifier.weight(1f))
-            StatCard(title = "配对蓝牙", value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun StatusCard(active: Boolean, modifier: Modifier = Modifier) {
+    val statusColor = if (active) Color(0xFF36D167) else Color(0xFFFF5A52)
+    val statusBackground = if (active) Color(0xFFDFFAE4) else Color(0xFFFFE5E3)
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.defaultColors(color = statusBackground),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.fillMaxSize().offset(34.dp, 38.dp),
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                Icon(
+                    modifier = Modifier.size(136.dp),
+                    imageVector = AppIcons.Headphones,
+                    contentDescription = null,
+                    tint = statusColor.copy(alpha = 0.78f),
+                )
+            }
+            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                Text(
+                    text = if (active) "模块已激活" else "模块未激活",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF101010),
+                )
+                Text(
+                    text = if (active) "LSPosed 服务已连接" else "等待 LSPosed 服务连接",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF2F3A32).copy(alpha = 0.78f),
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
     }
 }

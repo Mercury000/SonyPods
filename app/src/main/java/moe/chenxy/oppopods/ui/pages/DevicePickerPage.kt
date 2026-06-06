@@ -106,10 +106,10 @@ fun DevicePickerPage(
         } ?: emptyList()
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize(),horizontalAlignment = Alignment.CenterHorizontally) {
         LazyColumn(
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomContentPadding)
+            contentPadding = PaddingValues(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomContentPadding),
         ) {
             item {
                 Text(
@@ -145,7 +145,7 @@ fun DevicePickerPage(
             text = stringResource(R.string.input_mac_manually),
             onClick = { showMacDialog.value = true },
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.5f)
                 .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomContentPadding),
             colors = ButtonDefaults.textButtonColorsPrimary(),
         )

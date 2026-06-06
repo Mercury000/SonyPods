@@ -1,5 +1,7 @@
 package moe.chenxy.oppopods
 
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -55,8 +57,16 @@ class PopupActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        val appConfig = ConfigManager.refreshFromPrefs(prefs)
+        val bluetoothDevice = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
+        if (appConfig.notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
+            openNotificationTarget(appConfig.notificationClickAction, bluetoothDevice)
+            finish()
+            return
+        }
+
         setContent {
-            val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
             val colorSchemeMode = when (prefs.getInt("theme_mode", 0)) {
                 1 -> ColorSchemeMode.Light
                 2 -> ColorSchemeMode.Dark
@@ -65,22 +75,69 @@ class PopupActivity : ComponentActivity() {
             AppTheme(colorSchemeMode = colorSchemeMode, accentMode = prefs.getInt("accent_mode", 0)) {
                 PopupContent(
                     onMore = {
-                        val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-                        if (prefs.getBoolean("open_heytap", false)) {
-                            val intent = packageManager.getLaunchIntentForPackage("com.heytap.headset")
-                            if (intent != null) {
-                                startActivity(intent)
-                            } else {
-                                startActivity(Intent(this@PopupActivity, MainActivity::class.java))
-                            }
-                        } else {
-                            startActivity(Intent(this@PopupActivity, MainActivity::class.java))
-                        }
+                        val latestConfig = ConfigManager.refreshFromPrefs(prefs)
+                        openMoreTarget(latestConfig.moreClickAction, bluetoothDevice)
                         finish()
                     },
                     onDone = { finish() }
                 )
             }
+        }
+    }
+
+    private fun openNotificationTarget(action: Int, bluetoothDevice: BluetoothDevice?) {
+        when (action) {
+            ConfigManager.NOTIFICATION_CLICK_SYSTEM_SETTINGS -> openSystemSettings(bluetoothDevice)
+            ConfigManager.NOTIFICATION_CLICK_HEYTAP -> openHeyTapOrModule()
+            else -> openModule()
+        }
+    }
+
+    private fun openMoreTarget(action: Int, bluetoothDevice: BluetoothDevice?) {
+        when (action) {
+            ConfigManager.MORE_CLICK_HEYTAP -> openHeyTapOrModule()
+            ConfigManager.MORE_CLICK_SYSTEM_SETTINGS -> openSystemSettings(bluetoothDevice)
+            else -> openModule()
+        }
+    }
+
+    private fun openModule() {
+        startActivity(Intent(this, MainActivity::class.java))
+    }
+
+    private fun openHeyTapOrModule() {
+        val intent = packageManager.getLaunchIntentForPackage("com.heytap.headset")
+        if (intent != null) {
+            startActivity(intent)
+        } else {
+            openModule()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openSystemSettings(bluetoothDevice: BluetoothDevice?) {
+        if (bluetoothDevice == null) {
+            openModule()
+            return
+        }
+        val intent = Intent().apply {
+            setClassName("com.android.settings", "com.android.settings.bluetooth.MiuiHeadsetActivity")
+            putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
+            putExtra("bluetoothaddress", bluetoothDevice.address)
+            putExtra("MIUI_HEADSET_SUPPORT", ConfigManager.fakeSupport())
+            putExtra("COME_FROM", "MIUI_BLUETOOTH_SETTINGS")
+            putExtra("DEVICE_ID", ConfigManager.fakeDeviceId())
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { startActivity(intent) }.onFailure { openModule() }
+    }
+
+    private fun Intent.parcelableDevice(key: String): BluetoothDevice? {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(key, BluetoothDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(key)
         }
     }
 }

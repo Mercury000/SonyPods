@@ -12,8 +12,14 @@
     <string name="enable_game_mode">Enable Game Mode</string>
     <string name="disable_game_mode">Disable Game Mode</string>
     <string name="auto_game_mode">Auto-enable game mode on connect</string>
-    <string name="open_heytap">Open HeyTap Headset on \"More\"</string>
-    <string name="open_heytap_summary">Launch HeyTap Headset instead of main page when tapping \"More\"</string>
+    <string name="notification_click_action">Notification tap behavior</string>
+    <string name="notification_click_action_summary">Choose where tapping the headset notification opens</string>
+    <string name="more_click_action">\"More\" button behavior</string>
+    <string name="more_click_action_summary">Choose where tapping \"More\" in the module popup opens</string>
+    <string name="notification_click_module_popup">Module popup</string>
+    <string name="click_action_system_settings">System Settings</string>
+    <string name="click_action_heytap">HeyTap Headset</string>
+    <string name="click_action_module">Module</string>
     <string name="off">Off</string>
     <string name="noise_cancellation_title">NC</string>
     <string name="noise_cancellation_smart">Smart</string>
@@ -43,8 +49,6 @@
     <string name="more">More</string>
     <string name="done">Done</string>
     <string name="confirm">Confirm</string>
-    <string name="heytap_warning">For some unknown reason, this module will not function properly after connecting to HeyTap Headset. Put the earphones back in the case and reconnect to recover.</string>
-    <string name="heytap_warning_title">Notice</string>
     <string name="theme_title">Theme</string>
     <string name="theme_follow_system">Follow System</string>
     <string name="theme_light">Light</string>
@@ -72,6 +76,11 @@
     <string name="cycle_anc">Cycle ANC</string>
     <string name="adaptive_mode">Adaptive Mode</string>
     <string name="adaptive_mode_summary">Enable Adaptive noise control mode for compatible earphones</string>
+    <string name="island_mode">Super Island</string>
+    <string name="island_mode_summary">Choose which battery island is displayed</string>
+    <string name="island_mode_none">none</string>
+    <string name="island_mode_official">Official</string>
+    <string name="island_mode_module">Module</string>
     <string name="fake_device_id">Fake earphone model</string>
     <string name="fake_device_id_summary">Empty value falls back to 01010607.</string>
     <string name="notification_btn_disconnect">Disconnect</string>

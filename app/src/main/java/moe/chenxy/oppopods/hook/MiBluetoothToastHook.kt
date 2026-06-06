@@ -18,6 +18,7 @@ import moe.chenxy.oppopods.utils.FocusIslandUtil
 import moe.chenxy.oppopods.utils.SystemApisUtils
 import moe.chenxy.oppopods.utils.SystemApisUtils.cancelAsUser
 import moe.chenxy.oppopods.utils.SystemApisUtils.notifyAsUser
+import moe.chenxy.oppopods.config.ConfigManager
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.R
@@ -107,6 +108,9 @@ object MiBluetoothToastHook : HookContext() {
                     0,
                     Intent("chen.action.oppopods.show_pods_ui").apply {
                         setClassName("moe.chenxy.oppopods", "moe.chenxy.oppopods.PopupActivity")
+                        putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
+                        putExtra("bluetoothaddress", bluetoothDevice.address)
+                        putExtra("device_name", alias)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
@@ -235,6 +239,10 @@ object MiBluetoothToastHook : HookContext() {
                     val broadcastReceiver = object : BroadcastReceiver() {
                         override fun onReceive(p0: Context?, p1: Intent?) {
                             if (p1?.action == "chen.action.oppopods.sendstrongtoast") {
+                                if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_MODULE) {
+                                    Log.d("OppoPods", "skip module island mode=${ConfigManager.islandMode()}")
+                                    return
+                                }
                                 val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)!!
                                 // Use Focus Island (HyperOS 3+) for battery display
                                 FocusIslandUtil.showBatteryIsland(context, batteryParams)

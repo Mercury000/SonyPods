@@ -6,6 +6,7 @@
 
     <queries>
         <package android:name="com.heytap.headset" />
+        <package android:name="com.android.settings" />
     </queries>
 
     <application
