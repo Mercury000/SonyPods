@@ -18,8 +18,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import moe.chenxy.oppopods.pods.NoiseControlMode
@@ -41,11 +43,15 @@ import moe.chenxy.oppopods.ui.components.PodStatus
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.PressFeedbackType
 
 class PopupActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: Context) {
@@ -336,20 +342,15 @@ private fun PortraitPopupBody(
         }
         Spacer(modifier = Modifier.height(12.dp))
         Card(modifier = Modifier.fillMaxWidth()) {
-            AncSwitch(ancMode, onAncModeChange = onAncModeChange, adaptiveModeEnabled = adaptiveModeEnabled)
+            AncSwitch(
+                ancStatus = ancMode,
+                onAncModeChange = onAncModeChange,
+                adaptiveModeEnabled = adaptiveModeEnabled,
+                transparencyVocalEnhancement = transparencyVocalEnhancement,
+                onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange
+            )
         }
         Spacer(modifier = Modifier.height(12.dp))
-        if (ancMode == NoiseControlMode.TRANSPARENCY) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                SwitchPreference(
-                    title = stringResource(R.string.transparency_vocal_enhancement),
-                    summary = stringResource(R.string.transparency_vocal_enhancement_summary),
-                    checked = transparencyVocalEnhancement,
-                    onCheckedChange = onTransparencyVocalEnhancementChange
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-        }
         Card(modifier = Modifier.fillMaxWidth()) {
             SwitchPreference(
                 title = stringResource(R.string.game_mode),
@@ -391,10 +392,18 @@ private fun LandscapePopupBody(
     adaptiveModeEnabled: Boolean = true
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(min = 560.dp)
+            .height(240.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(modifier = Modifier.weight(0.60f)) {
+        Column(
+            modifier = Modifier
+                .weight(0.60f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.Center
+        ) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 PodStatus(
                     batteryParams,
@@ -408,37 +417,51 @@ private fun LandscapePopupBody(
                     ancMode,
                     onAncModeChange = onAncModeChange,
                     compact = true,
-                    adaptiveModeEnabled = adaptiveModeEnabled
+                    adaptiveModeEnabled = adaptiveModeEnabled,
+                    transparencyVocalEnhancement = transparencyVocalEnhancement,
+                    onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange
                 )
             }
         }
         Column(
-            modifier = Modifier.weight(0.40f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier
+                .weight(0.40f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.Center
         ) {
-            if (ancMode == NoiseControlMode.TRANSPARENCY) {
-                TextButton(
-                    text = stringResource(R.string.transparency_vocal_enhancement),
-                    onClick = { onTransparencyVocalEnhancementChange(!transparencyVocalEnhancement) },
-                    modifier = Modifier.fillMaxWidth().weight(1f)
+            val gameModeCardColor = if (gameMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.surfaceContainer
+            val gameModeTextColor = if (gameMode) Color.White else MiuixTheme.colorScheme.onSurfaceContainer
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.defaultColors(
+                    color = gameModeCardColor,
+                    contentColor = gameModeTextColor
+                ),
+                pressFeedbackType = PressFeedbackType.Sink,
+                showIndication = true,
+                onClick = { onGameModeChange(!gameMode) },
+                onLongPress = {}
+            ) {
+                Text(
+                    text = stringResource(R.string.game_mode),
+                    color = if (gameMode) Color.White else MiuixTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    textAlign = TextAlign.Center
                 )
             }
-            TextButton(
-                text = stringResource(
-                    if (gameMode) R.string.disable_game_mode else R.string.enable_game_mode
-                ),
-                onClick = { onGameModeChange(!gameMode) },
-                modifier = Modifier.fillMaxWidth().weight(1f)
-            )
+            Spacer(modifier = Modifier.height(6.dp))
             TextButton(
                 text = stringResource(R.string.more),
                 onClick = onMore,
-                modifier = Modifier.fillMaxWidth().weight(1f)
+                modifier = Modifier.fillMaxWidth()
             )
+            Spacer(modifier = Modifier.height(6.dp))
             TextButton(
                 text = stringResource(R.string.done),
                 onClick = onDone,
-                modifier = Modifier.fillMaxWidth().weight(1f)
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }

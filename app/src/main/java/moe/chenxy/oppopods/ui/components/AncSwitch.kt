@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -32,11 +33,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.pods.isNoiseCancellation
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.SinkFeedback
 import top.yukonga.miuix.kmp.utils.pressable
@@ -48,9 +51,16 @@ fun AncSwitch(
     ancStatus: NoiseControlMode,
     onAncModeChange: (NoiseControlMode) -> Unit,
     compact: Boolean = false,
-    adaptiveModeEnabled: Boolean = true
+    adaptiveModeEnabled: Boolean = true,
+    transparencyVocalEnhancement: Boolean = false,
+    onTransparencyVocalEnhancementChange: ((Boolean) -> Unit)? = null
 ) {
     val verticalPadding = if (compact) 8.dp else 16.dp
+    val tabMinWidth = 0.dp
+    val tabMaxWidth = if (compact) 72.dp else 98.dp
+    val tabHeight = if (compact) 38.dp else 45.dp
+    val tabSpacing = if (compact) 4.dp else 9.dp
+    val tabOuterPadding = if (compact) 8.dp else 12.dp
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -77,7 +87,8 @@ fun AncSwitch(
                     label = stringResource(R.string.adaptive_title),
                     isSelected = ancStatus == NoiseControlMode.ADAPTIVE,
                     onClick = { onAncModeChange(NoiseControlMode.ADAPTIVE) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    compact = compact
                 )
             }
             AncButton(
@@ -86,7 +97,8 @@ fun AncSwitch(
                 label = stringResource(R.string.transparency_title),
                 isSelected = ancStatus == NoiseControlMode.TRANSPARENCY,
                 onClick = { onAncModeChange(NoiseControlMode.TRANSPARENCY) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                compact = compact
             )
             AncButton(
                 offIconRes = R.drawable.ic_closeanc_off,
@@ -100,72 +112,80 @@ fun AncSwitch(
         }
 
         if (ancStatus.isNoiseCancellation()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = if (compact) 10.dp else 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AncLevelButton(
-                    label = stringResource(R.string.noise_cancellation_smart),
-                    isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLATION_SMART,
-                    onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLATION_SMART) },
-                    modifier = Modifier.weight(1f),
-                    compact = compact
-                )
-                AncLevelButton(
-                    label = stringResource(R.string.noise_cancellation_light),
-                    isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLATION_LIGHT,
-                    onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLATION_LIGHT) },
-                    modifier = Modifier.weight(1f),
-                    compact = compact
-                )
-                AncLevelButton(
-                    label = stringResource(R.string.noise_cancellation_medium),
-                    isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLATION_MEDIUM,
-                    onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLATION_MEDIUM) },
-                    modifier = Modifier.weight(1f),
-                    compact = compact
-                )
-                AncLevelButton(
-                    label = stringResource(R.string.noise_cancellation_deep),
-                    isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLATION_DEEP,
-                    onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLATION_DEEP) },
-                    modifier = Modifier.weight(1f),
-                    compact = compact
-                )
-            }
+            val modes = listOf(
+                NoiseControlMode.NOISE_CANCELLATION_SMART,
+                NoiseControlMode.NOISE_CANCELLATION_LIGHT,
+                NoiseControlMode.NOISE_CANCELLATION_MEDIUM,
+                NoiseControlMode.NOISE_CANCELLATION_DEEP
+            )
+            val tabs = listOf(
+                stringResource(R.string.noise_cancellation_smart),
+                stringResource(R.string.noise_cancellation_light),
+                stringResource(R.string.noise_cancellation_medium),
+                stringResource(R.string.noise_cancellation_deep)
+            )
+            ResponsiveAncTabRow(
+                tabs = tabs,
+                selectedTabIndex = modes.indexOf(ancStatus).takeIf { it >= 0 } ?: 0,
+                onTabSelected = { onAncModeChange(modes[it]) },
+                compact = compact,
+                minWidth = tabMinWidth,
+                tabMaxWidth = tabMaxWidth,
+                height = tabHeight,
+                itemSpacing = tabSpacing,
+                outerPadding = tabOuterPadding
+            )
+        }
+
+        if (ancStatus == NoiseControlMode.TRANSPARENCY && onTransparencyVocalEnhancementChange != null) {
+            val tabs = listOf(
+                stringResource(R.string.transparency_title),
+                stringResource(R.string.transparency_vocal_enhancement)
+            )
+            ResponsiveAncTabRow(
+                tabs = tabs,
+                selectedTabIndex = if (transparencyVocalEnhancement) 1 else 0,
+                onTabSelected = { onTransparencyVocalEnhancementChange(it == 1) },
+                compact = compact,
+                minWidth = tabMinWidth,
+                tabMaxWidth = tabMaxWidth,
+                height = tabHeight,
+                itemSpacing = tabSpacing,
+                outerPadding = tabOuterPadding
+            )
         }
     }
 }
 
 @Composable
-private fun AncLevelButton(
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    compact: Boolean = false
+private fun ResponsiveAncTabRow(
+    tabs: List<String>,
+    selectedTabIndex: Int,
+    onTabSelected: (Int) -> Unit,
+    compact: Boolean,
+    minWidth: Dp,
+    tabMaxWidth: Dp,
+    height: Dp,
+    itemSpacing: Dp,
+    outerPadding: Dp
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val textColor by animateColorAsState(
-        targetValue = if (isSelected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackground,
-        animationSpec = tween(ANIM_DURATION),
-        label = "anc_level_text_color"
-    )
-
-    Box(
-        modifier = modifier
-            .pressable(interactionSource = interactionSource, indication = SinkFeedback())
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(vertical = 8.dp),
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (compact) 8.dp else 16.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            label,
-            fontSize = if (compact) 12.sp else 13.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-            color = textColor
+        TabRowWithContour(
+            tabs = tabs,
+            selectedTabIndex = selectedTabIndex,
+            onTabSelected = onTabSelected,
+            modifier = Modifier
+                .padding(horizontal = outerPadding)
+                .fillMaxWidth(if (maxWidth >= 480.dp) 0.8f else 1f),
+            minWidth = minWidth,
+            maxWidth = tabMaxWidth,
+            height = height,
+            itemSpacing = itemSpacing
         )
     }
 }

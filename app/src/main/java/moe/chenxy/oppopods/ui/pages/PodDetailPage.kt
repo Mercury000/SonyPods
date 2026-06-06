@@ -157,28 +157,19 @@ private fun LazyListScope.podControlItems(
         Card(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
-            AncSwitch(ancMode, onAncModeChange, adaptiveModeEnabled = adaptiveModeEnabled)
-        }
-    }
-
-    if (ancMode == NoiseControlMode.TRANSPARENCY) {
-        item {
-            Card(
-                modifier = Modifier.padding(horizontal = 12.dp)
-            ) {
-                SwitchPreference(
-                    title = stringResource(R.string.transparency_vocal_enhancement),
-                    summary = stringResource(R.string.transparency_vocal_enhancement_summary),
-                    checked = transparencyVocalEnhancement,
-                    onCheckedChange = onTransparencyVocalEnhancementChange
-                )
-            }
+            AncSwitch(
+                ancStatus = ancMode,
+                onAncModeChange = onAncModeChange,
+                adaptiveModeEnabled = adaptiveModeEnabled,
+                transparencyVocalEnhancement = transparencyVocalEnhancement,
+                onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange
+            )
         }
     }
 
     item {
         Card(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = if (ancMode == NoiseControlMode.TRANSPARENCY) 12.dp else 0.dp)
+            modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             SwitchPreference(
                 title = stringResource(R.string.game_mode),
