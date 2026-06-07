@@ -90,6 +90,12 @@
     <string name="island_mode_none">不显示</string>
     <string name="island_mode_official">官方</string>
     <string name="island_mode_module">模块</string>
+    <string name="island_show_timing">超级岛显示时机</string>
+    <string name="island_show_timing_summary">仅开启超级岛时候显示</string>
+    <string name="island_show_timing_connected">连接时</string>
+    <string name="island_show_timing_wearing">佩戴时</string>
+    <string name="island_show_timing_removed">摘下时</string>
+    <string name="island_show_timing_in_case">放回盒中时</string>
     <string name="fake_device_id">伪装耳机型号</string>
     <string name="fake_device_id_summary">留空时默认使用 01010607</string>
     <string name="notification_btn_disconnect">断开连接</string>

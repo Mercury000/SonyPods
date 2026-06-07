@@ -349,7 +349,9 @@ object RfcommController {
         currentBatteryParams = batteryParams
 
         if (shouldShowToast) {
-            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
+            if (shouldShowIsland(ConfigManager.ISLAND_SHOW_TIMING_CONNECTED)) {
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
+            }
             mShowedConnectedToast = true
         }
         MiuiStrongToastUtil.showPodsNotificationByMiuiBt(mContext!!, batteryParams, mDevice)
@@ -503,6 +505,33 @@ object RfcommController {
         )
     }
 
+    private fun showIslandForWearStatusChange(previous: WearStatus, current: WearStatus) {
+        if (!::currentBatteryParams.isInitialized) return
+        val changedTimings = setOfNotNull(
+            islandShowTimingForChange(previous.left, current.left),
+            islandShowTimingForChange(previous.right, current.right),
+            islandShowTimingForChange(previous.case, current.case),
+        )
+        if (changedTimings.any { shouldShowIsland(it) }) {
+            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext ?: return, currentBatteryParams)
+        }
+    }
+
+    private fun shouldShowIsland(timing: Int): Boolean {
+        return ConfigManager.islandMode() == ConfigManager.ISLAND_MODE_MODULE &&
+                timing in ConfigManager.islandShowTimings()
+    }
+
+    private fun islandShowTimingForChange(previous: WearState?, current: WearState?): Int? {
+        if (previous == current) return null
+        return when (current) {
+            WearState.WEARING -> ConfigManager.ISLAND_SHOW_TIMING_WEARING
+            WearState.REMOVED -> ConfigManager.ISLAND_SHOW_TIMING_REMOVED
+            WearState.IN_CASE -> ConfigManager.ISLAND_SHOW_TIMING_IN_CASE
+            else -> null
+        }
+    }
+
     private fun connectRfcomm(initialDelayMs: Long = 0L) {
         connectionJob?.cancel()
         connectionJob = CoroutineScope(Dispatchers.IO).launch {
@@ -640,8 +669,10 @@ object RfcommController {
         val wearResult = WearStatusParser.parse(packet)
         if (wearResult != null) {
             Log.d(TAG, "Wear status received: $wearResult")
+            val previousWearStatus = currentWearStatus
             currentWearStatus = mergeWearStatus(currentWearStatus, wearResult)
             changeUIWearStatus(currentWearStatus)
+            showIslandForWearStatusChange(previousWearStatus, currentWearStatus)
             return
         }
 

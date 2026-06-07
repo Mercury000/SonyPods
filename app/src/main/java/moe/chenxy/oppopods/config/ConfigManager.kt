@@ -11,6 +11,7 @@ data class AppConfig(
     val fakeDeviceId: String = ConfigManager.DEFAULT_FAKE_DEVICE_ID,
     val logLevel: Int = ConfigManager.LOG_LEVEL_BASIC,
     val islandMode: Int = ConfigManager.ISLAND_MODE_OFFICIAL,
+    val islandShowTimings: Set<Int> = emptySet(),
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
     val rfcommChannel: Int = ConfigManager.DEFAULT_RFCOMM_CHANNEL,
@@ -23,6 +24,7 @@ object ConfigManager {
     const val PREF_KEY_FAKE_DEVICE_ID = "fake_device_id"
     const val PREF_KEY_LOG_LEVEL = "log_level"
     const val PREF_KEY_ISLAND_MODE = "island_mode"
+    const val PREF_KEY_ISLAND_SHOW_TIMINGS = "island_show_timings"
     const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_RFCOMM_CHANNEL = "rfcomm_channel"
@@ -35,6 +37,10 @@ object ConfigManager {
     const val ISLAND_MODE_NONE = 0
     const val ISLAND_MODE_OFFICIAL = 1
     const val ISLAND_MODE_MODULE = 2
+    const val ISLAND_SHOW_TIMING_CONNECTED = 0
+    const val ISLAND_SHOW_TIMING_WEARING = 1
+    const val ISLAND_SHOW_TIMING_REMOVED = 2
+    const val ISLAND_SHOW_TIMING_IN_CASE = 3
     const val NOTIFICATION_CLICK_MODULE_POPUP = 0
     const val NOTIFICATION_CLICK_SYSTEM_SETTINGS = 1
     const val NOTIFICATION_CLICK_HEYTAP = 2
@@ -72,6 +78,8 @@ object ConfigManager {
 
     fun islandMode(): Int = current().islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)
 
+    fun islandShowTimings(): Set<Int> = current().islandShowTimings.normalizedIslandShowTimings()
+
     fun notificationClickAction(): Int = current().notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP)
 
     fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
@@ -97,6 +105,11 @@ object ConfigManager {
 
     fun updateIslandMode(prefs: SharedPreferences, service: XposedService?, islandMode: Int) {
         val config = current().copy(islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE))
+        save(prefs, service, config)
+    }
+
+    fun updateIslandShowTimings(prefs: SharedPreferences, service: XposedService?, timings: Set<Int>) {
+        val config = current().copy(islandShowTimings = timings.normalizedIslandShowTimings())
         save(prefs, service, config)
     }
 
@@ -141,6 +154,7 @@ object ConfigManager {
             .putString(PREF_KEY_FAKE_DEVICE_ID, config.fakeDeviceId)
             .putInt(PREF_KEY_LOG_LEVEL, config.logLevel)
             .putInt(PREF_KEY_ISLAND_MODE, config.islandMode)
+            .putStringSet(PREF_KEY_ISLAND_SHOW_TIMINGS, config.islandShowTimings.map { it.toString() }.toSet())
             .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_RFCOMM_CHANNEL, config.rfcommChannel)
@@ -151,6 +165,7 @@ object ConfigManager {
         val directFakeDeviceId = prefs.getString(PREF_KEY_FAKE_DEVICE_ID, null)
         val directLogLevel = prefs.getInt(PREF_KEY_LOG_LEVEL, Int.MIN_VALUE)
         val directIslandMode = prefs.getInt(PREF_KEY_ISLAND_MODE, Int.MIN_VALUE)
+        val directIslandShowTimings = prefs.getStringSet(PREF_KEY_ISLAND_SHOW_TIMINGS, null)?.mapNotNull { it.toIntOrNull() }?.toSet()
         val directNotificationClickAction = prefs.getInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, Int.MIN_VALUE)
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directRfcommChannel = prefs.getInt(PREF_KEY_RFCOMM_CHANNEL, Int.MIN_VALUE)
@@ -165,6 +180,7 @@ object ConfigManager {
                 fakeDeviceId = directFakeDeviceId.normalizedFakeDeviceId(),
                 logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
                 islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
+                islandShowTimings = directIslandShowTimings ?: config.islandShowTimings,
                 notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 rfcommChannel = directRfcommChannel.takeIf { it != Int.MIN_VALUE } ?: config.rfcommChannel,
@@ -174,6 +190,7 @@ object ConfigManager {
             fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId(),
             logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
             islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
+            islandShowTimings = directIslandShowTimings ?: config.islandShowTimings,
             notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             rfcommChannel = directRfcommChannel.takeIf { it != Int.MIN_VALUE } ?: config.rfcommChannel,
@@ -184,6 +201,7 @@ object ConfigManager {
         fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId(),
         logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG),
         islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
+        islandShowTimings = islandShowTimings.normalizedIslandShowTimings(),
         notificationClickAction = notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP),
         moreClickAction = moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE),
         rfcommChannel = rfcommChannel.normalizedRfcommChannel(),
@@ -192,6 +210,10 @@ object ConfigManager {
     private fun String.normalizedFakeDeviceId(): String = trim().takeIf { it.isNotEmpty() } ?: DEFAULT_FAKE_DEVICE_ID
 
     private fun Int.normalizedRfcommChannel(): Int = takeIf { it in RFCOMM_CHANNELS } ?: DEFAULT_RFCOMM_CHANNEL
+
+    private fun Set<Int>.normalizedIslandShowTimings(): Set<Int> = filterTo(mutableSetOf()) {
+        it in ISLAND_SHOW_TIMING_CONNECTED..ISLAND_SHOW_TIMING_IN_CASE
+    }
 
     private fun logConfigChange(source: String, oldConfig: AppConfig, newConfig: AppConfig) {
         val changes = changedFields(oldConfig, newConfig)
@@ -221,6 +243,9 @@ object ConfigManager {
             }
             if (oldConfig.islandMode != newConfig.islandMode) {
                 add("islandMode=${oldConfig.islandMode}->${newConfig.islandMode}")
+            }
+            if (oldConfig.islandShowTimings != newConfig.islandShowTimings) {
+                add("islandShowTimings=${oldConfig.islandShowTimings}->${newConfig.islandShowTimings}")
             }
             if (oldConfig.notificationClickAction != newConfig.notificationClickAction) {
                 add("notificationClickAction=${oldConfig.notificationClickAction}->${newConfig.notificationClickAction}")

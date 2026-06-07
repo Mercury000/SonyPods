@@ -171,6 +171,7 @@ fun MainUI(
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
     val islandMode = remember { mutableStateOf(appConfig.islandMode) }
+    val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
     val rfcommChannel = remember { mutableStateOf(appConfig.rfcommChannel) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
@@ -653,6 +654,12 @@ fun MainUI(
                                     ConfigManager.updateIslandMode(prefs, xposedService, it)
                                     broadcastConfigChanged(context, "com.android.bluetooth")
                                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                                },
+                                islandShowTimings = islandShowTimings,
+                                onIslandShowTimingsChange = {
+                                    islandShowTimings.value = it
+                                    ConfigManager.updateIslandShowTimings(prefs, xposedService, it)
+                                    broadcastConfigChanged(context, "com.android.bluetooth")
                                 },
                                 appLanguage = appLanguage,
                                 onAppLanguageChange = {
