@@ -148,11 +148,9 @@ internal fun MainTabsScaffold(
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
     showConnectErrorDialog: Boolean,
-    rfcommChannel: Int,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onConnectedDeviceClick: () -> Unit,
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
-    onRfcommChannelChange: (Int) -> Unit,
     onDismissConnectError: () -> Unit,
     desktopIconHidden: MutableState<Boolean>,
     onDesktopIconHiddenChange: (Boolean) -> Unit,
@@ -253,6 +251,7 @@ internal fun MainTabsScaffold(
                             IconButton(onClick = { showPodImageDialog = true }) {
                                 Icon(
                                     imageVector = MiuixIcons.Edit,
+                                    modifier = Modifier.size(23.dp),
                                     contentDescription = stringResource(R.string.custom_pod_images),
                                 )
                             }
@@ -334,13 +333,11 @@ internal fun MainTabsScaffold(
                         connectedDeviceAddress = connectedDeviceAddress,
                         connectingDeviceAddress = connectingDeviceAddress,
                         showConnectErrorDialog = showConnectErrorDialog,
-                        rfcommChannel = rfcommChannel,
                         pageBottomContentPadding = pageBottomContentPadding,
                         nestedScrollConnection = topAppBarScrollBehavior.nestedScrollConnection,
                         onDeviceSelected = onDeviceSelected,
                         onConnectedDeviceClick = onConnectedDeviceClick,
                         onDeviceDisconnect = onDeviceDisconnect,
-                        onRfcommChannelChange = onRfcommChannelChange,
                         onDismissConnectError = onDismissConnectError,
                     )
 
@@ -483,13 +480,11 @@ private fun EarphonesTabPage(
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
     showConnectErrorDialog: Boolean,
-    rfcommChannel: Int,
     pageBottomContentPadding: Dp,
     nestedScrollConnection: NestedScrollConnection,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onConnectedDeviceClick: () -> Unit,
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
-    onRfcommChannelChange: (Int) -> Unit,
     onDismissConnectError: () -> Unit,
 ) {
     AnimatedContent(
@@ -528,12 +523,10 @@ private fun EarphonesTabPage(
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,
                 showConnectError = showConnectErrorDialog,
-                rfcommChannel = rfcommChannel,
                 bottomContentPadding = pageBottomContentPadding,
                 onDeviceSelected = onDeviceSelected,
                 onConnectedDeviceClick = onConnectedDeviceClick,
                 onDeviceDisconnect = onDeviceDisconnect,
-                onRfcommChannelChange = onRfcommChannelChange,
                 onDismissConnectError = onDismissConnectError,
             )
         }

@@ -46,10 +46,6 @@
     <string name="batt_right_pod">右</string>
     <string name="waiting_for_pod">等待 OPPO 耳机连接...</string>
     <string name="select_device">选择蓝牙设备</string>
-    <string name="rfcomm_channel">RFCOMM 信道</string>
-    <string name="rfcomm_channel_value">信道 %1$d</string>
-    <string name="rfcomm_channel_help_title">RFCOMM 信道</string>
-    <string name="rfcomm_channel_help_summary">如果遇到状态不显示/连接失败等情况，请尝试切换信道。</string>
     <string name="no_paired_devices">未找到已配对的设备</string>
     <string name="bluetooth_disabled">请开启蓝牙</string>
     <string name="unknown_device">未知设备</string>

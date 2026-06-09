@@ -45,10 +45,6 @@
     <string name="batt_right_pod">Right</string>
     <string name="waiting_for_pod">Waiting for OPPO Earphones Connection...</string>
     <string name="select_device">Select Bluetooth Device</string>
-    <string name="rfcomm_channel">RFCOMM Channel</string>
-    <string name="rfcomm_channel_value">Channel %1$d</string>
-    <string name="rfcomm_channel_help_title">RFCOMM Channel</string>
-    <string name="rfcomm_channel_help_summary">If status is not displayed or connection fails, try switching channels.</string>
     <string name="no_paired_devices">No paired devices found</string>
     <string name="bluetooth_disabled">Please enable Bluetooth</string>
     <string name="unknown_device">Unknown Device</string>

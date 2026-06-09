@@ -152,7 +152,6 @@ fun MainUI(
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
     val islandMode = remember { mutableStateOf(appConfig.islandMode) }
     val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
-    val rfcommChannel = remember { mutableStateOf(appConfig.rfcommChannel) }
     val spatialAudioMode = remember { mutableStateOf(prefs.getInt("spatial_audio_mode", ConfigManager.SPATIAL_AUDIO_OFF)) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
     val adaptiveCapabilityOverride = remember { mutableStateOf(appConfig.adaptiveCapabilityOverride) }
@@ -608,14 +607,9 @@ fun MainUI(
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,
                 showConnectErrorDialog = showConnectErrorDialog,
-                rfcommChannel = rfcommChannel.value,
                 onDeviceSelected = { onDeviceSelected(it) },
                 onConnectedDeviceClick = { onConnectedDeviceClick() },
                 onDeviceDisconnect = { onDeviceDisconnect(it) },
-                onRfcommChannelChange = {
-                    rfcommChannel.value = it
-                    ConfigManager.updateRfcommChannel(prefs, xposedService, it)
-                },
                 onDismissConnectError = { showConnectErrorDialog = false },
                 desktopIconHidden = desktopIconHidden,
                 onDesktopIconHiddenChange = {

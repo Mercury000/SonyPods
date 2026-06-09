@@ -32,6 +32,7 @@ import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
 import java.io.InputStream
 import android.content.SharedPreferences
+import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -64,7 +65,6 @@ object RfcommController {
     private var currentDualDeviceConnection: Boolean = false
     private var autoGameModeEnabled: Boolean = false
     private var gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
-    private var rfcommChannel: Int = ConfigManager.DEFAULT_RFCOMM_CHANNEL
     private var lastGameModeStatusUpdateMs: Long = 0L
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
@@ -92,6 +92,7 @@ object RfcommController {
     private var batteryPollJob: kotlinx.coroutines.Job? = null
     private val reconnectAttempts = AtomicInteger(0)
     private var reconnectPending = false
+    private val OPPO_RFCOMM_UUID: UUID = UUID.fromString("0000079A-D102-11E1-9B23-00025B00A5A5")
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(p0: Context?, p1: Intent?) {
@@ -423,13 +424,8 @@ object RfcommController {
         }
     }
 
-    /**
-     * Create RFCOMM socket to OPPO earphone on the configured channel via reflection.
-     */
-    @SuppressLint("DiscouragedPrivateApi")
-    private fun createRfcommSocket(device: BluetoothDevice, channel: Int): BluetoothSocket {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        return method.invoke(device, channel) as BluetoothSocket
+    private fun createRfcommSocket(device: BluetoothDevice): BluetoothSocket {
+        return device.createRfcommSocketToServiceRecord(OPPO_RFCOMM_UUID)
     }
 
     fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences, appRequested: Boolean = false) {
@@ -449,11 +445,11 @@ object RfcommController {
         gameModeImplementation = GameModeImplementation.fromPreference(
             mPrefs.getString(GameModeImplementation.PREF_KEY, null)
         )
-        rfcommChannel = ConfigManager.refreshFromPrefs(mPrefs).rfcommChannel
+        ConfigManager.refreshFromPrefs(mPrefs)
         Log.d(TAG, "Adaptive support initial: ${currentCapabilities().adaptiveSupported}")
         Log.d(TAG, "Auto game mode initial: $autoGameModeEnabled")
         Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")
-        Log.d(TAG, "RFCOMM channel initial: $rfcommChannel")
+        Log.d(TAG, "RFCOMM UUID initial: $OPPO_RFCOMM_UUID")
 
         if (!receiverRegistered) {
             context.registerReceiver(broadcastReceiver, IntentFilter().apply {
@@ -560,12 +556,12 @@ object RfcommController {
             if (!isConnected || !::mDevice.isInitialized) return@launch
             closeSocketOnly()
             try {
-                val newSocket = createRfcommSocket(mDevice, rfcommChannel)
+                val newSocket = createRfcommSocket(mDevice)
                 newSocket.connect()
                 socket = newSocket
                 reconnectAttempts.set(0)
                 reconnectPending = false
-                Log.d(TAG, "RFCOMM connected! channel=$rfcommChannel")
+                Log.d(TAG, "RFCOMM connected! uuid=$OPPO_RFCOMM_UUID")
                 changeUIConnectionState("connecting")
 
                 startPacketReader(newSocket.inputStream)
