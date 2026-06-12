@@ -54,7 +54,6 @@
 ### 致谢
 
 - [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen — 原始项目
-- [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) — Xposed 钩子框架
 - [Miuix](https://github.com/YuKongA/miuix) — HyperOS 风格 Compose UI 组件
 - [OPPOPods](https://github.com/Leaf-lsgtky/OppoPods) - by Leaf-lsgtky
 

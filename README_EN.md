@@ -53,7 +53,6 @@ An Xposed module that provides system-level OPPO earphone control for Xiaomi Hyp
 ### Credits
 
 - [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen — original project
-- [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) — Xposed hook framework
 - [Miuix](https://github.com/YuKongA/miuix) — HyperOS-style Compose UI components
 - [OPPOPods](https://github.com/Leaf-lsgtky/OppoPods) - by Leaf-lsgtky
 
