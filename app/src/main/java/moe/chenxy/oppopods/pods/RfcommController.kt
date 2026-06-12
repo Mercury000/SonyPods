@@ -40,7 +40,6 @@ import java.util.concurrent.atomic.AtomicInteger
 object RfcommController {
     private const val TAG = "OppoPods-RfcommController"
     private const val AUTO_RECONNECT_DELAY_MS = 120_000L
-    private const val BATTERY_POLL_INTERVAL_MS = 30_000L
     private const val APP_UI_ACTIVE_TIMEOUT_MS = 75_000L
 
     // Basic Objects
@@ -89,7 +88,6 @@ object RfcommController {
     private var connectionJob: kotlinx.coroutines.Job? = null
     private var reconnectJob: kotlinx.coroutines.Job? = null
     private var readerJob: kotlinx.coroutines.Job? = null
-    private var batteryPollJob: kotlinx.coroutines.Job? = null
     private val reconnectAttempts = AtomicInteger(0)
     private var reconnectPending = false
     private val OPPO_RFCOMM_UUID: UUID = UUID.fromString("0000079A-D102-11E1-9B23-00025B00A5A5")
@@ -447,7 +445,6 @@ object RfcommController {
         connectionJob?.cancel()
         reconnectJob?.cancel()
         readerJob?.cancel()
-        batteryPollJob?.cancel()
         closeSocketOnly()
         mContext = context
         mDevice = device
@@ -585,9 +582,10 @@ object RfcommController {
                 changeUIConnectionState("connecting")
 
                 startPacketReader(newSocket.inputStream)
-                startBatteryPolling()
 
                 delay(300)
+                sendPacketSafe(Enums.ENABLE_STATUS_REPORT)
+                delay(50)
                 sendStatusQueryPackets(immediateReconnect = false)
 
                 if (autoGameModeEnabled) {
@@ -597,19 +595,6 @@ object RfcommController {
                 Log.e(TAG, "RFCOMM connect failed", e)
                 changeUIConnectionState("error")
                 scheduleReconnect("connect failed")
-            }
-        }
-    }
-
-    private fun startBatteryPolling() {
-        batteryPollJob?.cancel()
-        batteryPollJob = CoroutineScope(Dispatchers.IO).launch {
-            delay(2_000L)
-            while (isConnected) {
-                delay(BATTERY_POLL_INTERVAL_MS)
-                if (isConnected && socket != null) {
-                    sendStatusQueryPackets(immediateReconnect = false)
-                }
             }
         }
     }
@@ -652,9 +637,7 @@ object RfcommController {
 
     private fun closeSocketOnly() {
         readerJob?.cancel()
-        batteryPollJob?.cancel()
         readerJob = null
-        batteryPollJob = null
         try {
             socket?.close()
         } catch (_: IOException) {}
@@ -810,7 +793,6 @@ object RfcommController {
         connectionJob?.cancel()
         reconnectJob?.cancel()
         readerJob?.cancel()
-        batteryPollJob?.cancel()
         reconnectAttempts.set(0)
         reconnectPending = false
 
@@ -1013,8 +995,6 @@ object RfcommController {
 
     private suspend fun sendStatusQueryPackets(immediateReconnect: Boolean = true) {
         val reason = if (immediateReconnect) "status query" else null
-        sendPacketSafe(Enums.ENABLE_STATUS_REPORT, reason)
-        delay(50)
         sendPacketSafe(Enums.QUERY_STATUS, reason)
         delay(50)
         sendPacketSafe(Enums.QUERY_BATTERY, reason)
