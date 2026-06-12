@@ -55,6 +55,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Edit
 import top.yukonga.miuix.kmp.icon.extended.Import
+import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -124,6 +125,7 @@ internal fun MainTabsScaffold(
     spatialAudioCapabilityOverride: MutableState<Int>,
     spatialSoundSwitchCapabilityOverride: MutableState<Int>,
     onOpenDeviceCapabilities: () -> Unit,
+    onOpenRfcommDebug: () -> Unit,
     fakeDeviceId: MutableState<String>,
     onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
@@ -210,6 +212,7 @@ internal fun MainTabsScaffold(
                         bondedDeviceCount = bondedDeviceCount,
                         onBluetoothStatusClick = onBluetoothStatusClick,
                         onPairedBluetoothClick = onPairedBluetoothClick,
+                        onOpenRfcommDebug = onOpenRfcommDebug,
                         pageBottomContentPadding = pageBottomContentPadding,
                         restartingScopes = restartingScopes,
                         onShowRestartScopeDialog = onShowRestartScopeDialog,
@@ -332,6 +335,7 @@ private fun ModuleTabPage(
     bondedDeviceCount: Int,
     onBluetoothStatusClick: () -> Unit,
     onPairedBluetoothClick: () -> Unit,
+    onOpenRfcommDebug: () -> Unit,
     pageBottomContentPadding: Dp,
     restartingScopes: Boolean,
     onShowRestartScopeDialog: () -> Unit,
@@ -344,6 +348,9 @@ private fun ModuleTabPage(
                 largeTitle = stringResource(R.string.app_name),
                 scrollBehavior = scrollBehavior,
                 actions = {
+                    IconButton(onClick = onOpenRfcommDebug) {
+                        Icon(imageVector = MiuixIcons.Months, contentDescription = "RFCOMM debug")
+                    }
                     IconButton(
                         onClick = {
                             if (!restartingScopes) onShowRestartScopeDialog()

@@ -234,6 +234,21 @@ object RfcommController {
                     setANCMode(2)
                 }
             }
+            OppoPodsAction.ACTION_RFCOMM_LOG_CONNECT -> {
+                if (!RfcommLog.isEnabled()) {
+                    RfcommLog.setEnabled(true, mContext)
+                }
+            }
+            OppoPodsAction.ACTION_RFCOMM_LOG_DISCONNECT -> {
+                RfcommLog.setEnabled(false)
+            }
+            OppoPodsAction.ACTION_RFCOMM_LOG_CLEAR -> {
+                RfcommLog.clear()
+            }
+            OppoPodsAction.ACTION_RFCOMM_DEBUG_SEND -> {
+                val hex = intent.getStringExtra("hex").orEmpty()
+                sendDebugHex(hex)
+            }
         }
     }
 
@@ -465,6 +480,10 @@ object RfcommController {
                 this.addAction(OppoPodsAction.ACTION_DUAL_DEVICE_CONNECTION_SET)
                 this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
                 this.addAction(OppoPodsAction.ACTION_CONFIG_CHANGED)
+                this.addAction(OppoPodsAction.ACTION_RFCOMM_LOG_CONNECT)
+                this.addAction(OppoPodsAction.ACTION_RFCOMM_LOG_DISCONNECT)
+                this.addAction(OppoPodsAction.ACTION_RFCOMM_LOG_CLEAR)
+                this.addAction(OppoPodsAction.ACTION_RFCOMM_DEBUG_SEND)
             }, Context.RECEIVER_EXPORTED)
             receiverRegistered = true
         }
@@ -562,6 +581,7 @@ object RfcommController {
                 reconnectAttempts.set(0)
                 reconnectPending = false
                 Log.d(TAG, "RFCOMM connected! uuid=$OPPO_RFCOMM_UUID")
+                RfcommLog.i(mContext, TAG, "connected uuid=$OPPO_RFCOMM_UUID")
                 changeUIConnectionState("connecting")
 
                 startPacketReader(newSocket.inputStream)
@@ -596,6 +616,7 @@ object RfcommController {
 
     private fun scheduleReconnect(reason: String, immediate: Boolean = false) {
         if (!isConnected || !::mDevice.isInitialized || mContext == null) return
+        RfcommLog.w(mContext, TAG, "schedule reconnect reason=$reason immediate=$immediate")
         closeSocketOnly()
         reconnectPending = true
         if (immediate) {
@@ -649,9 +670,11 @@ object RfcommController {
                     val bytesRead = inputStream.read(buffer)
                     if (bytesRead > 0) {
                         val packet = buffer.copyOfRange(0, bytesRead)
+                        RfcommLog.d(mContext, "RFCOMM/RX", packet.toHexString(HexFormat.UpperCase))
                         handleOppoPacket(packet)
                     } else if (bytesRead == -1) {
                         Log.d(TAG, "RFCOMM stream ended")
+                        RfcommLog.w(mContext, TAG, "stream ended")
                         scheduleReconnect("stream ended")
                         break
                     }
@@ -659,6 +682,7 @@ object RfcommController {
             } catch (e: IOException) {
                 if (isConnected) {
                     Log.e(TAG, "RFCOMM read error", e)
+                    RfcommLog.e(mContext, TAG, "read error: ${e.message.orEmpty()}")
                     scheduleReconnect("read error")
                 }
             }
@@ -823,15 +847,30 @@ object RfcommController {
         if (requestReason != null) reconnectNowForRequest(requestReason)
         try {
             val currentSocket = socket ?: run {
+                RfcommLog.w(mContext, "RFCOMM/TX", "socket null: ${packet.toHexString(HexFormat.UpperCase)}")
                 scheduleReconnect("socket null before send", immediate = requestReason != null)
                 return
             }
+            RfcommLog.d(mContext, "RFCOMM/TX", packet.toHexString(HexFormat.UpperCase))
             currentSocket.outputStream.write(packet)
             currentSocket.outputStream.flush()
         } catch (e: IOException) {
             Log.e(TAG, "Send packet failed", e)
+            RfcommLog.e(mContext, TAG, "send failed: ${e.message.orEmpty()}")
             scheduleReconnect("send error", immediate = requestReason != null)
         }
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    fun sendDebugHex(hex: String) {
+        val normalized = hex.filterNot { it.isWhitespace() || it == ':' || it == '-' }
+        if (normalized.isEmpty() || normalized.length % 2 != 0 || !normalized.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            RfcommLog.e(mContext, "RFCOMM/DEBUG", "invalid HEX: $hex")
+            return
+        }
+        val packet = normalized.hexToByteArray()
+        RfcommLog.i(mContext, "RFCOMM/DEBUG", "send ${packet.size} bytes")
+        sendPacketSafe(packet, "rfcomm debug send")
     }
 
     fun setGameMode(enabled: Boolean) {
