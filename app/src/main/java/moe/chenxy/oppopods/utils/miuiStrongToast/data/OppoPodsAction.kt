@@ -1,41 +1,44 @@
 package moe.chenxy.oppopods.utils.miuiStrongToast.data
 
+/**
+ * Cross-process broadcast actions for the SonyPods bridge (namespace dev.sonypods.action.*).
+ *
+ * Direction legend:
+ *  - app -> hooks: state fan-out from the app-process Sony repository
+ *  - hooks -> app: control requests and connection triggers
+ */
 object OppoPodsAction {
-    const val ACTION_PODS_UI_INIT = "chen.action.oppopods.ui_init"
-    const val ACTION_PODS_UI_CLOSED = "chen.action.oppopods.ui_closed"
-    const val ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE = "chen.action.oppopods.module_bluetooth_service_alive"
-    const val ACTION_PODS_CONNECTED = "chen.action.oppopods.pods_connected"
-    const val ACTION_PODS_DISCONNECTED = "chen.action.oppopods.pods_disconnected"
-    const val ACTION_CONNECT_POD_REQUEST = "chen.action.oppopods.connect_pod_request"
-    const val ACTION_DISCONNECT_POD_REQUEST = "chen.action.oppopods.disconnect_pod_request"
-    const val ACTION_PODS_CONNECTION_STATE_CHANGED = "chen.action.oppopods.pods_connection_state_changed"
-    const val ACTION_PODS_BATTERY_CHANGED = "chen.action.oppopods.pods_battery_changed"
-    const val ACTION_PODS_WEAR_STATUS_CHANGED = "chen.action.oppopods.pods_wear_status_changed"
-    const val ACTION_ANC_SELECT = "chen.action.oppopods.anc_select"
-    const val ACTION_PODS_ANC_CHANGED = "chen.action.oppopods.pods_anc_select"
-    const val ACTION_GET_PODS_MAC = "chen.action.oppopods.get_pods_mac"
-    const val ACTION_PODS_MAC_RECEIVED = "chen.action.oppopods.get_pods_mac"
-    const val ACTION_REFRESH_STATUS = "chen.action.oppopods.refresh_status"
-    const val ACTION_GAME_MODE_SET = "chen.action.oppopods.game_mode_set"
-    const val ACTION_PODS_GAME_MODE_CHANGED = "chen.action.oppopods.pods_game_mode_changed"
-    const val ACTION_TRANSPARENCY_VOCAL_ENHANCEMENT_SET = "chen.action.oppopods.transparency_vocal_enhancement_set"
-    const val ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED = "chen.action.oppopods.pods_transparency_vocal_enhancement_changed"
-    const val ACTION_SPATIAL_AUDIO_SET = "chen.action.oppopods.spatial_audio_set"
-    const val ACTION_PODS_SPATIAL_AUDIO_CHANGED = "chen.action.oppopods.pods_spatial_audio_changed"
-    const val ACTION_EQ_PRESET_SET = "chen.action.oppopods.eq_preset_set"
-    const val ACTION_PODS_EQ_PRESET_CHANGED = "chen.action.oppopods.pods_eq_preset_changed"
-    const val ACTION_PODS_SMART_ANC_LEVEL_CHANGED = "chen.action.oppopods.pods_smart_anc_level_changed"
-    const val ACTION_DUAL_DEVICE_CONNECTION_SET = "chen.action.oppopods.dual_device_connection_set"
-    const val ACTION_PODS_DUAL_DEVICE_CONNECTION_CHANGED = "chen.action.oppopods.pods_dual_device_connection_changed"
-    const val ACTION_CYCLE_ANC = "chen.action.oppopods.cycle_anc"
-    const val ACTION_AUTO_GAME_MODE_CHANGED = "chen.action.oppopods.auto_game_mode_changed"
-    const val ACTION_GAME_MODE_IMPLEMENTATION_CHANGED = "chen.action.oppopods.game_mode_implementation_changed"
-    const val ACTION_RFCOMM_LOG_CONNECT = "chen.action.oppopods.rfcomm_log_connect"
-    const val ACTION_RFCOMM_LOG_DISCONNECT = "chen.action.oppopods.rfcomm_log_disconnect"
-    const val ACTION_RFCOMM_LOG_CLEAR = "chen.action.oppopods.rfcomm_log_clear"
-    const val ACTION_RFCOMM_LOG = "chen.action.oppopods.rfcomm_log"
-    const val ACTION_RFCOMM_DEBUG_SEND = "chen.action.oppopods.rfcomm_debug_send"
-    // Adaptive模式开关状态变更广播，用于跨进程同步偏好设置（App → com.android.bluetooth / com.xiaomi.bluetooth）
-    const val ACTION_ADAPTIVE_MODE_CHANGED = "chen.action.oppopods.adaptive_mode_changed"
-    const val ACTION_CONFIG_CHANGED = "chen.action.oppopods.config_changed"
+    // App UI <-> bluetooth-process liveness ping
+    const val ACTION_PODS_UI_INIT = "dev.sonypods.action.ui_init"
+    const val ACTION_PODS_UI_CLOSED = "dev.sonypods.action.ui_closed"
+    const val ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE = "dev.sonypods.action.module_bluetooth_service_alive"
+
+    // app -> hooks: state fan-out
+    const val ACTION_PODS_CONNECTED = "dev.sonypods.action.pods_connected"
+    const val ACTION_PODS_DISCONNECTED = "dev.sonypods.action.pods_disconnected"
+    const val ACTION_PODS_BATTERY_CHANGED = "dev.sonypods.action.pods_battery_changed"
+    const val ACTION_PODS_WEAR_STATUS_CHANGED = "dev.sonypods.action.pods_wear_status_changed"
+    const val ACTION_PODS_ANC_CHANGED = "dev.sonypods.action.pods_anc_changed"
+    const val ACTION_PODS_AMBIENT_VOICE_CHANGED = "dev.sonypods.action.pods_ambient_voice_changed"
+
+    // hooks -> app: control requests (received by SystemIntegrationReceiver)
+    const val ACTION_ANC_SELECT = "dev.sonypods.action.anc_select"
+    const val ACTION_AMBIENT_VOICE_SET = "dev.sonypods.action.ambient_voice_set"
+    const val ACTION_CYCLE_ANC = "dev.sonypods.action.cycle_anc"
+    const val ACTION_REFRESH_STATUS = "dev.sonypods.action.refresh_status"
+
+    // bluetooth process -> app: A2DP connection trigger for the Sony transport
+    const val ACTION_HOOK_DEVICE_CONNECTED = "dev.sonypods.action.hook_device_connected"
+    const val ACTION_HOOK_DEVICE_DISCONNECTED = "dev.sonypods.action.hook_device_disconnected"
+
+    // app -> com.xiaomi.bluetooth: notification / island rendering
+    const val ACTION_SEND_STRONG_TOAST = "dev.sonypods.action.send_strong_toast"
+    const val ACTION_UPDATE_PODS_NOTIFICATION = "dev.sonypods.action.update_pods_notification"
+    const val ACTION_CANCEL_PODS_NOTIFICATION = "dev.sonypods.action.cancel_pods_notification"
+
+    // Popup activity intent action (manifest intent-filter)
+    const val ACTION_SHOW_PODS_UI = "dev.sonypods.action.show_pods_ui"
+
+    // App config sync towards hook processes
+    const val ACTION_CONFIG_CHANGED = "dev.sonypods.action.config_changed"
 }

@@ -23,11 +23,11 @@ import org.json.JSONObject
 class BluetoothUpstreamHeadsetHook : HookContext() {
     private val TAG = "OppoPods-Upstream"
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
-    private val knownOppoAddresses = linkedSetOf<String>()
+    private val knownSonyAddresses = linkedSetOf<String>()
     private val callbacks = linkedMapOf<IBinder, Any>()
     private val handler = Handler(Looper.getMainLooper())
     private val hookedBinderClasses = linkedSetOf<String>()
-    private var lastOppoDevice: BluetoothDevice? = null
+    private var lastSonyDevice: BluetoothDevice? = null
     private var context: Context? = null
     private var receiverRegistered = false
     private var currentBattery: BatteryParams? = null
@@ -58,7 +58,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     )
                 ) {
                     val device = args[4] as? BluetoothDevice
-                    if (!isOppoPod(device)) return@hookBefore
+                    if (!isSonyPod(device)) return@hookBefore
                     val battery = effectiveBattery() ?: return@hookBefore
                     val leftBattery = displayBattery(battery.left) ?: (args[1] as? Int ?: 0)
                     val rightBattery = displayBattery(battery.right) ?: (args[2] as? Int ?: 0)
@@ -107,7 +107,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 hookAfter(notificationClass.method("updateParameters", requestClass)) {
                     val request = args[0] ?: return@hookAfter
                     val device = getObjectField(request, "f18110e") as? BluetoothDevice
-                    if (!isOppoPod(device)) return@hookAfter
+                    if (!isSonyPod(device)) return@hookAfter
                     val battery = effectiveBattery() ?: return@hookAfter
                     val leftBattery = displayBattery(battery.left)
                     val rightBattery = displayBattery(battery.right)
@@ -164,7 +164,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
-            addAction(OppoPodsAction.ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED)
+            addAction(OppoPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED)
             addAction(OppoPodsAction.ACTION_CONFIG_CHANGED)
         }
         context?.registerReceiver(object : BroadcastReceiver() {
@@ -177,7 +177,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
                     OppoPodsAction.ACTION_PODS_DISCONNECTED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
@@ -185,18 +185,18 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
                     OppoPodsAction.ACTION_PODS_ANC_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentAnc = intent.getIntExtra("status", currentAnc)
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
-                    OppoPodsAction.ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED -> {
+                    OppoPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentTransparencyVocalEnhancement = intent.getBooleanExtra("enabled", currentTransparencyVocalEnhancement)
                         hasTransparencyVocalEnhancementState = true
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
                 }
                 Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc battery=${currentBattery.debugString()}")
@@ -205,7 +205,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }, filter, Context.RECEIVER_EXPORTED)
         receiverRegistered = true
         context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
-            setPackage("com.android.bluetooth")
+            setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
         Log.d(TAG, "registered status receiver context=$context")
@@ -219,8 +219,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         runCatching {
             hookBefore(binderClass.method("checkSupport", BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = fakeSupport()
                 Log.d(TAG, "BinderC6776v.checkSupport forced device=${device.describe()} support=$result")
             }
@@ -238,8 +238,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 val command = args[0] as? Int
                 val value = args[1] as? String
                 val device = args[2] as? BluetoothDevice
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = when (command) {
                     102 -> "1"
                     123 -> "4"
@@ -261,20 +261,20 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             val callbackClass = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetCallback")
             hookBefore(binderClass.method("register", callbackClass)) {
                 val callback = args[0]
-                if (callback != null && lastOppoDevice != null) {
+                if (callback != null && lastSonyDevice != null) {
                     rememberCallback(callback)
                     result = null
-                    Log.d(TAG, "BinderC6776v.register swallowed callback=$callback device=${lastOppoDevice.describe()}")
+                    Log.d(TAG, "BinderC6776v.register swallowed callback=$callback device=${lastSonyDevice.describe()}")
                     requestBluetoothStatus("register")
-                    sendRealStatus(lastOppoDevice, "register")
-                    sendRealStatusDelayed(lastOppoDevice, "register-refresh", 350L)
+                    sendRealStatus(lastSonyDevice, "register")
+                    sendRealStatusDelayed(lastSonyDevice, "register-refresh", 350L)
                 }
             }
             hookBefore(binderClass.method("registerCallbackDevice", callbackClass, BluetoothDevice::class.java)) {
                 val callback = args[0]
                 val device = args[1] as? BluetoothDevice
-                if (!isOppoPod(device) || callback == null) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device) || callback == null) return@hookBefore
+                lastSonyDevice = device
                 rememberCallback(callback)
                 result = null
                 Log.d(TAG, "BinderC6776v.registerCallbackDevice swallowed callback=$callback device=${device.describe()}")
@@ -285,7 +285,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             hookBefore(binderClass.method("unregister", callbackClass, BluetoothDevice::class.java)) {
                 val callback = args[0]
                 val device = args[1] as? BluetoothDevice
-                if (!isOppoPod(device) || callback == null) return@hookBefore
+                if (!isSonyPod(device) || callback == null) return@hookBefore
                 forgetCallback(callback)
                 result = null
                 Log.d(TAG, "BinderC6776v.unregister swallowed callback=$callback device=${device.describe()}")
@@ -298,8 +298,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         runCatching {
             hookBefore(binderClass.method(methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = null
                 Log.d(TAG, "BinderC6776v.$methodName swallowed device=${device.describe()}")
                 requestBluetoothStatus(methodName)
@@ -319,7 +319,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         runCatching {
             hookBefore(binderClass.method(methodName, String::class.java)) {
                 val address = args[0] as? String
-                if (address == null || !isOppoAddress(address)) return@hookBefore
+                if (address == null || !isSonyAddress(address)) return@hookBefore
                 result = forced()
                 Log.d(TAG, "BinderC6776v.$label forced address=$address result=$result method=$methodName")
             }
@@ -337,7 +337,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         runCatching {
             hookBefore(binderClass.method(methodName, String::class.java)) {
                 val address = args[0] as? String
-                if (address == null || !isOppoAddress(address)) return@hookBefore
+                if (address == null || !isSonyAddress(address)) return@hookBefore
                 result = forced
                 Log.d(TAG, "BinderC6776v.$label forced address=$address result=$forced method=$methodName")
             }
@@ -350,8 +350,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             hookBefore(binderClass.method(methodName, BluetoothDevice::class.java, String::class.java)) {
                 val device = args[0] as? BluetoothDevice
                 val value = args[1] as? String
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = null
                 Log.d(TAG, "BinderC6776v.$methodName swallowed value=$value device=${device.describe()}")
                 requestBluetoothStatus("$methodName:$value")
@@ -366,11 +366,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             hookBefore(binderClass.method("changeAncMode", Int::class.java, BluetoothDevice::class.java)) {
                 val mode = args[0] as? Int
                 val device = args[1] as? BluetoothDevice
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = null
                 Log.d(TAG, "BinderC6776v.changeAncMode swallowed mode=$mode device=${device.describe()}")
-                mode?.let { sendOppoAnc(oppoAncFromMiuiMode(it)) }
+                mode?.let { sendSonyAnc(sonyAncFromMiuiMode(it)) }
                 sendRealStatus(device, "changeAncMode:$mode")
             }
         }.onFailure { Log.w(TAG, "hook BinderC6776v.changeAncMode skipped", it) }
@@ -381,11 +381,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             hookBefore(binderClass.method("changeAncLevel", String::class.java, BluetoothDevice::class.java)) {
                 val level = args[0] as? String
                 val device = args[1] as? BluetoothDevice
-                if (!isOppoPod(device)) return@hookBefore
-                lastOppoDevice = device
+                if (!isSonyPod(device)) return@hookBefore
+                lastSonyDevice = device
                 result = null
                 Log.d(TAG, "BinderC6776v.changeAncLevel swallowed level=$level device=${device.describe()}")
-                level?.let { sendOppoAncLevel(it) }
+                level?.let { sendSonyAncLevel(it) }
                 sendRealStatus(device, "changeAncLevel:$level")
             }
         }.onFailure { Log.w(TAG, "hook BinderC6776v.changeAncLevel skipped", it) }
@@ -458,10 +458,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleCheckSupport(data: Parcel, reply: Parcel): Boolean? {
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "checkSupport upstream device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "checkSupport upstream device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
         reply.writeNoException()
         val support = fakeSupport()
         reply.writeString(support)
@@ -471,11 +471,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleRegister(data: Parcel, reply: Parcel): Boolean? {
         val callback = data.readCallbackBinder()
-        Log.d(TAG, "register upstream callback=$callback lastDevice=${lastOppoDevice.describe()}")
-        if (callback == null || lastOppoDevice == null) return null
+        Log.d(TAG, "register upstream callback=$callback lastDevice=${lastSonyDevice.describe()}")
+        if (callback == null || lastSonyDevice == null) return null
         (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks[it] = callback }
         reply.writeNoException()
-        sendRealStatus(lastOppoDevice, "register")
+        sendRealStatus(lastSonyDevice, "register")
         return true
     }
 
@@ -488,12 +488,12 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleDeviceVoid(method: String, data: Parcel, reply: Parcel): Boolean? {
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "$method upstream device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "$method upstream device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
         reply.writeNoException()
-        Log.d(TAG, "$method upstream no-op for Oppo")
+        Log.d(TAG, "$method upstream no-op for Sony")
         sendRealStatus(device, method)
         return true
     }
@@ -501,11 +501,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun handleAncMode(data: Parcel, reply: Parcel): Boolean? {
         val mode = data.readInt()
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "changeAncMode upstream mode=$mode device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
-        sendOppoAnc(oppoAncFromMiuiMode(mode))
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "changeAncMode upstream mode=$mode device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
+        sendSonyAnc(sonyAncFromMiuiMode(mode))
         reply.writeNoException()
         sendRealStatus(device, "changeAncMode:$mode")
         return true
@@ -514,11 +514,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun handleAncLevel(data: Parcel, reply: Parcel): Boolean? {
         val level = data.readString()
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "changeAncLevel upstream level=$level device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
-        level?.let { sendOppoAncLevel(it) }
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "changeAncLevel upstream level=$level device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
+        level?.let { sendSonyAncLevel(it) }
         reply.writeNoException()
         sendRealStatus(device, "changeAncLevel:$level")
         return true
@@ -526,9 +526,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleAddressString(method: String, data: Parcel, reply: Parcel, forced: String): Boolean? {
         val address = data.readString()
-        val isOppo = address != null && isOppoAddress(address)
-        Log.d(TAG, "$method upstream address=$address isOppo=$isOppo")
-        if (!isOppo) return null
+        val isSony = address != null && isSonyAddress(address)
+        Log.d(TAG, "$method upstream address=$address isSony=$isSony")
+        if (!isSony) return null
         reply.writeNoException()
         reply.writeString(forced)
         Log.d(TAG, "$method upstream forced $forced")
@@ -537,9 +537,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleAddressBoolean(method: String, data: Parcel, reply: Parcel, forced: Boolean): Boolean? {
         val address = data.readString()
-        val isOppo = address != null && isOppoAddress(address)
-        Log.d(TAG, "$method upstream address=$address isOppo=$isOppo")
-        if (!isOppo) return null
+        val isSony = address != null && isSonyAddress(address)
+        Log.d(TAG, "$method upstream address=$address isSony=$isSony")
+        if (!isSony) return null
         reply.writeNoException()
         reply.writeInt(if (forced) 1 else 0)
         Log.d(TAG, "$method upstream forced $forced")
@@ -550,10 +550,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         val command = data.readInt()
         val value = data.readString()
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "setCommonCommand upstream command=$command value=$value device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "setCommonCommand upstream command=$command value=$value device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
         reply.writeNoException()
         reply.writeString(
             when (command) {
@@ -569,10 +569,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun handleCommonConfig(data: Parcel, reply: Parcel): Boolean? {
         val device = data.readDevice()
         val type = data.readString()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "getCommonConfig upstream type=$type device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo) return null
-        lastOppoDevice = device
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "getCommonConfig upstream type=$type device=${device.describe()} isSony=$isSony")
+        if (!isSony) return null
+        lastSonyDevice = device
         reply.writeNoException()
         sendRealStatus(device, "getCommonConfig:$type")
         return true
@@ -581,10 +581,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun handleRegisterCallbackDevice(data: Parcel, reply: Parcel): Boolean? {
         val callback = data.readCallbackBinder()
         val device = data.readDevice()
-        val isOppo = isOppoPod(device)
-        Log.d(TAG, "registerCallbackDevice upstream callback=$callback device=${device.describe()} isOppo=$isOppo")
-        if (!isOppo || callback == null) return null
-        lastOppoDevice = device
+        val isSony = isSonyPod(device)
+        Log.d(TAG, "registerCallbackDevice upstream callback=$callback device=${device.describe()} isSony=$isSony")
+        if (!isSony || callback == null) return null
+        lastSonyDevice = device
         (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks[it] = callback }
         reply.writeNoException()
         sendRealStatus(device, "registerCallbackDevice")
@@ -605,17 +605,28 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         return if (readInt() != 0) BluetoothDevice.CREATOR.createFromParcel(this) else null
     }
 
-    private fun isOppoPod(device: BluetoothDevice?): Boolean {
+    private fun isSonyPod(device: BluetoothDevice?): Boolean {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull()
         val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val result = name.contains("oppo", ignoreCase = true) || (address != null && isOppoAddress(address))
-        if (result && address != null) knownOppoAddresses.add(address.uppercase())
+        val result = isSonyName(name) || (address != null && isSonyAddress(address))
+        if (result && address != null) knownSonyAddresses.add(address.uppercase())
         return result
     }
 
+    private fun isSonyName(rawName: String): Boolean {
+        val name = rawName.trim().lowercase()
+        return name.contains("sony") ||
+            name.contains("linkbuds") ||
+            name.startsWith("wf-") ||
+            name.startsWith("wh-") ||
+            name.startsWith("wi-") ||
+            name.startsWith("xba-") ||
+            name.startsWith("mdr-")
+    }
+
     private fun notifyRealStatus(reason: String) {
-        val device = lastOppoDevice
+        val device = lastSonyDevice
         if (device != null) {
             sendRealStatus(device, reason)
             return
@@ -765,7 +776,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun requestBluetoothStatus(reason: String) {
         runCatching {
             context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
-                setPackage("com.android.bluetooth")
+                setPackage(BuildConfig.APPLICATION_ID)
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             })
             Log.d(TAG, "requested bluetooth status reason=$reason package=$packageName")
@@ -774,7 +785,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }
     }
 
-    private fun oppoAncFromMiuiMode(mode: Int): Int {
+    private fun sonyAncFromMiuiMode(mode: Int): Int {
+        // Xiaomi mode 1 = noise cancelling, 2 = transparency -> Sony AMBIENT_SOUND, else off.
         return when (mode) {
             1 -> 2
             2 -> 3
@@ -782,78 +794,57 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }
     }
 
-    private fun oppoAncFromMiuiLevel(level: String): Int {
-        // MIUI binder level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep.
+    private fun sonyAncFromMiuiLevel(level: String): Int {
+        // MIUI binder level codes 01xx are NC intensity levels (Smart/Light/Medium/Deep);
+        // Sony has a single NC mode, so they all collapse to NC. 02xx = transparency.
         return when {
-            level.startsWith("0103") -> 5
-            level.startsWith("0101") -> 6
-            level.startsWith("0100") -> 7
-            level.startsWith("0102") -> 8
-            level.startsWith("01") -> 7
+            level.startsWith("01") -> 2
             level.startsWith("02") -> 3
             else -> 1
         }
     }
 
-    private fun sendOppoAncLevel(level: String) {
+    private fun sendSonyAncLevel(level: String) {
         when {
             level.startsWith("0201") -> {
                 currentAnc = 3
-                sendOppoTransparencyVocalEnhancement(true)
+                sendSonyAmbientVoice(true)
             }
             level.startsWith("0200") -> {
                 currentAnc = 3
-                sendOppoTransparencyVocalEnhancement(false)
+                sendSonyAmbientVoice(false)
             }
-            else -> sendOppoAnc(oppoAncFromMiuiLevel(level))
+            else -> sendSonyAnc(sonyAncFromMiuiLevel(level))
         }
     }
 
-    private fun sendOppoAnc(mode: Int) {
+    private fun sendSonyAnc(mode: Int) {
         currentAnc = mode
         val ctx = context ?: run {
-            Log.w(TAG, "sendOppoAnc skipped: context is null mode=$mode")
+            Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
         ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             putExtra("status", mode)
-            setPackage("com.android.bluetooth")
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
-            putExtra("status", mode)
             setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
-        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
-            setPackage("com.android.bluetooth")
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        Log.d(TAG, "sendOppoAnc broadcast sent mode=$mode")
+        Log.d(TAG, "sendSonyAnc broadcast sent mode=$mode")
     }
 
-    private fun sendOppoTransparencyVocalEnhancement(enabled: Boolean) {
+    private fun sendSonyAmbientVoice(enabled: Boolean) {
         currentTransparencyVocalEnhancement = enabled
         hasTransparencyVocalEnhancementState = true
         val ctx = context ?: run {
-            Log.w(TAG, "sendOppoTransparencyVocalEnhancement skipped: context is null enabled=$enabled")
+            Log.w(TAG, "sendSonyAmbientVoice skipped: context is null enabled=$enabled")
             return
         }
-        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_TRANSPARENCY_VOCAL_ENHANCEMENT_SET).apply {
-            putExtra("enabled", enabled)
-            setPackage("com.android.bluetooth")
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED).apply {
+        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_AMBIENT_VOICE_SET).apply {
             putExtra("enabled", enabled)
             setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
-        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
-            setPackage("com.android.bluetooth")
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        Log.d(TAG, "sendOppoTransparencyVocalEnhancement broadcast sent enabled=$enabled")
+        Log.d(TAG, "sendSonyAmbientVoice broadcast sent enabled=$enabled")
     }
 
     @Suppress("DEPRECATION")
@@ -891,8 +882,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         return "left=${left?.battery}/${left?.isCharging}/${left?.isConnected} right=${right?.battery}/${right?.isCharging}/${right?.isConnected} case=${case?.battery}/${case?.isCharging}/${case?.isConnected}"
     }
 
-    private fun isOppoAddress(address: String): Boolean {
-        return address.uppercase() in knownOppoAddresses
+    private fun isSonyAddress(address: String): Boolean {
+        return address.uppercase() in knownSonyAddresses
     }
 
     private fun BluetoothDevice?.describe(): String {

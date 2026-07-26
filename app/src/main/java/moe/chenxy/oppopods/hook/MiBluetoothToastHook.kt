@@ -14,6 +14,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.os.Bundle
 import com.xzakota.hyper.notification.focus.FocusNotification
+import moe.chenxy.oppopods.BuildConfig
 import moe.chenxy.oppopods.utils.FocusIslandUtil
 import moe.chenxy.oppopods.utils.PodImageLoader
 import moe.chenxy.oppopods.utils.SystemApisUtils
@@ -26,10 +27,6 @@ import moe.chenxy.oppopods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {
-
-    // ANC 模式本地缓存，用于循环切换和状态同步（1=关 2=降噪 3=通透 4=自适应）
-    // 通过接收 ACTION_PODS_ANC_CHANGED 广播与 RfcommController 保持同步
-    private var localAncMode = 1
 
     override fun onHook() {
 
@@ -94,9 +91,9 @@ object MiBluetoothToastHook : HookContext() {
                     context.resources.getString(miheadset_notification_Disconnect),
                     PendingIntent.getBroadcast(context, 0, intent, 201326592)
                 )
-                // 循环切换降噪模式，指定 package 确保广播路由到 com.android.bluetooth 进程
+                // 循环切换降噪模式：广播路由到模块 App 进程，由 Sony repository 执行三态循环
                 val ancCycleIntent = Intent(OppoPodsAction.ACTION_CYCLE_ANC)
-                ancCycleIntent.setPackage("com.android.bluetooth")
+                ancCycleIntent.setPackage(BuildConfig.APPLICATION_ID)
                 ancCycleIntent.setIdentifier("BTHeadset$address")
                 ancCycleIntent.putExtra("device_name", alias ?: bluetoothDevice.name ?: "")
                 val moduleContext = context.createPackageContext(
@@ -112,7 +109,7 @@ object MiBluetoothToastHook : HookContext() {
                 val pendingIntent = PendingIntent.getActivity(
                     context,
                     0,
-                    Intent("chen.action.oppopods.show_pods_ui").apply {
+                    Intent(OppoPodsAction.ACTION_SHOW_PODS_UI).apply {
                         setClassName("moe.chenxy.oppopods", "moe.chenxy.oppopods.PopupActivity")
                         putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
                         putExtra("bluetoothaddress", bluetoothDevice.address)
@@ -244,7 +241,7 @@ object MiBluetoothToastHook : HookContext() {
 
                     val broadcastReceiver = object : BroadcastReceiver() {
                         override fun onReceive(p0: Context?, p1: Intent?) {
-                            if (p1?.action == "chen.action.oppopods.sendstrongtoast") {
+                            if (p1?.action == OppoPodsAction.ACTION_SEND_STRONG_TOAST) {
                                 if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_MODULE) {
                                     Log.d("OppoPods", "skip module island mode=${ConfigManager.islandMode()}")
                                     return
@@ -253,40 +250,22 @@ object MiBluetoothToastHook : HookContext() {
                                 // Use Focus Island (HyperOS 3+) for battery display
                                 val address = p1.getStringExtra("address").orEmpty()
                                 FocusIslandUtil.showBatteryIsland(context, prefs, batteryParams, address)
-                            } else if (p1?.action == "chen.action.oppopods.updatepodsnotification") {
+                            } else if (p1?.action == OppoPodsAction.ACTION_UPDATE_PODS_NOTIFICATION) {
                                 val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
                                 createPodsNotification(device, context, batteryParams!!)
-                            } else if (p1?.action == "chen.action.oppopods.cancelpodsnotification") {
+                            } else if (p1?.action == OppoPodsAction.ACTION_CANCEL_PODS_NOTIFICATION) {
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java) as BluetoothDevice
                                 cancelNotification(device, context)
-                            } else if (p1?.action == OppoPodsAction.ACTION_PODS_ANC_CHANGED) {
-                                // 同步耳机实际 ANC 状态到本地缓存，确保下次循环切换时状态准确
-                                localAncMode = p1.getIntExtra("status", 1)
-                            } else if (p1?.action == OppoPodsAction.ACTION_CYCLE_ANC) {
-                                // Sony three-state cycle: NC(2) -> Ambient(3) -> Off(1).
-                                val cycle = listOf(2, 3, 1)
-                                val currentIndex = cycle.indexOf(if (localAncMode in 5..8) 2 else localAncMode)
-                                localAncMode = cycle[(currentIndex + 1).floorMod(cycle.size)]
-                                Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
-                                    putExtra("status", localAncMode)
-                                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                                    p0?.sendBroadcast(this)
-                                }
                             }
                         }
                     }
 
-                    val intentFilter = IntentFilter("chen.action.oppopods.sendstrongtoast")
-                    intentFilter.addAction("chen.action.oppopods.updatepodsnotification")
-                    intentFilter.addAction("chen.action.oppopods.cancelpodsnotification")
-                    intentFilter.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
-                    // 监听耳机实际 ANC 状态变更广播，保持 localAncMode 与 RfcommController 同步
-                    intentFilter.addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
+                    val intentFilter = IntentFilter(OppoPodsAction.ACTION_SEND_STRONG_TOAST)
+                    intentFilter.addAction(OppoPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
+                    intentFilter.addAction(OppoPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
                     context.registerReceiver(broadcastReceiver, intentFilter,
                         Context.RECEIVER_EXPORTED)
         }
     }
-
-    private fun Int.floorMod(divisor: Int): Int = ((this % divisor) + divisor) % divisor
 }

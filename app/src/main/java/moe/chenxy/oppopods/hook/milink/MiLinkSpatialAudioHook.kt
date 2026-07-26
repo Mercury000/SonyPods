@@ -34,7 +34,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
             hook.hookAfter(hook.findMethod("com.miui.circulate.api.service.CirculateServiceInfo", "setHeadsetId", String::class.java, Int::class.javaPrimitiveType!!)) {
                 val headsetId = args[0] as? String ?: return@hookAfter
                 val address = getObjectField(instance, "deviceId") as? String ?: return@hookAfter
-                if (!hook.isOppoAddress(address) && address != hook.currentAddress && headsetId != hook.fakeDeviceId()) return@hookAfter
+                if (!hook.isSonyAddress(address) && address != hook.currentAddress && headsetId != hook.fakeDeviceId()) return@hookAfter
                 if (hook.spatialAudioPanelEnabled()) return@hookAfter
                 val serviceProperties = getObjectField(instance, "serviceProperties")
                 val bundle = callMethod(serviceProperties, "getAll") as? Bundle ?: return@hookAfter
@@ -47,14 +47,12 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod(className, methodName, BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 hook.cacheRuntimeOwner(className, instance)
                 hook.captureRuntimeContext(instance)
                 val miLinkMode = args[1] as? Int ?: return@hookBefore
-                val mode = hook.oppoSpatialFromMiLink(miLinkMode)
+                val mode = hook.spatialModeFromMiLink(miLinkMode)
                 hook.updateSpatialAudioMode(mode)
-                hook.sendOppoSpatialAudio(mode)
-                hook.sendSpatialChanged(mode)
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = 1
             }
@@ -65,13 +63,11 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController", "setMiAudioEffect", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 hook.lastAncBatteryController = instance
                 hook.captureRuntimeContext(instance)
-                val mode = hook.oppoSpatialFromMiLink(args[1] as? Int ?: return@hookBefore)
+                val mode = hook.spatialModeFromMiLink(args[1] as? Int ?: return@hookBefore)
                 hook.updateSpatialAudioMode(mode)
-                hook.sendOppoSpatialAudio(mode)
-                hook.sendSpatialChanged(mode)
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
             }
@@ -80,12 +76,10 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController", "setHeadTracking", BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 hook.lastAncBatteryController = instance
                 hook.captureRuntimeContext(instance)
                 hook.updateSpatialAudioMode(ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
-                hook.sendOppoSpatialAudio(hook.currentSpatialAudioMode)
-                hook.sendSpatialChanged(hook.currentSpatialAudioMode)
                 hook.notifySpatialUiChanged(instance, device, hook.currentSpatialAudioMode)
                 this.result = 100
             }
@@ -112,7 +106,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController\$mmaCallback\$1", "onDeviceSpatialType", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 hook.notifySpatialUiChanged(instance, device, hook.currentSpatialAudioMode)
                 this.result = null
             }
@@ -121,7 +115,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController\$mmaCallback\$1", "onReportSpatialState", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 val mode = hook.currentSpatialAudioMode.coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
@@ -133,7 +127,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookAfter(hook.findMethod("com.miui.headset.runtime.ProfileContext", "getAudioSpatialEffectState", BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookAfter
-                if (!hook.isOppoPod(device)) return@hookAfter
+                if (!hook.isSonyPod(device)) return@hookAfter
                 hook.lastProfileContext = instance
                 hook.captureRuntimeContext(instance)
                 this.result = hook.miLinkSpatialMode()
@@ -145,14 +139,12 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.ProfileContext", "setAudioEffectState", BluetoothDevice::class.java, String::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!hook.isOppoPod(device)) return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
                 hook.lastProfileContext = instance
                 hook.captureRuntimeContext(instance)
                 val state = args[2] as? Int ?: return@hookBefore
                 val mode = state.coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
                 hook.updateSpatialAudioMode(mode)
-                hook.sendOppoSpatialAudio(mode)
-                hook.sendSpatialChanged(mode)
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
             }

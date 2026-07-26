@@ -17,6 +17,7 @@ import moe.chenxy.oppopods.hook.Log
 import moe.chenxy.oppopods.utils.SystemApisUtils.isHyperOS
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.IconParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.Left
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.Right
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.StringToastBean
@@ -104,7 +105,7 @@ object MiuiStrongToastUtil {
         batteryParams: BatteryParams,
         device: BluetoothDevice? = null,
     ) {
-        val intent = Intent("chen.action.oppopods.sendstrongtoast")
+        val intent = Intent(OppoPodsAction.ACTION_SEND_STRONG_TOAST)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("address", device?.address.orEmpty())
         intent.`package` = "com.xiaomi.bluetooth"
@@ -116,7 +117,7 @@ object MiuiStrongToastUtil {
         batteryParams: BatteryParams,
         device: BluetoothDevice,
     ) {
-        val intent = Intent("chen.action.oppopods.updatepodsnotification")
+        val intent = Intent(OppoPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("device", device)
         intent.`package` = "com.xiaomi.bluetooth"
@@ -127,7 +128,7 @@ object MiuiStrongToastUtil {
         context: Context,
         device: BluetoothDevice,
     ) {
-        val intent = Intent("chen.action.oppopods.cancelpodsnotification")
+        val intent = Intent(OppoPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
         intent.putExtra("device", device)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)

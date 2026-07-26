@@ -1,10 +1,13 @@
 package moe.chenxy.oppopods.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
@@ -19,18 +22,32 @@ import kotlinx.coroutines.launch
 import moe.chenxy.oppopods.MainActivity
 import moe.chenxy.oppopods.PopupActivity
 import moe.chenxy.oppopods.R
+import moe.chenxy.oppopods.ui.toBatteryParams
+import moe.chenxy.oppopods.ui.toSinglePodParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 
 /**
  * Foreground service that keeps [SonyHeadphoneRepository] (the Sony Tandem transport
- * and state hub) alive in the app process while a headphone session is active.
- *
- * Phase 3 will extend this service into the broadcast bridge towards the HyperOS
- * hooks (battery injection, island, system settings).
+ * and state hub) alive in the app process, and bridges its state to the HyperOS
+ * hook processes (方案 A):
+ *  - battery -> com.android.bluetooth (system stack injection) + com.xiaomi.bluetooth
+ *    (notification / island / AOD) + com.milink.service + com.android.settings
+ *  - ANC / ambient voice -> all hook processes
+ *  - connect / disconnect -> notification lifecycle + hook caches
  */
 class SonyControlService : Service() {
 
     private lateinit var repository: SonyHeadphoneRepository
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private var lastConnectedAddress: String? = null
+    private var lastBatteryParams: BatteryParams? = null
+    private var lastSingle: PodParams? = null
+    private var lastAncStatus: Int = -1
+    private var lastAmbientVoice: Boolean? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +57,7 @@ class SonyControlService : Service() {
         serviceScope.launch {
             repository.state.collect { uiState ->
                 updateNotification(uiState)
+                bridgeState(uiState)
             }
         }
     }
@@ -57,6 +75,120 @@ class SonyControlService : Service() {
         serviceScope.cancel()
         super.onDestroy()
     }
+
+    // ------------------------------------------------------------------
+    // State bridge towards the HyperOS hook processes
+    // ------------------------------------------------------------------
+
+    private fun bridgeState(uiState: SonyHeadphoneUiState) {
+        val address = uiState.connectedDevice?.address
+        val name = uiState.deviceInfo.modelName ?: uiState.connectedDevice?.name ?: ""
+
+        if (address != null && lastConnectedAddress == null) {
+            sendStateBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
+                putExtra("address", address)
+                putExtra("device_name", name)
+            }
+        } else if (address == null && lastConnectedAddress != null) {
+            sendStateBroadcast(OppoPodsAction.ACTION_PODS_DISCONNECTED) {
+                putExtra("address", lastConnectedAddress)
+            }
+            lastConnectedAddress?.let { previous ->
+                remoteDevice(previous)?.let { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(this, it) }
+            }
+            lastBatteryParams = null
+            lastSingle = null
+            lastAncStatus = -1
+            lastAmbientVoice = null
+        }
+        lastConnectedAddress = address
+
+        if (address == null) return
+
+        val battery = uiState.batteryState.toBatteryParams()
+        val single = uiState.batteryState.toSinglePodParams()
+        if (battery != lastBatteryParams || single != lastSingle) {
+            lastBatteryParams = battery
+            lastSingle = single
+            broadcastBattery(address, battery, single)
+        }
+
+        val ancStatus = ancStatusFromMode(uiState.noiseControlState.controlMode)
+        if (ancStatus != lastAncStatus) {
+            lastAncStatus = ancStatus
+            sendStateBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED) {
+                putExtra("address", address)
+                putExtra("status", ancStatus)
+            }
+        }
+
+        val ambientVoice = uiState.noiseControlState.ambientVoiceMode
+        if (ambientVoice != lastAmbientVoice) {
+            lastAmbientVoice = ambientVoice
+            sendStateBroadcast(OppoPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED) {
+                putExtra("address", address)
+                putExtra("enabled", ambientVoice)
+            }
+        }
+    }
+
+    private fun broadcastBattery(address: String, battery: BatteryParams, single: PodParams?) {
+        // The headband form factor reports one level; feed it through the "left"
+        // slot so the hooks' min/aggregation logic keeps working.
+        val effective = if (single != null) BatteryParams(left = single) else battery
+        val systemLevel = listOfNotNull(
+            single?.takeIf { it.isConnected }?.battery,
+            battery.left?.takeIf { it.isConnected }?.battery,
+            battery.right?.takeIf { it.isConnected }?.battery,
+        ).minOrNull() ?: -1
+
+        sendStateBroadcast(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED) {
+            putExtra("address", address)
+            putExtra("status", effective)
+            putExtra("system_battery_level", systemLevel)
+            putExtra("left_battery", effective.left?.battery ?: 0)
+            putExtra("left_charging", effective.left?.isCharging == true)
+            putExtra("left_connected", effective.left?.isConnected == true)
+            putExtra("right_battery", effective.right?.battery ?: 0)
+            putExtra("right_charging", effective.right?.isCharging == true)
+            putExtra("right_connected", effective.right?.isConnected == true)
+            putExtra("case_battery", effective.case?.battery ?: 0)
+            putExtra("case_charging", effective.case?.isCharging == true)
+            putExtra("case_connected", effective.case?.isConnected == true)
+        }
+
+        // System notification + focus island + AOD are rendered by the
+        // com.xiaomi.bluetooth hook.
+        remoteDevice(address)?.let { device ->
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(this, effective, device)
+            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(this, effective, device)
+        }
+    }
+
+    private fun sendStateBroadcast(action: String, fill: Intent.() -> Unit) {
+        HOOK_PACKAGES.forEach { targetPackage ->
+            runCatching {
+                sendBroadcast(Intent(action).apply {
+                    fill()
+                    setPackage(targetPackage)
+                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                })
+            }.onFailure {
+                Log.w(TAG, "state broadcast failed action=$action target=$targetPackage", it)
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun remoteDevice(address: String): BluetoothDevice? {
+        return runCatching {
+            getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
+        }.getOrNull()
+    }
+
+    // ------------------------------------------------------------------
+    // Foreground notification
+    // ------------------------------------------------------------------
 
     private fun updateNotification(uiState: SonyHeadphoneUiState) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -147,6 +279,13 @@ class SonyControlService : Service() {
         private const val CHANNEL_ID = "sony_control_service"
         private const val NOTIFICATION_ID = 2001
         const val ACTION_DISCONNECT = "dev.sonypods.action.SERVICE_DISCONNECT"
+
+        private val HOOK_PACKAGES = listOf(
+            "com.android.bluetooth",
+            "com.xiaomi.bluetooth",
+            "com.milink.service",
+            "com.android.settings",
+        )
 
         fun ensureRunning(context: Context) {
             runCatching {

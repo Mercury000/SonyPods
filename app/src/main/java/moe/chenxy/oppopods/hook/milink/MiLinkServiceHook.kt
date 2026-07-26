@@ -21,7 +21,7 @@ import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 object MiLinkServiceHook : HookContext() {
     internal const val TAG = "OppoPods-MiLink"
     private const val PREFS_NAME = "oppopods_milink_state"
-    private val knownOppoAddresses = linkedSetOf<String>()
+    private val knownSonyAddresses = linkedSetOf<String>()
     internal var context: Context? = null
     private var receiverRegistered = false
     internal var currentAddress: String? = null
@@ -102,7 +102,7 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             hookAfter(findMethod(className, methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookAfter
-                if (!isOppoPod(device)) return@hookAfter
+                if (!isSonyPod(device)) return@hookAfter
                 cacheRuntimeOwner(className, instance)
                 captureRuntimeContext(instance)
                 this.result = result()
@@ -117,22 +117,22 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             hookAfter(findMethod(className, methodName, String::class.java)) {
                 val address = args[0] as? String ?: return@hookAfter
-                if (!isOppoAddress(address)) return@hookAfter
+                if (!isSonyAddress(address)) return@hookAfter
                 this.result = result()
             }
         }.onFailure { Log.w(TAG, "hook $className.$methodName(String) skipped", it) }
     }
 
-    private fun hookAncCommand(className: String, methodName: String, oppoAnc: Int, result: Int) {
+    private fun hookAncCommand(className: String, methodName: String, sonyAnc: Int, result: Int) {
         runCatching {
             hookBefore(findMethod(className, methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!isOppoPod(device)) return@hookBefore
+                if (!isSonyPod(device)) return@hookBefore
                 cacheRuntimeOwner(className, instance)
                 captureRuntimeContext(instance)
-                currentAnc = oppoAnc
-                sendOppoAnc(oppoAnc)
-                sendAncChanged(oppoAnc)
+                currentAnc = sonyAnc
+                sendSonyAnc(sonyAnc)
+                sendAncChanged(sonyAnc)
                 this.result = result
             }
         }.onFailure { Log.w(TAG, "hook $className.$methodName command skipped", it) }
@@ -142,18 +142,18 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             hookBefore(findMethod("com.miui.headset.runtime.AncBatteryController", "setAncStateBlock", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
-                if (!isOppoPod(device)) return@hookBefore
+                if (!isSonyPod(device)) return@hookBefore
                 lastAncBatteryController = instance
                 captureRuntimeContext(instance)
                 val miLinkMode = args[1] as? Int ?: return@hookBefore
-                val oppoAnc = oppoAncFromMiLink(miLinkMode)
+                val sonyAnc = sonyAncFromMiLink(miLinkMode)
                 val instanceContext = runCatching { getObjectField(instance, "context") as? Context }.getOrNull()
                 if (instanceContext != null) {
                     context = instanceContext.applicationContext ?: instanceContext
                 }
-                currentAnc = oppoAnc
-                sendOppoAnc(oppoAnc, instanceContext)
-                sendAncChanged(oppoAnc, instanceContext)
+                currentAnc = sonyAnc
+                sendSonyAnc(sonyAnc, instanceContext)
+                sendAncChanged(sonyAnc, instanceContext)
                 notifyHeadsetPropertyChanged(instance, device, 8)
                 notifyHeadsetPropertyChanged(instance, device, 4)
                 this.result = miLinkAncState()
@@ -178,7 +178,6 @@ object MiLinkServiceHook : HookContext() {
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
-            addAction(OppoPodsAction.ACTION_PODS_SPATIAL_AUDIO_CHANGED)
             addAction(OppoPodsAction.ACTION_CONFIG_CHANGED)
         }
         context?.registerReceiver(object : BroadcastReceiver() {
@@ -190,7 +189,7 @@ object MiLinkServiceHook : HookContext() {
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
                     OppoPodsAction.ACTION_PODS_DISCONNECTED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
@@ -198,55 +197,55 @@ object MiLinkServiceHook : HookContext() {
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                         saveState(context)
                     }
                     OppoPodsAction.ACTION_PODS_ANC_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentAnc = intent.getIntExtra("status", currentAnc)
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
-                        saveState(context)
-                    }
-                    OppoPodsAction.ACTION_PODS_SPATIAL_AUDIO_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentSpatialAudioMode = intent.getIntExtra("mode", currentSpatialAudioMode)
-                            .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
-                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                         saveState(context)
                     }
                 }
             }
         }, filter, Context.RECEIVER_EXPORTED)
         receiverRegistered = true
-        context?.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT).apply {
-            setPackage("com.android.bluetooth")
+        context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
     }
 
-    internal fun isOppoPod(device: BluetoothDevice): Boolean {
+    internal fun isSonyPod(device: BluetoothDevice): Boolean {
         val address = runCatching { device.address }.getOrNull()
-        if (address != null && isOppoAddress(address)) return true
+        if (address != null && isSonyAddress(address)) return true
         val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val result = name.contains("oppo", ignoreCase = true)
+        val normalized = name.trim().lowercase()
+        val result = normalized.contains("sony") ||
+            normalized.contains("linkbuds") ||
+            normalized.startsWith("wf-") ||
+            normalized.startsWith("wh-") ||
+            normalized.startsWith("wi-") ||
+            normalized.startsWith("xba-") ||
+            normalized.startsWith("mdr-")
         if (result && address != null) {
-            knownOppoAddresses.add(address.uppercase())
+            knownSonyAddresses.add(address.uppercase())
             currentAddress = address
             currentName = name
         }
         return result
     }
 
-    internal fun isOppoAddress(address: String): Boolean {
+    internal fun isSonyAddress(address: String): Boolean {
         val normalized = address.uppercase()
-        return normalized == currentAddress?.uppercase() || normalized in knownOppoAddresses
+        return normalized == currentAddress?.uppercase() || normalized in knownSonyAddresses
     }
 
     private fun isTargetHeadsetInfo(info: Any?): Boolean {
         if (info == null) return false
         listOf("getAddress", "component1").forEach { method ->
             val address = runCatching { callMethod(info, method) as? String }.getOrNull()
-            if (address != null && isOppoAddress(address)) return true
+            if (address != null && isSonyAddress(address)) return true
         }
         return false
     }
@@ -260,7 +259,7 @@ object MiLinkServiceHook : HookContext() {
         }
     }
 
-    private fun oppoAncFromMiLink(mode: Int): Int {
+    private fun sonyAncFromMiLink(mode: Int): Int {
         return when (mode) {
             1 -> 2
             2 -> 3
@@ -300,14 +299,14 @@ object MiLinkServiceHook : HookContext() {
         return if (params?.isConnected == true && params.isCharging) 1 else 0
     }
 
-    private fun sendOppoAnc(mode: Int, fallbackContext: Context? = null) {
+    private fun sendSonyAnc(mode: Int, fallbackContext: Context? = null) {
         val ctx = fallbackContext ?: context ?: run {
-            Log.w(TAG, "sendOppoAnc skipped: context is null mode=$mode")
+            Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             putExtra("status", mode)
-            setPackage("com.android.bluetooth")
+            setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             ctx.sendBroadcast(this)
         }
@@ -315,35 +314,9 @@ object MiLinkServiceHook : HookContext() {
 
     private fun sendAncChanged(mode: Int, fallbackContext: Context? = null) {
         val ctx = fallbackContext ?: context ?: return
-        listOf(BuildConfig.APPLICATION_ID, "com.milink.service", "com.android.settings").forEach { targetPackage ->
+        listOf("com.milink.service", "com.android.settings").forEach { targetPackage ->
             ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
                 putExtra("status", mode)
-                setPackage(targetPackage)
-                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            })
-        }
-    }
-
-    internal fun sendOppoSpatialAudio(mode: Int, fallbackContext: Context? = null) {
-        val ctx = fallbackContext ?: context ?: run {
-            Log.w(TAG, "sendOppoSpatialAudio skipped: context is null mode=$mode")
-            return
-        }
-        Intent(OppoPodsAction.ACTION_SPATIAL_AUDIO_SET).apply {
-            putExtra("mode", mode.coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING))
-            setPackage("com.android.bluetooth")
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            ctx.sendBroadcast(this)
-        }
-    }
-
-    internal fun sendSpatialChanged(mode: Int, fallbackContext: Context? = null) {
-        val ctx = fallbackContext ?: context ?: return
-        val normalizedMode = mode.coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
-        listOf(BuildConfig.APPLICATION_ID, "com.milink.service", "com.android.settings").forEach { targetPackage ->
-            ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_SPATIAL_AUDIO_CHANGED).apply {
-                currentAddress?.let { putExtra("address", it) }
-                putExtra("mode", normalizedMode)
                 setPackage(targetPackage)
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             })
@@ -360,7 +333,7 @@ object MiLinkServiceHook : HookContext() {
         }
     }
 
-    internal fun oppoSpatialFromMiLink(mode: Int): Int {
+    internal fun spatialModeFromMiLink(mode: Int): Int {
         return when (mode) {
             9, 11 -> ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING
             1 -> ConfigManager.SPATIAL_AUDIO_FIXED
@@ -411,7 +384,7 @@ object MiLinkServiceHook : HookContext() {
 
     internal fun isTargetAncBatteryModel(model: Any?): Boolean {
         val device = runCatching { callMethod(model, "getBluetoothDevice") as? BluetoothDevice }.getOrNull()
-        return device?.let { isOppoPod(it) } == true
+        return device?.let { isSonyPod(it) } == true
     }
 
     internal fun cacheRuntimeOwner(className: String, owner: Any?) {
@@ -520,7 +493,7 @@ object MiLinkServiceHook : HookContext() {
         currentAnc = prefs.getInt("anc", currentAnc)
         currentSpatialAudioMode = prefs.getInt("spatial_audio_mode", currentSpatialAudioMode)
             .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
-        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
         currentBattery = BatteryParams(
             left = PodParams(
                 prefs.getInt("left_battery", currentBattery.left?.battery ?: 0),

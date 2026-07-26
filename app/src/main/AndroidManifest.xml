@@ -50,7 +50,7 @@
             android:excludeFromRecents="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="chen.action.oppopods.show_pods_ui" />
+                <action android:name="dev.sonypods.action.show_pods_ui" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -58,6 +58,18 @@
             android:name=".service.SonyControlService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <receiver
+            android:name=".service.SystemIntegrationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.sonypods.action.hook_device_connected" />
+                <action android:name="dev.sonypods.action.hook_device_disconnected" />
+                <action android:name="dev.sonypods.action.anc_select" />
+                <action android:name="dev.sonypods.action.ambient_voice_set" />
+                <action android:name="dev.sonypods.action.cycle_anc" />
+                <action android:name="dev.sonypods.action.refresh_status" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name=".config.PodImageProvider"
             android:authorities="moe.chenxy.oppopods.podimages"
