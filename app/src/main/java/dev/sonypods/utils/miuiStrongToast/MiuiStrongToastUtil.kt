@@ -144,7 +144,7 @@ object MiuiStrongToastUtil {
                 context = context,
                 category = StrongToastCategory.VIDEO_TEXT,
                 left = Left(
-                    iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("single_battery_head"), 1),
+                    iconParams = IconParams(Category.RAW, FileType.MP4, (clipUri(context, "single_battery_head") ?: return), 1),
                     textParams = batteryText(pod.battery, pod.isCharging, lowBatteryThreshold),
                 ),
                 right = null,
@@ -156,13 +156,13 @@ object MiuiStrongToastUtil {
             context = context,
             category = StrongToastCategory.VIDEO_TEXT_TEXT_VIDEO,
             left = Left(
-                iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("earphone_left_inear"), 1),
+                iconParams = IconParams(Category.RAW, FileType.MP4, (clipUri(context, "earphone_left_inear") ?: return), 1),
                 textParams = batteryParams.left?.let {
                     batteryText(it.battery, it.isCharging, lowBatteryThreshold)
                 },
             ),
             right = Right(
-                iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("earphone_right_inear"), 1),
+                iconParams = IconParams(Category.RAW, FileType.MP4, (clipUri(context, "earphone_right_inear") ?: return), 1),
                 textParams = batteryParams.right?.let {
                     batteryText(it.battery, it.isCharging, lowBatteryThreshold)
                 },
@@ -192,11 +192,41 @@ object MiuiStrongToastUtil {
     )
 
     /**
-     * HyperOS addresses these clips through its own FileProvider rather than as
-     * `android.resource://` ids — SystemUI resolves nothing else.
+     * HyperOS serves these clips from its own files dir through an androidx
+     * FileProvider, not as `android.resource://` ids. Two things are required beyond
+     * the URI string: the file has to be there (the system app copies it out of its raw
+     * resources on demand) and SystemUI has to be granted read access to it.
      */
-    private fun clipUri(name: String): String =
-        "content://com.xiaomi.bluetooth.fileprovider/internal_files/$name.mp4"
+    private fun clipUri(context: Context, name: String): String? {
+        val file = java.io.File(context.filesDir, "$name.mp4")
+        if (!file.exists() || file.length() == 0L) {
+            val id = runCatching {
+                context.resources.getIdentifier(name, "raw", context.packageName)
+            }.getOrDefault(0)
+            if (id == 0) {
+                Log.w("SonyPods", "strong toast clip missing and no raw resource: $name")
+                return null
+            }
+            val copied = runCatching {
+                context.resources.openRawResource(id).use { input ->
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+                file.setReadable(true, false)
+                true
+            }.onFailure { Log.w("SonyPods", "failed to materialise clip $name", it) }.getOrDefault(false)
+            if (!copied) return null
+            Log.i("SonyPods", "materialised strong toast clip $name (${file.length()} bytes)")
+        }
+        val uri = "content://com.xiaomi.bluetooth.fileprovider/internal_files/$name.mp4"
+        runCatching {
+            context.grantUriPermission(
+                "com.android.systemui",
+                Uri.parse(uri),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }.onFailure { Log.w("SonyPods", "grantUriPermission failed for $name", it) }
+        return uri
+    }
 
     private fun showToast(context: Context, category: String, left: Left, right: Right?) {
         val toastPayload = toastJson.encodeToString(StringToastBean.serializer(), StringToastBean(left, right))
