@@ -40,6 +40,13 @@ object SonyBridge {
     const val CMD_REFRESH = "refresh"
     /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
     const val CMD_REPUBLISH = "republish"
+
+    /**
+     * Sent by the process that renders the HyperOS notification and island once its
+     * receiver is up. The engine then re-renders, because anything it pushed before
+     * that point was dropped on the floor.
+     */
+    const val CMD_SURFACES_READY = "surfaces_ready"
     const val CMD_DEBUG_RAW = "debug_raw"
 
     /** The process that hosts the engine; all commands are addressed to it. */

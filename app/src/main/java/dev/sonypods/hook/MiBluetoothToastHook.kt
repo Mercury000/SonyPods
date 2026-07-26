@@ -13,6 +13,8 @@ import android.content.IntentFilter
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.utils.FocusIslandUtil
@@ -268,6 +270,23 @@ object MiBluetoothToastHook : HookContext() {
                     intentFilter.addAction(SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
                     context.registerReceiver(broadcastReceiver, intentFilter,
                         Context.RECEIVER_EXPORTED)
+                    Log.i("SonyPods", "notification/island receiver registered")
+                    // This class is constructed well after boot, so anything the engine
+                    // rendered before now was lost; ask it to render again.
+                    announceSurfacesReady(context)
         }
     }
+
+    private fun announceSurfacesReady(context: Context) {
+        val handler = Handler(Looper.getMainLooper())
+        repeat(SURFACES_READY_ATTEMPTS) { attempt ->
+            handler.postDelayed(
+                { SonyBridge.sendCommand(context, SonyBridge.CMD_SURFACES_READY) },
+                attempt * SURFACES_READY_INTERVAL_MS,
+            )
+        }
+    }
+
+    private const val SURFACES_READY_ATTEMPTS = 4
+    private const val SURFACES_READY_INTERVAL_MS = 4_000L
 }

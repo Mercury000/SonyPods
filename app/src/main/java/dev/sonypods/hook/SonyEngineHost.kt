@@ -197,6 +197,14 @@ object SonyEngineHost {
 
             SonyBridge.CMD_REPUBLISH -> appContext?.let { publish(it, snapshot()) }
 
+            SonyBridge.CMD_SURFACES_READY -> appContext?.let {
+                // Forget what we think is on screen so the island shows again.
+                lastRenderedAddress = null
+                lastRenderedBattery = null
+                Log.i(TAG, "surfaces ready; re-rendering notification and island")
+                publish(it, snapshot())
+            }
+
             SonyBridge.CMD_DEBUG_RAW ->
                 repo.runDebugAction("raw", intent.getStringExtra(SonyBridge.EXTRA_STRING))
         }
