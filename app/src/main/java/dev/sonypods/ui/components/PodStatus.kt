@@ -1,0 +1,227 @@
+package dev.sonypods.ui.components
+
+import android.content.res.Configuration
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.sonypods.R
+import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
+import dev.sonypods.utils.miuiStrongToast.data.PodParams
+import top.yukonga.miuix.kmp.basic.Text
+
+/**
+ * Battery status card. For TWS earbuds shows Left / Right / Case columns.
+ * For single-battery headphones (e.g. WH-1000XM4) pass [single] to show one column.
+ */
+@Composable
+fun PodStatus(
+    batteryParams: BatteryParams,
+    single: PodParams? = null,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    val dividerColor = if (isSystemInDarkTheme()) Color(0xFF333333) else Color(0xFFEEEEEE)
+    val dividerHeight = if (compact) 40.dp else 56.dp
+
+    if (single != null) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BatteryColumn(
+                label = stringResource(R.string.batt_single),
+                pod = single,
+                modifier = Modifier.weight(1f),
+                compact = compact
+            )
+        }
+        return
+    }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BatteryColumn(
+            label = stringResource(R.string.batt_left_pod),
+            pod = batteryParams.left,
+            modifier = Modifier.weight(1f),
+            compact = compact
+        )
+        Box(
+            modifier = Modifier
+                .width(0.5.dp)
+                .height(dividerHeight)
+                .background(dividerColor)
+        )
+        BatteryColumn(
+            label = stringResource(R.string.batt_right_pod),
+            pod = batteryParams.right,
+            modifier = Modifier.weight(1f),
+            compact = compact
+        )
+        Box(
+            modifier = Modifier
+                .width(0.5.dp)
+                .height(dividerHeight)
+                .background(dividerColor)
+        )
+        BatteryColumn(
+            label = stringResource(R.string.pod_case),
+            pod = batteryParams.case,
+            modifier = Modifier.weight(1f),
+            compact = compact
+        )
+    }
+}
+
+@Composable
+private fun BatteryColumn(
+    label: String,
+    pod: PodParams?,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    val isConnected = pod != null && pod.isConnected
+    val level = pod?.battery ?: 0
+
+    var lastKnownLevel by remember { mutableIntStateOf(100) }
+    if (level > 0) {
+        lastKnownLevel = level
+    }
+
+    val displayLevel = if (isConnected) "$level%" else "-"
+    val iconLevel = if (isConnected) level else lastKnownLevel
+
+    // Pad short labels (左/右) to match width of longest label (耳机盒) using ideographic spaces
+    val paddedLabel = if (label.length < 3) label.padEnd(3, '　') else label
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.padding(vertical = if (compact) 2.dp else 4.dp)
+        ) {
+            Text(
+                text = paddedLabel,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = displayLevel,
+                fontSize = 13.sp,
+                color = Color.Gray
+            )
+            Image(
+                painter = themedPainterResource(
+                    getBatteryIconRes(iconLevel, if (isConnected) pod?.isCharging == true else false)
+                ),
+                contentDescription = "$label $displayLevel",
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+private fun getBatteryIconRes(level: Int, isCharging: Boolean): Int {
+    val index = when {
+        level <= 10 -> 1
+        level <= 20 -> 2
+        level <= 30 -> 3
+        level <= 40 -> 4
+        level <= 50 -> 5
+        level <= 60 -> 6
+        level <= 70 -> 7
+        level <= 80 -> 8
+        level <= 90 -> 9
+        else -> 10
+    }
+    return if (isCharging) {
+        when (index) {
+            1 -> R.drawable.charge_1
+            2 -> R.drawable.charge_2
+            3 -> R.drawable.charge_3
+            4 -> R.drawable.charge_4
+            5 -> R.drawable.charge_5
+            6 -> R.drawable.charge_6
+            7 -> R.drawable.charge_7
+            8 -> R.drawable.charge_8
+            9 -> R.drawable.charge_9
+            else -> R.drawable.charge_10
+        }
+    } else {
+        when (index) {
+            1 -> R.drawable.common_1
+            2 -> R.drawable.common_2
+            3 -> R.drawable.common_3
+            4 -> R.drawable.common_4
+            5 -> R.drawable.common_5
+            6 -> R.drawable.common_6
+            7 -> R.drawable.common_7
+            8 -> R.drawable.common_8
+            9 -> R.drawable.common_9
+            else -> R.drawable.common_10
+        }
+    }
+}
+
+/**
+ * Loads a drawable resource respecting the app's theme override.
+ * When the app theme differs from the system night mode, creates a configuration context
+ * with the correct night mode to load the appropriate drawable variant (e.g. drawable-night-nodpi).
+ */
+@Composable
+private fun themedPainterResource(@androidx.annotation.DrawableRes id: Int): Painter {
+    val context = LocalContext.current
+    val themeConfig = LocalConfiguration.current
+    val sysNightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    val themeNightMode = themeConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+
+    return if (sysNightMode == themeNightMode) {
+        painterResource(id)
+    } else {
+        val themedResources = remember(context, themeNightMode) {
+            context.createConfigurationContext(
+                Configuration(context.resources.configuration).apply {
+                    uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or themeNightMode
+                }
+            ).resources
+        }
+        remember(id, themeNightMode) {
+            BitmapPainter(
+                (themedResources.getDrawable(id, null) as BitmapDrawable).bitmap.asImageBitmap()
+            )
+        }
+    }
+}

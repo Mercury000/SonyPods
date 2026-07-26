@@ -1,61 +1,58 @@
 <div align="center">
 
-<img src="https://github.com/user-attachments/assets/e8a3df6b-6e67-485a-ae1c-018ac24e87d4" width="120" height="120" style="border-radius: 24px;" alt="HyperIsland Icon"/>
+# SonyPods
 
-# OPPOPods
+**System-level Sony headphone control for HyperOS devices**
 
-**System-level OPPO earphone control for HyperOS devices**
-
-[![GitHub Release](https://img.shields.io/github/v/release/1812z/OppoPods?style=flat-square&logo=github&color=black)](https://github.com/1812z/OppoPods/releases)
-![Downloads](https://img.shields.io/github/downloads/1812z/OppoPods/total?style=flat-square)
 [![Platform](https://img.shields.io/badge/Platform-Android-green?style=flat-square&logo=android)](https://android.com)
 [![LSPosed](https://img.shields.io/badge/Framework-LSPosed-blueviolet?style=flat-square)](https://github.com/LSPosed/LSPosed)
-[![HyperOS](https://img.shields.io/badge/ROM-HyperOS%203-orange?style=flat-square)](https://hyperos.mi.com)
+[![HyperOS](https://img.shields.io/badge/ROM-HyperOS3-orange?style=flat-square)](https://hyperos.mi.com)
 
-
-**English** | **[Simplified Chinese](README.md)**
+**English** | **[简体中文](README.md)**
 
 </div>
 
+An Xposed module bringing system-level Sony headphone control to Xiaomi HyperOS.
+The protocol layer is based on OpenBuds' clean-room Sony Tandem implementation
+(BLE GATT + SPP).
 
-An Xposed module that provides system-level OPPO earphone control for Xiaomi HyperOS devices.
+### Supported models (first batch)
 
+- Sony WH-1000XM4
+- Sony LinkBuds S
+- Sony WF-1000XM5
 
-### Earphone Features
+### Headphone features
 
-- **Noise Cancellation Control** — Switch between Off / Noise Cancellation / Adaptive / Transparency modes
-- **Game Mode** — Low-latency audio toggle, with support for automatically enabling it when connected
-- **Battery Display** — Real-time battery display for the left earbud, right earbud, and charging case
+- **Noise control** — Off / Noise Cancelling / Ambient Sound, ambient level (1–20) and voice focus
+- **Equalizer** — official presets + Clear Bass + custom bands
+- **Battery** — TWS left / right / case, single level for headbands
+- **Playback** — previous / play-pause / next
+- **Status** — LE Audio, Quick Access, wearing detection, firmware version
+- **Tandem debug** — TX/RX log viewer and raw HEX sender
 
-### HyperOS Integration
-- **Hyper Island** — Supports the official Hyper Island or the module's built-in Hyper Island
-- **Fusion Device Center** — Supports controls in Fusion Device Center
-- **Settings Integration** — Supports controls in system Bluetooth settings
-- **Device Transfer** — Supports one-tap multi-device transfer in Fusion Device Center
-- **Model Spoofing** — Spoofs a supported Xiaomi earphone model
+### HyperOS integration
 
-### Module Features
-- **Quick Popup** — Tap the notification or Control Center earphone card to open a floating popup with battery, noise cancellation, and game mode controls; tap "More" to enter the full page
-- **Quick Launch** — From the notification or Control Center earphone card, quickly jump to HeyMelody, module settings, or system settings
-
-### System Requirements
-
-- Xiaomi device running **HyperOS** (Android 15+) (Hyper Island only supports OS3)
-- **LSPosed** API version >= 101
+- **Model spoofing** — presents Sony headphones as supported Xiaomi earbuds to the system headset UI
+- **System battery injection** — battery synced into the system bluetooth stack
+- **Focus Island / notifications** — connect & battery island, AOD battery, ANC-cycle notification button
+- **Fusion device center** — battery and ANC state read/write
+- **Quick popup** — control popup from the notification
+- **Model images** — cloud catalog matched by model + color, custom images supported
 
 ### Usage
 
-1. Install the APK
-2. Enable the module in LSPosed and select the recommended scopes
-3. Use the one-tap scope restart button in the top-right corner of the app
-4. Connect your OPPO earphones via Bluetooth
+1. Install the APK, enable the module in LSPosed with scopes:
+   `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`
+2. Restart the scopes (one-tap root restart inside the app)
+3. Open the app, grant Bluetooth / notification permissions, connect your Sony headphones
+
+### Requirements
+
+- HyperOS (Android 15+)
+- LSPosed (libxposed API 100+)
 
 ### Credits
 
-- [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen — original project
-- [Miuix](https://github.com/YuKongA/miuix) — HyperOS-style Compose UI components
-- [OPPOPods](https://github.com/Leaf-lsgtky/OppoPods) - by Leaf-lsgtky
-
-### License
-
-GPL-3.0
+- [OppoPods](https://github.com/1812z/OppoPods) — HyperOS system-integration shell
+- OpenBuds — Sony Tandem protocol stack

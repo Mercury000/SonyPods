@@ -13,14 +13,14 @@
     </queries>
 
     <application
-        android:name=".OppoPodsApp"
+        android:name=".SonyPodsApp"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:extractNativeLibs="false"
         android:enableOnBackInvokedCallback="true"
         android:supportsRtl="true"
-        android:theme="@style/Theme.OppoPods">
+        android:theme="@style/Theme.SonyPods">
 
         <activity-alias
             android:name=".LauncherActivity"
@@ -46,7 +46,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".PopupActivity"
-            android:theme="@style/Theme.OppoPods.Popup"
+            android:theme="@style/Theme.SonyPods.Popup"
             android:taskAffinity=""
             android:excludeFromRecents="true"
             android:exported="true">
@@ -73,7 +73,7 @@
         </receiver>
         <provider
             android:name=".config.PodImageProvider"
-            android:authorities="moe.chenxy.oppopods.podimages"
+            android:authorities="dev.sonypods.podimages"
             android:exported="true"
             android:grantUriPermissions="false" />
         <!-- Set as Xposed Module -->
@@ -84,7 +84,7 @@
         <!-- Set your Xposed Module description -->
         <meta-data
             android:name="xposeddescription"
-            android:value="OPPO Earphones Support for Xiaomi HyperOS." />
+            android:value="Sony Headphones Support for Xiaomi HyperOS." />
 
         <!-- The minimum Xposed version number -->
         <meta-data

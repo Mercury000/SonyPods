@@ -15,11 +15,11 @@ apksign {
 }
 
 android {
-    namespace = "moe.chenxy.oppopods"
+    namespace = "dev.sonypods"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "moe.chenxy.oppopods"
+        applicationId = "dev.sonypods"
         minSdk = 35
         targetSdk = 36
         versionCode = 15
