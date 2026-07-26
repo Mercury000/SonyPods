@@ -40,6 +40,7 @@ import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.components.AncSwitch
+import dev.sonypods.ui.localizedName
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
@@ -202,8 +203,8 @@ private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         OverlayDropdownPreference(
             title = stringResource(R.string.sony_eq_title),
-            summary = currentPreset?.displayName ?: stringResource(R.string.eq_unknown),
-            items = presets.map { it.displayName },
+            summary = currentPreset?.localizedName() ?: stringResource(R.string.eq_unknown),
+            items = presets.map { it.localizedName() },
             selectedIndex = presets.indexOf(currentPreset).coerceAtLeast(0),
             onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
         )
