@@ -358,19 +358,8 @@ private fun DeviceStatusCard(uiState: SonyStateSnapshot) {
             summary = uiState.firmwareVersion ?: "—",
         )
         BasicComponent(
-            title = stringResource(R.string.wearing_status),
-            summary = uiState.wearingStatus ?: "—",
-        )
-        BasicComponent(
             title = stringResource(R.string.lea_status),
             summary = uiState.leaStatus ?: "—",
-        )
-        BasicComponent(
-            title = stringResource(R.string.quick_access),
-            summary = listOfNotNull(
-                uiState.quickAccessLeftRight,
-                uiState.quickAccessNcAmb,
-            ).joinToString(" / ").ifEmpty { "—" },
         )
     }
 }

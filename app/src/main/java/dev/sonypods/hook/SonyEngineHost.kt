@@ -164,12 +164,21 @@ object SonyEngineHost {
      * *change*: after a reboot the headphones are usually connected again before this
      * hook can observe anything, and an attempt made while the stack is still settling
      * can fail with nothing to retry it.
+     *
+     * Guard: if A2DP-connected devices exist but none is a Sony device, skip silently.
+     * This prevents repeated Sony SPP attempts against non-Sony headphones (e.g. EDIFIER).
      */
     @SuppressLint("MissingPermission")
     private fun reconcileConnection() {
         val repo = repository ?: return
         if (repo.state.value.deviceInfo.protocolReady) return
-        val device = connectedSonyDevice() ?: return
+        val allConnected = runCatching { a2dpProxy?.connectedDevices }.getOrNull()
+        if (!allConnected.isNullOrEmpty() && allConnected.none { HeadsetStateDispatcher.isSonyPod(it) }) {
+            // A2DP is active, but only non-Sony devices are connected — do nothing.
+            Log.d(TAG, "reconcile skipped: ${allConnected.size} non-Sony A2DP device(s) connected")
+            return
+        }
+        val device = allConnected?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) } ?: return
         Log.i(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
         connectDevice(device, force = true)
     }
