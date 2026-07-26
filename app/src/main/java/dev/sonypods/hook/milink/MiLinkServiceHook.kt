@@ -2,6 +2,7 @@ package dev.sonypods.hook.milink
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -24,9 +25,14 @@ import dev.sonypods.utils.miuiStrongToast.data.PodParams
 object MiLinkServiceHook : HookContext() {
     internal const val TAG = "SonyPods-MiLink"
     private const val PREFS_NAME = "sonypods_milink_state"
+
+    /** headsetPropertyChangeListener update types observed in the MiUI headset runtime. */
+    private const val UPDATE_TYPE_BATTERY = 4
+    private const val UPDATE_TYPE_ANC = 8
     private val knownSonyAddresses = linkedSetOf<String>()
     internal var context: Context? = null
     private var receiverRegistered = false
+    private var stateSeeded = false
     internal var currentAddress: String? = null
     private var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
@@ -187,6 +193,10 @@ object MiLinkServiceHook : HookContext() {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
         Log.i(TAG, "registering state mirror process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
+        // Recover the device identity before the panel can ask: the hooks decline to
+        // answer for addresses they do not recognise as Sony, so an empty set at the
+        // first query loses that round even once the snapshot arrives.
+        loadState()
         stateMirror.register(context)
         runCatching {
             context?.registerReceiver(object : BroadcastReceiver() {
@@ -216,7 +226,28 @@ object MiLinkServiceHook : HookContext() {
             else -> 1
         }
         saveState(context)
-        Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
+        Log.i(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
+        pushStateToPanel()
+    }
+
+    /**
+     * The fusion-center panel only *pulls* headphone state, and only when the system
+     * decides to ask. A snapshot arriving after the panel rendered would otherwise sit
+     * in our cache unseen — which is why the panel looked empty until the process was
+     * restarted. Tell the runtime its properties changed so it queries us again.
+     */
+    private fun pushStateToPanel() {
+        val address = currentAddress ?: return
+        val device = runCatching {
+            context?.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
+        }.getOrNull() ?: return
+        listOf(lastAncBatteryController, lastProfileContext)
+            .filterNotNull()
+            .distinctBy { it.javaClass.name }
+            .forEach { owner ->
+                notifyHeadsetPropertyChanged(owner, device, UPDATE_TYPE_BATTERY)
+                notifyHeadsetPropertyChanged(owner, device, UPDATE_TYPE_ANC)
+            }
     }
 
     internal fun isSonyPod(device: BluetoothDevice): Boolean {
@@ -498,8 +529,18 @@ object MiLinkServiceHook : HookContext() {
             .apply()
     }
 
+    /**
+     * Cold-start seed only, and only once per process.
+     *
+     * These prefs are shared by every milink process but SharedPreferences does not
+     * synchronise across processes: re-reading them on each query used to overwrite
+     * fresh broadcast state with whatever this process happened to have cached, which
+     * made the panel's contents depend on which process wrote last.
+     */
     private fun loadState() {
+        if (stateSeeded) return
         val prefs = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) ?: return
+        stateSeeded = true
         currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
         currentAnc = prefs.getInt("anc", currentAnc)
