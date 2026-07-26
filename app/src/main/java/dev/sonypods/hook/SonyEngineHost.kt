@@ -3,6 +3,8 @@ package dev.sonypods.hook
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.os.SystemClock
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -39,6 +41,8 @@ object SonyEngineHost {
     private const val TAG = "SonyPods-Engine"
     private const val STARTUP_ANNOUNCE_COUNT = 10
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
+    private const val RECONCILE_INTERVAL_MS = 15_000L
+    private const val CONNECT_COOLDOWN_MS = 10_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -55,6 +59,10 @@ object SonyEngineHost {
     private var lastSnapshot: SonyStateSnapshot? = null
     private var lastRenderedBattery: BatteryParams? = null
     private var lastRenderedAddress: String? = null
+    private var lastConnectAttemptMs = 0L
+
+    @Volatile
+    private var a2dpProxy: BluetoothProfile? = null
 
     fun start(context: Context, adapterService: Any?) {
         adapterService?.let { this.adapterService = it }
@@ -90,6 +98,15 @@ object SonyEngineHost {
                 delay(STARTUP_ANNOUNCE_INTERVAL_MS)
             }
         }
+
+        bindA2dpProxy(ctx)
+        scope.launch {
+            while (true) {
+                delay(RECONCILE_INTERVAL_MS)
+                runCatching { reconcileConnection() }
+                    .onFailure { Log.w(TAG, "connection reconcile failed", it) }
+            }
+        }
         Log.i(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
     }
 
@@ -98,13 +115,65 @@ object SonyEngineHost {
     }
 
     @SuppressLint("MissingPermission")
-    fun connectDevice(device: BluetoothDevice) {
+    fun connectDevice(device: BluetoothDevice, force: Boolean = false) {
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
-        if (repo.state.value.connectedDevice?.address.equals(address, ignoreCase = true)) return
+        val current = repo.state.value
+        val alreadyLive = current.connectedDevice?.address.equals(address, ignoreCase = true) &&
+            current.deviceInfo.protocolReady
+        if (alreadyLive && !force) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
+        lastConnectAttemptMs = now
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
         Log.i(TAG, "connecting Tandem session to $name ($address)")
         repo.connect(address, name)
+    }
+
+    /**
+     * Re-attaches the Tandem session when it is missing but the headphones are there.
+     *
+     * Needed because the session is otherwise only established on an A2DP state
+     * *change*: after a reboot the headphones are usually connected again before this
+     * hook can observe anything, and an attempt made while the stack is still settling
+     * can fail with nothing to retry it.
+     */
+    @SuppressLint("MissingPermission")
+    private fun reconcileConnection() {
+        val repo = repository ?: return
+        if (repo.state.value.deviceInfo.protocolReady) return
+        val device = connectedSonyDevice() ?: return
+        Log.i(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
+        connectDevice(device, force = true)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectedSonyDevice(): BluetoothDevice? =
+        runCatching {
+            a2dpProxy?.connectedDevices?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
+        }.getOrNull()
+
+    private fun bindA2dpProxy(context: Context) {
+        runCatching {
+            val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return
+            adapter.getProfileProxy(
+                context,
+                object : BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                        if (profile == BluetoothProfile.A2DP) {
+                            a2dpProxy = proxy
+                            Log.d(TAG, "A2DP proxy bound")
+                            reconcileConnection()
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {
+                        if (profile == BluetoothProfile.A2DP) a2dpProxy = null
+                    }
+                },
+                BluetoothProfile.A2DP,
+            )
+        }.onFailure { Log.w(TAG, "A2DP proxy bind failed", it) }
     }
 
     @SuppressLint("MissingPermission")
