@@ -12,8 +12,9 @@ object SonyTandemV2Table1Protocol {
     private const val POWER_GET_STATUS: Byte = 0x22
     private const val POWER_RET_STATUS: Byte = 0x23
     private const val POWER_NTFY_STATUS: Byte = 0x25
-    private const val SYSTEM_GET_PARAM: Byte = 0x36
-    private const val SYSTEM_RET_PARAM: Byte = 0x37
+    private const val SYSTEM_GET_PARAM: Byte = 0xF6.toByte()
+    private const val SYSTEM_RET_PARAM: Byte = 0xF7.toByte()
+    private const val SYSTEM_NTFY_PARAM: Byte = 0xF9.toByte()
     private const val LEA_GET_STATUS: Byte = 0x42
     private const val LEA_RET_STATUS: Byte = 0x43
     private const val LEA_NTFY_STATUS: Byte = 0x45
@@ -271,7 +272,7 @@ object SonyTandemV2Table1Protocol {
             )
             LEA_RET_STATUS, LEA_NTFY_STATUS -> parseLeaStatus(payload, raw)
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaParam(payload, raw)
-            SYSTEM_RET_PARAM -> parseSystemRetParam(payload, raw)
+            SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
             else -> ParsedTandemResponse.Unknown(dataType.unsigned, command.unsigned, payload, raw)
         }
     }

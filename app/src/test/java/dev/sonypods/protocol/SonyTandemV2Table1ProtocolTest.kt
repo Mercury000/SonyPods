@@ -697,14 +697,14 @@ class SonyTandemV2Table1ProtocolTest {
     @Test
     fun quickAccessGetParam_matchesTandemV2Shape() {
         assertArrayEquals(
-            byteArrayOf(0x0E, 0x36, 0x0D),
+            byteArrayOf(0x0E, 0xF6.toByte(), 0x0D),
             SonyTandemV2Table1Protocol.buildGetQuickAccess(),
         )
     }
 
     @Test
     fun parser_quickAccessRetParam_extractsKeyAndFunction() {
-        val raw = byteArrayOf(0x0E, 0x37, 0x0D, 0x00, 0x02)
+        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x0D, 0x00, 0x02)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.QuickAccess)
@@ -718,14 +718,14 @@ class SonyTandemV2Table1ProtocolTest {
     @Test
     fun wearingGetStatus_matchesTandemV2Shape() {
         assertArrayEquals(
-            byteArrayOf(0x0E, 0x36, 0x06),
+            byteArrayOf(0x0E, 0xF6.toByte(), 0x06),
             SonyTandemV2Table1Protocol.buildGetWearingStatus(),
         )
     }
 
     @Test
     fun parser_wearingStatusRet_extractsStatusAndResult() {
-        val raw = byteArrayOf(0x0E, 0x37, 0x06, 0x02, 0x00)
+        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x06, 0x02, 0x00)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.WearingStatus)
@@ -735,8 +735,19 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
+    fun parser_wearingStatusNtfy_extractsStatusAndResult() {
+        val raw = byteArrayOf(0x0E, 0xF9.toByte(), 0x06, 0x01, 0x01)
+        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.WearingStatus)
+        parsed as ParsedTandemResponse.WearingStatus
+        assertEquals(WearingDetectionStatus.STARTED, parsed.status)
+        assertEquals(WearingDetectionResult.POOR, parsed.result)
+    }
+
+    @Test
     fun parser_unknownSystemParam_doesNotCrash() {
-        val raw = byteArrayOf(0x0E, 0x37, 0x7F)
+        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x7F)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.Unknown)
