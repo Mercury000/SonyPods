@@ -14,6 +14,7 @@ class HookEntry : XposedModule() {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     override fun onPackageLoaded(param: PackageLoadedParam) {
+        Log.i(TAG, "onPackageLoaded package=${param.packageName} firstPackage=${param.isFirstPackage} process=${runCatching { android.app.Application.getProcessName() }.getOrNull()}")
         if (!param.isFirstPackage) return
 
         when (param.packageName) {

@@ -181,6 +181,7 @@ object MiLinkServiceHook : HookContext() {
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
+        Log.i(TAG, "registering state receiver process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
         val filter = IntentFilter().apply {
             addAction(SonyPodsAction.ACTION_PODS_CONNECTED)
             addAction(SonyPodsAction.ACTION_PODS_DISCONNECTED)

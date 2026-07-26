@@ -60,48 +60,63 @@ abstract class HookContext {
     }
 }
 
+/**
+ * Hook-side logging. Writes to both the LSPosed module log and logcat: the LSPosed
+ * channel is not visible to `adb logcat`, which makes hook problems in system
+ * processes impossible to diagnose from a host machine.
+ */
 object Log {
     @Volatile
     var module: XposedModule? = null
 
+    private fun emit(priority: Int, tag: String, message: String, throwable: Throwable? = null) {
+        if (throwable == null) {
+            module?.log(priority, tag, message)
+            android.util.Log.println(priority, tag, message)
+        } else {
+            module?.log(priority, tag, message, throwable)
+            android.util.Log.println(priority, tag, "$message\n${android.util.Log.getStackTraceString(throwable)}")
+        }
+    }
+
     fun v(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        module?.log(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.INFO, tag, message)
     }
 
     fun i(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
-        module?.log(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.INFO, tag, message)
     }
 
     fun d(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        module?.log(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.INFO, tag, message)
     }
 
     fun d(tag: String, message: String, throwable: Throwable) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        module?.log(android.util.Log.ERROR, tag, message, throwable)
+        emit(android.util.Log.ERROR, tag, message, throwable)
     }
 
     fun w(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
-        module?.log(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.WARN, tag, message)
     }
 
     fun w(tag: String, message: String, throwable: Throwable) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
-        module?.log(android.util.Log.ERROR, tag, message, throwable)
+        emit(android.util.Log.WARN, tag, message, throwable)
     }
 
     fun e(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
-        module?.log(android.util.Log.ERROR, tag, message)
+        emit(android.util.Log.ERROR, tag, message)
     }
 
     fun e(tag: String, message: String, throwable: Throwable) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
-        module?.log(android.util.Log.ERROR, tag, message, throwable)
+        emit(android.util.Log.ERROR, tag, message, throwable)
     }
 }
 
