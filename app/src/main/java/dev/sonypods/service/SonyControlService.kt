@@ -74,8 +74,23 @@ class SonyControlService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_DISCONNECT -> repository.disconnect()
+            ACTION_REPUBLISH_STATE -> republishState()
         }
         return START_STICKY
+    }
+
+    /**
+     * State is normally broadcast only on change. A hook process that registers its
+     * receiver late (or after its process restarted) would otherwise wait for the next
+     * change to learn anything, leaving its panel empty; this replays the current state.
+     */
+    private fun republishState() {
+        lastConnectedAddress = null
+        lastBatteryParams = null
+        lastSingle = null
+        lastAncStatus = -1
+        lastAmbientVoice = null
+        bridgeState(repository.state.value)
     }
 
     override fun onDestroy() {
@@ -336,8 +351,19 @@ class SonyControlService : Service() {
         private const val CHANNEL_ID = "sony_control_service"
         private const val NOTIFICATION_ID = 2001
         const val ACTION_DISCONNECT = "dev.sonypods.action.SERVICE_DISCONNECT"
+        const val ACTION_REPUBLISH_STATE = "dev.sonypods.action.SERVICE_REPUBLISH_STATE"
         const val PREF_LAST_DEVICE_ADDRESS = "last_sony_device_address"
         const val PREF_LAST_DEVICE_NAME = "last_sony_device_name"
+
+        fun requestRepublish(context: Context) {
+            runCatching {
+                context.startForegroundService(
+                    Intent(context, SonyControlService::class.java).setAction(ACTION_REPUBLISH_STATE)
+                )
+            }.onFailure {
+                Log.w(TAG, "republish request failed", it)
+            }
+        }
 
         private val HOOK_PACKAGES = listOf(
             "com.android.bluetooth",

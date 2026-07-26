@@ -41,6 +41,14 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun hookContextEntry() {
+        // Primary entry: every process has an Application, so the state receiver is up
+        // before the fusion-center panel asks for battery/ANC.
+        runCatching {
+            hookAfter(findMethod("android.app.Application", "onCreate")) {
+                registerStatusReceiver(instance as? Context)
+            }
+        }.onFailure { Log.w(TAG, "hook Application.onCreate skipped", it) }
+
         listOf(
             "com.xiaomi.mxbluetoothsdk.service.MxBluetoothService",
             "com.xiaomi.mxbluetoothsdk.manager.MxBluetoothManager"
@@ -402,6 +410,11 @@ object MiLinkServiceHook : HookContext() {
             ?: runCatching { getObjectField(lastAncBatteryController, "context") as? Context }.getOrNull()
             ?: return
         context = ownerContext.applicationContext ?: ownerContext
+        // The panel reads battery/ANC from the state this receiver fills in. Registering
+        // it only from getInstanceForIsMiTWS is not enough: on some HyperOS builds that
+        // entry point never runs, leaving the panel with empty state forever. Register as
+        // soon as any hooked runtime call gives us a context.
+        registerStatusReceiver(context)
     }
 
     internal fun notifySpatialUiChanged(owner: Any?, device: BluetoothDevice, mode: Int) {

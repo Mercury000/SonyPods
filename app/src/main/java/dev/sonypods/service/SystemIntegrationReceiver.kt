@@ -78,6 +78,9 @@ class SystemIntegrationReceiver : BroadcastReceiver() {
             }
 
             SonyPodsAction.ACTION_REFRESH_STATUS -> {
+                // A hook process asking for a refresh has usually just (re)registered its
+                // receiver and holds no state at all, so replay what we have as well.
+                SonyControlService.requestRepublish(context)
                 if (repository.state.value.deviceInfo.protocolReady) {
                     repository.refreshBasics()
                 } else {
