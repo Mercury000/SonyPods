@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 22
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -45,7 +45,7 @@ jobs:
           fi
 
           VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unversioned")
-          OUT_NAME="OppoPods-${VERSION_NAME}-release.apk"
+          OUT_NAME="SonyPods-${VERSION_NAME}-release.apk"
 
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
 
@@ -56,7 +56,7 @@ jobs:
               --ks /tmp/keystore.jks \
               --ks-key-alias "${{ secrets.ALIAS }}" \
               --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
-              --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+              --key-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
               "./$OUT_NAME"
             rm /tmp/keystore.jks
             echo "signed=true" >> "$GITHUB_OUTPUT"
