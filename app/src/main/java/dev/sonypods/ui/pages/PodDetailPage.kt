@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -241,7 +243,13 @@ private fun LabeledLevelSlider(
     onValueChange: (Int) -> Unit,
 ) {
     val effective = (value ?: 0).coerceIn(range.first, range.last)
-    var draggingValue by remember(value) { mutableFloatStateOf(effective.toFloat()) }
+    var dragging by remember { mutableStateOf(false) }
+    var draggingValue by remember { mutableFloatStateOf(effective.toFloat()) }
+    // Follow device-reported value unless the user is mid-drag; commit once on
+    // drag end to avoid flooding the Tandem transport.
+    LaunchedEffect(effective) {
+        if (!dragging) draggingValue = effective.toFloat()
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -267,8 +275,12 @@ private fun LabeledLevelSlider(
         Slider(
             value = draggingValue,
             onValueChange = { newValue: Float ->
+                dragging = true
                 draggingValue = newValue
-                val rounded = newValue.toInt().coerceIn(range.first, range.last)
+            },
+            onValueChangeFinished = {
+                dragging = false
+                val rounded = draggingValue.toInt().coerceIn(range.first, range.last)
                 if (rounded != effective) {
                     onValueChange(rounded)
                 }
