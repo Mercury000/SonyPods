@@ -20,8 +20,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -147,7 +149,13 @@ private fun AmbientLevelSlider(
     outerPadding: Dp,
 ) {
     val effectiveLevel = (level ?: AMBIENT_LEVEL_MAX).coerceIn(AMBIENT_LEVEL_MIN, AMBIENT_LEVEL_MAX)
-    var draggingValue by remember(level) { mutableFloatStateOf(effectiveLevel.toFloat()) }
+    var dragging by remember { mutableStateOf(false) }
+    var draggingValue by remember { mutableFloatStateOf(effectiveLevel.toFloat()) }
+    // Follow device-reported level unless the user is mid-drag; the actual
+    // Tandem write happens once on drag end to avoid flooding the transport.
+    LaunchedEffect(effectiveLevel) {
+        if (!dragging) draggingValue = effectiveLevel.toFloat()
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -174,8 +182,12 @@ private fun AmbientLevelSlider(
         Slider(
             value = draggingValue,
             onValueChange = { value: Float ->
+                dragging = true
                 draggingValue = value
-                val rounded = value.toInt().coerceIn(AMBIENT_LEVEL_MIN, AMBIENT_LEVEL_MAX)
+            },
+            onValueChangeFinished = {
+                dragging = false
+                val rounded = draggingValue.toInt().coerceIn(AMBIENT_LEVEL_MIN, AMBIENT_LEVEL_MAX)
                 if (rounded != effectiveLevel) {
                     onLevelChange(rounded)
                 }

@@ -694,13 +694,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun miuiAncLevel(anc: Int, transparencyVocalEnhancement: Boolean): String {
-        // MIUI level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep,
-        // 0201=Transparency vocal enhancement (legacy codes kept until phase 3 Sony remap).
+        // MIUI level codes: 01xx = NC (0100=Medium used as the single Sony NC level),
+        // 0200 = transparency, 0201 = transparency + voice, 0000 = off.
         return when (anc) {
-            5 -> "0103"
-            6 -> "0101"
-            7 -> "0100"
-            8 -> "0102"
+            2 -> "0100"
             3 -> if (transparencyVocalEnhancement) "0201" else "0200"
             else -> "0000"
         }

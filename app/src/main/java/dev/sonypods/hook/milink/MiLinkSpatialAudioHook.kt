@@ -35,10 +35,10 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 val headsetId = args[0] as? String ?: return@hookAfter
                 val address = getObjectField(instance, "deviceId") as? String ?: return@hookAfter
                 if (!hook.isSonyAddress(address) && address != hook.currentAddress && headsetId != hook.fakeDeviceId()) return@hookAfter
-                if (hook.spatialAudioPanelEnabled()) return@hookAfter
                 val serviceProperties = getObjectField(instance, "serviceProperties")
                 val bundle = callMethod(serviceProperties, "getAll") as? Bundle ?: return@hookAfter
-                bundle.putInt("headset_switch_state", 0)
+                // Keep the fusion-center controls (ANC / volume) enabled for Sony devices.
+                bundle.putInt("headset_switch_state", 1)
             }
         }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook CirculateServiceInfo.setHeadsetId skipped", it) }
     }

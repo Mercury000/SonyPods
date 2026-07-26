@@ -96,6 +96,12 @@ class SonyControlService : Service() {
                 putExtra("address", address)
                 putExtra("device_name", name)
             }
+            // Remember the device so control broadcasts can revive the session
+            // after the app process was killed.
+            getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(PREF_LAST_DEVICE_ADDRESS, address)
+                .putString(PREF_LAST_DEVICE_NAME, name)
+                .apply()
         } else if (address == null && lastConnectedAddress != null) {
             sendStateBroadcast(SonyPodsAction.ACTION_PODS_DISCONNECTED) {
                 putExtra("address", lastConnectedAddress)
@@ -152,7 +158,11 @@ class SonyControlService : Service() {
         val key = "$address|$imageUrl"
         if (key == lastFetchedImageKey) return
         val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        if (PodImagePrefs.find(prefs, address)?.boxImagePath != null) {
+        val existing = PodImagePrefs.find(prefs, address)
+        val hasCustomImage = existing?.boxImagePath != null && existing.autoImageUrl == null
+        val upToDate = existing?.autoImageUrl == imageUrl &&
+            existing.boxImagePath?.let { java.io.File(it).exists() } == true
+        if (hasCustomImage || upToDate) {
             lastFetchedImageKey = key
             return
         }
@@ -172,6 +182,7 @@ class SonyControlService : Service() {
                     address = address,
                     name = name,
                     images = mapOf(PodImageResource.BOX to bytes),
+                    autoImageUrl = imageUrl,
                 )
                 Log.d(TAG, "model image stored address=$address url=$imageUrl bytes=${bytes.size}")
             }.onFailure { Log.w(TAG, "model image store failed", it) }
@@ -325,6 +336,8 @@ class SonyControlService : Service() {
         private const val CHANNEL_ID = "sony_control_service"
         private const val NOTIFICATION_ID = 2001
         const val ACTION_DISCONNECT = "dev.sonypods.action.SERVICE_DISCONNECT"
+        const val PREF_LAST_DEVICE_ADDRESS = "last_sony_device_address"
+        const val PREF_LAST_DEVICE_NAME = "last_sony_device_name"
 
         private val HOOK_PACKAGES = listOf(
             "com.android.bluetooth",

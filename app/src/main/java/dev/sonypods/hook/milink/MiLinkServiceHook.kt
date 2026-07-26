@@ -360,7 +360,9 @@ object MiLinkServiceHook : HookContext() {
     }
 
     internal fun miLinkSwitchState(): Int {
-        return if (spatialAudioPanelEnabled()) 1 else 0
+        // Audio-switch support gates the whole ANC/volume section of the fusion
+        // device center panel; it is independent of spatial audio, keep it on.
+        return 1
     }
 
     internal fun updateSpatialAudioMode(mode: Int) {

@@ -231,6 +231,16 @@ fun MainUI(
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
+        // The control service downloads the cloud model image asynchronously;
+        // reload the earphone prefs whenever they change so the picture appears
+        // without restarting the app.
+        val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
+            if (key == PodImagePrefs.PREF_KEY_EARPHONES) {
+                earphonePrefs.value = PodImagePrefs.load(changed)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+
         sendBluetoothModuleBroadcast(context, SonyPodsAction.ACTION_PODS_UI_INIT)
 
         onDispose {
@@ -238,6 +248,7 @@ fun MainUI(
             try {
                 context.unregisterReceiver(broadcastReceiver)
             } catch (_: Exception) {}
+            prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
             SonyPodsApp.removeServiceListener(serviceListener)
         }
     }

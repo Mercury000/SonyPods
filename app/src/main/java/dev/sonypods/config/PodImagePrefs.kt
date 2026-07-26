@@ -23,6 +23,8 @@ data class EarphonePref(
     val leftImagePath: String? = null,
     val rightImagePath: String? = null,
     val lastConnectedAt: Long = System.currentTimeMillis(),
+    /** Cloud catalog URL the box image was auto-downloaded from; null = user-provided image. */
+    val autoImageUrl: String? = null,
 ) {
     fun imagePath(resource: PodImageResource): String? = when (resource) {
         PodImageResource.BOX -> boxImagePath
@@ -33,7 +35,7 @@ data class EarphonePref(
 
 object PodImagePrefs {
     const val AUTHORITY = "dev.sonypods.podimages"
-    private const val PREF_KEY_EARPHONES = "earphone_prefs_json"
+    const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
 
     private val json = Json {
@@ -98,6 +100,10 @@ object PodImagePrefs {
                 updated = updated.withImagePath(resource, copyImage(context, address, resource, uri))
             }
         }
+        // The box image is now user-managed: stop treating it as auto-downloaded.
+        if (PodImageResource.BOX in clearedImages || selectedImages[PodImageResource.BOX] != null) {
+            updated = updated.copy(autoImageUrl = null)
+        }
         updated = updated.copy(
             name = name.ifBlank { updated.name },
             lastConnectedAt = System.currentTimeMillis(),
@@ -114,6 +120,7 @@ object PodImagePrefs {
         address: String,
         name: String,
         images: Map<PodImageResource, ByteArray>,
+        autoImageUrl: String? = null,
     ): List<EarphonePref> {
         if (address.isBlank()) return load(prefs)
         val current = load(prefs)
@@ -127,6 +134,7 @@ object PodImagePrefs {
         updated = updated.copy(
             name = name.ifBlank { updated.name },
             lastConnectedAt = System.currentTimeMillis(),
+            autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
         service?.getRemotePreferences(ConfigManager.PREFS_NAME)?.let { save(it, normalized) }
