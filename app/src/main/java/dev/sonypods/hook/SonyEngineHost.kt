@@ -61,6 +61,9 @@ object SonyEngineHost {
     private var lastRenderedAddress: String? = null
     private var lastConnectAttemptMs = 0L
 
+    /** Device the connect animation was already played for; survives surface re-renders. */
+    private var lastConnectAnimationAddress: String? = null
+
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
 
@@ -336,6 +339,7 @@ object SonyEngineHost {
             val previous = lastRenderedAddress ?: return
             lastRenderedAddress = null
             lastRenderedBattery = null
+            lastConnectAnimationAddress = null
             remoteDevice(context, previous)?.let {
                 runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
             }
@@ -349,7 +353,12 @@ object SonyEngineHost {
             case = snapshot.batteryCradle?.let { PodParams(battery = it, isConnected = true) },
         )
         if (battery == lastRenderedBattery && address == lastRenderedAddress) return
-        val isNewDevice = address != lastRenderedAddress
+        val hasBattery = listOfNotNull(snapshot.batterySingle, snapshot.batteryLeft, snapshot.batteryRight).isNotEmpty()
+        // The connect animation is played once per device, and only when there are
+        // levels to show: an empty one consumes SystemUI's display slot, which then
+        // ignores the real values arriving moments later.
+        val isNewDevice = address != lastConnectAnimationAddress && hasBattery
+        if (isNewDevice) lastConnectAnimationAddress = address
         lastRenderedBattery = battery
         lastRenderedAddress = address
 
