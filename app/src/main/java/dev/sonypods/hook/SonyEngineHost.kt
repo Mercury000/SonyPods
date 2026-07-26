@@ -270,7 +270,7 @@ object SonyEngineHost {
     private fun handleCommand(intent: Intent) {
         val repo = repository ?: return
         val command = intent.getStringExtra(SonyBridge.EXTRA_COMMAND) ?: return
-        Log.i(TAG, "command=$command")
+        Log.d(TAG, "command=$command")
         when (command) {
             SonyBridge.CMD_SET_NOISE_CONTROL -> {
                 val mode = intent.getStringExtra(SonyBridge.EXTRA_STRING)
@@ -416,7 +416,7 @@ object SonyEngineHost {
                     singleBattery = snapshot.batterySingle != null && snapshot.batteryLeft == null,
                 )
             }
-            Log.i(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice")
+            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice")
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }
 
@@ -434,7 +434,7 @@ object SonyEngineHost {
         val device = remoteDevice(context, address) ?: return
         runCatching {
             callMethod(service, "setBatteryLevel", device, level, false)
-            Log.i(TAG, "battery injected level=$level address=$address")
+            Log.d(TAG, "battery injected level=$level address=$address")
         }.onFailure { Log.w(TAG, "setBatteryLevel failed level=$level", it) }
     }
 }
