@@ -152,20 +152,25 @@ object MiuiStrongToastUtil {
             return
         }
 
+        // A bud that reports no level is out: HyperOS then shows the "_no_inear" clip for
+        // that side and omits its battery text entirely, which is what the official
+        // payload looks like when one bud is in the case.
+        val leftPod = batteryParams.left?.takeIf { it.isConnected }
+        val rightPod = batteryParams.right?.takeIf { it.isConnected }
+        val leftClip = clipUri(context, if (leftPod != null) "earphone_left_inear" else "earphone_left_no_inear")
+            ?: return
+        val rightClip = clipUri(context, if (rightPod != null) "earphone_right_inear" else "earphone_right_no_inear")
+            ?: return
         showToast(
             context = context,
             category = StrongToastCategory.VIDEO_TEXT_TEXT_VIDEO,
             left = Left(
-                iconParams = IconParams(Category.RAW, FileType.MP4, (clipUri(context, "earphone_left_inear") ?: return), 1),
-                textParams = batteryParams.left?.let {
-                    batteryText(it.battery, it.isCharging, lowBatteryThreshold)
-                },
+                iconParams = IconParams(Category.RAW, FileType.MP4, leftClip, 1),
+                textParams = leftPod?.let { batteryText(it.battery, it.isCharging, lowBatteryThreshold) },
             ),
             right = Right(
-                iconParams = IconParams(Category.RAW, FileType.MP4, (clipUri(context, "earphone_right_inear") ?: return), 1),
-                textParams = batteryParams.right?.let {
-                    batteryText(it.battery, it.isCharging, lowBatteryThreshold)
-                },
+                iconParams = IconParams(Category.RAW, FileType.MP4, rightClip, 1),
+                textParams = rightPod?.let { batteryText(it.battery, it.isCharging, lowBatteryThreshold) },
             ),
         )
     }
