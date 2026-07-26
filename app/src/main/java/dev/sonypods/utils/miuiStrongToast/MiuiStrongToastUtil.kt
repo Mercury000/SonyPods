@@ -200,10 +200,16 @@ object MiuiStrongToastUtil {
     private fun clipUri(context: Context, name: String): String? {
         val file = java.io.File(context.filesDir, "$name.mp4")
         if (!file.exists() || file.length() == 0L) {
-            val id = runCatching {
-                context.resources.getIdentifier(name, "raw", context.packageName)
-            }.getOrDefault(0)
-            if (id == 0) {
+            // The served file names carry an "_inear" suffix that the raw resources do
+            // not: internal_files/earphone_left_inear.mp4 comes from raw/earphone_left.
+            val id = listOf(name, name.removeSuffix("_inear"))
+                .distinct()
+                .firstNotNullOfOrNull { candidate ->
+                    runCatching {
+                        context.resources.getIdentifier(candidate, "raw", context.packageName)
+                    }.getOrDefault(0).takeIf { it != 0 }
+                }
+            if (id == null) {
                 Log.w("SonyPods", "strong toast clip missing and no raw resource: $name")
                 return null
             }
