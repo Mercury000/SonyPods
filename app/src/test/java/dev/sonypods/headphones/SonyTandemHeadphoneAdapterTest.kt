@@ -234,7 +234,8 @@ class SonyTandemHeadphoneAdapterTest {
                 isLikelyControlEndpoint = true,
             )
         )
-        val raw = byteArrayOf(0x0E, 0x67, 0x17, 0x01, 0x00, 0x01, 0x00, 0x0C)
+        // ncAsmEffect 0x01 = on, ncAsmMode 0x01 = ambient (LinkBuds S capture semantics).
+        val raw = byteArrayOf(0x0E, 0x67, 0x17, 0x01, 0x01, 0x01, 0x00, 0x0C)
         val parsed = SonyTandemHeadphoneAdapter.parse(profile, raw)
 
         assertTrue("Expected NoiseControl but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.NoiseControl)

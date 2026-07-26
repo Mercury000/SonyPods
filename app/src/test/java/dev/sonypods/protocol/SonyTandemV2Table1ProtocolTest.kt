@@ -7,6 +7,61 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SonyTandemV2Table1ProtocolTest {
+    /**
+     * Ground truth captured from a LinkBuds S (firmware 4.3.1) over SPP while the
+     * modes were switched with the headphone's own touch control, i.e. by a
+     * controller that is known good. Payload after inquired type 0x17 is
+     * `[valueChanged][ncAsmEffect][ncAsmMode][ambientSoundMode][ambientLevel]`.
+     */
+    @Test
+    fun ncAsmNotify_ambientSound_parsesFromDeviceCapture() {
+        val response = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x17, 0x01, 0x01, 0x01, 0x01, 0x14)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.AMBIENT_SOUND, response.controlMode)
+        assertEquals(20, response.ambientLevel)
+    }
+
+    @Test
+    fun ncAsmNotify_noiseCancelling_parsesFromDeviceCapture() {
+        val response = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x17, 0x01, 0x01, 0x00, 0x01, 0x14)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, response.controlMode)
+    }
+
+    @Test
+    fun ncAsmNotify_off_parsesFromDeviceCapture() {
+        val response = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x17, 0x01, 0x00, 0x00, 0x01, 0x14)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.OFF, response.controlMode)
+    }
+
+    /** What we write must round-trip to the state the device reports back. */
+    @Test
+    fun ncAsmSetParam_roundTripsThroughParserForAllModes() {
+        listOf(
+            NoiseControlMode.OFF,
+            NoiseControlMode.NOISE_CANCELLING,
+            NoiseControlMode.AMBIENT_SOUND,
+        ).forEach { mode ->
+            val command = SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+                mode,
+                ambientLevel = 20,
+                ambientMode = AmbientSoundMode.VOICE,
+            )
+            // Device echoes the applied state with the notify command byte.
+            val echoed = command.copyOf().also { it[1] = 0x69 }
+            val response = SonyTandemV2Table1Protocol.parse(echoed) as ParsedTandemResponse.NoiseControl
+
+            assertEquals(mode, response.controlMode)
+        }
+    }
+
     @Test
     fun connectGetProtocolInfo_matchesExportedCommandShape() {
         assertArrayEquals(
@@ -66,7 +121,8 @@ class SonyTandemV2Table1ProtocolTest {
     @Test
     fun ncAsmSetStatus_ncOn_matchesExportedCommandShape() {
         assertArrayEquals(
-            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x00, 0x00, 0x00, 0x0A),
+            // ncAsmEffect 0x01 = on, ncAsmMode 0x00 = NC (verified on LinkBuds S).
+            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x01, 0x00, 0x00, 0x0A),
             SonyTandemV2Table1Protocol.buildSetNoiseControlMode(NoiseControlMode.NOISE_CANCELLING),
         )
     }
@@ -74,7 +130,8 @@ class SonyTandemV2Table1ProtocolTest {
     @Test
     fun ncAsmSetParam_ambientLevel_matchesReverseCommandShape() {
         assertArrayEquals(
-            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x00, 0x01, 0x01, 0x0C),
+            // ncAsmEffect 0x01 = on, ncAsmMode 0x01 = ambient sound (verified on LinkBuds S).
+            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x01, 0x01, 0x01, 0x0C),
             SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
                 NoiseControlMode.AMBIENT_SOUND,
                 ambientLevel = 12,
@@ -86,7 +143,8 @@ class SonyTandemV2Table1ProtocolTest {
     @Test
     fun ncAsmSetParam_off_matchesReverseCommandShape() {
         assertArrayEquals(
-            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x01, 0x00, 0x00, 0x0A),
+            // ncAsmEffect 0x00 = off (verified on LinkBuds S).
+            byteArrayOf(0x0E, 0x68, 0x17, 0x01, 0x00, 0x00, 0x00, 0x0A),
             SonyTandemV2Table1Protocol.buildSetNoiseControlMode(NoiseControlMode.OFF),
         )
     }
@@ -334,7 +392,8 @@ class SonyTandemV2Table1ProtocolTest {
 
     @Test
     fun parser_ambientLevelResponse_extractsLevel() {
-        val raw = byteArrayOf(0x0E, 0x67, 0x17, 0x01, 0x00, 0x01, 0x00, 0x0C)
+        // ncAsmEffect 0x01 = on, ncAsmMode 0x01 = ambient (LinkBuds S capture semantics).
+        val raw = byteArrayOf(0x0E, 0x67, 0x17, 0x01, 0x01, 0x01, 0x00, 0x0C)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.NoiseControl)

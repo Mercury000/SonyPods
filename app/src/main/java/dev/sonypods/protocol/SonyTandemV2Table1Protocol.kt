@@ -43,6 +43,14 @@ object SonyTandemV2Table1Protocol {
     private const val VALUE_ENABLE: Byte = 0x00
     private const val VALUE_CHANGED: Byte = 0x01
     private const val NCASM_EFFECT_OFF: Byte = 0x00
+
+    /**
+     * ncAsmEffect for inquired type 0x17. Verified on a LinkBuds S: the headphone
+     * reports 0x01 while noise cancelling or ambient sound is active and 0x00 when
+     * the function is off. This field does NOT follow the inverted
+     * `OnOffSettingValue` convention used by [NCASM_ON] / [NCASM_OFF] below.
+     */
+    private const val NCASM_EFFECT_ON: Byte = 0x01
     private const val NCASM_ON: Byte = 0x00
     private const val NCASM_OFF: Byte = 0x01
     private const val NCASM_MODE_NC: Byte = 0x00
@@ -123,7 +131,7 @@ object SonyTandemV2Table1Protocol {
             byteArrayOf(
                 NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS.code,
                 VALUE_CHANGED,
-                if (enabled) NCASM_ON else NCASM_OFF,
+                if (enabled) NCASM_EFFECT_ON else NCASM_EFFECT_OFF,
                 ncAsmMode,
                 ambientMode.code,
                 ambientLevel.coerceIn(1, 20).toByte(),
@@ -417,7 +425,8 @@ object SonyTandemV2Table1Protocol {
         }?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }
         }
-        val combinedEnabled = payload.getOrNull(2)?.let { it == NCASM_ON }
+        // Only consumed by the 0x17 branch below, which uses ncAsmEffect (0x01 = on).
+        val combinedEnabled = payload.getOrNull(2)?.let { it == NCASM_EFFECT_ON }
         val combinedMode = payload.getOrNull(3)
         val combinedControlMode = when (type) {
             NcAsmInquiredType.V1_TABLE_SET1_NC_ASM -> when {
