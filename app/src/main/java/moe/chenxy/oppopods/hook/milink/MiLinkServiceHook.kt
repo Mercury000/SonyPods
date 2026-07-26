@@ -13,8 +13,6 @@ import moe.chenxy.oppopods.hook.Log
 import moe.chenxy.oppopods.hook.callMethod
 import moe.chenxy.oppopods.hook.getObjectField
 import moe.chenxy.oppopods.hook.setObjectField
-import moe.chenxy.oppopods.pods.RfcommController
-import moe.chenxy.oppopods.pods.detectDeviceCapabilities
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
@@ -406,29 +404,9 @@ object MiLinkServiceHook : HookContext() {
     }
 
     internal fun spatialAudioPanelEnabled(): Boolean {
-        runCatching { refreshConfig() }
-        return panelCapabilities().spatialAudioSupported
-    }
-
-    private fun panelCapabilities() = detectDeviceCapabilities(
-        deviceName = backendDeviceName() ?: currentName.orEmpty(),
-        adaptiveOverride = ConfigManager.adaptiveCapabilityOverride(),
-        spatialAudioOverride = miLinkSpatialAudioOverride(),
-        spatialSoundSwitchOverride = ConfigManager.CAPABILITY_OVERRIDE_FORCE_DISABLED,
-    )
-
-    private fun miLinkSpatialAudioOverride(): Int {
-        val direct = runCatching {
-            prefs.getInt(ConfigManager.PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
-        }.getOrDefault(Int.MIN_VALUE)
-        return (direct.takeIf { it != Int.MIN_VALUE } ?: ConfigManager.spatialAudioCapabilityOverride())
-            .coerceIn(ConfigManager.CAPABILITY_OVERRIDE_AUTO, ConfigManager.CAPABILITY_OVERRIDE_FORCE_DISABLED)
-    }
-
-    private fun backendDeviceName(): String? {
-        return runCatching { RfcommController.currentStatusSnapshot().deviceName }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
+        // The first batch of Sony targets (WH-1000XM4 / LinkBuds S / WF-1000XM5)
+        // has no writable spatial-audio mode, so the fusion-center panel stays hidden.
+        return false
     }
 
     internal fun isTargetAncBatteryModel(model: Any?): Boolean {

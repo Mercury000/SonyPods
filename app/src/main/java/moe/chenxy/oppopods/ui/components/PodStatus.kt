@@ -33,22 +33,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import moe.chenxy.oppopods.R
-import moe.chenxy.oppopods.pods.WearState
-import moe.chenxy.oppopods.pods.WearStatus
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 
+/**
+ * Battery status card. For TWS earbuds shows Left / Right / Case columns.
+ * For single-battery headphones (e.g. WH-1000XM4) pass [single] to show one column.
+ */
 @Composable
 fun PodStatus(
     batteryParams: BatteryParams,
-    wearStatus: WearStatus = WearStatus(),
+    single: PodParams? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
     val dividerColor = if (isSystemInDarkTheme()) Color(0xFF333333) else Color(0xFFEEEEEE)
     val dividerHeight = if (compact) 40.dp else 56.dp
+
+    if (single != null) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BatteryColumn(
+                label = stringResource(R.string.batt_single),
+                pod = single,
+                modifier = Modifier.weight(1f),
+                compact = compact
+            )
+        }
+        return
+    }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -57,7 +73,6 @@ fun PodStatus(
         BatteryColumn(
             label = stringResource(R.string.batt_left_pod),
             pod = batteryParams.left,
-            wearState = wearStatus.left,
             modifier = Modifier.weight(1f),
             compact = compact
         )
@@ -70,7 +85,6 @@ fun PodStatus(
         BatteryColumn(
             label = stringResource(R.string.batt_right_pod),
             pod = batteryParams.right,
-            wearState = wearStatus.right,
             modifier = Modifier.weight(1f),
             compact = compact
         )
@@ -83,7 +97,6 @@ fun PodStatus(
         BatteryColumn(
             label = stringResource(R.string.pod_case),
             pod = batteryParams.case,
-            wearState = wearStatus.case,
             modifier = Modifier.weight(1f),
             compact = compact
         )
@@ -94,7 +107,6 @@ fun PodStatus(
 private fun BatteryColumn(
     label: String,
     pod: PodParams?,
-    wearState: WearState?,
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
@@ -110,7 +122,7 @@ private fun BatteryColumn(
     val iconLevel = if (isConnected) level else lastKnownLevel
 
     // Pad short labels (左/右) to match width of longest label (耳机盒) using ideographic spaces
-    val paddedLabel = if (label.length < 3) label.padEnd(3, '\u3000') else label
+    val paddedLabel = if (label.length < 3) label.padEnd(3, '　') else label
 
     Box(
         modifier = modifier,
@@ -120,17 +132,11 @@ private fun BatteryColumn(
             horizontalAlignment = Alignment.Start,
             modifier = Modifier.padding(vertical = if (compact) 2.dp else 4.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = paddedLabel,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                WearStatusIcon(
-                    wearState = wearState,
-                    modifier = Modifier.padding(start = 2.dp)
-                )
-            }
+            Text(
+                text = paddedLabel,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = displayLevel,
@@ -145,25 +151,6 @@ private fun BatteryColumn(
                 modifier = Modifier.size(24.dp)
             )
         }
-    }
-}
-
-@Composable
-private fun WearStatusIcon(wearState: WearState?, modifier: Modifier = Modifier) {
-    val imageVector = when (wearState) {
-        WearState.WEARING -> AppIcons.Contacts
-        WearState.REMOVED -> AppIcons.RemoveContact
-        else -> null
-    }
-
-    Box(modifier = modifier.size(18.dp), contentAlignment = Alignment.Center) {
-        if (imageVector == null) return@Box
-        Icon(
-            imageVector = imageVector,
-            contentDescription = wearState?.name,
-            modifier = Modifier.size(14.dp),
-            tint = Color.Gray
-        )
     }
 }
 

@@ -1,0 +1,159 @@
+package moe.chenxy.oppopods.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.IBinder
+import android.util.Log
+import dev.sonypods.data.SonyHeadphoneRepository
+import dev.sonypods.data.SonyHeadphoneUiState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import moe.chenxy.oppopods.MainActivity
+import moe.chenxy.oppopods.PopupActivity
+import moe.chenxy.oppopods.R
+
+/**
+ * Foreground service that keeps [SonyHeadphoneRepository] (the Sony Tandem transport
+ * and state hub) alive in the app process while a headphone session is active.
+ *
+ * Phase 3 will extend this service into the broadcast bridge towards the HyperOS
+ * hooks (battery injection, island, system settings).
+ */
+class SonyControlService : Service() {
+
+    private lateinit var repository: SonyHeadphoneRepository
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    override fun onCreate() {
+        super.onCreate()
+        repository = SonyHeadphoneRepository.getInstance(this)
+        startForeground(NOTIFICATION_ID, createNotification(repository.state.value))
+
+        serviceScope.launch {
+            repository.state.collect { uiState ->
+                updateNotification(uiState)
+            }
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_DISCONNECT -> repository.disconnect()
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun updateNotification(uiState: SonyHeadphoneUiState) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, createNotification(uiState))
+    }
+
+    private fun createNotification(uiState: SonyHeadphoneUiState): Notification {
+        createChannelIfNeeded()
+
+        val connected = uiState.connectedDevice != null
+        val title = uiState.deviceInfo.modelName
+            ?: uiState.connectedDevice?.name
+            ?: getString(R.string.app_name)
+        val battery = uiState.batteryState
+        val content = if (connected) buildString {
+            battery.single?.let { append("$it% ") }
+            battery.left?.let { append("L:$it% ") }
+            battery.right?.let { append("R:$it% ") }
+            battery.cradle?.let { append("Case:$it%") }
+            if (isBlank()) {
+                append(uiState.noiseControlState.controlMode?.name ?: getString(R.string.connect))
+            }
+        } else getString(R.string.service_disconnected)
+
+        val disconnectIntent = Intent(this, SonyControlService::class.java).apply {
+            action = ACTION_DISCONNECT
+        }
+        val disconnectPending = PendingIntent.getService(
+            this, 1, disconnectIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val popupIntent = Intent(this, PopupActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val popupPending = PendingIntent.getActivity(
+            this, 2, popupIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val mainIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val mainPending = PendingIntent.getActivity(
+            this, 0, mainIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        return Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setContentIntent(mainPending)
+            .setOngoing(connected)
+            .addAction(
+                Notification.Action.Builder(
+                    null, getString(R.string.notification_btn_popup), popupPending
+                ).build()
+            )
+            .apply {
+                if (connected) {
+                    addAction(
+                        Notification.Action.Builder(
+                            null, getString(R.string.notification_btn_disconnect), disconnectPending
+                        ).build()
+                    )
+                }
+            }
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .build()
+    }
+
+    private fun createChannelIfNeeded() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    getString(R.string.service_channel_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply { setShowBadge(false) }
+            )
+        }
+    }
+
+    companion object {
+        private const val TAG = "SonyControlService"
+        private const val CHANNEL_ID = "sony_control_service"
+        private const val NOTIFICATION_ID = 2001
+        const val ACTION_DISCONNECT = "dev.sonypods.action.SERVICE_DISCONNECT"
+
+        fun ensureRunning(context: Context) {
+            runCatching {
+                context.startForegroundService(Intent(context, SonyControlService::class.java))
+            }.onFailure {
+                Log.w(TAG, "startForegroundService failed", it)
+            }
+        }
+    }
+}

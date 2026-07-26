@@ -28,21 +28,17 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.sonypods.data.SonyHeadphoneUiState
 import io.github.libxposed.service.XposedService
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.config.EarphonePref
 import moe.chenxy.oppopods.config.PodImageResource
-import moe.chenxy.oppopods.pods.GameModeImplementation
-import moe.chenxy.oppopods.pods.NoiseControlMode
-import moe.chenxy.oppopods.pods.WearStatus
 import moe.chenxy.oppopods.ui.dialogs.RestartScope
 import moe.chenxy.oppopods.ui.dialogs.RestartScopeDialog
-import moe.chenxy.oppopods.ui.dialogs.MelodyImageImportDialog
 import moe.chenxy.oppopods.ui.dialogs.PodImageConfigDialog
 import moe.chenxy.oppopods.ui.pages.EarphonesTabPage
 import moe.chenxy.oppopods.ui.pages.HomePage
 import moe.chenxy.oppopods.ui.pages.SettingsPage
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
@@ -54,7 +50,6 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Edit
-import top.yukonga.miuix.kmp.icon.extended.Import
 import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Settings
@@ -80,24 +75,8 @@ internal fun MainTabsScaffold(
     showEarphoneDetail: Boolean,
     mainTitle: String,
     displayTitle: String,
-    displayBattery: BatteryParams,
-    displayWearStatus: WearStatus,
-    displayAnc: NoiseControlMode,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    smartAncLevel: NoiseControlMode?,
-    displayTransparencyVocalEnhancement: Boolean,
-    onTransparencyVocalEnhancementChange: (Boolean) -> Unit,
-    displayGameMode: Boolean,
-    onGameModeChange: (Boolean) -> Unit,
-    spatialAudioMode: Int,
-    onSpatialAudioModeChange: (Int) -> Unit,
-    eqPreset: Int,
-    onEqPresetChange: (Int) -> Unit,
-    displayDualDeviceConnection: Boolean,
-    onDualDeviceConnectionChange: (Boolean) -> Unit,
-    spatialAudioSupported: Boolean,
-    spatialSoundSupported: Boolean,
-    adaptiveModeEnabled: Boolean,
+    sonyState: SonyHeadphoneUiState,
+    sonyActions: SonyDetailActions,
     earphonePrefs: List<EarphonePref>,
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
@@ -116,19 +95,11 @@ internal fun MainTabsScaffold(
     onIslandShowTimingsChange: (Set<Int>) -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
-    autoGameMode: MutableState<Boolean>,
-    onAutoGameModeChange: (Boolean) -> Unit,
-    gameModeImplementation: MutableState<GameModeImplementation>,
-    onGameModeImplementationChange: (GameModeImplementation) -> Unit,
     notificationClickAction: MutableState<Int>,
     onNotificationClickActionChange: (Int) -> Unit,
     moreClickAction: MutableState<Int>,
     onMoreClickActionChange: (Int) -> Unit,
-    adaptiveCapabilityOverride: MutableState<Int>,
-    spatialAudioCapabilityOverride: MutableState<Int>,
-    spatialSoundSwitchCapabilityOverride: MutableState<Int>,
-    onOpenDeviceCapabilities: () -> Unit,
-    onOpenRfcommDebug: () -> Unit,
+    onOpenTandemDebug: () -> Unit,
     fakeDeviceId: MutableState<String>,
     onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
@@ -141,7 +112,6 @@ internal fun MainTabsScaffold(
     onBackToDevicePicker: () -> Unit,
     onOpenSystemHeadsetSettings: () -> Unit,
     onSavePodImages: (String, String, Map<PodImageResource, Uri?>, Set<PodImageResource>) -> Unit,
-    onSavePodImageBytes: (String, String, Map<PodImageResource, ByteArray>) -> Unit,
 ) {
     val pagerState = rememberPagerState(
         initialPage = selectedTab.ordinal,
@@ -158,7 +128,6 @@ internal fun MainTabsScaffold(
         it.address.equals(connectedDeviceAddress, ignoreCase = true)
     }
     var showPodImageDialog by remember { mutableStateOf(false) }
-    var showMelodyImportDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedTab) {
         val targetPage = selectedTab.ordinal
@@ -215,7 +184,7 @@ internal fun MainTabsScaffold(
                         bondedDeviceCount = bondedDeviceCount,
                         onBluetoothStatusClick = onBluetoothStatusClick,
                         onPairedBluetoothClick = onPairedBluetoothClick,
-                        onOpenRfcommDebug = onOpenRfcommDebug,
+                        onOpenTandemDebug = onOpenTandemDebug,
                         pageBottomContentPadding = pageBottomContentPadding,
                         restartingScopes = restartingScopes,
                         onShowRestartScopeDialog = onShowRestartScopeDialog,
@@ -226,24 +195,8 @@ internal fun MainTabsScaffold(
                         showEarphoneDetail = showEarphoneDetail,
                         mainTitle = mainTitle,
                         displayTitle = displayTitle,
-                        displayBattery = displayBattery,
-                        displayWearStatus = displayWearStatus,
-                        displayAnc = displayAnc,
-                        onAncModeChange = onAncModeChange,
-                        smartAncLevel = smartAncLevel,
-                        displayTransparencyVocalEnhancement = displayTransparencyVocalEnhancement,
-                        onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange,
-                        displayGameMode = displayGameMode,
-                        onGameModeChange = onGameModeChange,
-                        spatialAudioMode = spatialAudioMode,
-                        onSpatialAudioModeChange = onSpatialAudioModeChange,
-                        eqPreset = eqPreset,
-                        onEqPresetChange = onEqPresetChange,
-                        displayDualDeviceConnection = displayDualDeviceConnection,
-                        onDualDeviceConnectionChange = onDualDeviceConnectionChange,
-                        spatialAudioSupported = spatialAudioSupported,
-                        spatialSoundSupported = spatialSoundSupported,
-                        adaptiveModeEnabled = adaptiveModeEnabled,
+                        sonyState = sonyState,
+                        sonyActions = sonyActions,
                         boxImagePath = currentEarphonePref?.boxImagePath,
                         connectedDeviceAddress = connectedDeviceAddress,
                         connectingDeviceAddress = connectingDeviceAddress,
@@ -254,7 +207,6 @@ internal fun MainTabsScaffold(
                         onDeviceDisconnect = onDeviceDisconnect,
                         onDismissConnectError = onDismissConnectError,
                         onBackToDevicePicker = onBackToDevicePicker,
-                        onOpenMelodyImport = { showMelodyImportDialog = true },
                         onOpenPodImageConfig = { showPodImageDialog = true },
                         onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                     )
@@ -271,18 +223,10 @@ internal fun MainTabsScaffold(
                         onIslandShowTimingsChange = onIslandShowTimingsChange,
                         appLanguage = appLanguage,
                         onAppLanguageChange = onAppLanguageChange,
-                        autoGameMode = autoGameMode,
-                        onAutoGameModeChange = onAutoGameModeChange,
-                        gameModeImplementation = gameModeImplementation,
-                        onGameModeImplementationChange = onGameModeImplementationChange,
                         notificationClickAction = notificationClickAction,
                         onNotificationClickActionChange = onNotificationClickActionChange,
                         moreClickAction = moreClickAction,
                         onMoreClickActionChange = onMoreClickActionChange,
-                        adaptiveCapabilityOverride = adaptiveCapabilityOverride,
-                        spatialAudioCapabilityOverride = spatialAudioCapabilityOverride,
-                        spatialSoundSwitchCapabilityOverride = spatialSoundSwitchCapabilityOverride,
-                        onOpenDeviceCapabilities = onOpenDeviceCapabilities,
                         fakeDeviceId = fakeDeviceId,
                         onFakeDeviceIdChange = onFakeDeviceIdChange,
                         onOpenTheme = onOpenTheme,
@@ -294,7 +238,6 @@ internal fun MainTabsScaffold(
             if (isLandscapeDetail) {
                 LandscapeDetailActions(
                     onBackToDevicePicker = onBackToDevicePicker,
-                    onOpenMelodyImport = { showMelodyImportDialog = true },
                     onOpenPodImageConfig = { showPodImageDialog = true },
                     onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                 )
@@ -319,17 +262,6 @@ internal fun MainTabsScaffold(
                 showPodImageDialog = false
             },
         )
-
-        MelodyImageImportDialog(
-            show = showMelodyImportDialog,
-            currentAddress = connectedDeviceAddress,
-            currentName = displayTitle,
-            onDismissRequest = { showMelodyImportDialog = false },
-            onImport = { address, name, images ->
-                onSavePodImageBytes(address, name, images)
-                showMelodyImportDialog = false
-            },
-        )
     }
 }
 
@@ -341,7 +273,7 @@ private fun ModuleTabPage(
     bondedDeviceCount: Int,
     onBluetoothStatusClick: () -> Unit,
     onPairedBluetoothClick: () -> Unit,
-    onOpenRfcommDebug: () -> Unit,
+    onOpenTandemDebug: () -> Unit,
     pageBottomContentPadding: Dp,
     restartingScopes: Boolean,
     onShowRestartScopeDialog: () -> Unit,
@@ -354,8 +286,8 @@ private fun ModuleTabPage(
                 largeTitle = stringResource(R.string.app_name),
                 scrollBehavior = scrollBehavior,
                 actions = {
-                    IconButton(onClick = onOpenRfcommDebug) {
-                        Icon(imageVector = MiuixIcons.Months, contentDescription = "RFCOMM debug")
+                    IconButton(onClick = onOpenTandemDebug) {
+                        Icon(imageVector = MiuixIcons.Months, contentDescription = "Tandem debug")
                     }
                     IconButton(
                         onClick = {
@@ -390,24 +322,8 @@ private fun EarphonesTabShell(
     showEarphoneDetail: Boolean,
     mainTitle: String,
     displayTitle: String,
-    displayBattery: BatteryParams,
-    displayWearStatus: WearStatus,
-    displayAnc: NoiseControlMode,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    smartAncLevel: NoiseControlMode?,
-    displayTransparencyVocalEnhancement: Boolean,
-    onTransparencyVocalEnhancementChange: (Boolean) -> Unit,
-    displayGameMode: Boolean,
-    onGameModeChange: (Boolean) -> Unit,
-    spatialAudioMode: Int,
-    onSpatialAudioModeChange: (Int) -> Unit,
-    eqPreset: Int,
-    onEqPresetChange: (Int) -> Unit,
-    displayDualDeviceConnection: Boolean,
-    onDualDeviceConnectionChange: (Boolean) -> Unit,
-    spatialAudioSupported: Boolean,
-    spatialSoundSupported: Boolean,
-    adaptiveModeEnabled: Boolean,
+    sonyState: SonyHeadphoneUiState,
+    sonyActions: SonyDetailActions,
     boxImagePath: String?,
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
@@ -418,7 +334,6 @@ private fun EarphonesTabShell(
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
     onDismissConnectError: () -> Unit,
     onBackToDevicePicker: () -> Unit,
-    onOpenMelodyImport: () -> Unit,
     onOpenPodImageConfig: () -> Unit,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
@@ -440,7 +355,6 @@ private fun EarphonesTabShell(
                     actions = {
                         if (showEarphoneDetail) {
                             EarphoneDetailActions(
-                                onOpenMelodyImport = onOpenMelodyImport,
                                 onOpenPodImageConfig = onOpenPodImageConfig,
                                 onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                             )
@@ -453,24 +367,8 @@ private fun EarphonesTabShell(
         EarphonesTabPage(
             showEarphoneDetail = showEarphoneDetail,
             displayTitle = displayTitle,
-            displayBattery = displayBattery,
-            displayWearStatus = displayWearStatus,
-            displayAnc = displayAnc,
-            onAncModeChange = onAncModeChange,
-            smartAncLevel = smartAncLevel,
-            displayTransparencyVocalEnhancement = displayTransparencyVocalEnhancement,
-            onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange,
-            displayGameMode = displayGameMode,
-            onGameModeChange = onGameModeChange,
-            spatialAudioMode = spatialAudioMode,
-            onSpatialAudioModeChange = onSpatialAudioModeChange,
-            eqPreset = eqPreset,
-            onEqPresetChange = onEqPresetChange,
-            displayDualDeviceConnection = displayDualDeviceConnection,
-            onDualDeviceConnectionChange = onDualDeviceConnectionChange,
-            spatialAudioSupported = spatialAudioSupported,
-            spatialSoundSupported = spatialSoundSupported,
-            adaptiveModeEnabled = adaptiveModeEnabled,
+            uiState = sonyState,
+            actions = sonyActions,
             boxImagePath = boxImagePath,
             connectedDeviceAddress = connectedDeviceAddress,
             connectingDeviceAddress = connectingDeviceAddress,
@@ -499,18 +397,10 @@ private fun SettingsTabPage(
     onIslandShowTimingsChange: (Set<Int>) -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
-    autoGameMode: MutableState<Boolean>,
-    onAutoGameModeChange: (Boolean) -> Unit,
-    gameModeImplementation: MutableState<GameModeImplementation>,
-    onGameModeImplementationChange: (GameModeImplementation) -> Unit,
     notificationClickAction: MutableState<Int>,
     onNotificationClickActionChange: (Int) -> Unit,
     moreClickAction: MutableState<Int>,
     onMoreClickActionChange: (Int) -> Unit,
-    adaptiveCapabilityOverride: MutableState<Int>,
-    spatialAudioCapabilityOverride: MutableState<Int>,
-    spatialSoundSwitchCapabilityOverride: MutableState<Int>,
-    onOpenDeviceCapabilities: () -> Unit,
     fakeDeviceId: MutableState<String>,
     onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
@@ -544,18 +434,10 @@ private fun SettingsTabPage(
             onIslandShowTimingsChange = onIslandShowTimingsChange,
             appLanguage = appLanguage,
             onAppLanguageChange = onAppLanguageChange,
-            autoGameMode = autoGameMode,
-            onAutoGameModeChange = onAutoGameModeChange,
-            gameModeImplementation = gameModeImplementation,
-            onGameModeImplementationChange = onGameModeImplementationChange,
             notificationClickAction = notificationClickAction,
             onNotificationClickActionChange = onNotificationClickActionChange,
             moreClickAction = moreClickAction,
             onMoreClickActionChange = onMoreClickActionChange,
-            adaptiveCapabilityOverride = adaptiveCapabilityOverride,
-            spatialAudioCapabilityOverride = spatialAudioCapabilityOverride,
-            spatialSoundSwitchCapabilityOverride = spatialSoundSwitchCapabilityOverride,
-            onOpenDeviceCapabilities = onOpenDeviceCapabilities,
             fakeDeviceId = fakeDeviceId,
             onFakeDeviceIdChange = onFakeDeviceIdChange,
             onOpenTheme = onOpenTheme,
@@ -567,7 +449,6 @@ private fun SettingsTabPage(
 @Composable
 private fun LandscapeDetailActions(
     onBackToDevicePicker: () -> Unit,
-    onOpenMelodyImport: () -> Unit,
     onOpenPodImageConfig: () -> Unit,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
@@ -580,18 +461,6 @@ private fun LandscapeDetailActions(
         Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
     }
     Box(Modifier.fillMaxSize()) {
-        IconButton(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 8.dp, end = 104.dp)
-                .zIndex(1f),
-            onClick = onOpenMelodyImport,
-        ) {
-            Icon(
-                imageVector = MiuixIcons.Import,
-                contentDescription = stringResource(R.string.import_melody_images),
-            )
-        }
         IconButton(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -621,16 +490,9 @@ private fun LandscapeDetailActions(
 
 @Composable
 private fun EarphoneDetailActions(
-    onOpenMelodyImport: () -> Unit,
     onOpenPodImageConfig: () -> Unit,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
-    IconButton(onClick = onOpenMelodyImport) {
-        Icon(
-            imageVector = MiuixIcons.Import,
-            contentDescription = stringResource(R.string.import_melody_images),
-        )
-    }
     IconButton(onClick = onOpenPodImageConfig) {
         Icon(
             imageVector = MiuixIcons.Edit,

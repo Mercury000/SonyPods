@@ -11,7 +11,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import moe.chenxy.oppopods.BuildConfig
-import moe.chenxy.oppopods.pods.RfcommController
 import moe.chenxy.oppopods.utils.SystemApisUtils.setIconVisibility
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 
@@ -36,18 +35,18 @@ object HeadsetStateDispatcher : HookContext() {
                 return@hookAfter
             }
             handler.post {
-                Log.d("OppoPods", "A2DP Connection State: $currState, isOppoPod ${isOppoPod(device)}")
+                Log.d("OppoPods", "A2DP Connection State: $currState, isSonyPod ${isSonyPod(device)}")
                 val context = instance as ContextWrapper
                 registerAppRequestReceiver(context)
-                if (!isOppoPod(device)) return@post
+                if (!isSonyPod(device)) return@post
 
+                // Phase 3 will notify the app process here so it can attach the Sony
+                // Tandem transport; for now only the status bar icon is handled.
                 val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
-                    RfcommController.connectPod(context, device, prefs)
                 } else if (currState == BluetoothHeadset.STATE_DISCONNECTING || currState == BluetoothHeadset.STATE_DISCONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", false)
-                    RfcommController.disconnectedPod(context, device)
                 }
             }
         }
@@ -66,33 +65,27 @@ object HeadsetStateDispatcher : HookContext() {
                             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                         })
                     }
-                    OppoPodsAction.ACTION_CONNECT_POD_REQUEST -> {
-                        val device = intent.getParcelableExtra("device", BluetoothDevice::class.java) ?: return
-                        Log.d("OppoPods", "connect request from app device=${device.name}/${device.address}")
-                        RfcommController.connectPod(context, device, prefs, appRequested = true)
-                    }
-                    OppoPodsAction.ACTION_DISCONNECT_POD_REQUEST -> {
-                        val device = intent.getParcelableExtra("device", BluetoothDevice::class.java) ?: return
-                        Log.d("OppoPods", "disconnect request from app device=${device.name}/${device.address}")
-                        RfcommController.disconnectedPod(context, device)
-                    }
                 }
             }
         }, IntentFilter().apply {
             addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
             addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
-            addAction(OppoPodsAction.ACTION_CONNECT_POD_REQUEST)
-            addAction(OppoPodsAction.ACTION_DISCONNECT_POD_REQUEST)
         }, Context.RECEIVER_EXPORTED)
         appRequestReceiverRegistered = true
     }
 
     /**
-     * Detect OPPO earphones by checking if the device name contains "oppo" (case insensitive).
+     * Detect Sony audio devices by name (mirrors SonyBleClient.isSonyCandidate).
      */
     @SuppressLint("MissingPermission")
-    fun isOppoPod(device: BluetoothDevice): Boolean {
-        val name = device.name ?: return false
-        return name.contains("oppo", ignoreCase = true)
+    fun isSonyPod(device: BluetoothDevice): Boolean {
+        val name = device.name?.trim()?.lowercase() ?: return false
+        return name.contains("sony") ||
+            name.contains("linkbuds") ||
+            name.startsWith("wf-") ||
+            name.startsWith("wh-") ||
+            name.startsWith("wi-") ||
+            name.startsWith("xba-") ||
+            name.startsWith("mdr-")
     }
 }

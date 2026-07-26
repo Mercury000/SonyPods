@@ -136,4 +136,26 @@
     <string name="anc_implementation_summary">自动时跟随型号检测；部分老耳机降噪/关闭指令相反，可手动切换。</string>
     <string name="anc_implementation_standard">标准</string>
     <string name="anc_implementation_compatible">兼容</string>
+    <string name="ambient_sound_title">环境声</string>
+    <string name="ambient_normal">普通</string>
+    <string name="ambient_voice_focus">人声</string>
+    <string name="ambient_level">环境声等级</string>
+    <string name="batt_single">电量</string>
+    <string name="sony_eq_title">均衡器</string>
+    <string name="eq_unknown">未知</string>
+    <string name="eq_clear_bass">Clear Bass</string>
+    <string name="playback_title">播放控制</string>
+    <string name="playback_playing">播放中</string>
+    <string name="playback_paused">已暂停</string>
+    <string name="playback_previous">上一首</string>
+    <string name="playback_play_pause">播放/暂停</string>
+    <string name="playback_next">下一首</string>
+    <string name="firmware_version">固件版本</string>
+    <string name="wearing_status">佩戴状态</string>
+    <string name="lea_status">LE Audio</string>
+    <string name="quick_access">快捷访问</string>
+    <string name="tandem_debug_title">Tandem 调试</string>
+    <string name="service_channel_name">Sony 耳机服务</string>
+    <string name="service_disconnected">未连接</string>
+    <string name="notification_btn_popup">弹窗</string>
 </resources>

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -25,21 +29,25 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.PlaybackStatus
 import moe.chenxy.oppopods.R
-import moe.chenxy.oppopods.config.ConfigManager
-import moe.chenxy.oppopods.pods.NoiseControlMode
-import moe.chenxy.oppopods.pods.WearStatus
+import moe.chenxy.oppopods.ui.SonyDetailActions
 import moe.chenxy.oppopods.ui.components.AncSwitch
 import moe.chenxy.oppopods.ui.components.PodStatus
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.ui.toBatteryParams
+import moe.chenxy.oppopods.ui.toSinglePodParams
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Text
-import moe.chenxy.oppopods.pods.EqPreset
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 fun PodDetailPage(
@@ -47,24 +55,8 @@ fun PodDetailPage(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     bottomContentPadding: Dp = 16.dp,
     podName: String,
-    batteryParams: BatteryParams,
-    wearStatus: WearStatus = WearStatus(),
-    ancMode: NoiseControlMode,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    smartAncLevel: NoiseControlMode? = null,
-    transparencyVocalEnhancement: Boolean = false,
-    onTransparencyVocalEnhancementChange: (Boolean) -> Unit = {},
-    gameMode: Boolean = false,
-    onGameModeChange: (Boolean) -> Unit = {},
-    spatialAudioMode: Int = ConfigManager.SPATIAL_AUDIO_OFF,
-    onSpatialAudioModeChange: (Int) -> Unit = {},
-    dualDeviceConnection: Boolean = false,
-    onDualDeviceConnectionChange: (Boolean) -> Unit = {},
-    spatialAudioSupported: Boolean = false,
-    spatialSoundSupported: Boolean = false,
-    adaptiveModeEnabled: Boolean = true,
-    eqPreset: Int = -1,
-    onEqPresetChange: (Int) -> Unit = {},
+    uiState: SonyHeadphoneUiState,
+    actions: SonyDetailActions = SonyDetailActions(),
     boxImagePath: String? = null,
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -108,24 +100,8 @@ fun PodDetailPage(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 podControlItems(
-                    batteryParams = batteryParams,
-                    wearStatus = wearStatus,
-                    ancMode = ancMode,
-                    onAncModeChange = onAncModeChange,
-                    smartAncLevel = smartAncLevel,
-                    transparencyVocalEnhancement = transparencyVocalEnhancement,
-                    onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange,
-                    gameMode = gameMode,
-                    onGameModeChange = onGameModeChange,
-                    spatialAudioMode = spatialAudioMode,
-                    onSpatialAudioModeChange = onSpatialAudioModeChange,
-                    dualDeviceConnection = dualDeviceConnection,
-                    onDualDeviceConnectionChange = onDualDeviceConnectionChange,
-                    spatialAudioSupported = spatialAudioSupported,
-                    spatialSoundSupported = spatialSoundSupported,
-                    adaptiveModeEnabled = adaptiveModeEnabled,
-                    eqPreset = eqPreset,
-                    onEqPresetChange = onEqPresetChange,
+                    uiState = uiState,
+                    actions = actions,
                     bottomContentPadding = bottomContentPadding
                 )
             }
@@ -150,24 +126,8 @@ fun PodDetailPage(
         }
 
         podControlItems(
-            batteryParams = batteryParams,
-            wearStatus = wearStatus,
-            ancMode = ancMode,
-            onAncModeChange = onAncModeChange,
-            smartAncLevel = smartAncLevel,
-            transparencyVocalEnhancement = transparencyVocalEnhancement,
-            onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange,
-            gameMode = gameMode,
-            onGameModeChange = onGameModeChange,
-            spatialAudioMode = spatialAudioMode,
-            onSpatialAudioModeChange = onSpatialAudioModeChange,
-            dualDeviceConnection = dualDeviceConnection,
-            onDualDeviceConnectionChange = onDualDeviceConnectionChange,
-            spatialAudioSupported = spatialAudioSupported,
-            spatialSoundSupported = spatialSoundSupported,
-            adaptiveModeEnabled = adaptiveModeEnabled,
-            eqPreset = eqPreset,
-            onEqPresetChange = onEqPresetChange,
+            uiState = uiState,
+            actions = actions,
             bottomContentPadding = bottomContentPadding
         )
     }
@@ -183,39 +143,17 @@ private fun rememberPodImagePainter(path: String?) = remember(path) {
 } ?: painterResource(R.drawable.img_box)
 
 private fun LazyListScope.podControlItems(
-    batteryParams: BatteryParams,
-    wearStatus: WearStatus,
-    ancMode: NoiseControlMode,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    smartAncLevel: NoiseControlMode?,
-    transparencyVocalEnhancement: Boolean,
-    onTransparencyVocalEnhancementChange: (Boolean) -> Unit,
-    gameMode: Boolean,
-    onGameModeChange: (Boolean) -> Unit,
-    spatialAudioMode: Int,
-    onSpatialAudioModeChange: (Int) -> Unit,
-    dualDeviceConnection: Boolean,
-    onDualDeviceConnectionChange: (Boolean) -> Unit,
-    spatialAudioSupported: Boolean,
-    spatialSoundSupported: Boolean,
-    adaptiveModeEnabled: Boolean,
-    eqPreset: Int,
-    onEqPresetChange: (Int) -> Unit,
+    uiState: SonyHeadphoneUiState,
+    actions: SonyDetailActions,
     bottomContentPadding: Dp
 ) {
-    val spatialAudioValues = listOf(
-        ConfigManager.SPATIAL_AUDIO_OFF,
-        ConfigManager.SPATIAL_AUDIO_FIXED,
-        ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING,
-    )
-
     item {
         Card(
             modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             PodStatus(
-                batteryParams = batteryParams,
-                wearStatus = wearStatus,
+                batteryParams = uiState.batteryState.toBatteryParams(),
+                single = uiState.batteryState.toSinglePodParams(),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp)
             )
         }
@@ -226,73 +164,194 @@ private fun LazyListScope.podControlItems(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
             AncSwitch(
-                ancStatus = ancMode,
-                onAncModeChange = onAncModeChange,
-                smartAncLevel = smartAncLevel,
-                adaptiveModeEnabled = adaptiveModeEnabled,
-                transparencyVocalEnhancement = transparencyVocalEnhancement,
-                onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange
+                ancStatus = uiState.noiseControlState.controlMode,
+                onAncModeChange = actions.onAncModeChange,
+                ambientLevel = uiState.noiseControlState.ambientLevel,
+                onAmbientLevelChange = actions.onAmbientLevelChange,
+                ambientVoiceMode = uiState.noiseControlState.ambientVoiceMode,
+                onAmbientVoiceModeChange = actions.onAmbientVoiceModeChange,
             )
         }
     }
 
     item {
-        Card(
-            modifier = Modifier.padding(horizontal = 12.dp)
-        ) {
-            SwitchPreference(
-                title = stringResource(R.string.game_mode),
-                summary = stringResource(R.string.game_mode_summary),
-                checked = gameMode,
-                onCheckedChange = onGameModeChange
-            )
-            if (spatialAudioSupported) {
-                val spatialAudioOptions = listOf(
-                    stringResource(R.string.off),
-                    stringResource(R.string.spatial_audio_fixed),
-                    stringResource(R.string.spatial_audio_head_tracking),
-                )
-                OverlayDropdownPreference(
-                    title = stringResource(R.string.spatial_audio),
-                    summary = stringResource(R.string.spatial_audio_summary),
-                    items = spatialAudioOptions,
-                    selectedIndex = spatialAudioValues.indexOf(spatialAudioMode).coerceAtLeast(0),
-                    onSelectedIndexChange = { onSpatialAudioModeChange(spatialAudioValues[it]) }
-                )
-            }
-            if (spatialSoundSupported) {
-                SwitchPreference(
-                    title = stringResource(R.string.spatial_sound),
-                    summary = stringResource(if (spatialAudioMode != ConfigManager.SPATIAL_AUDIO_OFF) R.string.enabled else R.string.off),
-                    checked = spatialAudioMode != ConfigManager.SPATIAL_AUDIO_OFF,
-                    onCheckedChange = {
-                        onSpatialAudioModeChange(if (it) ConfigManager.SPATIAL_AUDIO_FIXED else ConfigManager.SPATIAL_AUDIO_OFF)
-                    }
-                )
-            }
-            val eqOptions = listOf(
-                stringResource(R.string.eq_preset_authentic),
-                stringResource(R.string.eq_preset_detail),
-                stringResource(R.string.eq_preset_vocal),
-                stringResource(R.string.eq_preset_bass),
-                stringResource(R.string.eq_preset_dynaudio),
-            )
-            OverlayDropdownPreference(
-                title = stringResource(R.string.eq_preset_title),
-                summary = stringResource(R.string.eq_preset_summary),
-                items = eqOptions,
-                selectedIndex = EqPreset.ALL.indexOf(eqPreset).coerceAtLeast(0),
-                onSelectedIndexChange = { onEqPresetChange(EqPreset.ALL[it]) }
-            )
-            SwitchPreference(
-                title = stringResource(R.string.dual_device_connection),
-                summary = stringResource(if (dualDeviceConnection) R.string.enabled else R.string.off),
-                checked = dualDeviceConnection,
-                onCheckedChange = onDualDeviceConnectionChange
+        EqCard(uiState = uiState, actions = actions)
+    }
+
+    item {
+        PlaybackCard(uiState = uiState, actions = actions)
+    }
+
+    item {
+        DeviceStatusCard(uiState = uiState)
+    }
+
+    item {
+        Spacer(modifier = Modifier.height(bottomContentPadding))
+    }
+}
+
+@Composable
+private fun EqCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActions) {
+    val capability = uiState.eqUiCapability
+    val presets = capability?.availablePresets?.takeIf { it.isNotEmpty() }
+        ?: EqPresetId.entries.toList()
+    val currentPreset = uiState.eqState.preset
+
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        OverlayDropdownPreference(
+            title = stringResource(R.string.sony_eq_title),
+            summary = currentPreset?.displayName ?: stringResource(R.string.eq_unknown),
+            items = presets.map { it.displayName },
+            selectedIndex = presets.indexOf(currentPreset).coerceAtLeast(0),
+            onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
+        )
+
+        if (capability?.hasClearBass != false) {
+            val clearBassRange = capability?.clearBassDisplayRange ?: (-10..10)
+            LabeledLevelSlider(
+                label = stringResource(R.string.eq_clear_bass),
+                value = uiState.eqState.clearBass,
+                range = clearBassRange,
+                onValueChange = actions.onClearBassChange,
             )
         }
+
+        val bandSteps = uiState.eqState.bandSteps
+        if (bandSteps.isNotEmpty()) {
+            val bandLabels = capability?.bandLabels.orEmpty()
+            val bandRange = capability?.bandDisplayRange ?: (-10..10)
+            bandSteps.forEachIndexed { index, step ->
+                LabeledLevelSlider(
+                    label = bandLabels.getOrNull(index) ?: "Band ${index + 1}",
+                    value = step,
+                    range = bandRange,
+                    onValueChange = { actions.onCustomEqBandChange(index, it) },
+                )
+            }
+        }
     }
-    item {
-        androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(bottomContentPadding))
+}
+
+@Composable
+private fun LabeledLevelSlider(
+    label: String,
+    value: Int?,
+    range: IntRange,
+    onValueChange: (Int) -> Unit,
+) {
+    val effective = (value ?: 0).coerceIn(range.first, range.last)
+    var draggingValue by remember(value) { mutableFloatStateOf(effective.toFloat()) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = draggingValue.toInt().toString(),
+                fontSize = 14.sp,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Slider(
+            value = draggingValue,
+            onValueChange = { newValue: Float ->
+                draggingValue = newValue
+                val rounded = newValue.toInt().coerceIn(range.first, range.last)
+                if (rounded != effective) {
+                    onValueChange(rounded)
+                }
+            },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+        )
+    }
+}
+
+@Composable
+private fun PlaybackCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActions) {
+    Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.playback_title),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = when (uiState.playbackStatus) {
+                        PlaybackStatus.PLAYING -> stringResource(R.string.playback_playing)
+                        PlaybackStatus.PAUSED -> stringResource(R.string.playback_paused)
+                        else -> "—"
+                    },
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(
+                    text = stringResource(R.string.playback_previous),
+                    onClick = actions.onPlaybackPrevious,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.playback_play_pause),
+                    onClick = actions.onPlaybackPlayPause,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.playback_next),
+                    onClick = actions.onPlaybackNext,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceStatusCard(uiState: SonyHeadphoneUiState) {
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        BasicComponent(
+            title = stringResource(R.string.firmware_version),
+            summary = uiState.deviceInfo.firmwareVersion ?: "—",
+        )
+        BasicComponent(
+            title = stringResource(R.string.wearing_status),
+            summary = uiState.wearingState.status ?: "—",
+        )
+        BasicComponent(
+            title = stringResource(R.string.lea_status),
+            summary = uiState.leaState.enabled ?: "—",
+        )
+        BasicComponent(
+            title = stringResource(R.string.quick_access),
+            summary = listOfNotNull(
+                uiState.quickAccessState.lrKeyFunction,
+                uiState.quickAccessState.ncAmbKeyFunction,
+            ).joinToString(" / ").ifEmpty { "—" },
+        )
     }
 }

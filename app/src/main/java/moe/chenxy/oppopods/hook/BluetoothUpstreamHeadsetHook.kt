@@ -14,7 +14,6 @@ import android.os.Parcel
 import java.lang.reflect.Method
 import moe.chenxy.oppopods.BuildConfig
 import moe.chenxy.oppopods.config.ConfigManager
-import moe.chenxy.oppopods.pods.RfcommController
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
@@ -655,30 +654,45 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun realRefreshPayload(): String {
-        val localSnapshot = runCatching { RfcommController.currentStatusSnapshot() }
-            .getOrNull()
-            ?.takeIf { it.address != null || it.battery != null }
-        val battery = localSnapshot?.battery ?: currentBattery
-        val anc = currentAnc
-        if (!hasTransparencyVocalEnhancementState && localSnapshot != null) {
-            currentTransparencyVocalEnhancement = localSnapshot.transparencyVocalEnhancement
-            hasTransparencyVocalEnhancementState = true
-        }
-        val transparencyVocalEnhancement = if (hasTransparencyVocalEnhancementState) {
-            currentTransparencyVocalEnhancement
-        } else {
-            localSnapshot?.transparencyVocalEnhancement ?: currentTransparencyVocalEnhancement
-        }
-        localSnapshot?.address?.let {
-            currentAddress = it
-            knownOppoAddresses.add(it.uppercase())
-        }
-        localSnapshot?.deviceName?.let { currentName = it }
-        return RfcommController.miuiRefreshPayload(battery, anc, transparencyVocalEnhancement)
+        // State now arrives via broadcasts from the app-process Sony repository
+        // (wired up in phase 3); the local caches are the single source here.
+        return miuiRefreshPayload(currentBattery, currentAnc, currentTransparencyVocalEnhancement)
     }
 
     private fun effectiveBattery(): BatteryParams? {
-        return runCatching { RfcommController.currentStatusSnapshot().battery }.getOrNull() ?: currentBattery
+        return currentBattery
+    }
+
+    private fun miuiRefreshPayload(battery: BatteryParams?, anc: Int, transparencyVocalEnhancement: Boolean): String {
+        val values = MutableList(16) { "" }
+        values[0] = miuiBatteryValue(battery?.left)
+        values[1] = miuiBatteryValue(battery?.right)
+        values[2] = miuiBatteryValue(battery?.case)
+        values[7] = miuiAncLevel(anc, transparencyVocalEnhancement)
+        values[8] = "true"
+        values[11] = "00"
+        values[13] = "00"
+        values[14] = "00"
+        return values.joinToString(",")
+    }
+
+    private fun miuiBatteryValue(params: PodParams?): String {
+        if (params?.isConnected != true) return "255"
+        val value = params.battery.coerceIn(0, 100)
+        return (if (params.isCharging) value or 128 else value).toString()
+    }
+
+    private fun miuiAncLevel(anc: Int, transparencyVocalEnhancement: Boolean): String {
+        // MIUI level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep,
+        // 0201=Transparency vocal enhancement (legacy codes kept until phase 3 Sony remap).
+        return when (anc) {
+            5 -> "0103"
+            6 -> "0101"
+            7 -> "0100"
+            8 -> "0102"
+            3 -> if (transparencyVocalEnhancement) "0201" else "0200"
+            else -> "0000"
+        }
     }
 
     private fun displayBattery(params: PodParams?): Int? {
@@ -750,14 +764,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun requestBluetoothStatus(reason: String) {
         runCatching {
-            if (packageName == "com.android.bluetooth") {
-                RfcommController.queryStatus()
-            } else {
-                context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
-                    setPackage("com.android.bluetooth")
-                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                })
-            }
+            context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                setPackage("com.android.bluetooth")
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+            })
             Log.d(TAG, "requested bluetooth status reason=$reason package=$packageName")
         }.onFailure {
             Log.w(TAG, "request bluetooth status failed reason=$reason package=$packageName", it)

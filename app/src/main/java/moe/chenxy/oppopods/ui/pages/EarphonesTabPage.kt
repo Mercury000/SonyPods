@@ -10,34 +10,17 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
+import dev.sonypods.data.SonyHeadphoneUiState
 import moe.chenxy.oppopods.R
-import moe.chenxy.oppopods.pods.NoiseControlMode
-import moe.chenxy.oppopods.pods.WearStatus
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.ui.SonyDetailActions
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun EarphonesTabPage(
     showEarphoneDetail: Boolean,
     displayTitle: String,
-    displayBattery: BatteryParams,
-    displayWearStatus: WearStatus,
-    displayAnc: NoiseControlMode,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    smartAncLevel: NoiseControlMode?,
-    displayTransparencyVocalEnhancement: Boolean,
-    onTransparencyVocalEnhancementChange: (Boolean) -> Unit,
-    displayGameMode: Boolean,
-    onGameModeChange: (Boolean) -> Unit,
-    spatialAudioMode: Int,
-    onSpatialAudioModeChange: (Int) -> Unit,
-    eqPreset: Int,
-    onEqPresetChange: (Int) -> Unit,
-    displayDualDeviceConnection: Boolean,
-    onDualDeviceConnectionChange: (Boolean) -> Unit,
-    spatialAudioSupported: Boolean,
-    spatialSoundSupported: Boolean,
-    adaptiveModeEnabled: Boolean,
+    uiState: SonyHeadphoneUiState,
+    actions: SonyDetailActions,
     boxImagePath: String?,
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
@@ -63,24 +46,8 @@ internal fun EarphonesTabPage(
                 contentPadding = contentPadding,
                 bottomContentPadding = pageBottomContentPadding,
                 podName = displayTitle.ifEmpty { stringResource(R.string.pod_info) },
-                batteryParams = displayBattery,
-                wearStatus = displayWearStatus,
-                ancMode = displayAnc,
-                onAncModeChange = onAncModeChange,
-                smartAncLevel = smartAncLevel,
-                transparencyVocalEnhancement = displayTransparencyVocalEnhancement,
-                onTransparencyVocalEnhancementChange = onTransparencyVocalEnhancementChange,
-                gameMode = displayGameMode,
-                onGameModeChange = onGameModeChange,
-                spatialAudioMode = spatialAudioMode,
-                onSpatialAudioModeChange = onSpatialAudioModeChange,
-                eqPreset = eqPreset,
-                onEqPresetChange = onEqPresetChange,
-                dualDeviceConnection = displayDualDeviceConnection,
-                onDualDeviceConnectionChange = onDualDeviceConnectionChange,
-                spatialAudioSupported = spatialAudioSupported,
-                spatialSoundSupported = spatialSoundSupported,
-                adaptiveModeEnabled = adaptiveModeEnabled,
+                uiState = uiState,
+                actions = actions,
                 boxImagePath = boxImagePath,
             )
         } else {

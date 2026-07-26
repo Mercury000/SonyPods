@@ -135,4 +135,26 @@
     <string name="anc_implementation_summary">Auto follows model detection. Manual switch for ANC behavior compatibility.</string>
     <string name="anc_implementation_standard">Standard</string>
     <string name="anc_implementation_compatible">Compatible</string>
+    <string name="ambient_sound_title">Ambient</string>
+    <string name="ambient_normal">Normal</string>
+    <string name="ambient_voice_focus">Voice</string>
+    <string name="ambient_level">Ambient sound level</string>
+    <string name="batt_single">Battery</string>
+    <string name="sony_eq_title">Equalizer</string>
+    <string name="eq_unknown">Unknown</string>
+    <string name="eq_clear_bass">Clear Bass</string>
+    <string name="playback_title">Playback</string>
+    <string name="playback_playing">Playing</string>
+    <string name="playback_paused">Paused</string>
+    <string name="playback_previous">Prev</string>
+    <string name="playback_play_pause">Play/Pause</string>
+    <string name="playback_next">Next</string>
+    <string name="firmware_version">Firmware version</string>
+    <string name="wearing_status">Wearing status</string>
+    <string name="lea_status">LE Audio</string>
+    <string name="quick_access">Quick Access</string>
+    <string name="tandem_debug_title">Tandem Debug</string>
+    <string name="service_channel_name">Sony Headphone Service</string>
+    <string name="service_disconnected">Disconnected</string>
+    <string name="notification_btn_popup">Popup</string>
 </resources>
