@@ -19,6 +19,7 @@ data class AppConfig(
     val spatialSoundSwitchCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val ancImplementationCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val ancCycleModes: Set<String> = ConfigManager.DEFAULT_ANC_CYCLE_MODES,
+    val startupTab: Int = ConfigManager.STARTUP_TAB_MODULE,
 )
 
 object ConfigManager {
@@ -36,6 +37,7 @@ object ConfigManager {
     const val PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE = "spatial_sound_switch_capability_override"
     const val PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE = "anc_implementation_capability_override"
     const val PREF_KEY_ANC_CYCLE_MODES = "anc_cycle_modes"
+    const val PREF_KEY_STARTUP_TAB = "startup_tab"
     const val DEFAULT_FAKE_DEVICE_ID = "01010607"
     const val LOG_LEVEL_OFF = 0
     const val LOG_LEVEL_BASIC = 1
@@ -59,6 +61,9 @@ object ConfigManager {
     const val CAPABILITY_OVERRIDE_AUTO = 0
     const val CAPABILITY_OVERRIDE_FORCE_ENABLED = 1
     const val CAPABILITY_OVERRIDE_FORCE_DISABLED = 2
+
+    const val STARTUP_TAB_MODULE = 0
+    const val STARTUP_TAB_EARPHONES = 1
 
     /** Cycle order of the notification/island ANC button; values are [dev.sonypods.protocol.NoiseControlMode] names. */
     val ANC_CYCLE_MODE_ORDER = listOf("NOISE_CANCELLING", "AMBIENT_SOUND", "OFF")
@@ -109,6 +114,8 @@ object ConfigManager {
     fun ancImplementationCapabilityOverride(): Int = current().ancImplementationCapabilityOverride.normalizedCapabilityOverride()
 
     fun ancCycleModes(): Set<String> = current().ancCycleModes.normalizedAncCycleModes()
+
+    fun startupTab(): Int = current().startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES)
 
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
@@ -172,6 +179,11 @@ object ConfigManager {
         save(prefs, service, config)
     }
 
+    fun updateStartupTab(prefs: SharedPreferences, service: XposedService?, tab: Int) {
+        val config = current().copy(startupTab = tab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES))
+        save(prefs, service, config)
+    }
+
     fun save(prefs: SharedPreferences, config: AppConfig) {
         val oldConfig = cachedConfig
         val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
@@ -206,6 +218,7 @@ object ConfigManager {
             .putInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, config.spatialSoundSwitchCapabilityOverride)
             .putInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, config.ancImplementationCapabilityOverride)
             .putStringSet(PREF_KEY_ANC_CYCLE_MODES, config.ancCycleModes)
+            .putInt(PREF_KEY_STARTUP_TAB, config.startupTab)
             .commit()
     }
 
@@ -221,6 +234,7 @@ object ConfigManager {
         val directSpatialSoundSwitchCapabilityOverride = prefs.getInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
         val directAncImplementationCapabilityOverride = prefs.getInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
         val directAncCycleModes = prefs.getStringSet(PREF_KEY_ANC_CYCLE_MODES, null)?.toSet()
+        val directStartupTab = prefs.getInt(PREF_KEY_STARTUP_TAB, Int.MIN_VALUE)
         val raw = prefs.getString(PREF_KEY_CONFIG_JSON, null)
         logPrefsSnapshot(source, prefs, directFakeDeviceId, raw)
         val config = raw?.let {
@@ -240,6 +254,7 @@ object ConfigManager {
                 spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
                 ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
                 ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
+                startupTab = directStartupTab.takeIf { it != Int.MIN_VALUE } ?: config.startupTab,
             ).normalized()
         }
         return config.copy(
@@ -254,6 +269,7 @@ object ConfigManager {
             spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
             ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
             ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
+            startupTab = directStartupTab.takeIf { it != Int.MIN_VALUE } ?: config.startupTab,
         ).normalized()
     }
 
@@ -269,6 +285,7 @@ object ConfigManager {
         spatialSoundSwitchCapabilityOverride = spatialSoundSwitchCapabilityOverride.normalizedCapabilityOverride(),
         ancImplementationCapabilityOverride = ancImplementationCapabilityOverride.normalizedCapabilityOverride(),
         ancCycleModes = ancCycleModes.normalizedAncCycleModes(),
+        startupTab = startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES),
     )
 
     private fun String.normalizedFakeDeviceId(): String = trim().takeIf { it.isNotEmpty() } ?: DEFAULT_FAKE_DEVICE_ID
@@ -334,6 +351,9 @@ object ConfigManager {
             }
             if (oldConfig.ancCycleModes != newConfig.ancCycleModes) {
                 add("ancCycleModes=${oldConfig.ancCycleModes}->${newConfig.ancCycleModes}")
+            }
+            if (oldConfig.startupTab != newConfig.startupTab) {
+                add("startupTab=${oldConfig.startupTab}->${newConfig.startupTab}")
             }
         }
     }

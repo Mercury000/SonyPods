@@ -38,6 +38,8 @@ fun SettingsPage(
     onIslandShowTimingsChange: (Set<Int>) -> Unit = {},
     ancCycleModes: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_ANC_CYCLE_MODES),
     onAncCycleModesChange: (Set<String>) -> Unit = {},
+    startupTab: MutableState<Int> = mutableStateOf(ConfigManager.STARTUP_TAB_MODULE),
+    onStartupTabChange: (Int) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
@@ -98,6 +100,11 @@ fun SettingsPage(
         stringResource(R.string.notification_click_module_popup),
         stringResource(R.string.click_action_system_settings),
     )
+    val startupTabValues = listOf(ConfigManager.STARTUP_TAB_MODULE, ConfigManager.STARTUP_TAB_EARPHONES)
+    val startupTabOptions = listOf(
+        stringResource(R.string.module),
+        stringResource(R.string.earphones),
+    )
     val ancCycleModeLabels = listOf(
         "NOISE_CANCELLING" to stringResource(R.string.anc_cycle_mode_noise_cancelling),
         "AMBIENT_SOUND" to stringResource(R.string.anc_cycle_mode_ambient),
@@ -157,6 +164,13 @@ fun SettingsPage(
                     summary = stringResource(R.string.hide_desktop_icon_summary),
                     checked = desktopIconHidden.value,
                     onCheckedChange = { onDesktopIconHiddenChange(it) }
+                )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.startup_tab),
+                    summary = stringResource(R.string.startup_tab_summary),
+                    items = startupTabOptions,
+                    selectedIndex = startupTabValues.indexOf(startupTab.value).coerceAtLeast(0),
+                    onSelectedIndexChange = { onStartupTabChange(startupTabValues[it]) }
                 )
             }
         }

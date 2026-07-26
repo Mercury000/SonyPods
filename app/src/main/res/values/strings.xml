@@ -67,6 +67,8 @@
     <string name="log_level_off">Off</string>
     <string name="log_level_basic">Basic</string>
     <string name="log_level_debug">Debug</string>
+    <string name="startup_tab">Startup page</string>
+    <string name="startup_tab_summary">Choose which page opens when entering the app</string>
     <string name="hide_desktop_icon">Hide Desktop Icon</string>
     <string name="hide_desktop_icon_summary">Hide the launcher icon; open from module manager after hiding</string>
     <string name="cycle_anc">Cycle ANC</string>

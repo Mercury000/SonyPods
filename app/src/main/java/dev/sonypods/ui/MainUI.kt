@@ -139,6 +139,7 @@ fun MainUI(
     val islandMode = remember { mutableStateOf(appConfig.islandMode) }
     val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
+    val startupTab = remember { mutableStateOf(appConfig.startupTab) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
 
     val sonyConnected = sonyState.connected
@@ -162,9 +163,13 @@ fun MainUI(
         )
     }
 
-    LaunchedEffect(canShowDetailPage) {
+    LaunchedEffect(Unit) {
         if (!hasAppliedDefaultTab) {
-            selectedTab = if (canShowDetailPage) MainTab.Earphones else MainTab.Module
+            selectedTab = if (startupTab.value == ConfigManager.STARTUP_TAB_EARPHONES) {
+                MainTab.Earphones
+            } else {
+                MainTab.Module
+            }
             hasAppliedDefaultTab = true
         }
     }
@@ -450,6 +455,11 @@ fun MainUI(
                     ancCycleModes.value = it
                     ConfigManager.updateAncCycleModes(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.android.bluetooth")
+                },
+                startupTab = startupTab,
+                onStartupTabChange = {
+                    startupTab.value = it
+                    ConfigManager.updateStartupTab(prefs, xposedService, it)
                 },
                 appLanguage = appLanguage,
                 onAppLanguageChange = {

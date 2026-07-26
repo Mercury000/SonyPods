@@ -68,6 +68,8 @@
     <string name="log_level_off">关闭</string>
     <string name="log_level_basic">基础</string>
     <string name="log_level_debug">调试</string>
+    <string name="startup_tab">启动页</string>
+    <string name="startup_tab_summary">选择进入模块时显示的页面</string>
     <string name="hide_desktop_icon">隐藏桌面图标</string>
     <string name="hide_desktop_icon_summary">隐藏启动器图标；隐藏后请从模块管理器打开</string>
     <string name="cycle_anc">切换降噪</string>
