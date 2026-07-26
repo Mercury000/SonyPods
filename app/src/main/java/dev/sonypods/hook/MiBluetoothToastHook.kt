@@ -103,13 +103,16 @@ object MiBluetoothToastHook : HookContext() {
                 val moduleContext = context.createPackageContext(
                     "dev.sonypods", Context.CONTEXT_IGNORE_SECURITY
                 )
-                val headsetBitmap = PodImageLoader.loadBoxBitmap(context, prefs, address)
-                    ?: BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box)
+                // Before the user unlocks, our ContentProvider and resources are not
+                // reachable ("user not unlocked"). Post the notification anyway with a
+                // system icon rather than dropping it for the whole session.
+                val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, prefs, address) }.getOrNull()
+                    ?: runCatching { BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box) }.getOrNull()
                 if (headsetBitmap == null) {
-                    Log.e("SonyPods", "createPodsNotification: headset bitmap null")
-                    return
+                    Log.w("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
                 }
-                val headsetIcon = Icon.createWithBitmap(headsetBitmap)
+                val headsetIcon = headsetBitmap?.let { Icon.createWithBitmap(it) }
+                    ?: Icon.createWithResource(context, android.R.drawable.stat_sys_data_bluetooth)
                 val pendingIntent = PendingIntent.getActivity(
                     context,
                     0,
@@ -274,7 +277,33 @@ object MiBluetoothToastHook : HookContext() {
                     // This class is constructed well after boot, so anything the engine
                     // rendered before now was lost; ask it to render again.
                     announceSurfacesReady(context)
+                    registerUnlockReceiver(context)
         }
+    }
+
+    /**
+     * Until the user unlocks, our ContentProvider and resources are unavailable, so a
+     * notification rendered during that window has no headphone image and the island
+     * cannot be built. Nothing re-renders on its own afterwards — state is only pushed
+     * on change — so re-run the handshake once the device becomes usable.
+     */
+    private fun registerUnlockReceiver(context: Context) {
+        runCatching {
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context?, intent: Intent?) {
+                        Log.i("SonyPods", "user unlocked (${intent?.action}); re-rendering surfaces")
+                        announceSurfacesReady(context)
+                    }
+                },
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_USER_UNLOCKED)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                    addAction(Intent.ACTION_BOOT_COMPLETED)
+                },
+                Context.RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w("SonyPods", "unlock receiver registration failed", it) }
     }
 
     private fun announceSurfacesReady(context: Context) {

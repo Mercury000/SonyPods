@@ -99,6 +99,7 @@ object SonyEngineHost {
             }
         }
 
+        registerUnlockReceiver(ctx)
         bindA2dpProxy(ctx)
         scope.launch {
             while (true) {
@@ -152,6 +153,31 @@ object SonyEngineHost {
         runCatching {
             a2dpProxy?.connectedDevices?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
         }.getOrNull()
+
+    /**
+     * Everything published while the device is still locked lands in consumers that
+     * cannot render it yet — our provider and resources live in credential-encrypted
+     * storage. Republish once the user unlocks so the panels and notification catch up.
+     */
+    private fun registerUnlockReceiver(context: Context) {
+        runCatching {
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context?, intent: Intent?) {
+                        Log.i(TAG, "user unlocked (${intent?.action}); republishing state")
+                        lastRenderedAddress = null
+                        lastRenderedBattery = null
+                        publish(context, snapshot())
+                    }
+                },
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_USER_UNLOCKED)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                },
+                Context.RECEIVER_EXPORTED,
+            )
+        }.onFailure { Log.w(TAG, "unlock receiver registration failed", it) }
+    }
 
     private fun bindA2dpProxy(context: Context) {
         runCatching {
