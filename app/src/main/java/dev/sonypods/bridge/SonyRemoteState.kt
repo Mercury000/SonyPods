@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,11 +25,17 @@ object SonyRemoteState {
 
     private var registered = false
 
+    @Volatile
+    private var received = false
+
+    private val handler = Handler(Looper.getMainLooper())
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != SonyBridge.ACTION_STATE) return
             val bundle = intent.bundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
             val snapshot = SonyStateSnapshot.fromBundle(bundle)
+            received = true
             _state.value = snapshot
             context?.let { ModelImageSync.onState(it, snapshot) }
         }
@@ -46,8 +54,18 @@ object SonyRemoteState {
                 registered = true
             }.onFailure { Log.w(TAG, "state receiver registration failed", it) }
         }
-        SonyBridge.sendCommand(appContext, SonyBridge.CMD_REPUBLISH)
+        // The engine may still be booting; keep asking until it answers.
+        requestReplay(appContext, attempt = 0)
     }
+
+    private fun requestReplay(context: Context, attempt: Int) {
+        if (received || attempt >= REPLAY_ATTEMPTS) return
+        SonyBridge.sendCommand(context, SonyBridge.CMD_REPUBLISH)
+        handler.postDelayed({ requestReplay(context, attempt + 1) }, REPLAY_INTERVAL_MS)
+    }
+
+    private const val REPLAY_ATTEMPTS = 10
+    private const val REPLAY_INTERVAL_MS = 2_000L
 
     @Suppress("DEPRECATION")
     private fun Intent.bundleExtra(key: String): Bundle? =

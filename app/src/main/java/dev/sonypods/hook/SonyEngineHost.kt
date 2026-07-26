@@ -12,9 +12,13 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
+import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
+import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -33,6 +37,8 @@ import kotlinx.coroutines.launch
  */
 object SonyEngineHost {
     private const val TAG = "SonyPods-Engine"
+    private const val STARTUP_ANNOUNCE_COUNT = 10
+    private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -47,6 +53,8 @@ object SonyEngineHost {
 
     private var started = false
     private var lastSnapshot: SonyStateSnapshot? = null
+    private var lastRenderedBattery: BatteryParams? = null
+    private var lastRenderedAddress: String? = null
 
     fun start(context: Context, adapterService: Any?) {
         adapterService?.let { this.adapterService = it }
@@ -72,6 +80,14 @@ object SonyEngineHost {
                     lastSnapshot = snapshot
                     publish(ctx, snapshot)
                 }
+            }
+        }
+        // Consumers that registered before the engine existed have nothing to show
+        // and their replay requests were lost; announce ourselves for a while.
+        scope.launch {
+            repeat(STARTUP_ANNOUNCE_COUNT) {
+                publish(ctx, snapshot())
+                delay(STARTUP_ANNOUNCE_INTERVAL_MS)
             }
         }
         Log.i(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
@@ -202,7 +218,54 @@ object SonyEngineHost {
             }.onFailure { Log.w(TAG, "state broadcast to $target failed", it) }
         }
         injectSystemBattery(context, snapshot)
+        renderXiaomiSurfaces(context, snapshot)
     }
+
+    /**
+     * Drives the HyperOS notification and focus island, which are built by our hook
+     * inside com.xiaomi.bluetooth. Previously the module app pushed these; doing it
+     * here is what keeps them alive when the app is not running.
+     */
+    @SuppressLint("MissingPermission")
+    private fun renderXiaomiSurfaces(context: Context, snapshot: SonyStateSnapshot) {
+        val address = snapshot.deviceAddress
+        if (address == null || !snapshot.connected) {
+            val previous = lastRenderedAddress ?: return
+            lastRenderedAddress = null
+            lastRenderedBattery = null
+            remoteDevice(context, previous)?.let {
+                runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
+            }
+            return
+        }
+
+        val battery = BatteryParams(
+            left = (snapshot.batteryLeft ?: snapshot.batterySingle)
+                ?.let { PodParams(battery = it, isConnected = true) },
+            right = snapshot.batteryRight?.let { PodParams(battery = it, isConnected = true) },
+            case = snapshot.batteryCradle?.let { PodParams(battery = it, isConnected = true) },
+        )
+        if (battery == lastRenderedBattery && address == lastRenderedAddress) return
+        val isNewDevice = address != lastRenderedAddress
+        lastRenderedBattery = battery
+        lastRenderedAddress = address
+
+        val device = remoteDevice(context, address) ?: return
+        runCatching {
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(context, battery, device)
+            // The island is an arrival animation: only on a fresh connection, not on
+            // every battery tick.
+            if (isNewDevice) {
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(context, battery, device)
+            }
+            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice")
+        }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun remoteDevice(context: Context, address: String) = runCatching {
+        context.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
+    }.getOrNull()
 
     /** Feeds the system bluetooth stack so stock UI shows headphone battery. */
     @SuppressLint("MissingPermission")
@@ -210,9 +273,9 @@ object SonyEngineHost {
         val address = snapshot.deviceAddress ?: return
         val level = snapshot.systemBatteryLevel ?: return
         val service = adapterService ?: return
+        val device = remoteDevice(context, address) ?: return
         runCatching {
-            val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return
-            callMethod(service, "setBatteryLevel", adapter.getRemoteDevice(address), level, false)
+            callMethod(service, "setBatteryLevel", device, level, false)
             Log.d(TAG, "battery injected level=$level address=$address")
         }.onFailure { Log.w(TAG, "setBatteryLevel failed level=$level", it) }
     }
