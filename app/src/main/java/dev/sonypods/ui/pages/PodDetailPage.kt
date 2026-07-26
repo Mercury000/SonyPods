@@ -209,25 +209,34 @@ private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
             onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
         )
 
-        if (uiState.eqHasClearBass) {
-            LabeledLevelSlider(
-                label = stringResource(R.string.eq_clear_bass),
-                value = uiState.eqClearBass,
-                range = uiState.eqClearBassMin..uiState.eqClearBassMax,
-                onValueChange = actions.onClearBassChange,
-            )
-        }
-
-        val bandSteps = uiState.eqBandSteps
-        if (bandSteps.isNotEmpty()) {
-            val bandRange = uiState.eqBandMin..uiState.eqBandMax
-            bandSteps.forEachIndexed { index, step ->
+        // Band/Clear Bass writes always land on a user preset, so only surface the
+        // fine-tune sliders once one of those presets is active.
+        val fineTuneVisible = currentPreset in listOf(
+            EqPresetId.CUSTOM,
+            EqPresetId.USER_SETTING1,
+            EqPresetId.USER_SETTING2,
+        )
+        if (fineTuneVisible) {
+            if (uiState.eqHasClearBass) {
                 LabeledLevelSlider(
-                    label = uiState.eqBandLabels.getOrNull(index) ?: "Band ${index + 1}",
-                    value = step,
-                    range = bandRange,
-                    onValueChange = { actions.onCustomEqBandChange(index, it) },
+                    label = stringResource(R.string.eq_clear_bass),
+                    value = uiState.eqClearBass,
+                    range = uiState.eqClearBassMin..uiState.eqClearBassMax,
+                    onValueChange = actions.onClearBassChange,
                 )
+            }
+
+            val bandSteps = uiState.eqBandSteps
+            if (bandSteps.isNotEmpty()) {
+                val bandRange = uiState.eqBandMin..uiState.eqBandMax
+                bandSteps.forEachIndexed { index, step ->
+                    LabeledLevelSlider(
+                        label = uiState.eqBandLabels.getOrNull(index) ?: "Band ${index + 1}",
+                        value = step,
+                        range = bandRange,
+                        onValueChange = { actions.onCustomEqBandChange(index, it) },
+                    )
+                }
             }
         }
     }
