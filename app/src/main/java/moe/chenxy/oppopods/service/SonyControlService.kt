@@ -19,9 +19,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.URL
 import moe.chenxy.oppopods.MainActivity
+import moe.chenxy.oppopods.OppoPodsApp
 import moe.chenxy.oppopods.PopupActivity
 import moe.chenxy.oppopods.R
+import moe.chenxy.oppopods.config.ConfigManager
+import moe.chenxy.oppopods.config.PodImagePrefs
+import moe.chenxy.oppopods.config.PodImageResource
 import moe.chenxy.oppopods.ui.toBatteryParams
 import moe.chenxy.oppopods.ui.toSinglePodParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil
@@ -48,6 +54,7 @@ class SonyControlService : Service() {
     private var lastSingle: PodParams? = null
     private var lastAncStatus: Int = -1
     private var lastAmbientVoice: Boolean? = null
+    private var lastFetchedImageKey: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -129,6 +136,45 @@ class SonyControlService : Service() {
                 putExtra("address", address)
                 putExtra("enabled", ambientVoice)
             }
+        }
+
+        maybeFetchModelImage(address, name, uiState.deviceInfo.modelImageUrl)
+    }
+
+    /**
+     * Downloads the cloud model image (SonyModelImageCatalog match) once per
+     * device+URL and stores it as the box image, unless the user already set a
+     * custom one. The stored image feeds the system notification / island via
+     * PodImageProvider.
+     */
+    private fun maybeFetchModelImage(address: String, name: String, imageUrl: String?) {
+        if (imageUrl.isNullOrBlank()) return
+        val key = "$address|$imageUrl"
+        if (key == lastFetchedImageKey) return
+        val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        if (PodImagePrefs.find(prefs, address)?.boxImagePath != null) {
+            lastFetchedImageKey = key
+            return
+        }
+        lastFetchedImageKey = key
+        serviceScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { URL(imageUrl).openStream().use { it.readBytes() } }
+                    .onFailure { Log.w(TAG, "model image download failed url=$imageUrl", it) }
+                    .getOrNull()
+            } ?: return@launch
+            if (bytes.isEmpty()) return@launch
+            runCatching {
+                PodImagePrefs.saveImageBytes(
+                    context = this@SonyControlService,
+                    prefs = prefs,
+                    service = OppoPodsApp.xposedService,
+                    address = address,
+                    name = name,
+                    images = mapOf(PodImageResource.BOX to bytes),
+                )
+                Log.d(TAG, "model image stored address=$address url=$imageUrl bytes=${bytes.size}")
+            }.onFailure { Log.w(TAG, "model image store failed", it) }
         }
     }
 
