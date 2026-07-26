@@ -61,8 +61,8 @@ object SonyEngineHost {
     private var lastRenderedAddress: String? = null
     private var lastConnectAttemptMs = 0L
 
-    /** Device the connect animation was already played for; survives surface re-renders. */
-    private var lastConnectAnimationAddress: String? = null
+    /** Address + which sides report; the connect animation replays when this changes. */
+    private var lastConnectAnimationKey: String? = null
 
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
@@ -339,26 +339,30 @@ object SonyEngineHost {
             val previous = lastRenderedAddress ?: return
             lastRenderedAddress = null
             lastRenderedBattery = null
-            lastConnectAnimationAddress = null
+            lastConnectAnimationKey = null
             remoteDevice(context, previous)?.let {
                 runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
             }
             return
         }
 
+        // Sony reports 0 for a bud that is not in place rather than omitting it, which
+        // would otherwise be rendered as a real "0%".
+        fun pod(level: Int?) = level?.takeIf { it > 0 }?.let { PodParams(battery = it, isConnected = true) }
         val battery = BatteryParams(
-            left = (snapshot.batteryLeft ?: snapshot.batterySingle)
-                ?.let { PodParams(battery = it, isConnected = true) },
-            right = snapshot.batteryRight?.let { PodParams(battery = it, isConnected = true) },
-            case = snapshot.batteryCradle?.let { PodParams(battery = it, isConnected = true) },
+            left = pod(snapshot.batteryLeft ?: snapshot.batterySingle),
+            right = pod(snapshot.batteryRight),
+            case = pod(snapshot.batteryCradle),
         )
         if (battery == lastRenderedBattery && address == lastRenderedAddress) return
-        val hasBattery = listOfNotNull(snapshot.batterySingle, snapshot.batteryLeft, snapshot.batteryRight).isNotEmpty()
-        // The connect animation is played once per device, and only when there are
-        // levels to show: an empty one consumes SystemUI's display slot, which then
-        // ignores the real values arriving moments later.
-        val isNewDevice = address != lastConnectAnimationAddress && hasBattery
-        if (isNewDevice) lastConnectAnimationAddress = address
+
+        // HyperOS replays the connect animation whenever the wear composition changes —
+        // a bud going in or out — but not for plain battery drift. Keying on which sides
+        // report reproduces that, and skips the empty state before any level arrived.
+        val presence = "$address|${battery.left != null}|${battery.right != null}"
+        val playAnimation = battery.left != null || battery.right != null
+        val isNewDevice = playAnimation && presence != lastConnectAnimationKey
+        if (isNewDevice) lastConnectAnimationKey = presence
         lastRenderedBattery = battery
         lastRenderedAddress = address
 
