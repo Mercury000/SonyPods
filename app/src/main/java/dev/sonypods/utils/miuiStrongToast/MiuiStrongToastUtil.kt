@@ -27,8 +27,11 @@ import dev.sonypods.utils.miuiStrongToast.data.TextParams
 object MiuiStrongToastUtil {
     var lastPodsTimestamp = -1L
 
-    /** HyperOS omits absent fields entirely (e.g. no textParams for an unworn bud). */
-    private val toastJson = Json { encodeDefaults = false; explicitNulls = false }
+    /**
+     * HyperOS keeps zero-valued fields it uses (`iconType`, `viewFlags`) but omits
+     * absent ones entirely — no textParams at all for an unworn bud.
+     */
+    private val toastJson = Json { encodeDefaults = true; explicitNulls = false }
 
     fun showStringToast(context: Context, text: String?, colorType: Int) {
         if (!isHyperOS) {

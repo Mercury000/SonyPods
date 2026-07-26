@@ -13,10 +13,10 @@ class StringToastBundle private constructor() {
         private var target: PendingIntent? = null
         private var param: String? = null
         private var duration: Long = 2500L
-        private var level: Float = 0f
-        private var rapidRate: Float = 0f
+        private var level: Float? = null
+        private var rapidRate: Float? = null
         private var charge: String? = null
-        private var stringToastChargeFlag: Int = 0
+        private var stringToastChargeFlag: Int? = null
         private var statusBarStrongToast: String? = "show_custom_strong_toast"
         private var islandParam: String? = null
         private var notifyId: String? = null
@@ -47,10 +47,12 @@ class StringToastBundle private constructor() {
             mBundle.putParcelable("target", target)
             mBundle.putString("param", param)
             mBundle.putLong("duration", duration)
-            mBundle.putFloat("level", level)
-            mBundle.putFloat("rapid_rate", rapidRate)
-            mBundle.putString("charge", charge)
-            mBundle.putInt("string_toast_charge_flag", stringToastChargeFlag)
+            // Only present when actually used: HyperOS sends no charge/level keys for a
+            // headset toast, and their presence routes it into the charging variant.
+            level?.let { mBundle.putFloat("level", it) }
+            rapidRate?.let { mBundle.putFloat("rapid_rate", it) }
+            charge?.let { mBundle.putString("charge", it) }
+            stringToastChargeFlag?.let { mBundle.putInt("string_toast_charge_flag", it) }
             mBundle.putString("status_bar_strong_toast", statusBarStrongToast)
             return mBundle
         }
