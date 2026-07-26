@@ -226,7 +226,7 @@ object MiLinkServiceHook : HookContext() {
             else -> 1
         }
         saveState(context)
-        Log.i(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
+        Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
         pushStateToPanel()
     }
 
