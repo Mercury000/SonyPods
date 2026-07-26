@@ -14,7 +14,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.os.Bundle
 import com.xzakota.hyper.notification.focus.FocusNotification
-import dev.sonypods.BuildConfig
+import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.utils.FocusIslandUtil
 import dev.sonypods.utils.PodImageLoader
 import dev.sonypods.utils.SystemApisUtils
@@ -91,9 +91,11 @@ object MiBluetoothToastHook : HookContext() {
                     context.resources.getString(miheadset_notification_Disconnect),
                     PendingIntent.getBroadcast(context, 0, intent, 201326592)
                 )
-                // 循环切换降噪模式：广播路由到模块 App 进程，由 Sony repository 执行三态循环
-                val ancCycleIntent = Intent(SonyPodsAction.ACTION_CYCLE_ANC)
-                ancCycleIntent.setPackage(BuildConfig.APPLICATION_ID)
+                // 循环切换降噪：命令直接送到蓝牙进程的引擎，不经过模块 App，
+                // 这样 App 未运行时通知栏按钮依然有效。
+                val ancCycleIntent = Intent(SonyBridge.ACTION_COMMAND)
+                    .putExtra(SonyBridge.EXTRA_COMMAND, SonyBridge.CMD_CYCLE_NOISE_CONTROL)
+                ancCycleIntent.setPackage(SonyBridge.ENGINE_PACKAGE)
                 ancCycleIntent.setIdentifier("BTHeadset$address")
                 ancCycleIntent.putExtra("device_name", alias ?: bluetoothDevice.name ?: "")
                 val moduleContext = context.createPackageContext(

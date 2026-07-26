@@ -42,7 +42,8 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberDecoratedNavEntries
 import androidx.navigation3.ui.NavDisplay
-import dev.sonypods.data.SonyHeadphoneRepository
+import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.SonyPodsApp
 import dev.sonypods.R
@@ -99,8 +100,9 @@ fun MainUI(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    val repository = remember { SonyHeadphoneRepository.getInstance(context.applicationContext) }
-    val sonyState by repository.state.collectAsState()
+        // State authority lives in the bluetooth process; mirror it here.
+    LaunchedEffect(Unit) { SonyRemoteState.start(context) }
+    val sonyState by SonyRemoteState.state.collectAsState()
 
     val tabs = remember { MainTab.entries.toList() }
     var selectedTab by remember { mutableStateOf(MainTab.Module) }
@@ -138,24 +140,24 @@ fun MainUI(
     val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
 
-    val sonyConnected = sonyState.isConnected
-    val connectedDeviceAddress = sonyState.connectedDevice?.address.orEmpty()
+    val sonyConnected = sonyState.connected
+    val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
     val displayTitle = sonyState.displayName
     val canShowDetailPage = sonyConnected
     val showEarphoneDetail = canShowDetailPage && !showDevicePicker
 
-    val sonyActions = remember(repository) {
+    val sonyActions = remember(context) {
         SonyDetailActions(
-            onAncModeChange = { repository.setNoiseControlMode(it) },
-            onAmbientLevelChange = { repository.setAmbientLevel(it) },
-            onAmbientVoiceModeChange = { repository.setAmbientVoiceMode(it) },
-            onEqPresetChange = { repository.setEqPreset(it) },
-            onClearBassChange = { repository.setClearBass(it) },
-            onCustomEqBandChange = { index, level -> repository.setCustomEqBand(index, level) },
-            onPlaybackPrevious = { repository.playbackPrevious() },
-            onPlaybackPlayPause = { repository.playbackPlayPause() },
-            onPlaybackNext = { repository.playbackNext() },
-            onRefresh = { repository.refreshBasics() },
+            onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+            onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
+            onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
+            onEqPresetChange = { SonyBridge.setEqPreset(context, it.name) },
+            onClearBassChange = { SonyBridge.setClearBass(context, it) },
+            onCustomEqBandChange = { index, level -> SonyBridge.setEqBand(context, index, level) },
+            onPlaybackPrevious = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PREVIOUS) },
+            onPlaybackPlayPause = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PLAY_PAUSE) },
+            onPlaybackNext = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_NEXT) },
+            onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
         )
     }
 
@@ -197,7 +199,7 @@ fun MainUI(
             connectingDeviceAddress = null
             showConnectErrorDialog = true
             showDevicePicker = true
-            repository.disconnect()
+            SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
         }
     }
 
@@ -272,7 +274,7 @@ fun MainUI(
     // Periodic status refresh while connected.
     LaunchedEffect(sonyConnected) {
         while (sonyConnected) {
-            repository.refreshBasics()
+            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
             delay(30_000L)
         }
     }
@@ -292,7 +294,7 @@ fun MainUI(
         showDevicePicker = true
         selectedTab = MainTab.Earphones
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
-        repository.connect(device.address, name)
+        SonyBridge.connect(context, device.address, name)
     }
 
     fun onDeviceDisconnect(device: BluetoothDevice) {
@@ -300,7 +302,7 @@ fun MainUI(
             connectingDeviceAddress = null
         }
         if (device.address.equals(connectedDeviceAddress, ignoreCase = true) || connectedDeviceAddress.isBlank()) {
-            repository.disconnect()
+            SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
         }
     }
 

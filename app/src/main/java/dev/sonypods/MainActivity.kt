@@ -16,16 +16,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import dev.sonypods.config.ConfigManager
-import dev.sonypods.service.SonyControlService
 import dev.sonypods.ui.App
 import dev.sonypods.ui.AppLocale
 
 class MainActivity : ComponentActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (result[Manifest.permission.POST_NOTIFICATIONS] != false) {
-                SonyControlService.ensureRunning(this)
-            }
+            // Permissions only gate the UI; the engine runs in the bluetooth process.
         }
 
     override fun attachBaseContext(newBase: Context) {
@@ -45,9 +42,7 @@ class MainActivity : ComponentActivity() {
         val missing = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isEmpty()) {
-            SonyControlService.ensureRunning(this)
-        } else {
+        if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
         }
 

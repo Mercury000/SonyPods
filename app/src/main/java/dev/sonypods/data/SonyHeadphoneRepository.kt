@@ -169,11 +169,21 @@ data class SonyHeadphoneUiState(
     val preferredProtocol: String = "Sony Tandem",
 )
 
-class SonyHeadphoneRepository private constructor(context: Context) : SonyBleClientListener {
-    private val appContext = context.applicationContext
+/**
+ * @param resourceContext context used for our own resources (the model image catalog
+ *   asset). When hosted inside the bluetooth process this is the module package context,
+ *   because the host app's assets do not contain our files.
+ * @param systemContext context used for the bluetooth/audio system services. Defaults to
+ *   [resourceContext], which is correct when the repository runs in the module app.
+ */
+class SonyHeadphoneRepository private constructor(
+    resourceContext: Context,
+    systemContext: Context = resourceContext,
+) : SonyBleClientListener {
+    private val appContext = systemContext.applicationContext ?: systemContext
     private val client = SonyBleClient(appContext, this)
     private val mediaController = MediaPlaybackController(appContext)
-    private val modelImageCatalog = SonyModelImageCatalog(appContext)
+    private val modelImageCatalog = SonyModelImageCatalog(resourceContext.applicationContext ?: resourceContext)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
@@ -1112,9 +1122,12 @@ class SonyHeadphoneRepository private constructor(context: Context) : SonyBleCli
         @Volatile
         private var instance: SonyHeadphoneRepository? = null
 
-        fun getInstance(context: Context): SonyHeadphoneRepository {
+        fun getInstance(
+            resourceContext: Context,
+            systemContext: Context = resourceContext,
+        ): SonyHeadphoneRepository {
             return instance ?: synchronized(this) {
-                instance ?: SonyHeadphoneRepository(context.applicationContext).also { instance = it }
+                instance ?: SonyHeadphoneRepository(resourceContext, systemContext).also { instance = it }
             }
         }
 

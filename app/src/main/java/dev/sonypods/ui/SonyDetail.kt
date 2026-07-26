@@ -1,13 +1,12 @@
 package dev.sonypods.ui
 
-import dev.sonypods.data.BatteryState
-import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 
-/** Callbacks from the earphone detail UI into [dev.sonypods.data.SonyHeadphoneRepository]. */
+/** Callbacks from the earphone detail UI; each one sends a command to the engine. */
 data class SonyDetailActions(
     val onAncModeChange: (NoiseControlMode) -> Unit = {},
     val onAmbientLevelChange: (Int) -> Unit = {},
@@ -21,22 +20,19 @@ data class SonyDetailActions(
     val onRefresh: () -> Unit = {},
 )
 
-/** Maps Sony battery levels to the [BatteryParams] container used by the battery card and hooks. */
-fun BatteryState.toBatteryParams(): BatteryParams = BatteryParams(
-    left = left?.let { PodParams(battery = it, isConnected = true) },
-    right = right?.let { PodParams(battery = it, isConnected = true) },
-    case = cradle?.let { PodParams(battery = it, isConnected = true) },
+/** Maps Sony battery levels to the [BatteryParams] container used by the battery card. */
+fun SonyStateSnapshot.toBatteryParams(): BatteryParams = BatteryParams(
+    left = batteryLeft?.let { PodParams(battery = it, isConnected = true) },
+    right = batteryRight?.let { PodParams(battery = it, isConnected = true) },
+    case = batteryCradle?.let { PodParams(battery = it, isConnected = true) },
 )
 
 /** Single-battery pod (headband form factor) or null when the device reports L/R levels. */
-fun BatteryState.toSinglePodParams(): PodParams? =
-    single?.let { PodParams(battery = it, isConnected = true) }
+fun SonyStateSnapshot.toSinglePodParams(): PodParams? =
+    batterySingle?.let { PodParams(battery = it, isConnected = true) }
 
-val SonyHeadphoneUiState.isConnected: Boolean
-    get() = connectedDevice != null
-
-val SonyHeadphoneUiState.displayName: String
-    get() = deviceInfo.modelName ?: connectedDevice?.name ?: ""
+val SonyStateSnapshot.displayName: String
+    get() = deviceName.orEmpty()
 
 /** Mirrors SonyBleClient.isSonyCandidate: name-based Sony audio device detection. */
 fun isLikelySonyAudioDevice(name: String?): Boolean {

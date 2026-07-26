@@ -10,7 +10,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
-import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -19,7 +19,7 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 internal fun EarphonesTabPage(
     showEarphoneDetail: Boolean,
     displayTitle: String,
-    uiState: SonyHeadphoneUiState,
+    uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
     boxImagePath: String?,
     connectedDeviceAddress: String,

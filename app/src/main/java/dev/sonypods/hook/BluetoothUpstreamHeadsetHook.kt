@@ -12,8 +12,10 @@ import android.os.Looper
 import android.os.Bundle
 import android.os.Parcel
 import java.lang.reflect.Method
-import dev.sonypods.BuildConfig
+import dev.sonypods.bridge.HookStateMirror
+import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -36,6 +38,29 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private var hasTransparencyVocalEnhancementState = false
     private var currentAddress: String? = null
     private var currentName: String? = null
+
+    private val stateMirror = HookStateMirror { snapshot ->
+        snapshot.deviceAddress?.let {
+            currentAddress = it
+            knownSonyAddresses.add(it.uppercase())
+        }
+        snapshot.deviceName?.let { currentName = it }
+        currentBattery = BatteryParams(
+            left = (snapshot.batteryLeft ?: snapshot.batterySingle)
+                ?.let { PodParams(battery = it, isConnected = true) },
+            right = snapshot.batteryRight?.let { PodParams(battery = it, isConnected = true) },
+            case = snapshot.batteryCradle?.let { PodParams(battery = it, isConnected = true) },
+        )
+        currentAnc = when (snapshot.noiseControlMode) {
+            NoiseControlMode.NOISE_CANCELLING -> 2
+            NoiseControlMode.AMBIENT_SOUND -> 3
+            else -> 1
+        }
+        currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
+        hasTransparencyVocalEnhancementState = true
+        Log.d(TAG, "state applied address=$currentAddress anc=$currentAnc battery=${currentBattery.debugString()}")
+        notifyRealStatus("engine-state")
+    }
 
     override fun onHook() {
         hookHeadsetServiceBinder()
@@ -159,56 +184,18 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
-        val filter = IntentFilter().apply {
-            addAction(SonyPodsAction.ACTION_PODS_CONNECTED)
-            addAction(SonyPodsAction.ACTION_PODS_DISCONNECTED)
-            addAction(SonyPodsAction.ACTION_PODS_BATTERY_CHANGED)
-            addAction(SonyPodsAction.ACTION_PODS_ANC_CHANGED)
-            addAction(SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED)
-            addAction(SonyPodsAction.ACTION_CONFIG_CHANGED)
-        }
-        context?.registerReceiver(object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    SonyPodsAction.ACTION_CONFIG_CHANGED -> {
-                        refreshConfig()
-                        notifyRealStatus("config-changed")
-                    }
-                    SonyPodsAction.ACTION_PODS_CONNECTED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentName = intent.getStringExtra("device_name") ?: currentName
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                    }
-                    SonyPodsAction.ACTION_PODS_DISCONNECTED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                    }
-                    SonyPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                    }
-                    SonyPodsAction.ACTION_PODS_ANC_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentAnc = intent.getIntExtra("status", currentAnc)
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                    }
-                    SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentTransparencyVocalEnhancement = intent.getBooleanExtra("enabled", currentTransparencyVocalEnhancement)
-                        hasTransparencyVocalEnhancementState = true
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                    }
+        stateMirror.register(context)
+        runCatching {
+            context?.registerReceiver(object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
+                    refreshConfig()
+                    notifyRealStatus("config-changed")
                 }
-                Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc battery=${currentBattery.debugString()}")
-                notifyRealStatus("broadcast:${intent?.action}")
-            }
-        }, filter, Context.RECEIVER_EXPORTED)
+            }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+        }
         receiverRegistered = true
-        context?.sendBroadcast(Intent(SonyPodsAction.ACTION_REFRESH_STATUS).apply {
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        Log.d(TAG, "registered status receiver context=$context")
+        Log.d(TAG, "registered status mirror context=$context")
     }
 
     private fun installHeadsetBinderHooks(binderClass: Class<*>) {
@@ -771,15 +758,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun requestBluetoothStatus(reason: String) {
-        runCatching {
-            context?.sendBroadcast(Intent(SonyPodsAction.ACTION_REFRESH_STATUS).apply {
-                setPackage(BuildConfig.APPLICATION_ID)
-                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            })
-            Log.d(TAG, "requested bluetooth status reason=$reason package=$packageName")
-        }.onFailure {
-            Log.w(TAG, "request bluetooth status failed reason=$reason package=$packageName", it)
-        }
+        val ctx = context ?: return
+        SonyBridge.sendCommand(ctx, SonyBridge.CMD_REFRESH)
+        Log.d(TAG, "requested headphone refresh reason=$reason package=$packageName")
     }
 
     private fun sonyAncFromMiuiMode(mode: Int): Int {
@@ -821,12 +802,15 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
-        ctx.sendBroadcast(Intent(SonyPodsAction.ACTION_ANC_SELECT).apply {
-            putExtra("status", mode)
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        Log.d(TAG, "sendSonyAnc broadcast sent mode=$mode")
+        SonyBridge.setNoiseControl(
+            ctx,
+            when (mode) {
+                2 -> NoiseControlMode.NOISE_CANCELLING
+                3 -> NoiseControlMode.AMBIENT_SOUND
+                else -> NoiseControlMode.OFF
+            },
+        )
+        Log.d(TAG, "sendSonyAnc command sent mode=$mode")
     }
 
     private fun sendSonyAmbientVoice(enabled: Boolean) {
@@ -836,12 +820,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             Log.w(TAG, "sendSonyAmbientVoice skipped: context is null enabled=$enabled")
             return
         }
-        ctx.sendBroadcast(Intent(SonyPodsAction.ACTION_AMBIENT_VOICE_SET).apply {
-            putExtra("enabled", enabled)
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
-        Log.d(TAG, "sendSonyAmbientVoice broadcast sent enabled=$enabled")
+        SonyBridge.setAmbientVoice(ctx, enabled)
+        Log.d(TAG, "sendSonyAmbientVoice command sent enabled=$enabled")
     }
 
     @Suppress("DEPRECATION")

@@ -28,7 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.bridge.SonyStateSnapshot
 import io.github.libxposed.service.XposedService
 import dev.sonypods.R
 import dev.sonypods.config.EarphonePref
@@ -75,7 +75,7 @@ internal fun MainTabsScaffold(
     showEarphoneDetail: Boolean,
     mainTitle: String,
     displayTitle: String,
-    sonyState: SonyHeadphoneUiState,
+    sonyState: SonyStateSnapshot,
     sonyActions: SonyDetailActions,
     earphonePrefs: List<EarphonePref>,
     connectedDeviceAddress: String,
@@ -322,7 +322,7 @@ private fun EarphonesTabShell(
     showEarphoneDetail: Boolean,
     mainTitle: String,
     displayTitle: String,
-    sonyState: SonyHeadphoneUiState,
+    sonyState: SonyStateSnapshot,
     sonyActions: SonyDetailActions,
     boxImagePath: String?,
     connectedDeviceAddress: String,

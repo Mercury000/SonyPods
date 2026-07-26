@@ -34,7 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.R
@@ -57,7 +57,7 @@ fun PodDetailPage(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     bottomContentPadding: Dp = 16.dp,
     podName: String,
-    uiState: SonyHeadphoneUiState,
+    uiState: SonyStateSnapshot,
     actions: SonyDetailActions = SonyDetailActions(),
     boxImagePath: String? = null,
 ) {
@@ -145,7 +145,7 @@ private fun rememberPodImagePainter(path: String?) = remember(path) {
 } ?: painterResource(R.drawable.img_box)
 
 private fun LazyListScope.podControlItems(
-    uiState: SonyHeadphoneUiState,
+    uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
     bottomContentPadding: Dp
 ) {
@@ -154,8 +154,8 @@ private fun LazyListScope.podControlItems(
             modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             PodStatus(
-                batteryParams = uiState.batteryState.toBatteryParams(),
-                single = uiState.batteryState.toSinglePodParams(),
+                batteryParams = uiState.toBatteryParams(),
+                single = uiState.toSinglePodParams(),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp)
             )
         }
@@ -166,11 +166,11 @@ private fun LazyListScope.podControlItems(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
             AncSwitch(
-                ancStatus = uiState.noiseControlState.controlMode,
+                ancStatus = uiState.noiseControlMode,
                 onAncModeChange = actions.onAncModeChange,
-                ambientLevel = uiState.noiseControlState.ambientLevel,
+                ambientLevel = uiState.ambientLevel,
                 onAmbientLevelChange = actions.onAmbientLevelChange,
-                ambientVoiceMode = uiState.noiseControlState.ambientVoiceMode,
+                ambientVoiceMode = uiState.ambientVoiceMode,
                 onAmbientVoiceModeChange = actions.onAmbientVoiceModeChange,
             )
         }
@@ -194,11 +194,10 @@ private fun LazyListScope.podControlItems(
 }
 
 @Composable
-private fun EqCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActions) {
-    val capability = uiState.eqUiCapability
-    val presets = capability?.availablePresets?.takeIf { it.isNotEmpty() }
+private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
+    val presets = uiState.eqAvailablePresets.takeIf { it.isNotEmpty() }
         ?: EqPresetId.entries.toList()
-    val currentPreset = uiState.eqState.preset
+    val currentPreset = uiState.eqPreset
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         OverlayDropdownPreference(
@@ -209,23 +208,21 @@ private fun EqCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActions) {
             onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
         )
 
-        if (capability?.hasClearBass != false) {
-            val clearBassRange = capability?.clearBassDisplayRange ?: (-10..10)
+        if (uiState.eqHasClearBass) {
             LabeledLevelSlider(
                 label = stringResource(R.string.eq_clear_bass),
-                value = uiState.eqState.clearBass,
-                range = clearBassRange,
+                value = uiState.eqClearBass,
+                range = uiState.eqClearBassMin..uiState.eqClearBassMax,
                 onValueChange = actions.onClearBassChange,
             )
         }
 
-        val bandSteps = uiState.eqState.bandSteps
+        val bandSteps = uiState.eqBandSteps
         if (bandSteps.isNotEmpty()) {
-            val bandLabels = capability?.bandLabels.orEmpty()
-            val bandRange = capability?.bandDisplayRange ?: (-10..10)
+            val bandRange = uiState.eqBandMin..uiState.eqBandMax
             bandSteps.forEachIndexed { index, step ->
                 LabeledLevelSlider(
-                    label = bandLabels.getOrNull(index) ?: "Band ${index + 1}",
+                    label = uiState.eqBandLabels.getOrNull(index) ?: "Band ${index + 1}",
                     value = step,
                     range = bandRange,
                     onValueChange = { actions.onCustomEqBandChange(index, it) },
@@ -294,7 +291,7 @@ private fun LabeledLevelSlider(
 }
 
 @Composable
-private fun PlaybackCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActions) {
+private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
     Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(
@@ -344,25 +341,25 @@ private fun PlaybackCard(uiState: SonyHeadphoneUiState, actions: SonyDetailActio
 }
 
 @Composable
-private fun DeviceStatusCard(uiState: SonyHeadphoneUiState) {
+private fun DeviceStatusCard(uiState: SonyStateSnapshot) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(
             title = stringResource(R.string.firmware_version),
-            summary = uiState.deviceInfo.firmwareVersion ?: "—",
+            summary = uiState.firmwareVersion ?: "—",
         )
         BasicComponent(
             title = stringResource(R.string.wearing_status),
-            summary = uiState.wearingState.status ?: "—",
+            summary = uiState.wearingStatus ?: "—",
         )
         BasicComponent(
             title = stringResource(R.string.lea_status),
-            summary = uiState.leaState.enabled ?: "—",
+            summary = uiState.leaStatus ?: "—",
         )
         BasicComponent(
             title = stringResource(R.string.quick_access),
             summary = listOfNotNull(
-                uiState.quickAccessState.lrKeyFunction,
-                uiState.quickAccessState.ncAmbKeyFunction,
+                uiState.quickAccessLeftRight,
+                uiState.quickAccessNcAmb,
             ).joinToString(" / ").ifEmpty { "—" },
         )
     }

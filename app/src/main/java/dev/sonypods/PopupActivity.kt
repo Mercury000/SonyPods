@@ -30,8 +30,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import dev.sonypods.data.SonyHeadphoneRepository
-import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyRemoteState
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.NoiseControlMode
 import kotlinx.coroutines.delay
 import dev.sonypods.config.ConfigManager
@@ -40,7 +41,6 @@ import dev.sonypods.ui.AppTheme
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.displayName
-import dev.sonypods.ui.isConnected
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
 import top.yukonga.miuix.kmp.basic.Card
@@ -147,11 +147,11 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
         else -> systemDark
     }
 
-    val repository = remember { SonyHeadphoneRepository.getInstance(context.applicationContext) }
-    val sonyState by repository.state.collectAsState()
+        LaunchedEffect(Unit) { SonyRemoteState.start(context) }
+    val sonyState by SonyRemoteState.state.collectAsState()
 
-    LaunchedEffect(sonyState.isConnected) {
-        if (sonyState.isConnected && !showDialog.value) {
+    LaunchedEffect(sonyState.connected) {
+        if (sonyState.connected && !showDialog.value) {
             showDialog.value = true
         }
     }
@@ -164,9 +164,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 
         while (true) {
             delay(15_000)
-            if (repository.state.value.deviceInfo.protocolReady) {
-                repository.refreshBasics()
-            }
+            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
         }
     }
 
@@ -188,18 +186,18 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
             if (isLandscape) {
                 LandscapePopupBody(
                     sonyState = sonyState,
-                    onAncModeChange = { repository.setNoiseControlMode(it) },
-                    onAmbientLevelChange = { repository.setAmbientLevel(it) },
-                    onAmbientVoiceModeChange = { repository.setAmbientVoiceMode(it) },
+                    onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+                    onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
+                    onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
                     onMore = onMore,
                     onDone = { showDialog.value = false },
                 )
             } else {
                 PortraitPopupBody(
                     sonyState = sonyState,
-                    onAncModeChange = { repository.setNoiseControlMode(it) },
-                    onAmbientLevelChange = { repository.setAmbientLevel(it) },
-                    onAmbientVoiceModeChange = { repository.setAmbientVoiceMode(it) },
+                    onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+                    onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
+                    onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
                     onMore = onMore,
                     onDone = { showDialog.value = false },
                 )
@@ -210,7 +208,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 
 @Composable
 private fun PortraitPopupBody(
-    sonyState: SonyHeadphoneUiState,
+    sonyState: SonyStateSnapshot,
     onAncModeChange: (NoiseControlMode) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
     onAmbientVoiceModeChange: (Boolean) -> Unit,
@@ -220,19 +218,19 @@ private fun PortraitPopupBody(
     Column(modifier = Modifier.fillMaxWidth()) {
         Card(modifier = Modifier.fillMaxWidth()) {
             PodStatus(
-                batteryParams = sonyState.batteryState.toBatteryParams(),
-                single = sonyState.batteryState.toSinglePodParams(),
+                batteryParams = sonyState.toBatteryParams(),
+                single = sonyState.toSinglePodParams(),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp)
             )
         }
         Spacer(modifier = Modifier.height(12.dp))
         Card(modifier = Modifier.fillMaxWidth()) {
             AncSwitch(
-                ancStatus = sonyState.noiseControlState.controlMode,
+                ancStatus = sonyState.noiseControlMode,
                 onAncModeChange = onAncModeChange,
-                ambientLevel = sonyState.noiseControlState.ambientLevel,
+                ambientLevel = sonyState.ambientLevel,
                 onAmbientLevelChange = onAmbientLevelChange,
-                ambientVoiceMode = sonyState.noiseControlState.ambientVoiceMode,
+                ambientVoiceMode = sonyState.ambientVoiceMode,
                 onAmbientVoiceModeChange = onAmbientVoiceModeChange,
             )
         }
@@ -257,7 +255,7 @@ private fun PortraitPopupBody(
 
 @Composable
 private fun LandscapePopupBody(
-    sonyState: SonyHeadphoneUiState,
+    sonyState: SonyStateSnapshot,
     onAncModeChange: (NoiseControlMode) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
     onAmbientVoiceModeChange: (Boolean) -> Unit,
@@ -279,8 +277,8 @@ private fun LandscapePopupBody(
         ) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 PodStatus(
-                    batteryParams = sonyState.batteryState.toBatteryParams(),
-                    single = sonyState.batteryState.toSinglePodParams(),
+                    batteryParams = sonyState.toBatteryParams(),
+                    single = sonyState.toSinglePodParams(),
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
                     compact = true
                 )
@@ -288,11 +286,11 @@ private fun LandscapePopupBody(
             Spacer(modifier = Modifier.height(8.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
                 AncSwitch(
-                    ancStatus = sonyState.noiseControlState.controlMode,
+                    ancStatus = sonyState.noiseControlMode,
                     onAncModeChange = onAncModeChange,
-                    ambientLevel = sonyState.noiseControlState.ambientLevel,
+                    ambientLevel = sonyState.ambientLevel,
                     onAmbientLevelChange = onAmbientLevelChange,
-                    ambientVoiceMode = sonyState.noiseControlState.ambientVoiceMode,
+                    ambientVoiceMode = sonyState.ambientVoiceMode,
                     onAmbientVoiceModeChange = onAmbientVoiceModeChange,
                     compact = true,
                 )

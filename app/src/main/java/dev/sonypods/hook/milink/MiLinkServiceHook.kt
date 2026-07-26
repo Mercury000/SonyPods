@@ -6,8 +6,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import dev.sonypods.BuildConfig
+import dev.sonypods.bridge.HookStateMirror
+import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.hook.HookContext
 import dev.sonypods.hook.Log
 import dev.sonypods.hook.callMethod
@@ -178,51 +181,42 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.w(TAG, "hook HeadsetInfo.$methodName skipped", it) }
     }
 
+    private val stateMirror = HookStateMirror { snapshot -> applySnapshot(snapshot) }
+
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
-        Log.i(TAG, "registering state receiver process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
-        val filter = IntentFilter().apply {
-            addAction(SonyPodsAction.ACTION_PODS_CONNECTED)
-            addAction(SonyPodsAction.ACTION_PODS_DISCONNECTED)
-            addAction(SonyPodsAction.ACTION_PODS_BATTERY_CHANGED)
-            addAction(SonyPodsAction.ACTION_PODS_ANC_CHANGED)
-            addAction(SonyPodsAction.ACTION_CONFIG_CHANGED)
-        }
-        context?.registerReceiver(object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    SonyPodsAction.ACTION_CONFIG_CHANGED -> {
-                        refreshConfig()
-                    }
-                    SonyPodsAction.ACTION_PODS_CONNECTED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentName = intent.getStringExtra("device_name") ?: currentName
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                    }
-                    SonyPodsAction.ACTION_PODS_DISCONNECTED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                    }
-                    SonyPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                        saveState(context)
-                    }
-                    SonyPodsAction.ACTION_PODS_ANC_CHANGED -> {
-                        currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentAnc = intent.getIntExtra("status", currentAnc)
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                        saveState(context)
-                    }
+        Log.i(TAG, "registering state mirror process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
+        stateMirror.register(context)
+        runCatching {
+            context?.registerReceiver(object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == SonyPodsAction.ACTION_CONFIG_CHANGED) refreshConfig()
                 }
-            }
-        }, filter, Context.RECEIVER_EXPORTED)
+            }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+        }
         receiverRegistered = true
-        context?.sendBroadcast(Intent(SonyPodsAction.ACTION_REFRESH_STATUS).apply {
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
+    }
+
+    private fun applySnapshot(snapshot: SonyStateSnapshot) {
+        snapshot.deviceAddress?.let {
+            currentAddress = it
+            knownSonyAddresses.add(it.uppercase())
+        }
+        snapshot.deviceName?.let { currentName = it }
+        currentBattery = BatteryParams(
+            left = (snapshot.batteryLeft ?: snapshot.batterySingle)
+                ?.let { PodParams(battery = it, isConnected = true) },
+            right = snapshot.batteryRight?.let { PodParams(battery = it, isConnected = true) },
+            case = snapshot.batteryCradle?.let { PodParams(battery = it, isConnected = true) },
+        )
+        currentAnc = when (snapshot.noiseControlMode) {
+            NoiseControlMode.NOISE_CANCELLING -> 2
+            NoiseControlMode.AMBIENT_SOUND -> 3
+            else -> 1
+        }
+        saveState(context)
+        Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
     }
 
     internal fun isSonyPod(device: BluetoothDevice): Boolean {
@@ -313,12 +307,14 @@ object MiLinkServiceHook : HookContext() {
             Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
-        Intent(SonyPodsAction.ACTION_ANC_SELECT).apply {
-            putExtra("status", mode)
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            ctx.sendBroadcast(this)
-        }
+        SonyBridge.setNoiseControl(
+            ctx,
+            when (mode) {
+                2 -> NoiseControlMode.NOISE_CANCELLING
+                3 -> NoiseControlMode.AMBIENT_SOUND
+                else -> NoiseControlMode.OFF
+            },
+        )
     }
 
     private fun sendAncChanged(mode: Int, fallbackContext: Context? = null) {
