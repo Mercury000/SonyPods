@@ -18,6 +18,8 @@ class StringToastBundle private constructor() {
         private var charge: String? = null
         private var stringToastChargeFlag: Int = 0
         private var statusBarStrongToast: String? = "show_custom_strong_toast"
+        private var islandParam: String? = null
+        private var notifyId: String? = null
 
         fun setPackageName(packageName: String?) = apply { this.packageName = packageName }
         fun setStrongToastCategory(category: String) = apply { stringToastCategory = category }
@@ -30,8 +32,17 @@ class StringToastBundle private constructor() {
         fun setStringToastChargeFlag(stringToastChargeFlag: Int) = apply { this.stringToastChargeFlag = stringToastChargeFlag }
         fun setStatusBarStrongToast(statusBarStrongToast: String?) = apply { this.statusBarStrongToast = statusBarStrongToast }
 
+        /** Island half of the payload; HyperOS sends it alongside the strong toast. */
+        fun setIslandParam(islandParam: String?) = apply { this.islandParam = islandParam }
+
+        /** Ties the toast to a focus notification, e.g. `headset_wear_notification`. */
+        fun setNotifyId(notifyId: String?) = apply { this.notifyId = notifyId }
+
         fun onCreate(): Bundle {
+            mBundle = Bundle()
             mBundle.putString("package_name", packageName)
+            islandParam?.let { mBundle.putString("island_param", it) }
+            notifyId?.let { mBundle.putString("notifyId", it) }
             mBundle.putString("strong_toast_category", stringToastCategory)
             mBundle.putParcelable("target", target)
             mBundle.putString("param", param)

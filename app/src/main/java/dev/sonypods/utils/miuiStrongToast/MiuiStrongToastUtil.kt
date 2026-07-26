@@ -27,6 +27,9 @@ import dev.sonypods.utils.miuiStrongToast.data.TextParams
 object MiuiStrongToastUtil {
     var lastPodsTimestamp = -1L
 
+    /** HyperOS omits absent fields entirely (e.g. no textParams for an unworn bud). */
+    private val toastJson = Json { encodeDefaults = false; explicitNulls = false }
+
     fun showStringToast(context: Context, text: String?, colorType: Int) {
         if (!isHyperOS) {
             Handler(Looper.getMainLooper()).post {
@@ -134,14 +137,11 @@ object MiuiStrongToastUtil {
         if (!isHyperOS) return
         if (singleBattery) {
             val pod = batteryParams.left ?: return
-            val clip = rawResourceUri(context, "single_battery_head")
-                ?: rawResourceUri(context, "single_battery_earphone")
-                ?: return
             showToast(
                 context = context,
                 category = StrongToastCategory.VIDEO_TEXT,
                 left = Left(
-                    iconParams = IconParams(Category.RAW, FileType.MP4, clip, 1),
+                    iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("single_battery_head"), 1),
                     textParams = batteryText(pod.battery, pod.isCharging, lowBatteryThreshold),
                 ),
                 right = null,
@@ -149,61 +149,68 @@ object MiuiStrongToastUtil {
             return
         }
 
-        val leftClip = rawResourceUri(context, "earphone_left")
-            ?: rawResourceUri(context, "earphone") ?: return
-        val rightClip = rawResourceUri(context, "earphone_right")
-            ?: rawResourceUri(context, "earphone") ?: return
         showToast(
             context = context,
             category = StrongToastCategory.VIDEO_TEXT_TEXT_VIDEO,
             left = Left(
-                iconParams = IconParams(Category.RAW, FileType.MP4, leftClip, 1),
-                textParams = batteryParams.left.let {
-                    batteryText(it?.battery ?: 0, it?.isCharging == true, lowBatteryThreshold, it?.isConnected == true)
+                iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("earphone_left_inear"), 1),
+                textParams = batteryParams.left?.let {
+                    batteryText(it.battery, it.isCharging, lowBatteryThreshold)
                 },
             ),
             right = Right(
-                iconParams = IconParams(Category.RAW, FileType.MP4, rightClip, 1),
-                textParams = batteryParams.right.let {
-                    batteryText(it?.battery ?: 0, it?.isCharging == true, lowBatteryThreshold, it?.isConnected == true)
+                iconParams = IconParams(Category.RAW, FileType.MP4, clipUri("earphone_right_inear"), 1),
+                textParams = batteryParams.right?.let {
+                    batteryText(it.battery, it.isCharging, lowBatteryThreshold)
                 },
             ),
         )
     }
 
-    private fun batteryText(
-        level: Int,
-        charging: Boolean,
-        lowThreshold: Int,
-        connected: Boolean = true,
-    ): TextParams = TextParams(
-        if (connected) "$level %" else "",
-        when {
+    /** Official formatting: `100%`, no space, and a viewFlags field on the toast half. */
+    private fun batteryText(level: Int, charging: Boolean, lowThreshold: Int): TextParams = TextParams(
+        text = "${level.coerceIn(0, 100)}%",
+        textColor = when {
             charging -> Color.GREEN
             level <= lowThreshold -> Color.RED
             else -> Color.WHITE
         },
+        viewFlags = 0,
     )
 
-    private fun rawResourceUri(context: Context, name: String): String? {
-        val id = runCatching {
-            context.resources.getIdentifier(name, "raw", context.packageName)
-        }.getOrDefault(0)
-        if (id == 0) {
-            Log.w("SonyPods", "strong toast clip not found: $name")
-            return null
-        }
-        return "android.resource://${context.packageName}/$id"
-    }
+    private fun Left.asIslandHalf(): Left = Left(
+        iconParams = iconParams?.copy(iconType = 0),
+        textParams = textParams?.copy(viewFlags = null, turnAnim = true),
+    )
+
+    private fun Right.asIslandHalf(): Right = Right(
+        iconParams = iconParams?.copy(iconType = 0),
+        textParams = textParams?.copy(viewFlags = null, turnAnim = true),
+    )
+
+    /**
+     * HyperOS addresses these clips through its own FileProvider rather than as
+     * `android.resource://` ids — SystemUI resolves nothing else.
+     */
+    private fun clipUri(name: String): String =
+        "content://com.xiaomi.bluetooth.fileprovider/internal_files/$name.mp4"
 
     private fun showToast(context: Context, category: String, left: Left, right: Right?) {
-        val jsonStr = Json.encodeToString(StringToastBean.serializer(), StringToastBean(left, right))
+        val toastPayload = toastJson.encodeToString(StringToastBean.serializer(), StringToastBean(left, right))
+        // The island half repeats the payload with iconType 0 and turnAnim text; HyperOS
+        // always sends both, bound to the headset focus notification by notifyId.
+        val islandPayload = toastJson.encodeToString(
+            StringToastBean.serializer(),
+            StringToastBean(left.asIslandHalf(), right?.asIslandHalf()),
+        )
         val bundle = StringToastBundle.Builder()
             .setPackageName("com.xiaomi.bluetooth")
             .setStrongToastCategory(category)
             .setDuration(5000)
             .setTarget(null)
-            .setParam(jsonStr)
+            .setParam(toastPayload)
+            .setIslandParam(islandPayload)
+            .setNotifyId("headset_wear_notification")
             .onCreate()
         runCatching {
             val service = context.getSystemService(Context.STATUS_BAR_SERVICE)
