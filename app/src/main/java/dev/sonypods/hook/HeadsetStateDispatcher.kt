@@ -52,6 +52,9 @@ object HeadsetStateDispatcher : HookContext() {
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
                     SonyEngineHost.connectDevice(device)
+                    // Already-live session: a second bud joining shows up here as a state
+                    // change, so re-read levels instead of waiting for the next poll.
+                    SonyEngineHost.refreshNow("a2dp-connected")
                 } else if (currState == BluetoothHeadset.STATE_DISCONNECTING || currState == BluetoothHeadset.STATE_DISCONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", false)
                     SonyEngineHost.disconnectDevice(device)

@@ -42,6 +42,7 @@ object SonyEngineHost {
     private const val STARTUP_ANNOUNCE_COUNT = 10
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
+    private const val REFRESH_INTERVAL_MS = 20_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -111,11 +112,32 @@ object SonyEngineHost {
                     .onFailure { Log.w(TAG, "connection reconcile failed", it) }
             }
         }
+        // The headphones do not always announce a second bud joining, and nothing else
+        // polls now that the engine lives here rather than in the app UI, so state could
+        // sit stale for a long time. Keep it fresh while a session is up.
+        scope.launch {
+            while (true) {
+                delay(REFRESH_INTERVAL_MS)
+                if (repo.state.value.deviceInfo.protocolReady) {
+                    runCatching { repo.refreshBasics() }
+                        .onFailure { Log.w(TAG, "periodic refresh failed", it) }
+                }
+            }
+        }
         Log.i(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
     }
 
     fun onAdapterService(service: Any?) {
         if (service != null) adapterService = service
+    }
+
+    /** Audio routing changing usually means a bud joined or left; re-read state now. */
+    fun refreshNow(reason: String) {
+        val repo = repository ?: return
+        if (!repo.state.value.deviceInfo.protocolReady) return
+        Log.i(TAG, "refresh requested: $reason")
+        runCatching { repo.refreshBasics() }
+            .onFailure { Log.w(TAG, "refresh failed reason=$reason", it) }
     }
 
     @SuppressLint("MissingPermission")
