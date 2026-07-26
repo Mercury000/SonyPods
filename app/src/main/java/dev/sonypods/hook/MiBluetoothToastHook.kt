@@ -18,6 +18,7 @@ import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.utils.FocusIslandUtil
+import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
 import dev.sonypods.utils.PodImageLoader
 import dev.sonypods.utils.SystemApisUtils
 import dev.sonypods.utils.SystemApisUtils.cancelAsUser
@@ -249,14 +250,20 @@ object MiBluetoothToastHook : HookContext() {
                     val broadcastReceiver = object : BroadcastReceiver() {
                         override fun onReceive(p0: Context?, p1: Intent?) {
                             if (p1?.action == SonyPodsAction.ACTION_SEND_STRONG_TOAST) {
-                                if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_MODULE) {
-                                    Log.d("SonyPods", "skip module island mode=${ConfigManager.islandMode()}")
-                                    return
-                                }
                                 val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)!!
-                                // Use Focus Island (HyperOS 3+) for battery display
                                 val address = p1.getStringExtra("address").orEmpty()
-                                FocusIslandUtil.showBatteryIsland(context, prefs, batteryParams, address)
+                                val single = p1.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
+                                when (ConfigManager.islandMode()) {
+                                    // Module island: our own Focus Island (HyperOS 3+).
+                                    ConfigManager.ISLAND_MODE_MODULE ->
+                                        FocusIslandUtil.showBatteryIsland(context, prefs, batteryParams, address)
+                                    // Official look: the same strong toast HyperOS plays
+                                    // for its own earbuds, using the stock clips.
+                                    ConfigManager.ISLAND_MODE_OFFICIAL ->
+                                        MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                                    else ->
+                                        Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
+                                }
                             } else if (p1?.action == SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION) {
                                 val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)

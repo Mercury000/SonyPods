@@ -104,12 +104,115 @@ object MiuiStrongToastUtil {
         context: Context,
         batteryParams: BatteryParams,
         device: BluetoothDevice? = null,
+        singleBattery: Boolean = false,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_SEND_STRONG_TOAST)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("address", device?.address.orEmpty())
+        intent.putExtra(EXTRA_SINGLE_BATTERY, singleBattery)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
+    }
+
+    const val EXTRA_SINGLE_BATTERY = "single_battery"
+
+    /**
+     * The connect animation HyperOS plays for its own earbuds: a strong toast whose
+     * left and right halves each pair one of the stock earphone clips with a battery
+     * readout. Headband devices use the single-battery variant instead.
+     *
+     * The clips live in com.xiaomi.bluetooth's raw resources, which is the process this
+     * runs in, so they are addressed as `android.resource://` URIs by name — nothing is
+     * copied out of the system app.
+     */
+    fun showOfficialConnectToast(
+        context: Context,
+        batteryParams: BatteryParams,
+        singleBattery: Boolean,
+        lowBatteryThreshold: Int = 20,
+    ) {
+        if (!isHyperOS) return
+        if (singleBattery) {
+            val pod = batteryParams.left ?: return
+            val clip = rawResourceUri(context, "single_battery_head")
+                ?: rawResourceUri(context, "single_battery_earphone")
+                ?: return
+            showToast(
+                context = context,
+                category = StrongToastCategory.VIDEO_TEXT,
+                left = Left(
+                    iconParams = IconParams(Category.RAW, FileType.MP4, clip, 1),
+                    textParams = batteryText(pod.battery, pod.isCharging, lowBatteryThreshold),
+                ),
+                right = null,
+            )
+            return
+        }
+
+        val leftClip = rawResourceUri(context, "earphone_left")
+            ?: rawResourceUri(context, "earphone") ?: return
+        val rightClip = rawResourceUri(context, "earphone_right")
+            ?: rawResourceUri(context, "earphone") ?: return
+        showToast(
+            context = context,
+            category = StrongToastCategory.VIDEO_TEXT_TEXT_VIDEO,
+            left = Left(
+                iconParams = IconParams(Category.RAW, FileType.MP4, leftClip, 1),
+                textParams = batteryParams.left.let {
+                    batteryText(it?.battery ?: 0, it?.isCharging == true, lowBatteryThreshold, it?.isConnected == true)
+                },
+            ),
+            right = Right(
+                iconParams = IconParams(Category.RAW, FileType.MP4, rightClip, 1),
+                textParams = batteryParams.right.let {
+                    batteryText(it?.battery ?: 0, it?.isCharging == true, lowBatteryThreshold, it?.isConnected == true)
+                },
+            ),
+        )
+    }
+
+    private fun batteryText(
+        level: Int,
+        charging: Boolean,
+        lowThreshold: Int,
+        connected: Boolean = true,
+    ): TextParams = TextParams(
+        if (connected) "$level %" else "",
+        when {
+            charging -> Color.GREEN
+            level <= lowThreshold -> Color.RED
+            else -> Color.WHITE
+        },
+    )
+
+    private fun rawResourceUri(context: Context, name: String): String? {
+        val id = runCatching {
+            context.resources.getIdentifier(name, "raw", context.packageName)
+        }.getOrDefault(0)
+        if (id == 0) {
+            Log.w("SonyPods", "strong toast clip not found: $name")
+            return null
+        }
+        return "android.resource://${context.packageName}/$id"
+    }
+
+    private fun showToast(context: Context, category: String, left: Left, right: Right?) {
+        val jsonStr = Json.encodeToString(StringToastBean.serializer(), StringToastBean(left, right))
+        val bundle = StringToastBundle.Builder()
+            .setPackageName("com.xiaomi.bluetooth")
+            .setStrongToastCategory(category)
+            .setDuration(5000)
+            .setTarget(null)
+            .setParam(jsonStr)
+            .onCreate()
+        runCatching {
+            val service = context.getSystemService(Context.STATUS_BAR_SERVICE)
+            service.javaClass.getMethod(
+                "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
+            ).invoke(service, 1, "strong_toast_action", bundle)
+            lastPodsTimestamp = System.currentTimeMillis()
+            Log.i("SonyPods", "official strong toast shown category=$category")
+        }.onFailure { Log.e("SonyPods", "Failed to show strong toast", it) }
     }
 
     fun showPodsNotificationByMiuiBt(

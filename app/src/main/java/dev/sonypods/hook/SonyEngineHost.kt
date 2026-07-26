@@ -359,7 +359,14 @@ object SonyEngineHost {
             // The island is an arrival animation: only on a fresh connection, not on
             // every battery tick.
             if (isNewDevice) {
-                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(context, battery, device)
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
+                    context = context,
+                    batteryParams = battery,
+                    device = device,
+                    // Headband models report one level; the connect animation has a
+                    // dedicated single-battery variant for them.
+                    singleBattery = snapshot.batterySingle != null && snapshot.batteryLeft == null,
+                )
             }
             Log.i(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice")
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
