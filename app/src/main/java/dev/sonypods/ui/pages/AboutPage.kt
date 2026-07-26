@@ -1,7 +1,10 @@
 package dev.sonypods.ui.pages
 
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,24 +38,24 @@ fun AboutPage(
         item {
             Card {
                 BasicComponent(
-                    title = "SonyPods-Enhanced",
-                    summary = "https://github.com/1812z/OppoPods",
-                    onClick = {
-                        Intent(Intent.ACTION_VIEW).apply {
-                            this.data = Uri.parse("https://github.com/1812z/OppoPods")
-                            context.startActivity(this)
-                        }
-                    }
+                    title = "SonyPods",
+                    summary = "https://github.com/Mercury000/SonyPods",
+                    onClick = { context.openLink("https://github.com/Mercury000/SonyPods") }
                 )
                 BasicComponent(
-                    title = "SonyPods",
+                    title = "OpenBuds",
+                    summary = "https://github.com/IgnotusJee/OpenBuds",
+                    onClick = { context.openLink("https://github.com/IgnotusJee/OpenBuds") }
+                )
+                BasicComponent(
+                    title = "OppoPods-Enhanced",
+                    summary = "https://github.com/1812z/OppoPods",
+                    onClick = { context.openLink("https://github.com/1812z/OppoPods") }
+                )
+                BasicComponent(
+                    title = "OppoPods",
                     summary = "https://github.com/Leaf-lsgtky/OppoPods",
-                    onClick = {
-                        Intent(Intent.ACTION_VIEW).apply {
-                            this.data = Uri.parse("https://github.com/Leaf-lsgtky/OppoPods")
-                            context.startActivity(this)
-                        }
-                    }
+                    onClick = { context.openLink("https://github.com/Leaf-lsgtky/OppoPods") }
                 )
                 BasicComponent(
                     title = stringResource(R.string.based_on),
@@ -61,14 +64,25 @@ fun AboutPage(
                 BasicComponent(
                     title = "Github",
                     summary = "https://github.com/Art-Chen/HyperPods",
-                    onClick = {
-                        Intent(Intent.ACTION_VIEW).apply {
-                            this.data = Uri.parse("https://github.com/Art-Chen/HyperPods")
-                            context.startActivity(this)
-                        }
-                    }
+                    onClick = { context.openLink("https://github.com/Art-Chen/HyperPods") }
                 )
             }
         }
+    }
+}
+
+/**
+ * Opens a link without letting a missing browser take the app down: with Android 11
+ * package visibility an unresolvable VIEW intent throws instead of doing nothing.
+ */
+private fun Context.openLink(url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
+    } catch (_: SecurityException) {
+        Toast.makeText(this, R.string.link_open_failed, Toast.LENGTH_SHORT).show()
     }
 }

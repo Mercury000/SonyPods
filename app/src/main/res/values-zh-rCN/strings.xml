@@ -111,4 +111,5 @@
     <string name="service_channel_name">Sony 耳机服务</string>
     <string name="service_disconnected">未连接</string>
     <string name="notification_btn_popup">弹窗</string>
+    <string name="link_open_failed">没有可打开链接的应用</string>
 </resources>

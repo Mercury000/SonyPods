@@ -8,6 +8,11 @@
 
     <queries>
         <package android:name="com.android.settings" />
+        <!-- Required on Android 11+ so the About page can resolve a browser. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application
