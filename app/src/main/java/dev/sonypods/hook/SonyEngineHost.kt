@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
@@ -270,12 +271,15 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
-                val next = when (repo.state.value.noiseControlState.controlMode) {
-                    NoiseControlMode.NOISE_CANCELLING -> NoiseControlMode.AMBIENT_SOUND
-                    NoiseControlMode.AMBIENT_SOUND -> NoiseControlMode.OFF
-                    else -> NoiseControlMode.NOISE_CANCELLING
-                }
-                repo.setNoiseControlMode(next)
+                val enabledNames = ConfigManager.ancCycleModes()
+                val cycle = ConfigManager.ANC_CYCLE_MODE_ORDER
+                    .filter { it in enabledNames }
+                    .mapNotNull { name -> NoiseControlMode.entries.firstOrNull { it.name == name } }
+                    .ifEmpty { listOf(NoiseControlMode.NOISE_CANCELLING, NoiseControlMode.AMBIENT_SOUND, NoiseControlMode.OFF) }
+                val current = repo.state.value.noiseControlState.controlMode
+                val index = cycle.indexOf(current)
+                val next = if (index >= 0) cycle[(index + 1) % cycle.size] else cycle.first()
+                if (next != current) repo.setNoiseControlMode(next)
             }
 
             SonyBridge.CMD_SET_AMBIENT_LEVEL ->

@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import dev.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.ui.AppLocale
+import dev.sonypods.ui.dialogs.AncCycleModesDialog
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.DropdownEntry
@@ -35,6 +36,8 @@ fun SettingsPage(
     onIslandModeChange: (Int) -> Unit = {},
     islandShowTimings: MutableState<Set<Int>> = mutableStateOf(emptySet()),
     onIslandShowTimingsChange: (Set<Int>) -> Unit = {},
+    ancCycleModes: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_ANC_CYCLE_MODES),
+    onAncCycleModesChange: (Set<String>) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
@@ -95,6 +98,16 @@ fun SettingsPage(
         stringResource(R.string.notification_click_module_popup),
         stringResource(R.string.click_action_system_settings),
     )
+    val ancCycleModeLabels = listOf(
+        "NOISE_CANCELLING" to stringResource(R.string.anc_cycle_mode_noise_cancelling),
+        "AMBIENT_SOUND" to stringResource(R.string.anc_cycle_mode_ambient),
+        "OFF" to stringResource(R.string.anc_cycle_mode_off),
+    )
+    val ancCycleModesSummary = ancCycleModeLabels
+        .filter { (value, _) -> value in ancCycleModes.value }
+        .joinToString(" → ") { (_, label) -> label }
+        .ifEmpty { stringResource(R.string.anc_cycle_modes_summary) }
+    val showAncCycleModesDialog = remember { mutableStateOf(false) }
     val moreClickActionValues = listOf(
         ConfigManager.MORE_CLICK_SYSTEM_SETTINGS,
         ConfigManager.MORE_CLICK_MODULE,
@@ -165,6 +178,11 @@ fun SettingsPage(
                         collapseOnSelection = false,
                     )
                 }
+                BasicComponent(
+                    title = stringResource(R.string.anc_cycle_modes_title),
+                    summary = ancCycleModesSummary,
+                    onClick = { showAncCycleModesDialog.value = true },
+                )
                 OverlayDropdownPreference(
                     title = stringResource(R.string.notification_click_action),
                     summary = stringResource(R.string.notification_click_action_summary),
@@ -205,4 +223,14 @@ fun SettingsPage(
             }
         }
     }
+
+    AncCycleModesDialog(
+        show = showAncCycleModesDialog.value,
+        selected = ancCycleModes.value,
+        onDismissRequest = { showAncCycleModesDialog.value = false },
+        onConfirm = {
+            onAncCycleModesChange(it)
+            showAncCycleModesDialog.value = false
+        },
+    )
 }

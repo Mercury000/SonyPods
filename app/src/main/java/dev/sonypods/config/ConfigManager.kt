@@ -18,6 +18,7 @@ data class AppConfig(
     val spatialAudioCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val spatialSoundSwitchCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val ancImplementationCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
+    val ancCycleModes: Set<String> = ConfigManager.DEFAULT_ANC_CYCLE_MODES,
 )
 
 object ConfigManager {
@@ -34,6 +35,7 @@ object ConfigManager {
     const val PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE = "spatial_audio_capability_override"
     const val PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE = "spatial_sound_switch_capability_override"
     const val PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE = "anc_implementation_capability_override"
+    const val PREF_KEY_ANC_CYCLE_MODES = "anc_cycle_modes"
     const val DEFAULT_FAKE_DEVICE_ID = "01010607"
     const val LOG_LEVEL_OFF = 0
     const val LOG_LEVEL_BASIC = 1
@@ -57,6 +59,10 @@ object ConfigManager {
     const val CAPABILITY_OVERRIDE_AUTO = 0
     const val CAPABILITY_OVERRIDE_FORCE_ENABLED = 1
     const val CAPABILITY_OVERRIDE_FORCE_DISABLED = 2
+
+    /** Cycle order of the notification/island ANC button; values are [dev.sonypods.protocol.NoiseControlMode] names. */
+    val ANC_CYCLE_MODE_ORDER = listOf("NOISE_CANCELLING", "AMBIENT_SOUND", "OFF")
+    val DEFAULT_ANC_CYCLE_MODES: Set<String> = ANC_CYCLE_MODE_ORDER.toSet()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -101,6 +107,8 @@ object ConfigManager {
     fun spatialSoundSwitchCapabilityOverride(): Int = current().spatialSoundSwitchCapabilityOverride.normalizedCapabilityOverride()
 
     fun ancImplementationCapabilityOverride(): Int = current().ancImplementationCapabilityOverride.normalizedCapabilityOverride()
+
+    fun ancCycleModes(): Set<String> = current().ancCycleModes.normalizedAncCycleModes()
 
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
@@ -159,6 +167,11 @@ object ConfigManager {
         save(prefs, service, config)
     }
 
+    fun updateAncCycleModes(prefs: SharedPreferences, service: XposedService?, modes: Set<String>) {
+        val config = current().copy(ancCycleModes = modes.normalizedAncCycleModes())
+        save(prefs, service, config)
+    }
+
     fun save(prefs: SharedPreferences, config: AppConfig) {
         val oldConfig = cachedConfig
         val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
@@ -192,6 +205,7 @@ object ConfigManager {
             .putInt(PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE, config.spatialAudioCapabilityOverride)
             .putInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, config.spatialSoundSwitchCapabilityOverride)
             .putInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, config.ancImplementationCapabilityOverride)
+            .putStringSet(PREF_KEY_ANC_CYCLE_MODES, config.ancCycleModes)
             .commit()
     }
 
@@ -206,6 +220,7 @@ object ConfigManager {
         val directSpatialAudioCapabilityOverride = prefs.getInt(PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
         val directSpatialSoundSwitchCapabilityOverride = prefs.getInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
         val directAncImplementationCapabilityOverride = prefs.getInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
+        val directAncCycleModes = prefs.getStringSet(PREF_KEY_ANC_CYCLE_MODES, null)?.toSet()
         val raw = prefs.getString(PREF_KEY_CONFIG_JSON, null)
         logPrefsSnapshot(source, prefs, directFakeDeviceId, raw)
         val config = raw?.let {
@@ -224,6 +239,7 @@ object ConfigManager {
                 spatialAudioCapabilityOverride = directSpatialAudioCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialAudioCapabilityOverride,
                 spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
                 ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
+                ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
             ).normalized()
         }
         return config.copy(
@@ -237,6 +253,7 @@ object ConfigManager {
             spatialAudioCapabilityOverride = directSpatialAudioCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialAudioCapabilityOverride,
             spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
             ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
+            ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
         ).normalized()
     }
 
@@ -251,6 +268,7 @@ object ConfigManager {
         spatialAudioCapabilityOverride = spatialAudioCapabilityOverride.normalizedCapabilityOverride(),
         spatialSoundSwitchCapabilityOverride = spatialSoundSwitchCapabilityOverride.normalizedCapabilityOverride(),
         ancImplementationCapabilityOverride = ancImplementationCapabilityOverride.normalizedCapabilityOverride(),
+        ancCycleModes = ancCycleModes.normalizedAncCycleModes(),
     )
 
     private fun String.normalizedFakeDeviceId(): String = trim().takeIf { it.isNotEmpty() } ?: DEFAULT_FAKE_DEVICE_ID
@@ -260,6 +278,9 @@ object ConfigManager {
     private fun Set<Int>.normalizedIslandShowTimings(): Set<Int> = filterTo(mutableSetOf()) {
         it in ISLAND_SHOW_TIMING_CONNECTED..ISLAND_SHOW_TIMING_IN_CASE
     }
+
+    private fun Set<String>.normalizedAncCycleModes(): Set<String> =
+        filterTo(mutableSetOf()) { it in ANC_CYCLE_MODE_ORDER }.ifEmpty { DEFAULT_ANC_CYCLE_MODES }
 
     private fun logConfigChange(source: String, oldConfig: AppConfig, newConfig: AppConfig) {
         val changes = changedFields(oldConfig, newConfig)
@@ -310,6 +331,9 @@ object ConfigManager {
             }
             if (oldConfig.ancImplementationCapabilityOverride != newConfig.ancImplementationCapabilityOverride) {
                 add("ancImplementationCapabilityOverride=${oldConfig.ancImplementationCapabilityOverride}->${newConfig.ancImplementationCapabilityOverride}")
+            }
+            if (oldConfig.ancCycleModes != newConfig.ancCycleModes) {
+                add("ancCycleModes=${oldConfig.ancCycleModes}->${newConfig.ancCycleModes}")
             }
         }
     }

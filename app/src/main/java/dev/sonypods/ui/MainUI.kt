@@ -138,6 +138,7 @@ fun MainUI(
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
     val islandMode = remember { mutableStateOf(appConfig.islandMode) }
     val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
+    val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
 
     val sonyConnected = sonyState.connected
@@ -442,6 +443,12 @@ fun MainUI(
                 onIslandShowTimingsChange = {
                     islandShowTimings.value = it
                     ConfigManager.updateIslandShowTimings(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.android.bluetooth")
+                },
+                ancCycleModes = ancCycleModes,
+                onAncCycleModesChange = {
+                    ancCycleModes.value = it
+                    ConfigManager.updateAncCycleModes(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.android.bluetooth")
                 },
                 appLanguage = appLanguage,
