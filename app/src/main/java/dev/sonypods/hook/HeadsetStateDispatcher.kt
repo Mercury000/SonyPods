@@ -28,6 +28,7 @@ object HeadsetStateDispatcher : HookContext() {
                 SonyEngineHost.onAdapterService(instance)
                 if (context != null) SonyEngineHost.start(context, instance, prefs)
                 registerAppRequestReceiver(context)
+                registerAclReceiver(context)
             }
         }.onFailure {
             Log.d("SonyPods", "AdapterService.onCreate hook skipped", it)
@@ -61,6 +62,37 @@ object HeadsetStateDispatcher : HookContext() {
                 }
             }
         }
+    }
+
+    private var aclReceiverRegistered = false
+    private var lastAclRefreshMs = 0L
+
+    /**
+     * Refresh headphone state when a single bud connects or disconnects. The headset
+     * may not push a NTFY for a per-bud link change, and since periodic status polling
+     * was removed there is no other trigger to re-fetch — so we listen for the Android
+     * ACL connect/disconnect of a Sony device and trigger one event-driven refresh.
+     * This is not polling: it only fires on an actual link change.
+     */
+    private fun registerAclReceiver(context: Context?) {
+        if (context == null || aclReceiverRegistered) return
+        aclReceiverRegistered = true
+        context.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                val action = intent?.action ?: return
+                if (action != BluetoothDevice.ACTION_ACL_CONNECTED && action != BluetoothDevice.ACTION_ACL_DISCONNECTED) return
+                val device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
+                if (!isSonyPod(device)) return
+                val now = System.currentTimeMillis()
+                if (now - lastAclRefreshMs < 2000L) return
+                lastAclRefreshMs = now
+                Log.d("SonyPods", "ACL ${if (action == BluetoothDevice.ACTION_ACL_CONNECTED) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
+                SonyEngineHost.refreshNow("bud-acl")
+            }
+        }, IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        }, Context.RECEIVER_EXPORTED)
     }
 
     private fun registerAppRequestReceiver(context: Context?) {
