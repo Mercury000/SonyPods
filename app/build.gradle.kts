@@ -19,11 +19,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.sonypods"
+        applicationId = "com.mercury.sonypods"
         minSdk = 35
         targetSdk = 36
-        versionCode = 15
-        versionName = "2.0.7"
+        versionCode = 1
+        versionName = "1.0.0"
         buildConfigField("long", "BUILD_TIMESTAMP", System.currentTimeMillis().toString())
     }
 

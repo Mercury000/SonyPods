@@ -54,7 +54,7 @@ object SonyBridge {
 
     /** Processes that render headphone state in system surfaces, plus the module app. */
     val STATE_CONSUMERS = listOf(
-        "dev.sonypods",
+        "com.mercury.sonypods",
         "com.xiaomi.bluetooth",
         "com.milink.service",
         "com.android.settings",

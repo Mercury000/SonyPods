@@ -102,7 +102,7 @@ object MiBluetoothToastHook : HookContext() {
                 ancCycleIntent.setIdentifier("BTHeadset$address")
                 ancCycleIntent.putExtra("device_name", alias ?: bluetoothDevice.name ?: "")
                 val moduleContext = context.createPackageContext(
-                    "dev.sonypods", Context.CONTEXT_IGNORE_SECURITY
+                    "com.mercury.sonypods", Context.CONTEXT_IGNORE_SECURITY
                 )
                 // Before the user unlocks, our ContentProvider and resources are not
                 // reachable ("user not unlocked"). Post the notification anyway with a
@@ -118,7 +118,7 @@ object MiBluetoothToastHook : HookContext() {
                     context,
                     0,
                     Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
-                        setClassName("dev.sonypods", "dev.sonypods.PopupActivity")
+                        setClassName("com.mercury.sonypods", "dev.sonypods.PopupActivity")
                         putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
                         putExtra("bluetoothaddress", bluetoothDevice.address)
                         putExtra("device_name", alias)

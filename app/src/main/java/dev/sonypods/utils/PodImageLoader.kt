@@ -10,7 +10,7 @@ import dev.sonypods.config.PodImageResource
 import dev.sonypods.config.imageUri
 
 object PodImageLoader {
-    private const val MODULE_PACKAGE = "dev.sonypods"
+    private const val MODULE_PACKAGE = "com.mercury.sonypods"
 
     fun loadBitmap(
         context: Context,

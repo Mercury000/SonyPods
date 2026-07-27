@@ -60,7 +60,7 @@
         </activity>
         <provider
             android:name=".config.PodImageProvider"
-            android:authorities="dev.sonypods.podimages"
+            android:authorities="com.mercury.sonypods.podimages"
             android:exported="true"
             android:grantUriPermissions="false" />
         <!-- Set as Xposed Module -->

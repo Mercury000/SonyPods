@@ -79,7 +79,7 @@ object SonyEngineHost {
         // The engine reads its model-image catalog from our own assets, which the
         // bluetooth app's context cannot see.
         val moduleContext = runCatching {
-            ctx.createPackageContext("dev.sonypods", Context.CONTEXT_IGNORE_SECURITY)
+            ctx.createPackageContext("com.mercury.sonypods", Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull()
         val repo = SonyHeadphoneRepository.getInstance(moduleContext ?: ctx, ctx)
         repository = repo
