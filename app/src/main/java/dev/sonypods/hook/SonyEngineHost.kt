@@ -307,6 +307,9 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
+                // Re-read the persisted config from the module's remote preference so the
+                // cycle order is always current, even after a scope restart or a missed push.
+                prefs?.let { ConfigManager.refreshFromPrefs(it) }
                 val enabledNames = ConfigManager.ancCycleModes()
                 val cycle = ConfigManager.ANC_CYCLE_MODE_ORDER
                     .filter { it in enabledNames }

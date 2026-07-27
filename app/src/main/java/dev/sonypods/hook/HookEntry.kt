@@ -1,6 +1,5 @@
 package dev.sonypods.hook
 
-import android.content.SharedPreferences
 import android.os.Build
 import androidx.annotation.RequiresApi
 import io.github.libxposed.api.XposedModule
@@ -10,7 +9,6 @@ import dev.sonypods.hook.milink.MiLinkServiceHook
 
 class HookEntry : XposedModule() {
     private val TAG = "SonyPods-HookEntry"
-    private val configListeners = mutableListOf<SharedPreferences.OnSharedPreferenceChangeListener>()
 
     @RequiresApi(Build.VERSION_CODES.Q)
     override fun onPackageLoaded(param: PackageLoadedParam) {
@@ -36,16 +34,13 @@ class HookEntry : XposedModule() {
         hook.module = this
         hook.appClassLoader = classLoader
         hook.packageName = packageName
+        // LSPosed's remote preference (libxposed 101) is the cross-process config store.
+        // The app persists config here on every change, so the engine reads the authoritative
+        // value at startup (surviving scope restarts) and on demand. Live updates while running
+        // are still delivered by the config broadcast (applyConfigJson).
         hook.prefs = getRemotePreferences("sonypods_settings")
         Log.d(TAG, "loadHook package=$packageName hook=${hook.javaClass.simpleName}")
         ConfigManager.init(hook.prefs)
-        val configListener = SharedPreferences.OnSharedPreferenceChangeListener { sharedPreferences, key ->
-            if (key == ConfigManager.PREF_KEY_CONFIG_JSON) {
-                ConfigManager.refreshFromPrefs(sharedPreferences)
-            }
-        }
-        configListeners.add(configListener)
-        hook.prefs.registerOnSharedPreferenceChangeListener(configListener)
         hook.onHook()
     }
 }

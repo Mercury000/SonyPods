@@ -2,6 +2,7 @@ package dev.sonypods
 
 import android.app.Application
 import android.util.Log
+import dev.sonypods.config.ConfigManager
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArraySet
@@ -16,6 +17,9 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         Log.d(TAG, "LSPosed service bound api=${service.apiVersion} framework=${service.frameworkName}/${service.frameworkVersionCode}")
         xposedService = service
         notifyListeners(service)
+        // Flush any config that was saved while the service was unavailable, so the
+        // engine's remote-prefs store is authoritative and survives a scope restart.
+        ConfigManager.flushPendingRemote(service)
     }
 
     override fun onServiceDied(service: XposedService) {

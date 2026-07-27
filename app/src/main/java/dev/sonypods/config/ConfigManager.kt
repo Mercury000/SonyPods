@@ -77,6 +77,16 @@ object ConfigManager {
     @Volatile
     private var cachedConfig: AppConfig = AppConfig()
 
+    /**
+     * Config awaiting a remote-prefs write because the LSPosed service was unavailable
+     * at save time. Flushed by [flushPendingRemote] once the service (re)binds, so the
+     * cross-process store stays authoritative and survives scope restarts even if the
+     * first save raced the service connection. Only relevant in the app process; the
+     * hook process always has the service and never buffers.
+     */
+    @Volatile
+    private var pendingRemoteConfig: AppConfig? = null
+
     fun init(prefs: SharedPreferences) {
         val oldConfig = cachedConfig
         cachedConfig = readConfig(prefs, "init")
@@ -219,11 +229,35 @@ object ConfigManager {
         val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
         cachedConfig = normalized
         writePrefs(prefs, normalized)
-        service?.getRemotePreferences(PREFS_NAME)?.let { remotePrefs ->
-            writePrefs(remotePrefs, normalized)
-            Log.d(TAG, "save remote prefs class=${remotePrefs.javaClass.name} fakeDeviceId=${normalized.fakeDeviceId}")
-        } ?: Log.w(TAG, "save remote prefs skipped: LSPosed service is null")
+        if (service != null) {
+            service.getRemotePreferences(PREFS_NAME)?.let { remotePrefs ->
+                writePrefs(remotePrefs, normalized)
+                Log.d(TAG, "save remote prefs class=${remotePrefs.javaClass.name} fakeDeviceId=${normalized.fakeDeviceId}")
+            }
+            pendingRemoteConfig = null
+        } else {
+            // The engine reads remote prefs at startup (after a scope restart), so a
+            // missing write here would make the persisted config revert to defaults.
+            // Buffer it and flush when the service binds.
+            pendingRemoteConfig = normalized
+            Log.w(TAG, "save remote prefs skipped: LSPosed service is null; buffering for flush on bind")
+        }
         logConfigChange("save", oldConfig, normalized)
+    }
+
+    /**
+     * Write any config buffered because the LSPosed service was null at save time.
+     * Call from [dev.sonypods.SonyPodsApp.onServiceBind] so the cross-process store is
+     * always current, even if a save raced the service connection.
+     */
+    fun flushPendingRemote(service: XposedService?) {
+        val pending = pendingRemoteConfig ?: return
+        service ?: return
+        service.getRemotePreferences(PREFS_NAME)?.let { remotePrefs ->
+            writePrefs(remotePrefs, pending)
+            pendingRemoteConfig = null
+            Log.d(TAG, "flushed buffered remote config fakeDeviceId=${pending.fakeDeviceId}")
+        }
     }
 
     private fun writePrefs(prefs: SharedPreferences, config: AppConfig) {
