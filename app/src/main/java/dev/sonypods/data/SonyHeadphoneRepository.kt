@@ -936,11 +936,18 @@ class SonyHeadphoneRepository private constructor(
 
     private fun applyLeaPairedHistory(response: ParsedTandemResponse.LeaPairedHistoryStatus) {
         appendLog("LEA paired history ${response.type} pairedHistory=${response.pairedHistory}")
+        val previous = _state.value.leaState.pairedHistory
         _state.update { current ->
             current.copy(leaState = current.leaState.copy(
                 pairedHistory = response.pairedHistory?.name ?: current.leaState.pairedHistory,
                 raw = response.values,
             ))
+        }
+        // A LE Audio paired-history change means a single bud paired or unpaired.
+        // Re-fetch battery so the new per-bud connection state is reflected.
+        // Event-driven only; avoids polling.
+        if (_state.value.leaState.pairedHistory != previous) {
+            refreshBasics()
         }
     }
 
@@ -958,12 +965,21 @@ class SonyHeadphoneRepository private constructor(
 
     private fun applyWearingStatus(response: ParsedTandemResponse.WearingStatus) {
         appendLog("Wearing status=${response.status} result=${response.result}")
+        val previous = _state.value.wearingState
         _state.update { current ->
             current.copy(wearingState = current.wearingState.copy(
                 status = response.status?.name ?: current.wearingState.status,
                 result = response.result?.name ?: current.wearingState.result,
                 raw = response.values,
             ))
+        }
+        // A wearing change (bud put in/out of ear, or in/out of the case) means a
+        // single bud may have connected or disconnected. The device does not always
+        // push a fresh battery NTFY for that event, so re-fetch battery now so the
+        // engine reflects the new per-bud connection state. Event-driven only.
+        val updated = _state.value.wearingState
+        if (updated.status != previous.status || updated.result != previous.result) {
+            refreshBasics()
         }
     }
 
