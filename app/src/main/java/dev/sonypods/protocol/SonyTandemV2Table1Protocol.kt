@@ -389,10 +389,13 @@ object SonyTandemV2Table1Protocol {
         val kind = payload.firstOrNull()?.let { code ->
             PowerInquiredType.entries.firstOrNull { it.code == code }
         }
+        // Keep position: a null (sentinel or absent slot) stays in its place so the
+        // engine can tell which bud is disconnected, instead of listOfNotNull silently
+        // dropping it and shifting the other bud's level into the disconnected slot.
         val values = when (kind) {
             PowerInquiredType.BATTERY,
-            PowerInquiredType.CRADLE_BATTERY -> listOfNotNull(payload.getOrNull(1)?.percentageOrNull())
-            PowerInquiredType.LEFT_RIGHT_BATTERY -> listOfNotNull(
+            PowerInquiredType.CRADLE_BATTERY -> listOf(payload.getOrNull(1)?.percentageOrNull())
+            PowerInquiredType.LEFT_RIGHT_BATTERY -> listOf(
                 payload.getOrNull(1)?.percentageOrNull(),
                 payload.getOrNull(3)?.percentageOrNull(),
             )

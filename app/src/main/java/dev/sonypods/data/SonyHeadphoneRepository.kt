@@ -737,18 +737,18 @@ class SonyHeadphoneRepository private constructor(
                         // map it to null so consumers render "disconnected" instead of a
                         // misleading 0%. The charging case (CRADLE) keeps its raw value.
                         single = response.values.firstOrNull().takeIf { it != 0 },
-                        raw = response.values,
+                        raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.LEFT_RIGHT_BATTERY -> battery.copy(
                         left = response.values.getOrNull(0).takeIf { it != 0 },
                         right = response.values.getOrNull(1).takeIf { it != 0 },
-                        raw = response.values,
+                        raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.CRADLE_BATTERY -> battery.copy(
                         cradle = response.values.firstOrNull(),
-                        raw = response.values,
+                        raw = response.values.filterNotNull(),
                     )
-                    else -> battery.copy(raw = response.values)
+                    else -> battery.copy(raw = response.values.filterNotNull())
                 }
             )
         }

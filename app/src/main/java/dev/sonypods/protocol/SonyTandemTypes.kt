@@ -50,7 +50,7 @@ sealed interface ParsedTandemResponse {
 
     data class Battery(
         val kind: PowerInquiredType?,
-        val values: List<Int>,
+        val values: List<Int?>,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 

@@ -379,7 +379,7 @@ class SonyTandemV2Table1ProtocolTest {
         assertTrue(parsed is ParsedTandemResponse.Battery)
         parsed as ParsedTandemResponse.Battery
         assertEquals(PowerInquiredType.BATTERY, parsed.kind)
-        assertEquals(emptyList<Int>(), parsed.values)
+        assertEquals(listOf(null), parsed.values)
     }
 
     @Test
