@@ -91,7 +91,29 @@ object ConfigManager {
         }
     }
 
+    /**
+     * Apply a config pushed from the app process by value (serialized [AppConfig] JSON),
+     * bypassing the remote-preferences store entirely. Used by the cross-process config
+     * broadcast so a change made in the app takes effect in the engine immediately, even
+     * when the remote-prefs write did not propagate (e.g. XposedService unavailable at save
+     * time). Updates the shared [cachedConfig] without touching any SharedPreferences.
+     * Returns true if the JSON was applied.
+     */
+    fun applyConfigJson(json: String): Boolean {
+        val parsed = runCatching { this.json.decodeFromString(AppConfig.serializer(), json) }.getOrNull() ?: run {
+            Log.w(TAG, "applyConfigJson: failed to decode config json, ignoring")
+            return false
+        }
+        val oldConfig = cachedConfig
+        cachedConfig = parsed.normalized()
+        logConfigChange("applyConfigJson", oldConfig, cachedConfig)
+        return true
+    }
+
     fun current(): AppConfig = cachedConfig
+
+    /** Serialize the current config to JSON for cross-process push via broadcast. */
+    fun currentAsJson(): String = json.encodeToString(AppConfig.serializer(), cachedConfig)
 
     fun fakeDeviceId(): String = current().fakeDeviceId.normalizedFakeDeviceId()
 

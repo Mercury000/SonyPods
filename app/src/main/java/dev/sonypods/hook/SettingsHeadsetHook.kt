@@ -382,7 +382,7 @@ object SettingsHeadsetHook : HookContext() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     SonyPodsAction.ACTION_CONFIG_CHANGED -> {
-                        refreshConfig()
+                        applyPushedConfig(intent)
                         updateFragments()
                     }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {

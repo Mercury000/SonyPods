@@ -19,6 +19,7 @@ import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
+import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +90,7 @@ object SonyEngineHost {
         repository = repo
 
         registerCommandReceiver(ctx)
+        registerConfigReceiver(ctx)
 
         scope.launch {
             repo.state.collect { uiState ->
@@ -259,14 +261,42 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "command receiver registration failed", it) }
     }
 
+    private var configReceiverRegistered = false
+
+    /**
+     * Apply config pushed from the app by value. The app attaches the full serialized
+     * [dev.sonypods.config.AppConfig] to [SonyPodsAction.ACTION_CONFIG_CHANGED]; we apply
+     * it directly to the shared [ConfigManager] cache so changes made in the app (e.g. ANC
+     * cycle modes) take effect in the engine without relying on remote-preferences
+     * propagation. Falls back to reading the remote prefs when no JSON payload is present
+     * (older app builds).
+     */
+    private fun registerConfigReceiver(context: Context) {
+        if (configReceiverRegistered) return
+        configReceiverRegistered = true
+        runCatching {
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context?, intent: Intent?) {
+                        if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
+                        val json = intent.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON)
+                        if (json != null) {
+                            ConfigManager.applyConfigJson(json)
+                        } else {
+                            prefs?.let { ConfigManager.refreshFromPrefs(it) }
+                        }
+                    }
+                },
+                IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED),
+                Context.RECEIVER_EXPORTED,
+            )
+            Log.d(TAG, "config push receiver registered")
+        }.onFailure { Log.w(TAG, "config push receiver registration failed", it) }
+    }
+
     private fun handleCommand(intent: Intent) {
         val repo = repository ?: return
         val command = intent.getStringExtra(SonyBridge.EXTRA_COMMAND) ?: return
-        // The engine's ConfigManager cache was loaded at process start and is only updated
-        // by a cross-process remote-prefs listener that is unreliable. Re-read the prefs
-        // on each command so options changed in the app (e.g. ANC cycle modes) are
-        // honoured without needing the listener to fire.
-        prefs?.let { ConfigManager.refreshFromPrefs(it) }
         Log.d(TAG, "command=$command")
         when (command) {
             SonyBridge.CMD_SET_NOISE_CONTROL -> {

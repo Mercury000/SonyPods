@@ -1,5 +1,6 @@
 package dev.sonypods.hook
 
+import android.content.Intent
 import android.content.SharedPreferences
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -21,6 +22,17 @@ abstract class HookContext {
 
     fun refreshConfig() {
         ConfigManager.refreshFromPrefs(prefs)
+    }
+
+    /**
+     * Apply config pushed from the app by value. The app attaches the full serialized
+     * [dev.sonypods.config.AppConfig] to [SonyPodsAction.ACTION_CONFIG_CHANGED]; when
+     * present we apply it directly (no dependency on remote-preferences propagation).
+     * Falls back to re-reading the remote prefs when no JSON payload is attached.
+     */
+    fun applyPushedConfig(intent: Intent?) {
+        val json = intent?.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON)
+        if (json != null) ConfigManager.applyConfigJson(json) else refreshConfig()
     }
 
     fun findClass(name: String): Class<*> = Class.forName(name, false, appClassLoader)

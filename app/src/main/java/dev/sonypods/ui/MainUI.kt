@@ -677,6 +677,9 @@ private fun broadcastConfigChanged(context: Context, packageName: String) {
     Intent(SonyPodsAction.ACTION_CONFIG_CHANGED).apply {
         setPackage(packageName)
         addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        // Carry the authoritative config by value so the engine process applies it
+        // directly, independent of remote-preferences propagation.
+        putExtra(ConfigManager.PREF_KEY_CONFIG_JSON, ConfigManager.currentAsJson())
         context.sendBroadcast(this)
     }
 }
