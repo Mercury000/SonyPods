@@ -43,15 +43,18 @@ class SonyModelImageCatalog(context: Context) {
      *  2. low-nibble fallback (`colorCode and 0x0F`) so the 0x1x "X-I" variant codes a
      *     device may report map back to their base colour entry;
      *  3. normalised colour-label equality (legacy path, kept for devices that report
-     *     a colour string but no code);
-     *  4. the catalog's "Default" entry.
+     *     a colour string but no code).
+     *
+     * No Default fallback: if nothing above matches, returns null so a previously cached
+     * correct image for this MAC is kept rather than being overwritten with an unrelated
+     * Default image (a device that genuinely reports 0x00/Default is matched by step 1).
      *
      * Returns null when the device's colour is still unknown this session (no code and
-     * the label is absent or just the "Default" placeholder). This is deliberate: on
-     * reconnect the colour code has not arrived yet at that moment, and resolving to the
-     * Default image would make [dev.sonypods.bridge.ModelImageSync] download a
-     * wrong-colour image and overwrite the correctly cached one for this MAC. Returning
-     * null leaves the cached image in place until the real colour is reported.
+     * the label is absent or just the "Default" placeholder). On reconnect the colour
+     * code has not arrived yet at that moment, and resolving to the Default image would
+     * make [dev.sonypods.bridge.ModelImageSync] download a wrong-colour image and
+     * overwrite the correctly cached one for this MAC. Returning null leaves the cached
+     * image in place until the real colour is reported.
      */
     fun resolve(modelName: String?, modelColor: String?, colorCode: Int? = null): SonyModelImageMatch? {
         val normalizedModel = normalizeModelName(modelName) ?: return null
@@ -66,7 +69,11 @@ class SonyModelImageCatalog(context: Context) {
                 modelEntries.firstOrNull { it.modelColorId != null && it.modelColorId == (code and 0x0F) }
             }
             ?: modelEntries.firstOrNull { normalizeColor(it.modelColor) == normalizedColor }
-            ?: modelEntries.firstOrNull { normalizeColor(it.modelColor) == normalizeColor(DEFAULT_COLOR) }
+            // No Default fallback: if the device's reported colour does not actually match
+            // any catalog entry, return null so a previously cached correct image for this
+            // MAC is kept rather than being overwritten with an unrelated Default image.
+            // (A device that genuinely reports 0x00/Default is still matched by the
+            // colorCode branch above.)
         return entry?.let {
             SonyModelImageMatch(
                 modelName = it.modelName,
