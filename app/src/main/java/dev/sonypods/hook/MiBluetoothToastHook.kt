@@ -110,7 +110,7 @@ object MiBluetoothToastHook : HookContext() {
                 val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, prefs, address) }.getOrNull()
                     ?: runCatching { BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box) }.getOrNull()
                 if (headsetBitmap == null) {
-                    Log.w("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
+                    Log.d("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
                 }
                 val headsetIcon = headsetBitmap?.let { Icon.createWithBitmap(it) }
                     ?: Icon.createWithResource(context, android.R.drawable.stat_sys_data_bluetooth)
@@ -280,7 +280,7 @@ object MiBluetoothToastHook : HookContext() {
                     intentFilter.addAction(SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
                     context.registerReceiver(broadcastReceiver, intentFilter,
                         Context.RECEIVER_EXPORTED)
-                    Log.i("SonyPods", "notification/island receiver registered")
+                    Log.d("SonyPods", "notification/island receiver registered")
                     // This class is constructed well after boot, so anything the engine
                     // rendered before now was lost; ask it to render again.
                     announceSurfacesReady(context)
@@ -299,7 +299,7 @@ object MiBluetoothToastHook : HookContext() {
             context.registerReceiver(
                 object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
-                        Log.i("SonyPods", "user unlocked (${intent?.action}); re-rendering surfaces")
+                        Log.d("SonyPods", "user unlocked (${intent?.action}); re-rendering surfaces")
                         announceSurfacesReady(context)
                     }
                 },

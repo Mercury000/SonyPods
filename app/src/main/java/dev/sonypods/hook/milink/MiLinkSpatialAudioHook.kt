@@ -40,7 +40,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 // Keep the fusion-center controls (ANC / volume) enabled for Sony devices.
                 bundle.putInt("headset_switch_state", 1)
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook CirculateServiceInfo.setHeadsetId skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook CirculateServiceInfo.setHeadsetId skipped", it) }
     }
 
     private fun hookSpatialCommand(className: String, methodName: String) {
@@ -56,7 +56,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = 1
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook $className.$methodName spatial command skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook $className.$methodName spatial command skipped", it) }
     }
 
     private fun hookSpatialStateBlock() {
@@ -71,7 +71,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook AncBatteryController.setMiAudioEffect skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook AncBatteryController.setMiAudioEffect skipped", it) }
 
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController", "setHeadTracking", BluetoothDevice::class.java)) {
@@ -83,7 +83,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, hook.currentSpatialAudioMode)
                 this.result = 100
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook AncBatteryController.setHeadTracking skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook AncBatteryController.setHeadTracking skipped", it) }
     }
 
     private fun hookDeviceSpatialTypeModel() {
@@ -92,14 +92,14 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 if (!hook.isTargetAncBatteryModel(instance)) return@hookAfter
                 this.result = hook.miLinkDeviceSpatialType()
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook AncBatteryModel.getDeviceSpatialType skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook AncBatteryModel.getDeviceSpatialType skipped", it) }
 
         runCatching {
             hook.hookAfter(hook.findMethod("com.miui.headset.runtime.AncBatteryModel", "setDeviceSpatialType", Int::class.javaPrimitiveType!!)) {
                 if (!hook.isTargetAncBatteryModel(instance)) return@hookAfter
                 setObjectField(instance, "deviceSpatialType", hook.miLinkDeviceSpatialType())
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook AncBatteryModel.setDeviceSpatialType skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook AncBatteryModel.setDeviceSpatialType skipped", it) }
     }
 
     private fun hookSpatialCallbacks() {
@@ -110,7 +110,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, hook.currentSpatialAudioMode)
                 this.result = null
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook mmaCallback.onDeviceSpatialType skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook mmaCallback.onDeviceSpatialType skipped", it) }
 
         runCatching {
             hook.hookBefore(hook.findMethod("com.miui.headset.runtime.AncBatteryController\$mmaCallback\$1", "onReportSpatialState", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
@@ -120,7 +120,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook mmaCallback.onReportSpatialState skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook mmaCallback.onReportSpatialState skipped", it) }
     }
 
     private fun hookProfileSpatialEffect() {
@@ -132,7 +132,7 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.captureRuntimeContext(instance)
                 this.result = hook.miLinkSpatialMode()
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook ProfileContext.getAudioSpatialEffectState skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook ProfileContext.getAudioSpatialEffectState skipped", it) }
     }
 
     private fun hookProfileAudioEffectState() {
@@ -148,6 +148,6 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
                 hook.notifySpatialUiChanged(instance, device, mode)
                 this.result = null
             }
-        }.onFailure { Log.w(MiLinkServiceHook.TAG, "hook ProfileContext.setAudioEffectState skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook ProfileContext.setAudioEffectState skipped", it) }
     }
 }

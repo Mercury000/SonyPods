@@ -215,7 +215,7 @@ object MiuiStrongToastUtil {
                     }.getOrDefault(0).takeIf { it != 0 }
                 }
             if (id == null) {
-                Log.w("SonyPods", "strong toast clip missing and no raw resource: $name")
+                Log.d("SonyPods", "strong toast clip missing and no raw resource: $name")
                 return null
             }
             val copied = runCatching {
@@ -226,7 +226,7 @@ object MiuiStrongToastUtil {
                 true
             }.onFailure { Log.w("SonyPods", "failed to materialise clip $name", it) }.getOrDefault(false)
             if (!copied) return null
-            Log.i("SonyPods", "materialised strong toast clip $name (${file.length()} bytes)")
+            Log.d("SonyPods", "materialised strong toast clip $name (${file.length()} bytes)")
         }
         val uri = "content://com.xiaomi.bluetooth.fileprovider/internal_files/$name.mp4"
         runCatching {
@@ -262,7 +262,7 @@ object MiuiStrongToastUtil {
                 "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
             ).invoke(service, 1, "strong_toast_action", bundle)
             lastPodsTimestamp = System.currentTimeMillis()
-            Log.i("SonyPods", "official strong toast shown category=$category")
+            Log.d("SonyPods", "official strong toast shown category=$category")
         }.onFailure { Log.e("SonyPods", "Failed to show strong toast", it) }
     }
 

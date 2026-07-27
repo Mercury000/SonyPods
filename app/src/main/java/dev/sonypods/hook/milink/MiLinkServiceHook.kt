@@ -56,7 +56,7 @@ object MiLinkServiceHook : HookContext() {
             hookAfter(findMethod("android.app.Application", "onCreate")) {
                 registerStatusReceiver(instance as? Context)
             }
-        }.onFailure { Log.w(TAG, "hook Application.onCreate skipped", it) }
+        }.onFailure { Log.d(TAG, "hook Application.onCreate skipped", it) }
 
         listOf(
             "com.xiaomi.mxbluetoothsdk.service.MxBluetoothService",
@@ -66,7 +66,7 @@ object MiLinkServiceHook : HookContext() {
                 hookBefore(findMethod(className, "getInstanceForIsMiTWS", Context::class.java)) {
                     registerStatusReceiver(args[0] as? Context)
                 }
-            }.onFailure { Log.w(TAG, "hook $className.getInstanceForIsMiTWS skipped", it) }
+            }.onFailure { Log.d(TAG, "hook $className.getInstanceForIsMiTWS skipped", it) }
         }
     }
 
@@ -127,7 +127,7 @@ object MiLinkServiceHook : HookContext() {
                     notifyHeadsetPropertyChanged(instance, device, 4)
                 }
             }
-        }.onFailure { Log.w(TAG, "hook $className.$methodName(BluetoothDevice) skipped", it) }
+        }.onFailure { Log.d(TAG, "hook $className.$methodName(BluetoothDevice) skipped", it) }
     }
 
     internal fun hookStringAddressResult(className: String, methodName: String, result: () -> Any) {
@@ -137,7 +137,7 @@ object MiLinkServiceHook : HookContext() {
                 if (!isSonyAddress(address)) return@hookAfter
                 this.result = result()
             }
-        }.onFailure { Log.w(TAG, "hook $className.$methodName(String) skipped", it) }
+        }.onFailure { Log.d(TAG, "hook $className.$methodName(String) skipped", it) }
     }
 
     private fun hookAncCommand(className: String, methodName: String, sonyAnc: Int, result: Int) {
@@ -152,7 +152,7 @@ object MiLinkServiceHook : HookContext() {
                 sendAncChanged(sonyAnc)
                 this.result = result
             }
-        }.onFailure { Log.w(TAG, "hook $className.$methodName command skipped", it) }
+        }.onFailure { Log.d(TAG, "hook $className.$methodName command skipped", it) }
     }
 
     private fun hookAncStateBlock() {
@@ -175,7 +175,7 @@ object MiLinkServiceHook : HookContext() {
                 notifyHeadsetPropertyChanged(instance, device, 4)
                 this.result = miLinkAncState()
             }
-        }.onFailure { Log.w(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
+        }.onFailure { Log.d(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
     }
 
     internal fun hookHeadsetInfoNoArg(methodName: String, result: () -> Any) {
@@ -184,7 +184,7 @@ object MiLinkServiceHook : HookContext() {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
                 this.result = result()
             }
-        }.onFailure { Log.w(TAG, "hook HeadsetInfo.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetInfo.$methodName skipped", it) }
     }
 
     private val stateMirror = HookStateMirror { snapshot -> applySnapshot(snapshot) }
@@ -192,7 +192,7 @@ object MiLinkServiceHook : HookContext() {
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
-        Log.i(TAG, "registering state mirror process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
+        Log.d(TAG, "registering state mirror process=${runCatching { android.app.Application.getProcessName() }.getOrNull()} ctx=$ctx")
         // Recover the device identity before the panel can ask: the hooks decline to
         // answer for addresses they do not recognise as Sony, so an empty set at the
         // first query loses that round even once the snapshot arrives.
@@ -335,7 +335,7 @@ object MiLinkServiceHook : HookContext() {
 
     private fun sendSonyAnc(mode: Int, fallbackContext: Context? = null) {
         val ctx = fallbackContext ?: context ?: run {
-            Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
+            Log.d(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
         SonyBridge.setNoiseControl(

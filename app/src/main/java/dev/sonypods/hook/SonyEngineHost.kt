@@ -125,7 +125,7 @@ object SonyEngineHost {
                 }
             }
         }
-        Log.i(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
+        Log.d(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
     }
 
     fun onAdapterService(service: Any?) {
@@ -136,7 +136,7 @@ object SonyEngineHost {
     fun refreshNow(reason: String) {
         val repo = repository ?: return
         if (!repo.state.value.deviceInfo.protocolReady) return
-        Log.i(TAG, "refresh requested: $reason")
+        Log.d(TAG, "refresh requested: $reason")
         runCatching { repo.refreshBasics() }
             .onFailure { Log.w(TAG, "refresh failed reason=$reason", it) }
     }
@@ -153,7 +153,7 @@ object SonyEngineHost {
         if (now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
         lastConnectAttemptMs = now
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
-        Log.i(TAG, "connecting Tandem session to $name ($address)")
+        Log.d(TAG, "connecting Tandem session to $name ($address)")
         repo.connect(address, name)
     }
 
@@ -179,7 +179,7 @@ object SonyEngineHost {
             return
         }
         val device = allConnected?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) } ?: return
-        Log.i(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
+        Log.d(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
         connectDevice(device, force = true)
     }
 
@@ -199,7 +199,7 @@ object SonyEngineHost {
             context.registerReceiver(
                 object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
-                        Log.i(TAG, "user unlocked (${intent?.action}); republishing state")
+                        Log.d(TAG, "user unlocked (${intent?.action}); republishing state")
                         lastRenderedAddress = null
                         lastRenderedBattery = null
                         publish(context, snapshot())
@@ -242,7 +242,7 @@ object SonyEngineHost {
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
         if (repo.state.value.connectedDevice?.address.equals(address, ignoreCase = true)) {
-            Log.i(TAG, "disconnecting Tandem session from $address")
+            Log.d(TAG, "disconnecting Tandem session from $address")
             repo.disconnect()
         }
     }
@@ -263,7 +263,7 @@ object SonyEngineHost {
                 IntentFilter(SonyBridge.ACTION_COMMAND),
                 Context.RECEIVER_EXPORTED,
             )
-            Log.i(TAG, "command receiver registered")
+            Log.d(TAG, "command receiver registered")
         }.onFailure { Log.w(TAG, "command receiver registration failed", it) }
     }
 
@@ -334,7 +334,7 @@ object SonyEngineHost {
                 // Forget what we think is on screen so the island shows again.
                 lastRenderedAddress = null
                 lastRenderedBattery = null
-                Log.i(TAG, "surfaces ready; re-rendering notification and island")
+                Log.d(TAG, "surfaces ready; re-rendering notification and island")
                 publish(it, snapshot())
             }
 

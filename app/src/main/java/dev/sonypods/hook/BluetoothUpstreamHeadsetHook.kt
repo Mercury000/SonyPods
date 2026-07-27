@@ -103,7 +103,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     Log.d(TAG, "showNewConnectedToast patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState oldLeft=${args[1]} oldRight=${args[2]} oldWear=${args[3]}")
                 }
                 Log.d(TAG, "MiuiBluetoothNotificationApi.showNewConnectedToast hook installed")
-            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotificationApi.showNewConnectedToast skipped", it) }
+            }.onFailure { Log.d(TAG, "hook MiuiBluetoothNotificationApi.showNewConnectedToast skipped", it) }
         }
 
         val notificationClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotification")
@@ -125,7 +125,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     Log.d(TAG, "invokeStatusBar upstream action=${args[1]} bundle=$bundle focus=${bundle?.getString("miui.focus.param")}")
                 }
                 Log.d(TAG, "MiuiBluetoothNotification.invokeStatusBar debug hook installed")
-            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotification.invokeStatusBar skipped", it) }
+            }.onFailure { Log.d(TAG, "hook MiuiBluetoothNotification.invokeStatusBar skipped", it) }
         }
         if (notificationClass != null && requestClass != null) {
             runCatching {
@@ -143,7 +143,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     Log.d(TAG, "updateParameters patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState")
                 }
                 Log.d(TAG, "MiuiBluetoothNotification.updateParameters hook installed")
-            }.onFailure { Log.w(TAG, "hook MiuiBluetoothNotification.updateParameters skipped", it) }
+            }.onFailure { Log.d(TAG, "hook MiuiBluetoothNotification.updateParameters skipped", it) }
         }
     }
 
@@ -212,7 +212,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "BinderC6776v.checkSupport forced device=${device.describe()} support=$result")
             }
             Log.d(TAG, "BinderC6776v.checkSupport hook installed")
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.checkSupport skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.checkSupport skipped", it) }
 
         hookAddressStringResult(binderClass, listOf("getDeviceInfo"), "getDeviceInfo") { fakeSupport() }
         hookAddressStringResult(binderClass, listOf("isSupportAudioSwitch", "mo19775z1", "z1"), "isSupportAudioSwitch") { "1" }
@@ -236,7 +236,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 sendRealStatus(device, "setCommonCommand:$command")
             }
             Log.d(TAG, "BinderC6776v.setCommonCommand hook installed")
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.setCommonCommand skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.setCommonCommand skipped", it) }
 
         hookBinderVoidDevice(binderClass, "connect") { device, method -> sendRealStatus(device, method) }
         hookBinderVoidDevice(binderClass, "getDeviceConfig") { device, method -> sendRealStatus(device, method) }
@@ -278,7 +278,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "BinderC6776v.unregister swallowed callback=$callback device=${device.describe()}")
             }
             Log.d(TAG, "BinderC6776v callback hooks installed")
-        }.onFailure { Log.w(TAG, "hook BinderC6776v callback methods skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v callback methods skipped", it) }
     }
 
     private fun hookBinderVoidDevice(binderClass: Class<*>, methodName: String, after: (BluetoothDevice?, String) -> Unit) {
@@ -293,14 +293,14 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 after(device, methodName)
                 sendRealStatusDelayed(device, "$methodName-refresh", 350L)
             }
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.$methodName skipped", it) }
     }
 
     private fun hookAddressStringResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: () -> String) {
         val methodName = methodNames.firstOrNull { name ->
             runCatching { binderClass.method(name, String::class.java) }.isSuccess
         } ?: run {
-            Log.w(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
+            Log.d(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
             return
         }
         runCatching {
@@ -311,14 +311,14 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "BinderC6776v.$label forced address=$address result=$result method=$methodName")
             }
             Log.d(TAG, "BinderC6776v.$label hook installed method=$methodName")
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.$label skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.$label skipped", it) }
     }
 
     private fun hookAddressBooleanResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: Boolean) {
         val methodName = methodNames.firstOrNull { name ->
             runCatching { binderClass.method(name, String::class.java) }.isSuccess
         } ?: run {
-            Log.w(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
+            Log.d(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
             return
         }
         runCatching {
@@ -329,7 +329,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "BinderC6776v.$label forced address=$address result=$forced method=$methodName")
             }
             Log.d(TAG, "BinderC6776v.$label hook installed method=$methodName")
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.$label skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.$label skipped", it) }
     }
 
     private fun hookBinderVoidDeviceString(binderClass: Class<*>, methodName: String, after: (BluetoothDevice?, String) -> Unit) {
@@ -345,7 +345,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 after(device, "$methodName:$value")
                 sendRealStatusDelayed(device, "$methodName-refresh:$value", 350L)
             }
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.$methodName skipped", it) }
     }
 
     private fun hookBinderAncMode(binderClass: Class<*>) {
@@ -360,7 +360,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 mode?.let { sendSonyAnc(sonyAncFromMiuiMode(it)) }
                 sendRealStatus(device, "changeAncMode:$mode")
             }
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.changeAncMode skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.changeAncMode skipped", it) }
     }
 
     private fun hookBinderAncLevel(binderClass: Class<*>) {
@@ -375,7 +375,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 level?.let { sendSonyAncLevel(it) }
                 sendRealStatus(device, "changeAncLevel:$level")
             }
-        }.onFailure { Log.w(TAG, "hook BinderC6776v.changeAncLevel skipped", it) }
+        }.onFailure { Log.d(TAG, "hook BinderC6776v.changeAncLevel skipped", it) }
     }
 
     private fun rememberCallback(callback: Any) {
@@ -411,7 +411,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 }
             }
             Log.d(TAG, "IMiuiHeadsetService.Stub.onTransact hooked class=$stubClass")
-        }.onFailure { Log.w(TAG, "hook IMiuiHeadsetService.Stub.onTransact skipped", it) }
+        }.onFailure { Log.d(TAG, "hook IMiuiHeadsetService.Stub.onTransact skipped", it) }
     }
 
     private fun handleTransaction(code: Int, data: Parcel, reply: Parcel): Boolean? {
@@ -799,7 +799,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun sendSonyAnc(mode: Int) {
         currentAnc = mode
         val ctx = context ?: run {
-            Log.w(TAG, "sendSonyAnc skipped: context is null mode=$mode")
+            Log.d(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
         SonyBridge.setNoiseControl(
@@ -817,7 +817,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         currentTransparencyVocalEnhancement = enabled
         hasTransparencyVocalEnhancementState = true
         val ctx = context ?: run {
-            Log.w(TAG, "sendSonyAmbientVoice skipped: context is null enabled=$enabled")
+            Log.d(TAG, "sendSonyAmbientVoice skipped: context is null enabled=$enabled")
             return
         }
         SonyBridge.setAmbientVoice(ctx, enabled)

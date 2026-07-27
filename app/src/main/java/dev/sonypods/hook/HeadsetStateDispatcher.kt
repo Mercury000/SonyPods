@@ -30,7 +30,7 @@ object HeadsetStateDispatcher : HookContext() {
                 registerAppRequestReceiver(context)
             }
         }.onFailure {
-            Log.w("SonyPods", "AdapterService.onCreate hook skipped", it)
+            Log.d("SonyPods", "AdapterService.onCreate hook skipped", it)
         }
 
         hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
@@ -47,7 +47,7 @@ object HeadsetStateDispatcher : HookContext() {
                 registerAppRequestReceiver(context)
                 if (!isSonyPod(device)) return@post
 
-                Log.i("SonyPods", "A2DP state=$currState for Sony device ${device.address}")
+                Log.d("SonyPods", "A2DP state=$currState for Sony device ${device.address}")
                 val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
