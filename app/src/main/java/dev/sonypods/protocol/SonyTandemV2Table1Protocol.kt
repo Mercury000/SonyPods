@@ -288,7 +288,8 @@ object SonyTandemV2Table1Protocol {
             DeviceInfoType.SERIES_AND_COLOR_INFO -> parseSeriesAndColor(payload)
             null -> null
         }
-        return ParsedTandemResponse.DeviceInfo(type, text, raw)
+        val colorCode = if (type == DeviceInfoType.SERIES_AND_COLOR_INFO) payload.getOrNull(2)?.unsigned else null
+        return ParsedTandemResponse.DeviceInfo(type, text, raw, colorCode)
     }
 
     private fun parseCommonStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
@@ -386,12 +387,20 @@ object SonyTandemV2Table1Protocol {
 
     private fun parseBattery(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val kind = payload.firstOrNull()?.let { code ->
-            PowerInquiredType.entries.firstOrNull { it.code == code }
+            // 0x09 is an extended battery NTFY (LEFT_RIGHT layout, 2-byte values) that
+            // some devices push unsolicited on per-bud connect/disconnect. It is not in
+            // the PowerInquiredType enum, so map it to LEFT_RIGHT_BATTERY so the engine
+            // updates left/right (and sees a disconnected bud as 0 -> null).
+            if (code == 0x09.toByte()) PowerInquiredType.LEFT_RIGHT_BATTERY
+            else PowerInquiredType.entries.firstOrNull { it.code == code }
         }
+        // Keep position: a null (sentinel or absent slot) stays in its place so the
+        // engine can tell which bud is disconnected, instead of listOfNotNull silently
+        // dropping it and shifting the other bud's level into the disconnected slot.
         val values = when (kind) {
             PowerInquiredType.BATTERY,
-            PowerInquiredType.CRADLE_BATTERY -> listOfNotNull(payload.getOrNull(1)?.percentageOrNull())
-            PowerInquiredType.LEFT_RIGHT_BATTERY -> listOfNotNull(
+            PowerInquiredType.CRADLE_BATTERY -> listOf(payload.getOrNull(1)?.percentageOrNull())
+            PowerInquiredType.LEFT_RIGHT_BATTERY -> listOf(
                 payload.getOrNull(1)?.percentageOrNull(),
                 payload.getOrNull(3)?.percentageOrNull(),
             )

@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import dev.sonypods.bridge.SonyStateSnapshot
 import io.github.libxposed.service.XposedService
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.config.EarphonePref
 import dev.sonypods.config.PodImageResource
 import dev.sonypods.ui.dialogs.RestartScope

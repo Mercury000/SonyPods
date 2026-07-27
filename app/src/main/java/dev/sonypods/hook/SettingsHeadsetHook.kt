@@ -1,4 +1,5 @@
 package dev.sonypods.hook
+import com.mercury.sonypods.R
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -9,7 +10,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import dev.sonypods.BuildConfig
+import com.mercury.sonypods.BuildConfig
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -382,7 +383,7 @@ object SettingsHeadsetHook : HookContext() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     SonyPodsAction.ACTION_CONFIG_CHANGED -> {
-                        refreshConfig()
+                        applyPushedConfig(intent)
                         updateFragments()
                     }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {

@@ -67,6 +67,10 @@ object ConfigManager {
 
     /** Cycle order of the notification/island ANC button; values are [dev.sonypods.protocol.NoiseControlMode] names. */
     val ANC_CYCLE_MODE_ORDER = listOf("NOISE_CANCELLING", "AMBIENT_SOUND", "OFF")
+    /**
+     * Default cycle set (all three modes). Used only when the persisted value is absent or
+     * contains no valid mode names — i.e. never to override a valid subset the user chose.
+     */
     val DEFAULT_ANC_CYCLE_MODES: Set<String> = ANC_CYCLE_MODE_ORDER.toSet()
 
     private val json = Json {
@@ -76,6 +80,16 @@ object ConfigManager {
 
     @Volatile
     private var cachedConfig: AppConfig = AppConfig()
+
+    /**
+     * Config awaiting a remote-prefs write because the LSPosed service was unavailable
+     * at save time. Flushed by [flushPendingRemote] once the service (re)binds, so the
+     * cross-process store stays authoritative and survives scope restarts even if the
+     * first save raced the service connection. Only relevant in the app process; the
+     * hook process always has the service and never buffers.
+     */
+    @Volatile
+    private var pendingRemoteConfig: AppConfig? = null
 
     fun init(prefs: SharedPreferences) {
         val oldConfig = cachedConfig
@@ -91,7 +105,29 @@ object ConfigManager {
         }
     }
 
+    /**
+     * Apply a config pushed from the app process by value (serialized [AppConfig] JSON),
+     * bypassing the remote-preferences store entirely. Used by the cross-process config
+     * broadcast so a change made in the app takes effect in the engine immediately, even
+     * when the remote-prefs write did not propagate (e.g. XposedService unavailable at save
+     * time). Updates the shared [cachedConfig] without touching any SharedPreferences.
+     * Returns true if the JSON was applied.
+     */
+    fun applyConfigJson(json: String): Boolean {
+        val parsed = runCatching { this.json.decodeFromString(AppConfig.serializer(), json) }.getOrNull() ?: run {
+            Log.w(TAG, "applyConfigJson: failed to decode config json, ignoring")
+            return false
+        }
+        val oldConfig = cachedConfig
+        cachedConfig = parsed.normalized()
+        logConfigChange("applyConfigJson", oldConfig, cachedConfig)
+        return true
+    }
+
     fun current(): AppConfig = cachedConfig
+
+    /** Serialize the current config to JSON for cross-process push via broadcast. */
+    fun currentAsJson(): String = json.encodeToString(AppConfig.serializer(), cachedConfig)
 
     fun fakeDeviceId(): String = current().fakeDeviceId.normalizedFakeDeviceId()
 
@@ -197,11 +233,61 @@ object ConfigManager {
         val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
         cachedConfig = normalized
         writePrefs(prefs, normalized)
-        service?.getRemotePreferences(PREFS_NAME)?.let { remotePrefs ->
-            writePrefs(remotePrefs, normalized)
-            Log.d(TAG, "save remote prefs class=${remotePrefs.javaClass.name} fakeDeviceId=${normalized.fakeDeviceId}")
-        } ?: Log.w(TAG, "save remote prefs skipped: LSPosed service is null")
+        if (service != null) {
+            // getRemotePreferences() is non-null in libxposed 101/102; a non-null service
+            // always yields a usable cross-process store. This (app-side) store is WRITABLE,
+            // unlike the engine-side one, so it is the durable authority the engine reads at
+            // startup via ConfigManager.init.
+            val remotePrefs = service.getRemotePreferences(PREFS_NAME)
+            writeRemoteConfig(remotePrefs, normalized)
+            val hasConfigJson = runCatching { remotePrefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)
+            Log.d(TAG, "save remote prefs class=${remotePrefs.javaClass.name} hasConfigJson=$hasConfigJson fakeDeviceId=${normalized.fakeDeviceId}")
+            pendingRemoteConfig = null
+        } else {
+            // The engine reads remote prefs at startup (after a scope restart), so a
+            // missing write here would make the persisted config revert to defaults.
+            // Buffer it and flush when the service binds.
+            pendingRemoteConfig = normalized
+            Log.w(TAG, "save remote prefs skipped: LSPosed service is null; buffering for flush on bind")
+        }
         logConfigChange("save", oldConfig, normalized)
+    }
+
+    /**
+     * Write any config buffered because the LSPosed service was null at save time.
+     * Call from [dev.sonypods.SonyPodsApp.onServiceBind] so the cross-process store is
+     * always current, even if a save raced the service connection.
+     */
+    fun flushPendingRemote(service: XposedService?) {
+        val pending = pendingRemoteConfig ?: return
+        service ?: return
+        val remotePrefs = service.getRemotePreferences(PREFS_NAME)
+        writeRemoteConfig(remotePrefs, pending)
+        pendingRemoteConfig = null
+        Log.d(TAG, "flushed buffered remote config fakeDeviceId=${pending.fakeDeviceId}")
+    }
+
+    /**
+     * Unconditionally write the current [cachedConfig] to the remote-preference store.
+     *
+     * This repairs a remote-prefs store that is stale or missing [PREF_KEY_CONFIG_JSON] —
+     * for example after an older build of the module wrote only [PodImagePrefs.PREF_KEY_EARPHONES]
+     * into remote prefs (evicting config_json), leaving the engine with no config on startup.
+     * Unlike [flushPendingRemote], which only acts when there is a buffered write, this always
+     * writes and is therefore safe to call on every [onServiceBind].
+     */
+    fun syncToRemote(service: XposedService?) {
+        service ?: return
+        runCatching {
+            val remotePrefs = service.getRemotePreferences(PREFS_NAME)
+            val hasConfig = runCatching { remotePrefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)
+            if (!hasConfig) {
+                writeRemoteConfig(remotePrefs, cachedConfig)
+                Log.d(TAG, "syncToRemote: config_json was absent; wrote cachedConfig ancCycleModes=${cachedConfig.ancCycleModes}")
+            } else {
+                Log.d(TAG, "syncToRemote: config_json already present, skipping")
+            }
+        }.onFailure { Log.w(TAG, "syncToRemote failed", it) }
     }
 
     private fun writePrefs(prefs: SharedPreferences, config: AppConfig) {
@@ -220,6 +306,22 @@ object ConfigManager {
             .putStringSet(PREF_KEY_ANC_CYCLE_MODES, config.ancCycleModes)
             .putInt(PREF_KEY_STARTUP_TAB, config.startupTab)
             .commit()
+    }
+
+    /**
+     * Write the config to the framework-backed remote-preference store, following the
+     * canonical libxposed pattern (see libxposed/example): a single authoritative key — the
+     * serialized [AppConfig] — written with `.apply()` (the framework's async remote write).
+     * The hooked app reads it back via `getRemotePreferences` and observes changes through
+     * `registerOnSharedPreferenceChangeListener`. Direct/legacy keys are NOT mirrored to
+     * remote prefs; [readConfig] falls back to config_json when they are absent, so this
+     * single key is sufficient. Using `.apply()` (not `.commit()`) matches the reference
+     * implementation and avoids a synchronous IPC write that can fail silently.
+     */
+    private fun writeRemoteConfig(remotePrefs: SharedPreferences, config: AppConfig) {
+        remotePrefs.edit()
+            .putString(PREF_KEY_CONFIG_JSON, json.encodeToString(AppConfig.serializer(), config))
+            .apply()
     }
 
     private fun readConfig(prefs: SharedPreferences, source: String): AppConfig {
@@ -296,8 +398,19 @@ object ConfigManager {
         it in ISLAND_SHOW_TIMING_CONNECTED..ISLAND_SHOW_TIMING_IN_CASE
     }
 
+    /**
+     * Filters out any values that are not valid [ANC_CYCLE_MODE_ORDER] names.
+     *
+     * Intentionally does NOT fall back to [DEFAULT_ANC_CYCLE_MODES] when the result is empty:
+     * that would silently override a user who deliberately deselected all modes (edge case) or,
+     * more critically, would expand a valid two-mode subset (e.g. NC+ASM) back to all three
+     * modes whenever this function is called on a freshly-read SharedPreferences that happens
+     * to be empty (LSPosed remote-prefs bridge not yet ready at package-load time). The
+     * empty-set fallback belongs at the point where the cycle list is actually consumed
+     * (SonyEngineHost.CMD_CYCLE_NOISE_CONTROL), not here.
+     */
     private fun Set<String>.normalizedAncCycleModes(): Set<String> =
-        filterTo(mutableSetOf()) { it in ANC_CYCLE_MODE_ORDER }.ifEmpty { DEFAULT_ANC_CYCLE_MODES }
+        filterTo(mutableSetOf()) { it in ANC_CYCLE_MODE_ORDER }
 
     private fun logConfigChange(source: String, oldConfig: AppConfig, newConfig: AppConfig) {
         val changes = changedFields(oldConfig, newConfig)

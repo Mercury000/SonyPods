@@ -201,7 +201,7 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             context?.registerReceiver(object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == SonyPodsAction.ACTION_CONFIG_CHANGED) refreshConfig()
+                    if (intent?.action == SonyPodsAction.ACTION_CONFIG_CHANGED) applyPushedConfig(intent)
                 }
             }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
         }

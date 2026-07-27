@@ -189,7 +189,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             context?.registerReceiver(object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
-                    refreshConfig()
+                    applyPushedConfig(intent)
                     notifyRealStatus("config-changed")
                 }
             }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)

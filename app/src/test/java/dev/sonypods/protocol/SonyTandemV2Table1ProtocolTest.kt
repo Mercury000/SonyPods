@@ -299,6 +299,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.MODEL_NAME, parsed.type)
         assertEquals("WF-1000XM5", parsed.text)
+        assertEquals(null, parsed.colorCode)
     }
 
     @Test
@@ -310,6 +311,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.SERIES_AND_COLOR_INFO, parsed.type)
         assertEquals("LINK_BUDS / Black", parsed.text)
+        assertEquals(0x01, parsed.colorCode)
     }
 
     @Test
@@ -355,6 +357,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.FW_VERSION, parsed.type)
         assertEquals("2.5.1", parsed.text)
+        assertEquals(null, parsed.colorCode)
     }
 
     @Test
@@ -376,7 +379,20 @@ class SonyTandemV2Table1ProtocolTest {
         assertTrue(parsed is ParsedTandemResponse.Battery)
         parsed as ParsedTandemResponse.Battery
         assertEquals(PowerInquiredType.BATTERY, parsed.kind)
-        assertEquals(emptyList<Int>(), parsed.values)
+        assertEquals(listOf(null), parsed.values)
+    }
+
+    @Test
+    fun parser_batteryNtfy0x09_mapsToLeftRight() {
+        // 0x09 extended battery NTFY uses the LEFT_RIGHT 2-byte layout.
+        // left = 0x52 0x00 = 82, right = 0x49 0x00 = 73.
+        val raw = byteArrayOf(0x0E, 0x25, 0x09, 0x52, 0x00, 0x49, 0x00, 0x64, 0x64)
+        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.Battery)
+        parsed as ParsedTandemResponse.Battery
+        assertEquals(PowerInquiredType.LEFT_RIGHT_BATTERY, parsed.kind)
+        assertEquals(listOf(82, 73), parsed.values)
     }
 
     @Test

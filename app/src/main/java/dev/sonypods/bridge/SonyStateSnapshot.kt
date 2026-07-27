@@ -26,6 +26,9 @@ data class SonyStateSnapshot(
     val firmwareVersion: String? = null,
     /** Cloud catalog image for this model+colour; the app downloads and caches it. */
     val modelImageUrl: String? = null,
+    /** Catalog accent colour (ARGB hex, e.g. "FFf7594e") for the resolved image, if any.
+     * Consumers use it to tint system surfaces so they match the depicted headphone. */
+    val modelImageSourceColor: String? = null,
 
     val batterySingle: Int? = null,
     val batteryLeft: Int? = null,
@@ -65,6 +68,7 @@ data class SonyStateSnapshot(
         deviceAddress?.let { putString(KEY_DEVICE_ADDRESS, it) }
         firmwareVersion?.let { putString(KEY_FIRMWARE, it) }
         modelImageUrl?.let { putString(KEY_MODEL_IMAGE, it) }
+        modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
 
         batterySingle?.let { putInt(KEY_BATTERY_SINGLE, it) }
         batteryLeft?.let { putInt(KEY_BATTERY_LEFT, it) }
@@ -103,6 +107,7 @@ data class SonyStateSnapshot(
         private const val KEY_DEVICE_ADDRESS = "device_address"
         private const val KEY_FIRMWARE = "firmware"
         private const val KEY_MODEL_IMAGE = "model_image_url"
+        private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
         private const val KEY_BATTERY_SINGLE = "battery_single"
         private const val KEY_BATTERY_LEFT = "battery_left"
         private const val KEY_BATTERY_RIGHT = "battery_right"
@@ -134,6 +139,7 @@ data class SonyStateSnapshot(
             deviceAddress = bundle.getString(KEY_DEVICE_ADDRESS),
             firmwareVersion = bundle.getString(KEY_FIRMWARE),
             modelImageUrl = bundle.getString(KEY_MODEL_IMAGE),
+            modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
             batteryLeft = bundle.optInt(KEY_BATTERY_LEFT),
             batteryRight = bundle.optInt(KEY_BATTERY_RIGHT),
@@ -176,6 +182,7 @@ data class SonyStateSnapshot(
                 deviceAddress = state.connectedDevice?.address,
                 firmwareVersion = state.deviceInfo.firmwareVersion,
                 modelImageUrl = state.deviceInfo.modelImageUrl,
+                modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
                 batteryRight = state.batteryState.right,

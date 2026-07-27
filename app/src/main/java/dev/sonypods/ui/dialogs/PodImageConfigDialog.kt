@@ -32,7 +32,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.config.EarphonePref
 import dev.sonypods.config.PodImageResource
 import top.yukonga.miuix.kmp.basic.ButtonDefaults

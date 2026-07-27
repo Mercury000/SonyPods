@@ -35,6 +35,10 @@ sealed interface ParsedTandemResponse {
         val type: DeviceInfoType?,
         val text: String?,
         override val raw: ByteArray,
+        /** Raw numeric colour code from a SERIES_AND_COLOR_INFO payload (`payload[2]`), if any.
+         * Used to match the catalog image by code so the fragile per-protocol colour-label
+         * tables (which disagree between V1 and V2 for codes 0x06–0x0B) are bypassed. */
+        val colorCode: Int? = null,
     ) : ParsedTandemResponse
 
     data class CommonStatus(
@@ -46,7 +50,7 @@ sealed interface ParsedTandemResponse {
 
     data class Battery(
         val kind: PowerInquiredType?,
-        val values: List<Int>,
+        val values: List<Int?>,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 

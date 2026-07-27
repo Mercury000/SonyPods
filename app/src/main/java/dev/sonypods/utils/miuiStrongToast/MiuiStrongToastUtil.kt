@@ -1,4 +1,5 @@
 package dev.sonypods.utils.miuiStrongToast
+import com.mercury.sonypods.R
 
 import StringToastBundle
 import android.annotation.SuppressLint
@@ -12,7 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import kotlinx.serialization.json.Json
-import dev.sonypods.BuildConfig
+import com.mercury.sonypods.BuildConfig
 import dev.sonypods.hook.Log
 import dev.sonypods.utils.SystemApisUtils.isHyperOS
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
@@ -121,6 +122,7 @@ object MiuiStrongToastUtil {
     }
 
     const val EXTRA_SINGLE_BATTERY = "single_battery"
+    const val EXTRA_SOURCE_COLOR = "source_color"
 
     /**
      * The connect animation HyperOS plays for its own earbuds: a strong toast whose
@@ -270,10 +272,12 @@ object MiuiStrongToastUtil {
         context: Context,
         batteryParams: BatteryParams,
         device: BluetoothDevice,
+        sourceColor: String? = null,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("device", device)
+        intent.putExtra(EXTRA_SOURCE_COLOR, sourceColor)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }

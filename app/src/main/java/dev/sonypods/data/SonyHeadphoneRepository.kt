@@ -51,7 +51,6 @@ private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
-private const val PLAYBACK_HEARTBEAT_INTERVAL_MS = 30_000L
 
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
@@ -63,6 +62,7 @@ data class DeviceInfoState(
     val firmwareVersion: String? = null,
     val seriesAndColor: String? = null,
     val modelColor: String? = null,
+    val modelColorCode: Int? = null,
     val modelImageUrl: String? = null,
     val modelImageSourceColor: String? = null,
     val protocolReady: Boolean = false,
@@ -187,10 +187,8 @@ class SonyHeadphoneRepository private constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
-    private val playbackHeartbeatRunnable = Runnable { sendPlaybackHeartbeat() }
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
-    private var playbackHeartbeatActive = false
 
     val state: StateFlow<SonyHeadphoneUiState> = _state.asStateFlow()
 
@@ -566,7 +564,6 @@ class SonyHeadphoneRepository private constructor(
         if (!connected) {
             clearPendingPlaybackTransition()
             mainHandler.removeCallbacks(playbackRefreshRunnable)
-            stopPlaybackHeartbeat()
         }
         _state.update {
             val deviceInfo = if (connected) {
@@ -672,6 +669,7 @@ class SonyHeadphoneRepository private constructor(
                     info.copy(
                         seriesAndColor = seriesAndColor,
                         modelColor = parseModelColor(seriesAndColor) ?: info.modelColor,
+                        modelColorCode = response.colorCode ?: info.modelColorCode,
                     )
                 }
                 else -> info
@@ -703,11 +701,18 @@ class SonyHeadphoneRepository private constructor(
 
     private fun DeviceInfoState.withResolvedModelImage(device: DiscoveredSonyDevice?): DeviceInfoState {
         val preferredModelName = modelName ?: device?.name?.removePrefix("LE_")
-        val match = modelImageCatalog.resolve(preferredModelName, modelColor ?: parseModelColor(seriesAndColor))
+        val match = modelImageCatalog.resolve(
+            preferredModelName,
+            modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode,
+        )
         return copy(
             modelImageUrl = match?.imageUrl,
             modelImageSourceColor = match?.sourceColor,
-            modelColor = modelColor ?: match?.modelColor ?: parseModelColor(seriesAndColor),
+            // Prefer the catalog's colour label so the stored value reflects the image
+            // we actually resolved, instead of the fragile per-protocol label text.
+            modelColor = match?.modelColor ?: modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode = modelColorCode,
         )
     }
 
@@ -728,19 +733,22 @@ class SonyHeadphoneRepository private constructor(
             current.copy(
                 batteryState = when (response.kind) {
                     PowerInquiredType.BATTERY -> battery.copy(
-                        single = response.values.firstOrNull(),
-                        raw = response.values,
+                        // A reported 0% for a bud means it is not on-link (disconnected);
+                        // map it to null so consumers render "disconnected" instead of a
+                        // misleading 0%. The charging case (CRADLE) keeps its raw value.
+                        single = response.values.firstOrNull().takeIf { it != 0 },
+                        raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.LEFT_RIGHT_BATTERY -> battery.copy(
-                        left = response.values.getOrNull(0),
-                        right = response.values.getOrNull(1),
-                        raw = response.values,
+                        left = response.values.getOrNull(0).takeIf { it != 0 },
+                        right = response.values.getOrNull(1).takeIf { it != 0 },
+                        raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.CRADLE_BATTERY -> battery.copy(
                         cradle = response.values.firstOrNull(),
-                        raw = response.values,
+                        raw = response.values.filterNotNull(),
                     )
-                    else -> battery.copy(raw = response.values)
+                    else -> battery.copy(raw = response.values.filterNotNull())
                 }
             )
         }
@@ -843,50 +851,11 @@ class SonyHeadphoneRepository private constructor(
     private fun schedulePlaybackStateRefresh() {
         mainHandler.removeCallbacks(playbackRefreshRunnable)
         mainHandler.postDelayed(playbackRefreshRunnable, PLAYBACK_REFRESH_AFTER_COMMAND_MS)
-        // Reset heartbeat timer to avoid querying right after a command-triggered refresh
-        if (playbackHeartbeatActive) {
-            mainHandler.removeCallbacks(playbackHeartbeatRunnable)
-            mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-        }
     }
 
     private fun schedulePlaybackStateReconcile() {
         mainHandler.removeCallbacks(playbackReconcileRunnable)
         mainHandler.postDelayed(playbackReconcileRunnable, PLAYBACK_RECONCILE_AFTER_COMMAND_MS)
-    }
-
-    private fun sendPlaybackHeartbeat() {
-        if (!playbackHeartbeatActive) return
-        if (_state.value.playbackStatus != PlaybackStatus.PLAYING) {
-            stopPlaybackHeartbeat()
-            return
-        }
-        if (!_state.value.deviceInfo.protocolReady) return
-        appendLog("Playback heartbeat: GET playback status")
-        refreshPlaybackState()
-        mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-    }
-
-    private fun startPlaybackHeartbeat() {
-        if (playbackHeartbeatActive) return
-        if (!shouldUseTandemPlaybackStatus()) return
-        playbackHeartbeatActive = true
-        appendLog("Playback heartbeat started (interval=${PLAYBACK_HEARTBEAT_INTERVAL_MS}ms)")
-        mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-    }
-
-    private fun stopPlaybackHeartbeat() {
-        if (!playbackHeartbeatActive) return
-        playbackHeartbeatActive = false
-        mainHandler.removeCallbacks(playbackHeartbeatRunnable)
-        appendLog("Playback heartbeat stopped")
-    }
-
-    private fun maybeStartPlaybackHeartbeat(status: PlaybackStatus) {
-        when (status) {
-            PlaybackStatus.PLAYING -> startPlaybackHeartbeat()
-            else -> stopPlaybackHeartbeat()
-        }
     }
 
     private fun clearPendingPlaybackTransition() {
@@ -1045,7 +1014,6 @@ class SonyHeadphoneRepository private constructor(
                     return
                 }
                 _state.update { it.copy(playbackStatus = status) }
-                maybeStartPlaybackHeartbeat(status)
                 return
             }
             pendingPlaybackStatus = null
@@ -1067,7 +1035,6 @@ class SonyHeadphoneRepository private constructor(
         }
 
         _state.update { it.copy(playbackStatus = status) }
-        maybeStartPlaybackHeartbeat(status)
     }
 
     private fun ensureConnectedProfile(): ConnectedHeadphoneProfile {

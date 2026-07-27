@@ -3,7 +3,7 @@ package dev.sonypods.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.ui.components.AppIcons
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Settings

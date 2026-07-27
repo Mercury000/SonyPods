@@ -16,7 +16,7 @@
     </queries>
 
     <application
-        android:name=".SonyPodsApp"
+        android:name="dev.sonypods.SonyPodsApp"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -26,20 +26,20 @@
         android:theme="@style/Theme.SonyPods">
 
         <activity-alias
-            android:name=".LauncherActivity"
+            android:name="dev.sonypods.LauncherActivity"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name"
             android:roundIcon="@mipmap/ic_launcher_round"
-            android:targetActivity=".MainActivity">
+            android:targetActivity="dev.sonypods.MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
 
-        <activity android:name=".MainActivity"
+        <activity android:name="dev.sonypods.MainActivity"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"
             android:exported="true">
@@ -48,7 +48,7 @@
                 <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
-        <activity android:name=".PopupActivity"
+        <activity android:name="dev.sonypods.PopupActivity"
             android:theme="@style/Theme.SonyPods.Popup"
             android:taskAffinity=""
             android:excludeFromRecents="true"
@@ -59,7 +59,7 @@
             </intent-filter>
         </activity>
         <provider
-            android:name=".config.PodImageProvider"
+            android:name="dev.sonypods.config.PodImageProvider"
             android:authorities="com.mercury.sonypods.podimages"
             android:exported="true"
             android:grantUriPermissions="false" />

@@ -11,7 +11,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import dev.sonypods.bridge.SonyStateSnapshot
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
