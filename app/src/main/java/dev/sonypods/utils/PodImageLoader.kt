@@ -19,7 +19,7 @@ object PodImageLoader {
         resource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        val earphone = runCatching { PodImagePrefs.findOrLatest(prefs, address) }.getOrNull()
+        val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull()
         val custom = runCatching {
             earphone?.imageUri(resource)?.let { uri -> decodeUri(context, uri) }
         }.getOrNull()
@@ -42,7 +42,7 @@ object PodImageLoader {
         customFallbackResource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        val earphone = runCatching { PodImagePrefs.findOrLatest(prefs, address) }.getOrNull()
+        val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull()
         val custom = runCatching {
             earphone?.imageUri(resource)?.let { uri -> decodeUri(context, uri) }
                 ?: earphone?.imageUri(customFallbackResource)?.let { uri -> decodeUri(context, uri) }

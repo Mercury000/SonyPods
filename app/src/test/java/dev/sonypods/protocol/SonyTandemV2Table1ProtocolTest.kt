@@ -299,6 +299,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.MODEL_NAME, parsed.type)
         assertEquals("WF-1000XM5", parsed.text)
+        assertEquals(null, parsed.colorCode)
     }
 
     @Test
@@ -310,6 +311,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.SERIES_AND_COLOR_INFO, parsed.type)
         assertEquals("LINK_BUDS / Black", parsed.text)
+        assertEquals(0x01, parsed.colorCode)
     }
 
     @Test
@@ -355,6 +357,7 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.DeviceInfo
         assertEquals(DeviceInfoType.FW_VERSION, parsed.type)
         assertEquals("2.5.1", parsed.text)
+        assertEquals(null, parsed.colorCode)
     }
 
     @Test

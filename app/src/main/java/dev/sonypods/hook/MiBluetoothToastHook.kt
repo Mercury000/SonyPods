@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.os.Handler
@@ -40,7 +41,7 @@ object MiBluetoothToastHook : HookContext() {
         }
 
         @SuppressLint("WrongConstant")
-        fun createPodsNotification(bluetoothDevice: BluetoothDevice?, context: Context, batteryParams: BatteryParams) {
+        fun createPodsNotification(bluetoothDevice: BluetoothDevice?, context: Context, batteryParams: BatteryParams, sourceColor: String? = null) {
             val miheadset_notification_Box = context.resources.getIdentifier("miheadset_notification_Box", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_LeftEar = context.resources.getIdentifier("miheadset_notification_LeftEar", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_RightEar = context.resources.getIdentifier("miheadset_notification_RightEar", "string", "com.xiaomi.bluetooth")
@@ -219,7 +220,10 @@ object MiBluetoothToastHook : HookContext() {
                         .setContentText(contentText)
                         .setContentIntent(pendingIntent)
                         .setDeleteIntent(deleteIntent(context, bluetoothDevice))
-                        .setColor(context.getColor(system_notification_accent_color))
+                        .setColor(
+                            sourceColor?.let { runCatching { Color.parseColor("#$it") }.getOrNull() }
+                                ?: context.getColor(system_notification_accent_color)
+                        )
                         .addAction(disconnectAction)
                         .apply { focusExtras?.let { addExtras(it) } }
                         .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -264,11 +268,12 @@ object MiBluetoothToastHook : HookContext() {
                                     else ->
                                         Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
                                 }
-                            } else if (p1?.action == SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION) {
-                                val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
-                                val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
-                                createPodsNotification(device, context, batteryParams!!)
-                            } else if (p1?.action == SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION) {
+                        } else if (p1?.action == SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION) {
+                            val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
+                            val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
+                            val sourceColor = p1.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
+                            createPodsNotification(device, context, batteryParams!!, sourceColor)
+                        } else if (p1?.action == SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION) {
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java) as BluetoothDevice
                                 cancelNotification(device, context)
                             }

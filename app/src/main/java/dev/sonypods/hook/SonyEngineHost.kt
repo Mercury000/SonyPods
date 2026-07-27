@@ -403,7 +403,12 @@ object SonyEngineHost {
 
         val device = remoteDevice(context, address) ?: return
         runCatching {
-            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(context, battery, device)
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
+                context = context,
+                batteryParams = battery,
+                device = device,
+                sourceColor = snapshot.modelImageSourceColor,
+            )
             // The island is an arrival animation: only on a fresh connection, not on
             // every battery tick.
             if (isNewDevice) {

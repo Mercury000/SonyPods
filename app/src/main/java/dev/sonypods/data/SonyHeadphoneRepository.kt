@@ -63,6 +63,7 @@ data class DeviceInfoState(
     val firmwareVersion: String? = null,
     val seriesAndColor: String? = null,
     val modelColor: String? = null,
+    val modelColorCode: Int? = null,
     val modelImageUrl: String? = null,
     val modelImageSourceColor: String? = null,
     val protocolReady: Boolean = false,
@@ -672,6 +673,7 @@ class SonyHeadphoneRepository private constructor(
                     info.copy(
                         seriesAndColor = seriesAndColor,
                         modelColor = parseModelColor(seriesAndColor) ?: info.modelColor,
+                        modelColorCode = response.colorCode ?: info.modelColorCode,
                     )
                 }
                 else -> info
@@ -703,11 +705,18 @@ class SonyHeadphoneRepository private constructor(
 
     private fun DeviceInfoState.withResolvedModelImage(device: DiscoveredSonyDevice?): DeviceInfoState {
         val preferredModelName = modelName ?: device?.name?.removePrefix("LE_")
-        val match = modelImageCatalog.resolve(preferredModelName, modelColor ?: parseModelColor(seriesAndColor))
+        val match = modelImageCatalog.resolve(
+            preferredModelName,
+            modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode,
+        )
         return copy(
             modelImageUrl = match?.imageUrl,
             modelImageSourceColor = match?.sourceColor,
-            modelColor = modelColor ?: match?.modelColor ?: parseModelColor(seriesAndColor),
+            // Prefer the catalog's colour label so the stored value reflects the image
+            // we actually resolved, instead of the fragile per-protocol label text.
+            modelColor = match?.modelColor ?: modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode = modelColorCode,
         )
     }
 

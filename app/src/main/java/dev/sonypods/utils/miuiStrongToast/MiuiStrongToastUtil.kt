@@ -121,6 +121,7 @@ object MiuiStrongToastUtil {
     }
 
     const val EXTRA_SINGLE_BATTERY = "single_battery"
+    const val EXTRA_SOURCE_COLOR = "source_color"
 
     /**
      * The connect animation HyperOS plays for its own earbuds: a strong toast whose
@@ -270,10 +271,12 @@ object MiuiStrongToastUtil {
         context: Context,
         batteryParams: BatteryParams,
         device: BluetoothDevice,
+        sourceColor: String? = null,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("device", device)
+        intent.putExtra(EXTRA_SOURCE_COLOR, sourceColor)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }

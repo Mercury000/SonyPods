@@ -196,7 +196,8 @@ object SonyTandemV1Table1Protocol {
             DeviceInfoType.SERIES_AND_COLOR_INFO -> parseSeriesAndColor(payload)
             null -> null
         }
-        return ParsedTandemResponse.DeviceInfo(type, text, raw)
+        val colorCode = if (type == DeviceInfoType.SERIES_AND_COLOR_INFO) payload.getOrNull(2)?.unsigned else null
+        return ParsedTandemResponse.DeviceInfo(type, text, raw, colorCode)
     }
 
     private fun parseBattery(payload: ByteArray, raw: ByteArray): ParsedTandemResponse.Battery {
