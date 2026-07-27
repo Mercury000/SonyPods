@@ -26,7 +26,7 @@ object HeadsetStateDispatcher : HookContext() {
             hookAfter(findMethod("com.android.bluetooth.btservice.AdapterService", "onCreate")) {
                 val context = instance as? Context
                 SonyEngineHost.onAdapterService(instance)
-                if (context != null) SonyEngineHost.start(context, instance)
+                if (context != null) SonyEngineHost.start(context, instance, prefs)
                 registerAppRequestReceiver(context)
             }
         }.onFailure {
@@ -43,7 +43,7 @@ object HeadsetStateDispatcher : HookContext() {
             }
             handler.post {
                 val context = instance as ContextWrapper
-                SonyEngineHost.start(context, null)
+                SonyEngineHost.start(context, null, prefs)
                 registerAppRequestReceiver(context)
                 if (!isSonyPod(device)) return@post
 

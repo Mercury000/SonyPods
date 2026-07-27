@@ -2,6 +2,7 @@ package dev.sonypods.hook
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
+import android.content.SharedPreferences
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.os.SystemClock
@@ -56,6 +57,9 @@ object SonyEngineHost {
     @Volatile
     private var adapterService: Any? = null
 
+    @Volatile
+    private var prefs: SharedPreferences? = null
+
     private var started = false
     private var lastSnapshot: SonyStateSnapshot? = null
     private var lastRenderedBattery: BatteryParams? = null
@@ -68,8 +72,9 @@ object SonyEngineHost {
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
 
-    fun start(context: Context, adapterService: Any?) {
+    fun start(context: Context, adapterService: Any?, prefs: SharedPreferences? = null) {
         adapterService?.let { this.adapterService = it }
+        prefs?.let { this.prefs = it }
         if (started) return
         val ctx = context.applicationContext ?: context
         appContext = ctx
@@ -257,6 +262,11 @@ object SonyEngineHost {
     private fun handleCommand(intent: Intent) {
         val repo = repository ?: return
         val command = intent.getStringExtra(SonyBridge.EXTRA_COMMAND) ?: return
+        // The engine's ConfigManager cache was loaded at process start and is only updated
+        // by a cross-process remote-prefs listener that is unreliable. Re-read the prefs
+        // on each command so options changed in the app (e.g. ANC cycle modes) are
+        // honoured without needing the listener to fire.
+        prefs?.let { ConfigManager.refreshFromPrefs(it) }
         Log.d(TAG, "command=$command")
         when (command) {
             SonyBridge.CMD_SET_NOISE_CONTROL -> {
