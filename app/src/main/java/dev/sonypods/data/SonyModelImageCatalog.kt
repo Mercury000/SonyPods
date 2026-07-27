@@ -44,16 +44,23 @@ class SonyModelImageCatalog(context: Context) {
      *     device may report map back to their base colour entry;
      *  3. normalised colour-label equality (legacy path, kept for devices that report
      *     a colour string but no code);
-     *  4. the catalog's "Default" entry;
-     *  5. nothing — returns null so the caller shows the generic drawable, rather than
-     *     silently picking an arbitrary colour ([modelEntries].first()) which is how a
-     *     wrong-colour image used to be selected.
+     *  4. the catalog's "Default" entry.
+     *
+     * Returns null when the device's colour is still unknown this session (no code and
+     * the label is absent or just the "Default" placeholder). This is deliberate: on
+     * reconnect the colour code has not arrived yet at that moment, and resolving to the
+     * Default image would make [dev.sonypods.bridge.ModelImageSync] download a
+     * wrong-colour image and overwrite the correctly cached one for this MAC. Returning
+     * null leaves the cached image in place until the real colour is reported.
      */
     fun resolve(modelName: String?, modelColor: String?, colorCode: Int? = null): SonyModelImageMatch? {
         val normalizedModel = normalizeModelName(modelName) ?: return null
         val modelEntries = entries.filter { normalizeModelName(it.modelName) == normalizedModel }
         if (modelEntries.isEmpty()) return null
         val normalizedColor = normalizeColor(modelColor)
+        if (colorCode == null && normalizedColor == normalizeColor(DEFAULT_COLOR)) {
+            return null
+        }
         val entry = modelEntries.firstOrNull { it.modelColorId != null && it.modelColorId == colorCode }
             ?: colorCode?.let { code ->
                 modelEntries.firstOrNull { it.modelColorId != null && it.modelColorId == (code and 0x0F) }
