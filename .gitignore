@@ -20,3 +20,5 @@ resources/META-INF/yukihookapi_init
 opencode.json
 /.idea
 /.qoder
+jadx/
+.workbuddy/
