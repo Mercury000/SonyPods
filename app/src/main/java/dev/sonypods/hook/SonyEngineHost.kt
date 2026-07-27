@@ -89,6 +89,22 @@ object SonyEngineHost {
         val repo = SonyHeadphoneRepository.getInstance(moduleContext ?: ctx, ctx)
         repository = repo
 
+        // The authoritative, always-written config store is the module app's own
+        // SharedPreferences (sonypods_settings.xml). libxposed 101's getRemotePreferences
+        // is not a reliable cross-process channel in this environment: the hooked side
+        // reads a different (stale) store than the app writes via XposedService, so it
+        // never carries config_json and reverts to defaults after a scope restart. Read
+        // the module's own file directly from the bluetooth process instead. After a
+        // scope restart this process is fresh, so the first read sees the on-disk value.
+        val configPrefs = moduleContext?.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        if (configPrefs != null) {
+            this.prefs = configPrefs
+            ConfigManager.init(configPrefs)
+            Log.d(TAG, "config loaded from module package store")
+        } else {
+            Log.w(TAG, "module context unavailable; config may be stale (remote prefs only)")
+        }
+
         registerCommandReceiver(ctx)
         registerConfigReceiver(ctx)
 
@@ -283,7 +299,11 @@ object SonyEngineHost {
                         if (json != null) {
                             ConfigManager.applyConfigJson(json)
                         } else {
-                            prefs?.let { ConfigManager.refreshFromPrefs(it) }
+                            // No JSON payload (older app build): the live config in
+                            // cachedConfig is already authoritative (set at engine start
+                            // from the module's own SharedPreferences, kept current by
+                            // broadcasts that carry JSON), so do not clobber it.
+                            Log.d(TAG, "config push without JSON; keeping current cache")
                         }
                     }
                 },
@@ -307,9 +327,10 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
-                // Re-read the persisted config from the module's remote preference so the
-                // cycle order is always current, even after a scope restart or a missed push.
-                prefs?.let { ConfigManager.refreshFromPrefs(it) }
+                // cachedConfig is the authority: set at engine start from the module's own
+                // SharedPreferences (always written by the app) and kept live by the
+                // ACTION_CONFIG_CHANGED broadcast. Re-reading the hooked-side remote prefs
+                // here would revert live changes to a stale default, so we use cachedConfig.
                 val enabledNames = ConfigManager.ancCycleModes()
                 val cycle = ConfigManager.ANC_CYCLE_MODE_ORDER
                     .filter { it in enabledNames }
