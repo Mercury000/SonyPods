@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
 import dev.sonypods.config.imageUri

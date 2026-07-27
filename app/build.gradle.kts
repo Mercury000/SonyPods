@@ -15,7 +15,7 @@ apksign {
 }
 
 android {
-    namespace = "dev.sonypods"
+    namespace = "com.mercury.sonypods"
     compileSdk = 37
 
     defaultConfig {

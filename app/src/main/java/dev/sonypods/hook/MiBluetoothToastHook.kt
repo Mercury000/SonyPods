@@ -27,7 +27,7 @@ import dev.sonypods.utils.SystemApisUtils.notifyAsUser
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
-import dev.sonypods.R
+import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {

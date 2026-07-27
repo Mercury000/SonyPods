@@ -46,7 +46,7 @@ import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.SonyPodsApp
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
@@ -216,6 +216,21 @@ fun MainUI(
                     SonyPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE -> {
                         lastBluetoothServiceAliveMs = SystemClock.elapsedRealtime()
                         bluetoothServiceResponsive = true
+                        // The engine (re)started — e.g. after a scope restart. Re-push the
+                        // current config so its authoritative cache is current even if the push
+                        // that accompanied the original change was missed. Prefer the
+                        // framework-backed remote-preferences store (the cross-process source of
+                        // truth that survives a scope restart); fall back to the local store only
+                        // if the LSPosed service is unavailable. Remote prefs remain the persistent
+                        // source of truth the engine reads at startup; this just guarantees delivery.
+                        val remote = xposedService
+                        val source = if (remote != null) {
+                            runCatching { remote.getRemotePreferences(ConfigManager.PREFS_NAME) }.getOrNull() ?: prefs
+                        } else {
+                            prefs
+                        }
+                        ConfigManager.refreshFromPrefs(source)
+                        broadcastConfigChanged(context, "com.android.bluetooth")
                     }
 
                     BluetoothAdapter.ACTION_STATE_CHANGED,

@@ -39,6 +39,9 @@ class HookEntry : XposedModule() {
         // value at startup (surviving scope restarts) and on demand. Live updates while running
         // are still delivered by the config broadcast (applyConfigJson).
         hook.prefs = getRemotePreferences("sonypods_settings")
+        // Re-fetchable provider: every call re-reads the framework-backed store so the
+        // engine can correct a startup read that raced the remote-prefs bridge.
+        hook.prefsProvider = { getRemotePreferences("sonypods_settings") }
         Log.d(TAG, "loadHook package=$packageName hook=${hook.javaClass.simpleName}")
         ConfigManager.init(hook.prefs)
         hook.onHook()

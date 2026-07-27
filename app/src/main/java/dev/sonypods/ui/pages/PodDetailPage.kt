@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.PlaybackStatus
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.localizedName

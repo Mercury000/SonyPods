@@ -2,7 +2,7 @@ package dev.sonypods.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.protocol.EqPresetId
 
 /** Localized preset name for UI display; the enum's [EqPresetId.displayName] stays English for logs. */

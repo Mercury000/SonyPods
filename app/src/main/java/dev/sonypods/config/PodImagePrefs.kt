@@ -75,7 +75,11 @@ object PodImagePrefs {
             lastConnectedAt = System.currentTimeMillis(),
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        service?.getRemotePreferences(ConfigManager.PREFS_NAME)?.let { save(it, normalized) }
+        // NOTE: do NOT write earphone image data into remote prefs (ConfigManager.PREFS_NAME).
+        // Remote prefs is the cross-process config store; writing only earphone_prefs_json there
+        // (without config_json) leaves the engine with a null config on every refreshFromPrefs,
+        // causing it to fall back to the default ANC cycle (all three modes) and override the
+        // user's settings. The hook process reads images via ContentProvider, not remote prefs.
         return save(prefs, normalized)
     }
 
@@ -109,7 +113,7 @@ object PodImagePrefs {
             lastConnectedAt = System.currentTimeMillis(),
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        service?.getRemotePreferences(ConfigManager.PREFS_NAME)?.let { save(it, normalized) }
+        // Do NOT write to remote prefs here — see upsertConnected for explanation.
         return save(prefs, normalized)
     }
 
@@ -137,7 +141,7 @@ object PodImagePrefs {
             autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        service?.getRemotePreferences(ConfigManager.PREFS_NAME)?.let { save(it, normalized) }
+        // Do NOT write to remote prefs here — see upsertConnected for explanation.
         return save(prefs, normalized)
     }
 

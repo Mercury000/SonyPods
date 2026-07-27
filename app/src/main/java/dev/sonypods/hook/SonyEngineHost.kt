@@ -61,6 +61,15 @@ object SonyEngineHost {
     @Volatile
     private var prefs: SharedPreferences? = null
 
+    /**
+     * Source of the framework-backed remote-preference store. Re-invoking it always
+     * returns a store reflecting the latest data the LSPosed framework has persisted,
+     * so we prefer this over the single [prefs] captured at package-load (which can race
+     * the remote-prefs bridge and come back empty). See [currentPrefs].
+     */
+    @Volatile
+    private var prefsProvider: (() -> SharedPreferences)? = null
+
     private var started = false
     private var lastSnapshot: SonyStateSnapshot? = null
     private var lastRenderedBattery: BatteryParams? = null
@@ -73,9 +82,12 @@ object SonyEngineHost {
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
 
-    fun start(context: Context, adapterService: Any?, prefs: SharedPreferences? = null) {
+    fun start(context: Context, adapterService: Any?, prefsProvider: (() -> SharedPreferences)? = null) {
         adapterService?.let { this.adapterService = it }
-        prefs?.let { this.prefs = it }
+        prefsProvider?.let { this.prefsProvider = it }
+        // Keep a snapshot of the store for the rare code paths that need a value without
+        // re-fetching; the cycle command and the deferred re-read prefer currentPrefs().
+        this.prefs = prefsProvider?.invoke()
         if (started) return
         val ctx = context.applicationContext ?: context
         appContext = ctx
@@ -88,22 +100,6 @@ object SonyEngineHost {
         }.getOrNull()
         val repo = SonyHeadphoneRepository.getInstance(moduleContext ?: ctx, ctx)
         repository = repo
-
-        // The authoritative, always-written config store is the module app's own
-        // SharedPreferences (sonypods_settings.xml). libxposed 101's getRemotePreferences
-        // is not a reliable cross-process channel in this environment: the hooked side
-        // reads a different (stale) store than the app writes via XposedService, so it
-        // never carries config_json and reverts to defaults after a scope restart. Read
-        // the module's own file directly from the bluetooth process instead. After a
-        // scope restart this process is fresh, so the first read sees the on-disk value.
-        val configPrefs = moduleContext?.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        if (configPrefs != null) {
-            this.prefs = configPrefs
-            ConfigManager.init(configPrefs)
-            Log.d(TAG, "config loaded from module package store")
-        } else {
-            Log.w(TAG, "module context unavailable; config may be stale (remote prefs only)")
-        }
 
         registerCommandReceiver(ctx)
         registerConfigReceiver(ctx)
@@ -135,7 +131,45 @@ object SonyEngineHost {
                     .onFailure { Log.w(TAG, "connection reconcile failed", it) }
             }
         }
+        // Deferred config re-read. The LSPosed remote-prefs bridge may not be ready at
+        // package-load time, so the init read (HookEntry -> ConfigManager.init) can come
+        // back empty and leave cachedConfig at its default (ANC cycle includes OFF). Re-read
+        // a couple of times shortly after start so the persisted cycle config is picked up
+        // even after a scope restart with the module app never opened. Reads are harmless:
+        // the hook-side store is read-only, so this can never clobber the user's config.
+        scope.launch {
+            for (delayMs in listOf(3_000L, 8_000L)) {
+                delay(delayMs)
+                runCatching {
+                    currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
+                    Log.d(TAG, "deferred config re-read done; ancCycleModes=${ConfigManager.ancCycleModes()}")
+                }.onFailure { Log.w(TAG, "deferred config re-read failed", it) }
+            }
+        }
+        // Native remote-preference change listener (canonical libxposed pattern, see
+        // libxposed/example ModuleMainKt). The framework notifies us whenever the app writes
+        // to the shared remote-preference store, so we refresh cachedConfig from the live
+        // store without relying on a custom broadcast. The hook-side store is read-only, but
+        // registering a listener is a read operation and is explicitly supported. This keeps
+        // the engine's config in sync with the app even while the module app is backgrounded.
+        registerRemoteConfigListener()
         Log.d(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
+    }
+
+    @Volatile
+    private var remoteConfigListenerRegistered = false
+
+    private fun registerRemoteConfigListener() {
+        if (remoteConfigListenerRegistered) return
+        val p = currentPrefs() ?: return
+        remoteConfigListenerRegistered = true
+        p.registerOnSharedPreferenceChangeListener { _, _ ->
+            runCatching {
+                currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
+                Log.d(TAG, "remote config changed; refreshed; ancCycleModes=${ConfigManager.ancCycleModes()}")
+            }.onFailure { Log.w(TAG, "remote config change refresh failed", it) }
+        }
+        Log.d(TAG, "remote config change listener registered")
     }
 
     fun onAdapterService(service: Any?) {
@@ -260,6 +294,16 @@ object SonyEngineHost {
     /** Latest known state; hooks render system surfaces from this. */
     fun snapshot(): SonyStateSnapshot = lastSnapshot ?: SonyStateSnapshot()
 
+    /**
+     * The live framework-backed remote-preference store. Re-invoking [prefsProvider]
+     * returns a store reflecting the latest persisted data, correcting any startup read
+     * that raced the LSPosed remote-prefs bridge and came back empty (leaving the cached
+     * config at its default, which includes OFF in the ANC cycle). Falls back to the
+     * package-load snapshot when no provider is wired.
+     */
+    private fun currentPrefs(): SharedPreferences? =
+        runCatching { prefsProvider?.invoke() }.getOrNull() ?: prefs
+
     // ── Commands ──
 
     private fun registerCommandReceiver(context: Context) {
@@ -283,9 +327,16 @@ object SonyEngineHost {
      * Apply config pushed from the app by value. The app attaches the full serialized
      * [dev.sonypods.config.AppConfig] to [SonyPodsAction.ACTION_CONFIG_CHANGED]; we apply
      * it directly to the shared [ConfigManager] cache so changes made in the app (e.g. ANC
-     * cycle modes) take effect in the engine without relying on remote-preferences
-     * propagation. Falls back to reading the remote prefs when no JSON payload is present
-     * (older app builds).
+     * cycle modes) take effect in the engine immediately. The persisted authority at startup
+     * is the remote-preference store (HookEntry -> ConfigManager.init); live updates arrive
+     * here by value.
+     *
+     * NOTE: this receiver must NOT write back to remote prefs. In the hooked process
+     * `XposedModule.getRemotePreferences(...)` is **read-only** — calling `.edit()` on it
+     * throws `UnsupportedOperationException: Read only implementation`, which (uncaught in
+     * onReceive) kills the `com.android.bluetooth` main thread and drops the Bluetooth link.
+     * Durability across a scope restart comes solely from the app process writing the config
+     * via `XposedService.getRemotePreferences` (which is writable); the engine only reads it.
      */
     private fun registerConfigReceiver(context: Context) {
         if (configReceiverRegistered) return
@@ -295,16 +346,8 @@ object SonyEngineHost {
                 object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
-                        val json = intent.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON)
-                        if (json != null) {
-                            ConfigManager.applyConfigJson(json)
-                        } else {
-                            // No JSON payload (older app build): the live config in
-                            // cachedConfig is already authoritative (set at engine start
-                            // from the module's own SharedPreferences, kept current by
-                            // broadcasts that carry JSON), so do not clobber it.
-                            Log.d(TAG, "config push without JSON; keeping current cache")
-                        }
+                        val json = intent.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON) ?: return
+                        ConfigManager.applyConfigJson(json)
                     }
                 },
                 IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED),
@@ -327,11 +370,18 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
-                // cachedConfig is the authority: set at engine start from the module's own
-                // SharedPreferences (always written by the app) and kept live by the
-                // ACTION_CONFIG_CHANGED broadcast. Re-reading the hooked-side remote prefs
-                // here would revert live changes to a stale default, so we use cachedConfig.
+                // IMPORTANT: do NOT call currentPrefs()?.let { refreshFromPrefs(it) } here.
+                // XposedModule.getRemotePreferences() in the hooked process (com.android.bluetooth)
+                // returns a SharedPreferences backed by *that process's own* data directory —
+                // it is NOT the module app's store. In practice it always returns an empty object
+                // (class=a1, keys=[]), so reading it clobbers the config that applyConfigJson
+                // already delivered correctly via broadcast. The live config in cachedConfig is
+                // authoritative; trust it without re-reading.
                 val enabledNames = ConfigManager.ancCycleModes()
+                // Build the ordered cycle from the user's chosen subset.
+                // .ifEmpty fallback only fires when cachedConfig itself has no valid mode names
+                // (genuine corruption / first boot before any config broadcast), never for a
+                // normal two-mode subset like [NC, ASM].
                 val cycle = ConfigManager.ANC_CYCLE_MODE_ORDER
                     .filter { it in enabledNames }
                     .mapNotNull { name -> NoiseControlMode.entries.firstOrNull { it.name == name } }

@@ -12,7 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import dev.sonypods.R
+import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.ui.dialogs.AncCycleModesDialog

@@ -1,4 +1,5 @@
 package dev.sonypods
+import com.mercury.sonypods.R
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice

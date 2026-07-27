@@ -1,4 +1,5 @@
 package dev.sonypods.hook
+import com.mercury.sonypods.R
 
 import android.annotation.SuppressLint
 import android.app.StatusBarManager
@@ -10,7 +11,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
-import dev.sonypods.BuildConfig
+import com.mercury.sonypods.BuildConfig
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 
@@ -26,7 +27,7 @@ object HeadsetStateDispatcher : HookContext() {
             hookAfter(findMethod("com.android.bluetooth.btservice.AdapterService", "onCreate")) {
                 val context = instance as? Context
                 SonyEngineHost.onAdapterService(instance)
-                if (context != null) SonyEngineHost.start(context, instance, prefs)
+                if (context != null) SonyEngineHost.start(context, instance, prefsProvider)
                 registerAppRequestReceiver(context)
                 registerAclReceiver(context)
             }
@@ -44,7 +45,7 @@ object HeadsetStateDispatcher : HookContext() {
             }
             handler.post {
                 val context = instance as ContextWrapper
-                SonyEngineHost.start(context, null, prefs)
+                SonyEngineHost.start(context, null, prefsProvider)
                 registerAppRequestReceiver(context)
                 if (!isSonyPod(device)) return@post
 

@@ -12,6 +12,15 @@ abstract class HookContext {
     lateinit var module: XposedModule
     lateinit var appClassLoader: ClassLoader
     lateinit var prefs: SharedPreferences
+    /**
+     * Re-fetchable source of the framework-backed remote-preference store.
+     * `SharedPreferences` objects handed out by `XposedModule.getRemotePreferences(...)`
+     * are snapshots taken at call time; re-invoking the provider always returns a store
+     * reflecting the latest data the LSPosed framework has on disk. The engine uses this
+     * (instead of the single [prefs] instance captured at package-load) so a cold read that
+     * raced the framework bridge is corrected by a later re-read.
+     */
+    lateinit var prefsProvider: () -> SharedPreferences
     lateinit var packageName: String
 
     abstract fun onHook()

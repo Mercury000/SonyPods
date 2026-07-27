@@ -31,8 +31,8 @@ import io.github.libxposed.service.XposedService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import dev.sonypods.BuildConfig
-import dev.sonypods.R
+import com.mercury.sonypods.BuildConfig
+import com.mercury.sonypods.R
 import dev.sonypods.ui.components.AppIcons
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
