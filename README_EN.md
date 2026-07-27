@@ -54,5 +54,5 @@ The protocol layer is based on OpenBuds' clean-room Sony Tandem implementation
 
 ### Credits
 
-- [OppoPods](https://github.com/1812z/OppoPods) — HyperOS system-integration shell
-- OpenBuds — Sony Tandem protocol stack
+- [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
+- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Sony Tandem 协议栈来源

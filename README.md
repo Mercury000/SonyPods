@@ -53,5 +53,5 @@ OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 
 ### 致谢
 
-- [OppoPods](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
-- OpenBuds — Sony Tandem 协议栈来源
+- [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
+- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Sony Tandem 协议栈来源
