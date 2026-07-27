@@ -51,7 +51,6 @@ private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
-private const val PLAYBACK_HEARTBEAT_INTERVAL_MS = 30_000L
 
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
@@ -188,10 +187,8 @@ class SonyHeadphoneRepository private constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
-    private val playbackHeartbeatRunnable = Runnable { sendPlaybackHeartbeat() }
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
-    private var playbackHeartbeatActive = false
 
     val state: StateFlow<SonyHeadphoneUiState> = _state.asStateFlow()
 
@@ -567,7 +564,6 @@ class SonyHeadphoneRepository private constructor(
         if (!connected) {
             clearPendingPlaybackTransition()
             mainHandler.removeCallbacks(playbackRefreshRunnable)
-            stopPlaybackHeartbeat()
         }
         _state.update {
             val deviceInfo = if (connected) {
@@ -852,50 +848,11 @@ class SonyHeadphoneRepository private constructor(
     private fun schedulePlaybackStateRefresh() {
         mainHandler.removeCallbacks(playbackRefreshRunnable)
         mainHandler.postDelayed(playbackRefreshRunnable, PLAYBACK_REFRESH_AFTER_COMMAND_MS)
-        // Reset heartbeat timer to avoid querying right after a command-triggered refresh
-        if (playbackHeartbeatActive) {
-            mainHandler.removeCallbacks(playbackHeartbeatRunnable)
-            mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-        }
     }
 
     private fun schedulePlaybackStateReconcile() {
         mainHandler.removeCallbacks(playbackReconcileRunnable)
         mainHandler.postDelayed(playbackReconcileRunnable, PLAYBACK_RECONCILE_AFTER_COMMAND_MS)
-    }
-
-    private fun sendPlaybackHeartbeat() {
-        if (!playbackHeartbeatActive) return
-        if (_state.value.playbackStatus != PlaybackStatus.PLAYING) {
-            stopPlaybackHeartbeat()
-            return
-        }
-        if (!_state.value.deviceInfo.protocolReady) return
-        appendLog("Playback heartbeat: GET playback status")
-        refreshPlaybackState()
-        mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-    }
-
-    private fun startPlaybackHeartbeat() {
-        if (playbackHeartbeatActive) return
-        if (!shouldUseTandemPlaybackStatus()) return
-        playbackHeartbeatActive = true
-        appendLog("Playback heartbeat started (interval=${PLAYBACK_HEARTBEAT_INTERVAL_MS}ms)")
-        mainHandler.postDelayed(playbackHeartbeatRunnable, PLAYBACK_HEARTBEAT_INTERVAL_MS)
-    }
-
-    private fun stopPlaybackHeartbeat() {
-        if (!playbackHeartbeatActive) return
-        playbackHeartbeatActive = false
-        mainHandler.removeCallbacks(playbackHeartbeatRunnable)
-        appendLog("Playback heartbeat stopped")
-    }
-
-    private fun maybeStartPlaybackHeartbeat(status: PlaybackStatus) {
-        when (status) {
-            PlaybackStatus.PLAYING -> startPlaybackHeartbeat()
-            else -> stopPlaybackHeartbeat()
-        }
     }
 
     private fun clearPendingPlaybackTransition() {
@@ -1054,7 +1011,6 @@ class SonyHeadphoneRepository private constructor(
                     return
                 }
                 _state.update { it.copy(playbackStatus = status) }
-                maybeStartPlaybackHeartbeat(status)
                 return
             }
             pendingPlaybackStatus = null
@@ -1076,7 +1032,6 @@ class SonyHeadphoneRepository private constructor(
         }
 
         _state.update { it.copy(playbackStatus = status) }
-        maybeStartPlaybackHeartbeat(status)
     }
 
     private fun ensureConnectedProfile(): ConnectedHeadphoneProfile {
