@@ -383,6 +383,19 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
+    fun parser_batteryNtfy0x09_mapsToLeftRight() {
+        // 0x09 extended battery NTFY uses the LEFT_RIGHT 2-byte layout.
+        // left = 0x52 0x00 = 82, right = 0x49 0x00 = 73.
+        val raw = byteArrayOf(0x0E, 0x25, 0x09, 0x52, 0x00, 0x49, 0x00, 0x64, 0x64)
+        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.Battery)
+        parsed as ParsedTandemResponse.Battery
+        assertEquals(PowerInquiredType.LEFT_RIGHT_BATTERY, parsed.kind)
+        assertEquals(listOf(82, 73), parsed.values)
+    }
+
+    @Test
     fun parser_sppPayloadWithoutDataType_isNormalized() {
         val raw = byteArrayOf(0x23, 0x02, 90.toByte(), 0x00)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)

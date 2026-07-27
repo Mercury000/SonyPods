@@ -202,7 +202,12 @@ object SonyTandemV1Table1Protocol {
 
     private fun parseBattery(payload: ByteArray, raw: ByteArray): ParsedTandemResponse.Battery {
         val kind = payload.firstOrNull()?.let { code ->
-            PowerInquiredType.entries.firstOrNull { it.code == code }
+            // 0x09 is an extended battery NTFY (LEFT_RIGHT layout, 2-byte values) that
+            // some devices push unsolicited on per-bud connect/disconnect. It is not in
+            // the PowerInquiredType enum, so map it to LEFT_RIGHT_BATTERY so the engine
+            // updates left/right (and sees a disconnected bud as 0 -> null).
+            if (code == 0x09.toByte()) PowerInquiredType.LEFT_RIGHT_BATTERY
+            else PowerInquiredType.entries.firstOrNull { it.code == code }
         }
         // Keep position: a null (sentinel or absent slot) stays in its place so the
         // engine can tell which bud is disconnected, instead of listOfNotNull silently
