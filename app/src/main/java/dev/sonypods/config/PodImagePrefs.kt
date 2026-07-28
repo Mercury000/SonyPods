@@ -3,11 +3,13 @@ package dev.sonypods.config
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import android.util.Log
 import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
 
 enum class PodImageResource(val fileSuffix: String) {
     BOX("box"),
@@ -34,6 +36,7 @@ data class EarphonePref(
 }
 
 object PodImagePrefs {
+    private const val TAG = "SonyPods-PodImage"
     const val AUTHORITY = "com.mercury.sonypods.podimages"
     const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
@@ -75,12 +78,14 @@ object PodImagePrefs {
             lastConnectedAt = System.currentTimeMillis(),
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        // NOTE: do NOT write earphone image data into remote prefs (ConfigManager.PREFS_NAME).
-        // Remote prefs is the cross-process config store; writing only earphone_prefs_json there
-        // (without config_json) leaves the engine with a null config on every refreshFromPrefs,
-        // causing it to fall back to the default ANC cycle (all three modes) and override the
-        // user's settings. The hook process reads images via ContentProvider, not remote prefs.
-        return save(prefs, normalized)
+        // Publish earphone metadata to BOTH local prefs and the framework-backed remote
+        // prefs. The hook process (com.android.bluetooth / com.xiaomi.bluetooth) reads
+        // earphone_prefs_json from remote prefs to resolve which image belongs to which
+        // device address — without it, PodImagePrefs.find returns null and the notification
+        // falls back to the stock image. This is safe now that config_json is written to
+        // remote prefs separately (ConfigManager.writeRemoteConfig); readConfig never reads
+        // earphone_prefs_json, so it cannot default the engine config.
+        return saveBoth(prefs, service, normalized)
     }
 
     fun saveImages(
@@ -101,7 +106,7 @@ object PodImagePrefs {
         }
         selectedImages.forEach { (resource, uri) ->
             if (uri != null) {
-                updated = updated.withImagePath(resource, copyImage(context, address, resource, uri))
+                updated = updated.withImagePath(resource, copyImage(context, service, address, resource, uri))
             }
         }
         // The box image is now user-managed: stop treating it as auto-downloaded.
@@ -113,8 +118,7 @@ object PodImagePrefs {
             lastConnectedAt = System.currentTimeMillis(),
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        // Do NOT write to remote prefs here — see upsertConnected for explanation.
-        return save(prefs, normalized)
+        return saveBoth(prefs, service, normalized)
     }
 
     fun saveImageBytes(
@@ -132,7 +136,7 @@ object PodImagePrefs {
         var updated = existing ?: EarphonePref(address = address, name = name)
         images.forEach { (resource, bytes) ->
             if (bytes.isNotEmpty()) {
-                updated = updated.withImagePath(resource, copyImage(context, address, resource, bytes))
+                updated = updated.withImagePath(resource, copyImage(context, service, address, resource, bytes))
             }
         }
         updated = updated.copy(
@@ -141,8 +145,7 @@ object PodImagePrefs {
             autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        // Do NOT write to remote prefs here — see upsertConnected for explanation.
-        return save(prefs, normalized)
+        return saveBoth(prefs, service, normalized)
     }
 
     private fun save(prefs: SharedPreferences, earphones: List<EarphonePref>): List<EarphonePref> {
@@ -153,30 +156,105 @@ object PodImagePrefs {
         return normalized
     }
 
+    /**
+     * Persist earphone metadata to local prefs AND the framework-backed remote-prefs store.
+     * The hook process reads earphone_prefs_json from remote prefs to resolve per-device
+     * images; without the remote write it would only see stale/empty metadata and fall back
+     * to the stock image in the notification/island. See [upsertConnected] for why this is
+     * safe alongside config_json.
+     */
+    private fun saveBoth(
+        prefs: SharedPreferences,
+        service: XposedService?,
+        earphones: List<EarphonePref>,
+    ): List<EarphonePref> {
+        val normalized = save(prefs, earphones)
+        runCatching {
+            service?.getRemotePreferences(ConfigManager.PREFS_NAME)
+                ?.edit()
+                ?.putString(PREF_KEY_EARPHONES, json.encodeToString(ListSerializer(EarphonePref.serializer()), normalized))
+                ?.apply()
+        }.onFailure { Log.w(TAG, "saveBoth: remote prefs write failed", it) }
+        return normalized
+    }
+
+    private fun imageFileName(address: String, resource: PodImageResource): String =
+        "${address.safeFileName()}_${resource.fileSuffix}.img"
+
+    /**
+     * Write image bytes to the libxposed Remote Files store (the module's shared data dir)
+     * so the hook process can read them via [io.github.libxposed.api.XposedInterface.openRemoteFile]
+     * without depending on the PodImageProvider ContentProvider (which is unreachable from
+     * com.android.bluetooth / com.xiaomi.bluetooth before user unlock, and fragile cross-process).
+     * Returns true on success. Truncates to the exact byte count so a smaller replacement image
+     * cannot leave a stale tail from a previous larger one with the same filename.
+     */
+    private fun writeBytesToRemote(s: XposedService, name: String, bytes: ByteArray): Boolean {
+        return runCatching {
+            s.openRemoteFile(name).use { pfd ->
+                FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) }
+                // openRemoteFile may not truncate on open; chop any leftover tail.
+                runCatching { android.system.Os.ftruncate(pfd.fileDescriptor, bytes.size.toLong()) }
+            }
+            true
+        }.onFailure { Log.w(TAG, "writeBytesToRemote failed for $name", it) }.getOrDefault(false)
+    }
+
+    private fun writeImageToRemote(service: XposedService?, name: String, bytes: ByteArray) {
+        val s = service ?: return
+        writeBytesToRemote(s, name, bytes)
+    }
+
+    /**
+     * One-time migration: copy any pod images that exist only in the module's local filesDir
+     * into the Remote Files store, so the hook process can read images saved before this
+     * refactor. Call from [dev.sonypods.SonyPodsApp.onServiceBind]. Idempotent.
+     */
+    fun migrateImagesToRemote(context: Context, service: XposedService?) {
+        val s = service ?: return
+        val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        var migrated = 0
+        load(prefs).forEach { earphone ->
+            PodImageResource.entries.forEach { res ->
+                val path = earphone.imagePath(res) ?: return@forEach
+                val file = File(path)
+                if (!file.isFile) return@forEach
+                val bytes = runCatching { file.readBytes() }.getOrNull() ?: return@forEach
+                if (writeBytesToRemote(s, file.name, bytes)) migrated++
+            }
+        }
+        Log.d(TAG, "migrateImagesToRemote: migrated $migrated file(s)")
+    }
+
     private fun copyImage(
         context: Context,
+        service: XposedService?,
         address: String,
         resource: PodImageResource,
         uri: Uri,
     ): String {
         val dir = imageDir(context)
-        val file = File(dir, "${address.safeFileName()}_${resource.fileSuffix}.img")
-        context.contentResolver.openInputStream(uri).use { input ->
+        val file = File(dir, imageFileName(address, resource))
+        val bytes = context.contentResolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Unable to open image uri: $uri" }
-            file.outputStream().use { output -> input.copyTo(output) }
+            input.readBytes()
         }
+        file.writeBytes(bytes)
+        writeImageToRemote(service, file.name, bytes)
         return file.absolutePath
     }
 
     private fun copyImage(
         context: Context,
+        service: XposedService?,
         address: String,
         resource: PodImageResource,
         bytes: ByteArray,
     ): String {
         val dir = imageDir(context)
-        val file = File(dir, "${address.safeFileName()}_${resource.fileSuffix}.img")
+        val file = File(dir, imageFileName(address, resource))
         file.writeBytes(bytes)
+        writeImageToRemote(service, file.name, bytes)
         return file.absolutePath
     }
 

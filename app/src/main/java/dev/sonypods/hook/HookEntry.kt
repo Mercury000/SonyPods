@@ -6,6 +6,7 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.hook.milink.MiLinkServiceHook
+import dev.sonypods.utils.PodImageLoader
 
 class HookEntry : XposedModule() {
     private val TAG = "SonyPods-HookEntry"
@@ -45,5 +46,21 @@ class HookEntry : XposedModule() {
         Log.d(TAG, "loadHook package=$packageName hook=${hook.javaClass.simpleName}")
         ConfigManager.init(hook.prefs)
         hook.onHook()
+        // Wire the hook-side Remote Files image reader so the notification/island (rendered
+        // in com.android.bluetooth / com.xiaomi.bluetooth) can read pod images via libxposed
+        // Remote Files (openRemoteFile) instead of the cross-process PodImageProvider
+        // ContentProvider, which is unreachable before user unlock and fragile cross-process.
+        // openRemoteFile is read-only on the hook side and throws FileNotFoundException when
+        // the file is absent; both are swallowed into null by runCatching, falling back to the
+        // ContentProvider / stock image inside PodImageLoader.loadCustom.
+        PodImageLoader.remoteImageReader = { name ->
+            runCatching {
+                hook.module.openRemoteFile(name).use { pfd ->
+                    java.io.FileInputStream(pfd.fileDescriptor).use {
+                        android.graphics.BitmapFactory.decodeStream(it)
+                    }
+                }
+            }.getOrNull()
+        }
     }
 }

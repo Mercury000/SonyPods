@@ -3,6 +3,7 @@ package dev.sonypods
 import android.app.Application
 import android.util.Log
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.PodImagePrefs
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArraySet
@@ -24,6 +25,10 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // Flush any config that was saved while the service was unavailable, so the
         // engine's remote-prefs store is authoritative and survives a scope restart.
         ConfigManager.flushPendingRemote(service)
+        // Migrate any pod images that exist only in local filesDir into the Remote Files
+        // store, so the hook process can read them via openRemoteFile. Idempotent; runs on
+        // every bind but only writes files that are present locally.
+        PodImagePrefs.migrateImagesToRemote(this, service)
     }
 
     override fun onServiceDied(service: XposedService) {
