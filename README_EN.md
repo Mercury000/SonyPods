@@ -43,7 +43,7 @@ The protocol layer is based on OpenBuds' clean-room Sony Tandem implementation
 ### Usage
 
 1. Install the APK, enable the module in LSPosed with scopes:
-   `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`
+   `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`, `com.android.settings`
 2. Restart the scopes (one-tap root restart inside the app)
 3. Open the app, grant Bluetooth / notification permissions, connect your Sony headphones
 
