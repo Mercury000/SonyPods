@@ -71,7 +71,7 @@
         <!-- Set your Xposed Module description -->
         <meta-data
             android:name="xposeddescription"
-            android:value="Sony Headphones Support for Xiaomi HyperOS." />
+            android:value="为 HyperOS 设备提供系统级 Sony 耳机控制" />
 
         <!-- The minimum Xposed version number -->
         <meta-data
