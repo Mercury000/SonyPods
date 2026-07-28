@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SonyPods</string>
+    <string name="app_description">为 HyperOS 设备提供系统级 Sony 耳机控制</string>
     <string name="app_subtitle">Sony 耳机适配 HyperOS</string>
     <string name="pod_info">耳机信息</string>
     <string name="about">关于 SonyPods</string>
