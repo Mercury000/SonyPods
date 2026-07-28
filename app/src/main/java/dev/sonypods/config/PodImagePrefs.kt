@@ -40,6 +40,7 @@ object PodImagePrefs {
     const val AUTHORITY = "com.mercury.sonypods.podimages"
     const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
+    private const val PREF_KEY_IMAGES_MIGRATED = "pod_images_migrated"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -208,11 +209,16 @@ object PodImagePrefs {
     /**
      * One-time migration: copy any pod images that exist only in the module's local filesDir
      * into the Remote Files store, so the hook process can read images saved before this
-     * refactor. Call from [dev.sonypods.SonyPodsApp.onServiceBind]. Idempotent.
+     * refactor. Call from [dev.sonypods.SonyPodsApp.onServiceBind].
+     * Skipped if already migrated.
      */
     fun migrateImagesToRemote(context: Context, service: XposedService?) {
         val s = service ?: return
         val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_KEY_IMAGES_MIGRATED, false)) {
+            Log.d(TAG, "migrateImagesToRemote: already migrated, skipping")
+            return
+        }
         var migrated = 0
         load(prefs).forEach { earphone ->
             PodImageResource.entries.forEach { res ->
@@ -223,6 +229,7 @@ object PodImagePrefs {
                 if (writeBytesToRemote(s, file.name, bytes)) migrated++
             }
         }
+        prefs.edit().putBoolean(PREF_KEY_IMAGES_MIGRATED, true).apply()
         Log.d(TAG, "migrateImagesToRemote: migrated $migrated file(s)")
     }
 

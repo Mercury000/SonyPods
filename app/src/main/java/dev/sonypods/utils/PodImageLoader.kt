@@ -7,7 +7,6 @@ import android.graphics.BitmapFactory
 import com.mercury.sonypods.R
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
-import dev.sonypods.config.imageUri
 import java.io.File
 
 object PodImageLoader {
@@ -55,9 +54,9 @@ object PodImageLoader {
 
     /**
      * Resolve a user-configured image for [address], trying each [resources] in order.
-     * In a hooked process the Remote Files reader is tried first (cold-safe, no
-     * ContentProvider); in the module app process (or on a remote-file miss) it falls back
-     * to the PodImageProvider ContentProvider. Returns null if no custom image is available.
+     * In a hooked process the Remote Files reader is tried first (cold-safe).
+     * In the module app process (or on a remote-file miss) it falls back to the local file
+     * directly. Returns null if no custom image is available.
      */
     private fun loadCustom(
         context: Context,
@@ -69,11 +68,11 @@ object PodImageLoader {
         val reader = remoteImageReader
         for (res in resources) {
             val path = earphone.imagePath(res) ?: continue
-            val fileName = File(path).name
+            val file = File(path)
             if (reader != null) {
-                runCatching { reader(fileName) }.getOrNull()?.let { return it }
+                runCatching { reader(file.name) }.getOrNull()?.let { return it }
             }
-            runCatching { earphone.imageUri(res)?.let { uri -> decodeUri(context, uri) } }.getOrNull()?.let { return it }
+            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()?.let { return it }
         }
         return null
     }
@@ -105,11 +104,4 @@ object PodImageLoader {
         )
     }
 
-    private fun decodeUri(context: Context, uri: android.net.Uri): Bitmap? {
-        return runCatching {
-            context.contentResolver.openInputStream(uri).use { input ->
-                input?.let { BitmapFactory.decodeStream(it) }
-            }
-        }.getOrNull()
-    }
 }
