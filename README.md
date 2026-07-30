@@ -15,11 +15,14 @@
 为小米 HyperOS 设备提供系统级 Sony 耳机控制的 Xposed 模块。协议层基于
 OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 
-### 支持型号（首批）
+### 支持型号
 
-- Sony WH-1000XM4
-- Sony LinkBuds S
-- Sony WF-1000XM5
+- WH-1000XM4
+- WF-1000XM4
+- WF-1000XM5
+- WH-1000XM5
+- LinkBuds S
+- LinkBuds Fit
 
 ### 耳机功能
 
