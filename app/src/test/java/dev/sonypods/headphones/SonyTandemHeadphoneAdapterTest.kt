@@ -307,6 +307,68 @@ class SonyTandemHeadphoneAdapterTest {
     }
 
     @Test
+    fun match_wf1000Xm4_usesV2Table1AndTrueWirelessBattery() {
+        val profile = SonyTandemHeadphoneAdapter.match(
+            DiscoveredSonyDevice(
+                name = "WF-1000XM4",
+                address = "F8:4E:17:9A:3C:0D",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            ),
+        )!!
+
+        assertEquals("WF-1000XM4", profile.modelName)
+        assertEquals("PREMIUM", profile.series)
+        assertEquals(HeadphoneFormFactor.TRUE_WIRELESS, profile.capabilities.formFactor)
+        assertEquals(
+            listOf(PowerInquiredType.LEFT_RIGHT_BATTERY, PowerInquiredType.CRADLE_BATTERY),
+            profile.capabilities.batteryQueries,
+        )
+        assertEquals(
+            listOf(NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS),
+            profile.capabilities.noiseControlQueryTypes,
+        )
+        // WF-1000XM4 is V2_TABLE1: uses 0x15 (auto-NC + ambient-level) NC/ASM.
+        assertEquals(
+            HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            profile.protocolFor(HeadphoneFeature.NOISE_CONTROL),
+        )
+        // 入耳式: LEA / quick-access / wearing-status 能力齐全。
+        assertTrue(profile.supports(HeadphoneFeature.AMBIENT_VOICE_MODE))
+        assertTrue(profile.supports(HeadphoneFeature.LEA_STATUS))
+        assertTrue(profile.supports(HeadphoneFeature.QUICK_ACCESS))
+        assertTrue(profile.supports(HeadphoneFeature.WEARING_STATUS))
+    }
+
+    @Test
+    fun setNoiseControl_wf1000Xm4_emitsCaptureExactV2Bytes() {
+        val profile = SonyTandemHeadphoneAdapter.match(
+            DiscoveredSonyDevice(
+                name = "WF-1000XM4",
+                address = "F8:4E:17:9A:3C:0D",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            ),
+        )!!
+        // Ground truth: btsnoop_hci_260730_113943.log `68 15 01 01 01 02 01 10`
+        // (ASM, level 16). 0x15 layout has no voice slot, so ambientMode is ignored.
+        val commands = SonyTandemHeadphoneAdapter.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.AMBIENT_SOUND,
+            ambientLevel = 16,
+            ambientMode = AmbientSoundMode.NORMAL,
+        )
+
+        assertEquals(1, commands.size)
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x15, 0x01, 0x01, 0x01, 0x02, 0x01, 0x10),
+            commands.single().bytes,
+        )
+    }
+
+    @Test
     fun parse_xm4TableSet1NcAsmResponse_routesViaV1_returnsNoiseControl() {
         val profile = SonyTandemHeadphoneAdapter.match(xm4Device(), "WH-1000XM4")!!
         // 0x67 = NCASM_RET_PARAM, 0x02 = V1_TABLE_SET1_NC_ASM type
