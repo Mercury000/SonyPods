@@ -251,6 +251,91 @@ class SonyTandemV2Table1ProtocolTest {
         }
     }
 
+    // ── 0x19 MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA (LinkBuds Fit) ──
+    // Ground truth: btsnoop_hci_260730_125322.log, official controller frames
+    // `68 19 01 01 01 00 0a 00 00` (ambient) / `68 19 01 00 01 00 0a 00 00` (off),
+    // initial RETP `67 19 01 01 00 00 0a 00 00` (on+NC); headphone echoes the
+    // identical layout in 0x67/0x69 responses.
+
+    @Test
+    fun ncAsmSetParam_naAmbient_matchesLinkBudsFitCapture() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 10,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_naNoiseCancelling_matchesLinkBudsFitCapture() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x00, 0x00, 0x0A, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(
+                NoiseControlMode.NOISE_CANCELLING,
+                ambientLevel = 10,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_naOff_zeroesEffectAndMode() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(NoiseControlMode.OFF),
+        )
+    }
+
+    @Test
+    fun parser_naRetParam_noiseCancelling_parsesFromLinkBudsFitCapture() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x67, 0x19, 0x01, 0x01, 0x00, 0x00, 0x0A, 0x00, 0x00)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA, parsed.type)
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, parsed.controlMode)
+        assertEquals(10, parsed.ambientLevel)
+        assertEquals(true, parsed.enabled)
+        assertEquals(false, parsed.ambientSoundEnabled)
+    }
+
+    @Test
+    fun parser_naNotify_ambient_parsesFromLinkBudsFitCapture() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x00, 0x00)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.AMBIENT_SOUND, parsed.controlMode)
+        assertEquals(10, parsed.ambientLevel)
+        assertEquals(true, parsed.ambientSoundEnabled)
+        assertEquals(false, parsed.enabled)
+    }
+
+    @Test
+    fun parser_naNotify_off_parsesEffectOff() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x19, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.OFF, parsed.controlMode)
+    }
+
+    @Test
+    fun ncAsmSetParam_na_roundTripsThroughParserForAllModes() {
+        listOf(
+            NoiseControlMode.OFF,
+            NoiseControlMode.NOISE_CANCELLING,
+            NoiseControlMode.AMBIENT_SOUND,
+        ).forEach { mode ->
+            val command = SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(mode, ambientLevel = 10)
+            val echoed = command.copyOf().also { it[1] = 0x69 }
+            val response = SonyTandemV2Table1Protocol.parse(echoed) as ParsedTandemResponse.NoiseControl
+
+            assertEquals(mode, response.controlMode)
+        }
+    }
+
     @Test
     fun ncAsmGetParam_tableSet1_matchesOfficialXm4Capture() {
         assertArrayEquals(

@@ -1,6 +1,7 @@
 package dev.sonypods.headphones
 
 import dev.sonypods.ble.DiscoveredSonyDevice
+import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
@@ -159,6 +160,59 @@ class SonyTandemHeadphoneAdapterTest {
         )
         assertEquals(listOf(EqEbbInquiredType.PRESET_EQ), profile.capabilities.eqConfig.statusQueryTypes)
         assertEquals(listOf(EqEbbInquiredType.PRESET_EQ), profile.capabilities.eqConfig.paramQueryTypes)
+    }
+
+    @Test
+    fun match_linkBudsFit_usesNaNoiseControlAndTrueWirelessBattery() {
+        val profile = HeadphoneAdapterRegistry.resolve(
+            DiscoveredSonyDevice(
+                name = "LinkBuds Fit",
+                address = "80:99:E7:DC:79:6E",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            )
+        )
+
+        assertEquals("LinkBuds Fit", profile.modelName)
+        assertEquals(HeadphoneFormFactor.TRUE_WIRELESS, profile.capabilities.formFactor)
+        assertEquals(
+            listOf(NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA),
+            profile.capabilities.noiseControlQueryTypes,
+        )
+        assertEquals(
+            listOf(
+                PowerInquiredType.LEFT_RIGHT_BATTERY,
+                PowerInquiredType.CRADLE_BATTERY,
+            ),
+            profile.capabilities.batteryQueries,
+        )
+    }
+
+    @Test
+    fun setNoiseControl_linkBudsFit_emitsCaptureExactNaBytes() {
+        val profile = SonyTandemHeadphoneAdapter.match(
+            DiscoveredSonyDevice(
+                name = "LinkBuds Fit",
+                address = "80:99:E7:DC:79:6E",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            )
+        )!!
+        val commands = SonyTandemHeadphoneAdapter.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.AMBIENT_SOUND,
+            ambientLevel = 10,
+            ambientMode = AmbientSoundMode.NORMAL,
+        )
+
+        assertEquals(1, commands.size)
+        // Ground truth: btsnoop_hci_260730_125322.log `68 19 01 01 01 00 0a 00 00`.
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x00, 0x00),
+            commands.single().bytes,
+        )
     }
 
     @Test

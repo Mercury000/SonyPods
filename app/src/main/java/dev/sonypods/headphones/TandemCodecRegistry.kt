@@ -257,6 +257,8 @@ object SonyTandemV2Table1Codec : TandemCodec {
                 SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, type)
             NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                 SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode)
+            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA ->
+                SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(mode, ambientLevel, ambientMode)
             else -> null
         }
 

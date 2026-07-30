@@ -75,6 +75,22 @@ object SonyTandemV2Table1Protocol {
     private const val AUTO_NC_SETTING_TYPE: Byte = 0x02
     private const val AUTO_ASM_SETTING_TYPE: Byte = 0x01
 
+    // Setting-type constants for inquired type 0x19
+    // (MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA, LinkBuds Fit).
+    // Ground truth from a LinkBuds Fit (fw 1.5.1) btsnoop capture
+    // (btsnoop_hci_260730_125322.log, official controller traffic).
+    // Param layout is 8 bytes:
+    //   [0]=0x19 type, [1]=0x01 VALUE_CHANGED,
+    //   [2]=ncAsmEffect  (0x00=off, 0x01=on)          <- total on/off switch
+    //   [3]=ncAsmMode    (0x00=NC,  0x01=AMBIENT)     <- only valid when [2]=on
+    //   [4]=0x00 (suspected voice-passthrough flag; unverified, constant in capture)
+    //   [5]=ambientLevel (1-20, sent as-is; capture used the default 0x0A=10)
+    //   [6]=0x00, [7]=0x00 (constant, suspected NA/noise-adaptive fields)
+    // Captured frames: ambient `68 19 01 01 01 00 0a 00 00`,
+    // off `68 19 01 00 01 00 0a 00 00`, initial RETP `67 19 01 01 00 00 0a 00 00`
+    // (on+NC); headphone echoes the identical layout in 0x67/0x69 responses.
+    private const val NA_RESERVED: Byte = 0x00
+
     fun buildGetProtocolInfo(): ByteArray =
         SonyTandemFrame.message(CONNECT_GET_PROTOCOL_INFO)
 
@@ -148,6 +164,11 @@ object SonyTandemV2Table1Protocol {
         if (type == NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS) {
             return buildSetAutoNcModeSwitchAndAmbientLevel(controlMode, ambientLevel, ambientMode)
         }
+        // Inquired type 0x19 (LinkBuds Fit) uses an 8-byte param layout; see the
+        // dedicated builder for the byte-exact capture reference.
+        if (type == NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA) {
+            return buildSetDualNcAsmSeamlessNa(controlMode, ambientLevel, ambientMode)
+        }
         val enabled = controlMode != NoiseControlMode.OFF
         val ncAsmMode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
         return SonyTandemFrame.message(
@@ -220,6 +241,38 @@ object SonyTandemV2Table1Protocol {
                 AUTO_NC_SETTING_TYPE,
                 AUTO_ASM_SETTING_TYPE,
                 ambientLevel.coerceIn(1, 20).toByte(),
+            ),
+        )
+    }
+
+    /**
+     * SET_PARAM for inquired type 0x19 (MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA).
+     * Byte-exact against a LinkBuds Fit btsnoop capture of the official controller:
+     *   ambient: `68 19 01 01 01 00 0a 00 00`
+     *   off:     `68 19 01 00 01 00 0a 00 00`
+     * Param layout (8 bytes): type, VALUE_CHANGED, ncAsmEffect (0=off/1=on),
+     * ncAsmMode (0=NC/1=AMBIENT), reserved 0x00, ambientLevel (1-20 as-is),
+     * reserved 0x00, reserved 0x00. [ambientMode] has no verified slot in this
+     * layout, so it is intentionally not encoded.
+     */
+    fun buildSetDualNcAsmSeamlessNa(
+        controlMode: NoiseControlMode,
+        ambientLevel: Int = 10,
+        @Suppress("UNUSED_PARAMETER") ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+    ): ByteArray {
+        val effect = if (controlMode == NoiseControlMode.OFF) NCASM_EFFECT_OFF else NCASM_EFFECT_ON
+        val mode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
+        return SonyTandemFrame.message(
+            NCASM_SET_PARAM,
+            byteArrayOf(
+                NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA.code,
+                VALUE_CHANGED,
+                effect,
+                mode,
+                NA_RESERVED,
+                ambientLevel.coerceIn(1, 20).toByte(),
+                NA_RESERVED,
+                NA_RESERVED,
             ),
         )
     }
@@ -489,6 +542,9 @@ object SonyTandemV2Table1Protocol {
             // 0x15: no verified ambient-mode slot in the captured 7-byte layout
             // (idx[5] is the constant asmSettingType 0x01, NOT a voice flag).
             NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> null
+            // 0x19: idx[4] is suspected to be the voice flag but stayed constant 0x00
+            // in the capture; do not decode until verified.
+            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA -> null
             else -> payload.getOrNull(3)
         }?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }
@@ -542,6 +598,9 @@ object SonyTandemV2Table1Protocol {
             }
             // 0x15 (WF-1000XM4 capture): idx[2]=ncAsmEffect (0=off/1=on),
             // idx[3]=ncAsmMode (0=NC/1=AMBIENT), idx[6]=ambientLevel.
+            // 0x19 (LinkBuds Fit capture): identical idx[2]/idx[3] semantics,
+            // level at idx[5] instead (handled in ambientLevel below).
+            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
             NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> when {
                 payload.getOrNull(2) == NCASM_EFFECT_OFF -> NoiseControlMode.OFF
                 payload.getOrNull(3) == NCASM_MODE_ASM -> NoiseControlMode.AMBIENT_SOUND
@@ -562,6 +621,7 @@ object SonyTandemV2Table1Protocol {
                     ?: payload.getOrNull(1)?.let { it == VALUE_ENABLE }
                 NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS,
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> combinedControlMode == NoiseControlMode.NOISE_CANCELLING
+                NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
                 NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                     combinedControlMode == NoiseControlMode.NOISE_CANCELLING
                 else -> null
@@ -575,6 +635,7 @@ object SonyTandemV2Table1Protocol {
                 NcAsmInquiredType.ASM_SEAMLESS -> payload.getOrNull(2)?.let { it == NCASM_ON }
                 NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS,
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> combinedControlMode == NoiseControlMode.AMBIENT_SOUND
+                NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
                 NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                     combinedControlMode == NoiseControlMode.AMBIENT_SOUND
                 else -> null
@@ -586,6 +647,8 @@ object SonyTandemV2Table1Protocol {
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(5)?.unsigned?.plus(1)
                 // 0x15: level at idx[6], sent as-is (1-20), no -1 offset.
                 NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(6)?.unsigned
+                // 0x19: level at idx[5], sent as-is (1-20), no -1 offset.
+                NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA -> payload.getOrNull(5)?.unsigned
                 NcAsmInquiredType.ASM_SEAMLESS -> payload.getOrNull(4)?.unsigned
                 else -> null
             },
