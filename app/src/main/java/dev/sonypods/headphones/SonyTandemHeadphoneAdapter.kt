@@ -6,6 +6,7 @@ import dev.sonypods.headphones.sonydevices.LinkBudsSProfile
 import dev.sonypods.headphones.sonydevices.Wf1000Xm4Profile
 import dev.sonypods.headphones.sonydevices.Wf1000Xm5Profile
 import dev.sonypods.headphones.sonydevices.Wh1000Xm4Profile
+import dev.sonypods.headphones.sonydevices.Wh1000Xm5Profile
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.CommonInquiredType
 import dev.sonypods.protocol.DeviceInfoType
@@ -51,6 +52,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     private val templates = listOf(
         Wh1000Xm4Profile.template,
+        Wh1000Xm5Profile.template,
         LinkBudsSProfile.template,
         LinkBudsFitProfile.template,
         Wf1000Xm5Profile.template,
