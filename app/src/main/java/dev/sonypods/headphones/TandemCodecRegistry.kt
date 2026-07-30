@@ -252,9 +252,11 @@ object SonyTandemV2Table1Codec : TandemCodec {
     ): ByteArray? =
         when (type) {
             NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                SonyTandemV2Table1Protocol.buildSetNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode)
+                SonyTandemV2Table1Protocol.buildSetNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode, type)
             NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode)
+                SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, type)
+            NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode)
             else -> null
         }
 

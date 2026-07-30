@@ -60,6 +60,21 @@ object SonyTandemV2Table1Protocol {
     private const val NC_VALUE_ON_SINGLE: Byte = 0x01
     private const val NC_VALUE_ON_DUAL: Byte = 0x02
 
+    // Setting-type constants for inquired type 0x15
+    // (MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS). Ground truth from a
+    // WF-1000XM4 btsnoop capture (btsnoop_hci_260730_113943.log, official
+    // controller traffic). Param layout is 7 bytes:
+    //   [0]=0x15 type, [1]=0x01 VALUE_CHANGED,
+    //   [2]=ncAsmEffect  (0x00=off, 0x01=on)          <- total on/off switch
+    //   [3]=ncAsmMode    (0x00=NC,  0x01=AMBIENT)     <- only valid when [2]=on
+    //   [4]=0x02 ncSettingType  (constant, mirrors the V1 0x02 constant)
+    //   [5]=0x01 asmSettingType (constant, LEVEL_ADJUSTMENT)
+    //   [6]=ambientLevel (1-20, sent as-is)
+    // Captured frames: ambient `68 15 01 01 01 02 01 10`, NC `68 15 01 01 00 02 01 10`;
+    // headphone echoes the identical layout in 0x67/0x69 responses.
+    private const val AUTO_NC_SETTING_TYPE: Byte = 0x02
+    private const val AUTO_ASM_SETTING_TYPE: Byte = 0x01
+
     fun buildGetProtocolInfo(): ByteArray =
         SonyTandemFrame.message(CONNECT_GET_PROTOCOL_INFO)
 
@@ -124,13 +139,21 @@ object SonyTandemV2Table1Protocol {
         controlMode: NoiseControlMode,
         ambientLevel: Int = 10,
         ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+        type: NcAsmInquiredType = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
     ): ByteArray {
+        // Inquired type 0x15 (MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS, WF-1000XM4)
+        // uses a 7-byte param layout (effect, mode, ncSettingType 0x02,
+        // asmSettingType 0x01, level) instead of the 6-byte V2 DUAL layout below.
+        // Route it to the dedicated builder that matches the device capture.
+        if (type == NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS) {
+            return buildSetAutoNcModeSwitchAndAmbientLevel(controlMode, ambientLevel, ambientMode)
+        }
         val enabled = controlMode != NoiseControlMode.OFF
         val ncAsmMode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
         return SonyTandemFrame.message(
             NCASM_SET_PARAM,
             byteArrayOf(
-                NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS.code,
+                type.code,
                 VALUE_CHANGED,
                 if (enabled) NCASM_EFFECT_ON else NCASM_EFFECT_OFF,
                 ncAsmMode,
@@ -144,6 +167,7 @@ object SonyTandemV2Table1Protocol {
         controlMode: NoiseControlMode,
         ambientLevel: Int = 10,
         ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+        type: NcAsmInquiredType = NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS,
     ): ByteArray {
         val totalEffect = if (controlMode == NoiseControlMode.OFF) NCASM_OFF else NCASM_ON
         val ncValue = when (controlMode) {
@@ -159,12 +183,43 @@ object SonyTandemV2Table1Protocol {
         return SonyTandemFrame.message(
             NCASM_SET_PARAM,
             byteArrayOf(
-                NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS.code,
+                type.code,
                 VALUE_CHANGED,
                 totalEffect,
                 ncValue,
                 ambientMode.code,
                 rawAmbientLevel,
+            ),
+        )
+    }
+
+    /**
+     * SET_PARAM for inquired type 0x15 (MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS).
+     * Byte-exact against a WF-1000XM4 btsnoop capture of a known-good controller:
+     *   ambient: `68 15 01 01 01 02 01 10`
+     *   nc:      `68 15 01 01 00 02 01 10`
+     * Param layout (7 bytes): type, VALUE_CHANGED, ncAsmEffect (0=off/1=on),
+     * ncAsmMode (0=NC/1=AMBIENT), ncSettingType 0x02, asmSettingType 0x01,
+     * ambientLevel (1-20 as-is). [ambientMode] has no verified slot in this
+     * layout, so it is intentionally not encoded.
+     */
+    fun buildSetAutoNcModeSwitchAndAmbientLevel(
+        controlMode: NoiseControlMode,
+        ambientLevel: Int = 10,
+        @Suppress("UNUSED_PARAMETER") ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+    ): ByteArray {
+        val effect = if (controlMode == NoiseControlMode.OFF) NCASM_EFFECT_OFF else NCASM_EFFECT_ON
+        val mode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
+        return SonyTandemFrame.message(
+            NCASM_SET_PARAM,
+            byteArrayOf(
+                NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS.code,
+                VALUE_CHANGED,
+                effect,
+                mode,
+                AUTO_NC_SETTING_TYPE,
+                AUTO_ASM_SETTING_TYPE,
+                ambientLevel.coerceIn(1, 20).toByte(),
             ),
         )
     }
@@ -431,6 +486,9 @@ object SonyTandemV2Table1Protocol {
             NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
             NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS,
             NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(4)
+            // 0x15: no verified ambient-mode slot in the captured 7-byte layout
+            // (idx[5] is the constant asmSettingType 0x01, NOT a voice flag).
+            NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> null
             else -> payload.getOrNull(3)
         }?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }
@@ -482,6 +540,15 @@ object SonyTandemV2Table1Protocol {
                     payload.getOrNull(2) == NCASM_ON -> NoiseControlMode.AMBIENT_SOUND
                 else -> null
             }
+            // 0x15 (WF-1000XM4 capture): idx[2]=ncAsmEffect (0=off/1=on),
+            // idx[3]=ncAsmMode (0=NC/1=AMBIENT), idx[6]=ambientLevel.
+            NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> when {
+                payload.getOrNull(2) == NCASM_EFFECT_OFF -> NoiseControlMode.OFF
+                payload.getOrNull(3) == NCASM_MODE_ASM -> NoiseControlMode.AMBIENT_SOUND
+                payload.getOrNull(3) == NCASM_MODE_NC &&
+                    payload.getOrNull(2) == NCASM_EFFECT_ON -> NoiseControlMode.NOISE_CANCELLING
+                else -> null
+            }
             else -> null
         }
         return ParsedTandemResponse.NoiseControl(
@@ -495,6 +562,8 @@ object SonyTandemV2Table1Protocol {
                     ?: payload.getOrNull(1)?.let { it == VALUE_ENABLE }
                 NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS,
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> combinedControlMode == NoiseControlMode.NOISE_CANCELLING
+                NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                    combinedControlMode == NoiseControlMode.NOISE_CANCELLING
                 else -> null
             },
             ambientSoundEnabled = when (type) {
@@ -506,6 +575,8 @@ object SonyTandemV2Table1Protocol {
                 NcAsmInquiredType.ASM_SEAMLESS -> payload.getOrNull(2)?.let { it == NCASM_ON }
                 NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS,
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> combinedControlMode == NoiseControlMode.AMBIENT_SOUND
+                NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                    combinedControlMode == NoiseControlMode.AMBIENT_SOUND
                 else -> null
             },
             ambientLevel = when (type) {
@@ -513,6 +584,8 @@ object SonyTandemV2Table1Protocol {
                 NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(5)?.unsigned
                 NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS -> payload.getOrNull(5)?.unsigned
                 NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(5)?.unsigned?.plus(1)
+                // 0x15: level at idx[6], sent as-is (1-20), no -1 offset.
+                NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> payload.getOrNull(6)?.unsigned
                 NcAsmInquiredType.ASM_SEAMLESS -> payload.getOrNull(4)?.unsigned
                 else -> null
             },

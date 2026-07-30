@@ -2,6 +2,7 @@ package dev.sonypods.headphones
 
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.headphones.sonydevices.LinkBudsSProfile
+import dev.sonypods.headphones.sonydevices.Wf1000Xm4Profile
 import dev.sonypods.headphones.sonydevices.Wf1000Xm5Profile
 import dev.sonypods.headphones.sonydevices.Wh1000Xm4Profile
 import dev.sonypods.protocol.AmbientSoundMode
@@ -47,7 +48,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     val legacyIds: Set<String> = setOf("sony-tandem-v2")
 
-    private val templates = listOf(Wh1000Xm4Profile.template, LinkBudsSProfile.template, Wf1000Xm5Profile.template)
+    private val templates = listOf(Wh1000Xm4Profile.template, LinkBudsSProfile.template, Wf1000Xm5Profile.template, Wf1000Xm4Profile.template)
 
     private fun command(
         profile: ConnectedHeadphoneProfile,

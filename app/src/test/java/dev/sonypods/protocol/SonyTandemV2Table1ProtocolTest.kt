@@ -168,6 +168,89 @@ class SonyTandemV2Table1ProtocolTest {
         )
     }
 
+    // ── 0x15 MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS (WF-1000XM4) ──
+    // Ground truth: btsnoop_hci_260730_113943.log, known-good controller frames
+    // `68 15 01 01 01 02 01 10` (ambient) / `68 15 01 01 00 02 01 10` (NC),
+    // echoed identically by the headphone in 0x67/0x69 responses.
+
+    @Test
+    fun ncAsmSetParam_autoNcAmbient_matchesWf1000Xm4Capture() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x15, 0x01, 0x01, 0x01, 0x02, 0x01, 0x10),
+            SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 16,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_autoNcNoiseCancelling_matchesWf1000Xm4Capture() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x15, 0x01, 0x01, 0x00, 0x02, 0x01, 0x10),
+            SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(
+                NoiseControlMode.NOISE_CANCELLING,
+                ambientLevel = 16,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_autoNcOff_zeroesEffectAndMode() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x15, 0x01, 0x00, 0x00, 0x02, 0x01, 0x0A),
+            SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(NoiseControlMode.OFF),
+        )
+    }
+
+    @Test
+    fun parser_autoNcNotify_ambient_parsesFromWf1000Xm4Capture() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x15, 0x01, 0x01, 0x01, 0x02, 0x01, 0x10)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS, parsed.type)
+        assertEquals(NoiseControlMode.AMBIENT_SOUND, parsed.controlMode)
+        assertEquals(16, parsed.ambientLevel)
+        assertEquals(true, parsed.ambientSoundEnabled)
+        assertEquals(false, parsed.enabled)
+    }
+
+    @Test
+    fun parser_autoNcRetParam_noiseCancelling_parsesFromWf1000Xm4Capture() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x67, 0x15, 0x01, 0x01, 0x00, 0x02, 0x01, 0x10)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, parsed.controlMode)
+        assertEquals(true, parsed.enabled)
+        assertEquals(false, parsed.ambientSoundEnabled)
+    }
+
+    @Test
+    fun parser_autoNcRetParam_off_parsesEffectOff() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x67, 0x15, 0x01, 0x00, 0x00, 0x02, 0x01, 0x10)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.OFF, parsed.controlMode)
+    }
+
+    @Test
+    fun ncAsmSetParam_autoNc_roundTripsThroughParserForAllModes() {
+        listOf(
+            NoiseControlMode.OFF,
+            NoiseControlMode.NOISE_CANCELLING,
+            NoiseControlMode.AMBIENT_SOUND,
+        ).forEach { mode ->
+            val command = SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(mode, ambientLevel = 16)
+            val echoed = command.copyOf().also { it[1] = 0x69 }
+            val response = SonyTandemV2Table1Protocol.parse(echoed) as ParsedTandemResponse.NoiseControl
+
+            assertEquals(mode, response.controlMode)
+        }
+    }
+
     @Test
     fun ncAsmGetParam_tableSet1_matchesOfficialXm4Capture() {
         assertArrayEquals(
