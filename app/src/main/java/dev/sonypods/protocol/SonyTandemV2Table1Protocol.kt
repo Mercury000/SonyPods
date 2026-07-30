@@ -251,14 +251,14 @@ object SonyTandemV2Table1Protocol {
      *   ambient: `68 19 01 01 01 00 0a 00 00`
      *   off:     `68 19 01 00 01 00 0a 00 00`
      * Param layout (8 bytes): type, VALUE_CHANGED, ncAsmEffect (0=off/1=on),
-     * ncAsmMode (0=NC/1=AMBIENT), reserved 0x00, ambientLevel (1-20 as-is),
-     * reserved 0x00, reserved 0x00. [ambientMode] has no verified slot in this
-     * layout, so it is intentionally not encoded.
+     * ncAsmMode (0=NC/1=AMBIENT), voice (0x00 normal / 0x01 voice), ambientLevel (1-20 as-is),
+     * reserved 0x00, reserved 0x00. [ambientMode] maps to the voice byte at idx[4],
+     * verified via btsnoop_hci_260730_133417.log where it toggled 0x00<->0x01.
      */
     fun buildSetDualNcAsmSeamlessNa(
         controlMode: NoiseControlMode,
         ambientLevel: Int = 10,
-        @Suppress("UNUSED_PARAMETER") ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+        ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
     ): ByteArray {
         val effect = if (controlMode == NoiseControlMode.OFF) NCASM_EFFECT_OFF else NCASM_EFFECT_ON
         val mode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
@@ -269,7 +269,7 @@ object SonyTandemV2Table1Protocol {
                 VALUE_CHANGED,
                 effect,
                 mode,
-                NA_RESERVED,
+                ambientMode.code,
                 ambientLevel.coerceIn(1, 20).toByte(),
                 NA_RESERVED,
                 NA_RESERVED,
@@ -542,9 +542,9 @@ object SonyTandemV2Table1Protocol {
             // 0x15: no verified ambient-mode slot in the captured 7-byte layout
             // (idx[5] is the constant asmSettingType 0x01, NOT a voice flag).
             NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS -> null
-            // 0x19: idx[4] is suspected to be the voice flag but stayed constant 0x00
-            // in the capture; do not decode until verified.
-            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA -> null
+            // 0x19: idx[4] is the focus-on-voice flag (0x00 normal / 0x01 voice),
+            // verified via btsnoop_hci_260730_133417.log where it toggled 0x00<->0x01.
+            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA -> payload.getOrNull(4)
             else -> payload.getOrNull(3)
         }?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }

@@ -216,6 +216,32 @@ class SonyTandemHeadphoneAdapterTest {
     }
 
     @Test
+    fun setNoiseControl_linkBudsFit_voice_emitsCaptureExactNaBytes() {
+        val profile = SonyTandemHeadphoneAdapter.match(
+            DiscoveredSonyDevice(
+                name = "LinkBuds Fit",
+                address = "80:99:E7:DC:79:6E",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            )
+        )!!
+        val commands = SonyTandemHeadphoneAdapter.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.AMBIENT_SOUND,
+            ambientLevel = 10,
+            ambientMode = AmbientSoundMode.VOICE,
+        )
+
+        assertEquals(1, commands.size)
+        // 人声: idx[4] = 0x01, verified via btsnoop_hci_260730_133417.log.
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x01, 0x0A, 0x00, 0x00),
+            commands.single().bytes,
+        )
+    }
+
+    @Test
     fun match_wh1000xm5_usesV2Table1AndHeadsetBattery() {
         val profile = SonyTandemHeadphoneAdapter.match(
             DiscoveredSonyDevice(

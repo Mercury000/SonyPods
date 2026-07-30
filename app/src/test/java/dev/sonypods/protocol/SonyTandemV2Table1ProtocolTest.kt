@@ -287,6 +287,32 @@ class SonyTandemV2Table1ProtocolTest {
         )
     }
 
+    // 人声 (focus-on-voice) SET: idx[4] must be 0x01. Ground truth:
+    // btsnoop_hci_260730_133417.log where idx[4] toggled 0x00<->0x01.
+    @Test
+    fun ncAsmSetParam_naAmbientVoice_encodesVoiceByte() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x01, 0x0A, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 10,
+                ambientMode = AmbientSoundMode.VOICE,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_naAmbientNormal_encodesZeroVoiceByte() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 10,
+                ambientMode = AmbientSoundMode.NORMAL,
+            ),
+        )
+    }
+
     @Test
     fun parser_naRetParam_noiseCancelling_parsesFromLinkBudsFitCapture() {
         val parsed = SonyTandemV2Table1Protocol.parse(
@@ -310,6 +336,21 @@ class SonyTandemV2Table1ProtocolTest {
         assertEquals(10, parsed.ambientLevel)
         assertEquals(true, parsed.ambientSoundEnabled)
         assertEquals(false, parsed.enabled)
+        assertEquals(AmbientSoundMode.NORMAL, parsed.ambientMode)
+    }
+
+    // 人声 NTF: idx[4] = 0x01 must round-trip to AmbientSoundMode.VOICE.
+    @Test
+    fun parser_naNotify_ambientVoice_parsesFromLinkBudsFitCapture() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x19, 0x01, 0x01, 0x01, 0x01, 0x0A, 0x00, 0x00)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(NoiseControlMode.AMBIENT_SOUND, parsed.controlMode)
+        assertEquals(10, parsed.ambientLevel)
+        assertEquals(true, parsed.ambientSoundEnabled)
+        assertEquals(false, parsed.enabled)
+        assertEquals(AmbientSoundMode.VOICE, parsed.ambientMode)
     }
 
     @Test
