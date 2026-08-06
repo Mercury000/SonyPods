@@ -70,12 +70,25 @@ data class SonyBleConnectionInfo(
      * connection time to bind the neutral profile to the protocol generation
      * the hardware speaks, replacing the deleted static per-model templates. */
     val channels: Set<TandemChannel> = emptySet(),
+    /**
+     * For SPP connections: the exact SPP service UUID that the Android socket's
+     * SDP handshake actually bound to. SC resolves the protocol generation from
+     * this UUID (96cc203e… → TABLE_SET_1/V1, 956c7b26… → TABLE_SET_2/V2), NOT
+     * from a static per-model name table. When present the repository must bind
+     * to this generation instead of the channel-only heuristic, otherwise a
+     * V1 SPP device (e.g. WH-1000XM4) gets V2 frames and hard-disconnects. */
+    val sppUuid: UUID? = null,
 )
 
 data class GattTandemEndpoint(
     val channel: TandemChannel,
     val toAcc: BluetoothGattCharacteristic,
     val fromAcc: BluetoothGattCharacteristic,
+)
+
+internal data class SppSocketWithUuid(
+    val socket: BluetoothSocket,
+    val uuid: UUID,
 )
 
 data class UnsupportedEndpointDiagnostics(
@@ -550,8 +563,10 @@ class SonyBleClient(
                     "Connecting SPP to ${classicRemote.address} name=${safeDeviceName(classicRemote).orEmpty()} " +
                         "uuids=${classicRemote.uuids?.joinToString { it.uuid.toString() }.orEmpty()}"
                 )
-                val socket = createSppSocket(classicRemote)
+                val spp = createSppSocket(classicRemote)
+                val socket = spp.socket
                 socket.connect()
+                val sppUuid = spp.uuid
                 // Publish the connected device BEFORE the read loop starts: the headphone
                 // pushes its first frame immediately, and onMessage() requires
                 // connectedDevice/connectedProfile to be present (ensureConnectedProfile
@@ -569,7 +584,14 @@ class SonyBleClient(
                 ).also { it.start() }
                 log("SPP connected")
                 listener.onConnectionStateChanged(true, connectedDevice)
-                listener.onReady(SonyBleConnectionInfo(mtu = SPP_WRITABLE_VALUE_LENGTH, transport = "SPP", channels = setOf(TandemChannel.SPP_MDR)))
+                listener.onReady(
+                    SonyBleConnectionInfo(
+                        mtu = SPP_WRITABLE_VALUE_LENGTH,
+                        transport = "SPP",
+                        channels = setOf(TandemChannel.SPP_MDR),
+                        sppUuid = sppUuid,
+                    )
+                )
             } catch (e: IOException) {
                 log("SPP connection failed: ${e.message}")
                 closeSpp(notify = true)
@@ -602,7 +624,7 @@ class SonyBleClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun createSppSocket(device: BluetoothDevice): BluetoothSocket {
+    private fun createSppSocket(device: BluetoothDevice): SppSocketWithUuid {
         val advertised = device.uuids.orEmpty().map { it.uuid }.toSet()
         val candidates = OFFICIAL_SPP_UUIDS.filter { it in advertised } +
             OFFICIAL_SPP_UUIDS.filter { it !in advertised }
@@ -610,7 +632,7 @@ class SonyBleClient(
         for (uuid in candidates.distinct()) {
             try {
                 log("SPP create socket uuid=$uuid")
-                return device.createRfcommSocketToServiceRecord(uuid)
+                return SppSocketWithUuid(device.createRfcommSocketToServiceRecord(uuid), uuid)
             } catch (e: IOException) {
                 lastError = e
                 log("SPP create socket failed uuid=$uuid error=${e.message}")

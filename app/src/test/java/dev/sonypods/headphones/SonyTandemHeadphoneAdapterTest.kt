@@ -101,6 +101,30 @@ class SonyTandemHeadphoneAdapterTest {
     }
 
     @Test
+    fun withEndpointChannels_sppV1UuidBindsV1() {
+        // SC: SPP UUID 96cc203e… is TABLE_SET_1 (V1). WH-1000XM4 binds to this
+        // UUID, so SPP must NOT be forced to V2 or the device hard-disconnects.
+        val profile = SonyTandemHeadphoneAdapter.withEndpointChannels(
+            HeadphoneAdapterRegistry.resolve(xm4Device()),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
+        )
+        assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.NOISE_CONTROL))
+        assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.BATTERY))
+        assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.EQ))
+    }
+
+    @Test
+    fun withEndpointChannels_sppV2UuidBindsV2() {
+        val profile = SonyTandemHeadphoneAdapter.withEndpointChannels(
+            HeadphoneAdapterRegistry.resolve(linkBudsSDevice()),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"),
+        )
+        assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1, profile.protocolFor(HeadphoneFeature.NOISE_CONTROL))
+    }
+
+    @Test
     fun withEndpointChannels_v1McRebindsToV1() {
         val profile = SonyTandemHeadphoneAdapter.withEndpointChannels(
             HeadphoneAdapterRegistry.resolve(xm4Device()),

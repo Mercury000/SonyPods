@@ -846,7 +846,7 @@ class SonyHeadphoneRepository private constructor(
             // Bind the neutral profile to the protocol generation the transport
             // endpoints actually expose (V1 MC endpoint → V1, V2 HPC/SPP → V2).
             val profile = base?.let { p ->
-                SonyTandemHeadphoneAdapter.withEndpointChannels(p, info.channels)
+                SonyTandemHeadphoneAdapter.withEndpointChannels(p, info.channels, info.sppUuid)
             }
             it.copy(
                 connectionInfo = info,

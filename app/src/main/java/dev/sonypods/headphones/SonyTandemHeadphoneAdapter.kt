@@ -103,22 +103,38 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     /**
      * Bind a profile to the protocol generation implied by the transport
-     * endpoints. A V1 MC GATT endpoint means V1; SPP and V2 HPC/MC endpoints
-     * mean V2 (the V1 fallback only triggers when no V2/SPP endpoint exists).
-     * Returns the profile unchanged when the generation already matches.
+     * endpoints. For SPP, the generation is resolved from the SPP service UUID
+     * the SDP handshake bound to — matching SC, which keys V1/V2 off the SPP
+     * UUID (96cc203e… → TABLE_SET_1/V1, 956c7b26… → TABLE_SET_2/V2), not the
+     * model name. A V1 MC GATT endpoint means V1; V2 HPC/MC means V2 (the V1
+     * fallback only triggers when no V2/SPP endpoint exists). Returns the
+     * profile unchanged when the generation already matches.
      */
     fun withEndpointChannels(
         profile: ConnectedHeadphoneProfile,
         channels: Set<TandemChannel>,
+        sppUuid: java.util.UUID? = null,
     ): ConnectedHeadphoneProfile {
-        val variant = bindVariantFromChannels(channels) ?: return profile
+        val variant = bindVariantFromChannels(channels, sppUuid) ?: return profile
         if (variant == profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) return profile
         return rebindProfile(profile, variant)
     }
 
-    fun bindVariantFromChannels(channels: Set<TandemChannel>): HeadphoneProtocolVariant? = when {
+    fun bindVariantFromChannels(
+        channels: Set<TandemChannel>,
+        sppUuid: java.util.UUID? = null,
+    ): HeadphoneProtocolVariant? = when {
         channels.isEmpty() -> null
-        TandemChannel.SPP_MDR in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+        TandemChannel.SPP_MDR in channels ->
+            when (sppUuid) {
+                // SC: SPP UUID 96cc203e… is TABLE_SET_1 (V1), 956c7b26… is TABLE_SET_2 (V2).
+                null -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+                else -> if (sppUuid.toString().startsWith("96cc203e")) {
+                    HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
+                } else {
+                    HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+                }
+            }
         TandemChannel.GATT_V2_HPC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
         TandemChannel.GATT_V2_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
         TandemChannel.GATT_V1_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
