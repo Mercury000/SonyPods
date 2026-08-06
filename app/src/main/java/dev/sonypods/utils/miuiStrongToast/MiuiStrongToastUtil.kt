@@ -273,11 +273,13 @@ object MiuiStrongToastUtil {
         batteryParams: BatteryParams,
         device: BluetoothDevice,
         sourceColor: String? = null,
+        singleBattery: Boolean = false,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("device", device)
         intent.putExtra(EXTRA_SOURCE_COLOR, sourceColor)
+        intent.putExtra(EXTRA_SINGLE_BATTERY, singleBattery)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }

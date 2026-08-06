@@ -26,6 +26,15 @@ object MiLinkServiceHook : HookContext() {
     internal const val TAG = "SonyPods-MiLink"
     private const val PREFS_NAME = "sonypods_milink_state"
 
+    /**
+     * MiLink carrier identity for over-ear (single-battery) headphones. Mirrors the
+     * TWS default [dev.sonypods.config.ConfigManager.DEFAULT_FAKE_DEVICE_ID]; the fusion
+     * device center classifies devices off this carrier, so a headphone must not ride
+     * the TWS carrier or it would render as a case+left+right earbud set.
+     */
+    private const val HEADPHONES_DEVICE_ID = "01013A04"
+    private const val FORM_FACTOR_HEADSET = "HEADSET"
+
     /** headsetPropertyChangeListener update types observed in the MiUI headset runtime. */
     private const val UPDATE_TYPE_BATTERY = 4
     private const val UPDATE_TYPE_ANC = 8
@@ -37,6 +46,10 @@ object MiLinkServiceHook : HookContext() {
     private var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
+    /** "HEADSET" / "TRUE_WIRELESS" / null. Over-ear devices carry a single battery
+     * and must not be projected onto MiLink's TWS case/left/right slot layout. */
+    private var currentFormFactor: String? = null
+    internal val isOverEar: Boolean get() = currentFormFactor == FORM_FACTOR_HEADSET
     internal var currentSpatialAudioMode = ConfigManager.SPATIAL_AUDIO_OFF
     internal var lastAncBatteryController: Any? = null
     internal var lastProfileContext: Any? = null
@@ -48,6 +61,14 @@ object MiLinkServiceHook : HookContext() {
         hookHeadsetRuntimeDisplay()
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
     }
+
+    /**
+     * Fusion device center carrier identity. Over-ear headphones report the headphone
+     * carrier; everything else keeps the user-configured disguise model. Called for the
+     * MiLink process only, so the settings-injection and upstream hooks are unaffected.
+     */
+    override fun fakeDeviceId(): String =
+        if (isOverEar) HEADPHONES_DEVICE_ID else super.fakeDeviceId()
 
     private fun hookContextEntry() {
         // Primary entry: every process has an Application, so the state receiver is up
@@ -214,6 +235,7 @@ object MiLinkServiceHook : HookContext() {
             knownSonyAddresses.add(it.uppercase())
         }
         snapshot.deviceName?.let { currentName = it }
+        snapshot.formFactor?.let { currentFormFactor = it }
         currentBattery = BatteryParams(
             left = (snapshot.batteryLeft ?: snapshot.batterySingle)
                 ?.let { PodParams(battery = it, isConnected = true) },
@@ -303,6 +325,16 @@ object MiLinkServiceHook : HookContext() {
 
     private fun miLinkBatteryLevels(): List<Int> {
         loadState()
+        // Over-ear headphones present a single (overall) battery in MiLink slots 2/5,
+        // matching SC's headset presentation. TWS instead uses case/left/right + charging.
+        if (isOverEar) {
+            val single = batteryValue(currentBattery.left)
+                .takeIf { it >= 0 }
+                ?: batteryValue(currentBattery.right)
+                ?: 0
+            val charging = if (single > 0) chargingValue(currentBattery.left) else 0
+            return listOf(-1, -1, if (single > 0) single else -1, 0, 0, charging)
+        }
         val left = batteryValue(currentBattery.left)
         val right = batteryValue(currentBattery.right)
         val box = batteryValue(currentBattery.case)
@@ -318,6 +350,13 @@ object MiLinkServiceHook : HookContext() {
 
     private fun batteryPercentForMiLink(): Int {
         loadState()
+        if (isOverEar) {
+            val single = batteryValue(currentBattery.left)
+                .takeIf { it >= 0 }
+                ?: batteryValue(currentBattery.right)
+                ?: 0
+            return single.coerceIn(0, 100)
+        }
         val values = listOfNotNull(currentBattery.left, currentBattery.right)
             .filter { it.isConnected }
             .map { it.battery.coerceIn(0, 100) }
@@ -515,6 +554,7 @@ object MiLinkServiceHook : HookContext() {
         prefs.edit()
             .putString("address", currentAddress)
             .putString("name", currentName)
+            .putString("form_factor", currentFormFactor)
             .putInt("anc", currentAnc)
             .putInt("spatial_audio_mode", currentSpatialAudioMode)
             .putInt("left_battery", currentBattery.left?.battery ?: 0)
@@ -543,6 +583,7 @@ object MiLinkServiceHook : HookContext() {
         stateSeeded = true
         currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
+        currentFormFactor = prefs.getString("form_factor", currentFormFactor)
         currentAnc = prefs.getInt("anc", currentAnc)
         currentSpatialAudioMode = prefs.getInt("spatial_audio_mode", currentSpatialAudioMode)
             .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)

@@ -25,7 +25,7 @@ abstract class HookContext {
 
     abstract fun onHook()
 
-    fun fakeDeviceId(): String = ConfigManager.fakeDeviceId()
+    open fun fakeDeviceId(): String = ConfigManager.fakeDeviceId()
 
     fun fakeSupport(): String = ConfigManager.fakeSupport()
 

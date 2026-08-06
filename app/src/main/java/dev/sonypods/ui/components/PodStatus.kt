@@ -129,7 +129,7 @@ private fun BatteryColumn(
         contentAlignment = Alignment.Center
     ) {
         Column(
-            horizontalAlignment = Alignment.Start,
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(vertical = if (compact) 2.dp else 4.dp)
         ) {
             Text(

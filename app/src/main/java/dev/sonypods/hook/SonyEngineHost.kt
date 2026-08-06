@@ -553,6 +553,9 @@ object SonyEngineHost {
                 batteryParams = battery,
                 device = device,
                 sourceColor = snapshot.modelImageSourceColor,
+                // Headband models report one level; tag the notification so the label
+                // reads "电量" (battery) instead of "左"+"%" for the single over-ear value.
+                singleBattery = snapshot.batterySingle != null && snapshot.batteryLeft == null,
             )
             // The island is an arrival animation: only on a fresh connection, not on
             // every battery tick.

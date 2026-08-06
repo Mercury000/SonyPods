@@ -41,7 +41,7 @@ object MiBluetoothToastHook : HookContext() {
         }
 
         @SuppressLint("WrongConstant")
-        fun createPodsNotification(bluetoothDevice: BluetoothDevice?, context: Context, batteryParams: BatteryParams, sourceColor: String? = null) {
+        fun createPodsNotification(bluetoothDevice: BluetoothDevice?, context: Context, batteryParams: BatteryParams, sourceColor: String? = null, singleBattery: Boolean = false) {
             val miheadset_notification_Box = context.resources.getIdentifier("miheadset_notification_Box", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_LeftEar = context.resources.getIdentifier("miheadset_notification_LeftEar", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_RightEar = context.resources.getIdentifier("miheadset_notification_RightEar", "string", "com.xiaomi.bluetooth")
@@ -62,8 +62,10 @@ object MiBluetoothToastHook : HookContext() {
                     "${context.resources.getString(miheadset_notification_Box)}${batteryParams.case!!.battery}%" +
                             "${if (batteryParams.case!!.isCharging) "⚡ " else " "}\n"
                 else ""
+                // Over-ear headphones report a single level; label it "电量" rather than "左".
+                val leftLabel = if (singleBattery) "电量" else context.resources.getString(miheadset_notification_LeftEar)
                 val leftEar = if (batteryParams.left != null && batteryParams.left!!.isConnected)
-                    "${context.resources.getString(miheadset_notification_LeftEar)}${batteryParams.left!!.battery}%" +
+                    "$leftLabel${batteryParams.left!!.battery}%" +
                         (if (batteryParams.left!!.isCharging) "⚡" else "")
                 else ""
                 val leftToRight = if (batteryParams.left?.isConnected == true && batteryParams.right?.isConnected == true) " " else ""
@@ -272,7 +274,8 @@ object MiBluetoothToastHook : HookContext() {
                             val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
                             val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
                             val sourceColor = p1.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
-                            createPodsNotification(device, context, batteryParams!!, sourceColor)
+                            val singleBattery = p1.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
+                            createPodsNotification(device, context, batteryParams!!, sourceColor, singleBattery)
                         } else if (p1?.action == SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION) {
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java) as BluetoothDevice
                                 cancelNotification(device, context)

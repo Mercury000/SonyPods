@@ -28,6 +28,11 @@ data class SonyStateSnapshot(
     val deviceName: String? = null,
     val deviceAddress: String? = null,
     val firmwareVersion: String? = null,
+    /** Physical form: "HEADSET" (over-ear, single battery) / "TRUE_WIRELESS" /
+     * "UNKNOWN". Carried from the connected profile so system surfaces (fusion
+     * device center, settings injection) can present a single-battery over-ear
+     * headphone instead of projecting it onto a TWS case/left/right layout. */
+    val formFactor: String? = null,
     /** Cloud catalog image for this model+colour; the app downloads and caches it. */
     val modelImageUrl: String? = null,
     /** Catalog accent colour (ARGB hex, e.g. "FFf7594e") for the resolved image, if any.
@@ -72,6 +77,7 @@ data class SonyStateSnapshot(
         deviceName?.let { putString(KEY_DEVICE_NAME, it) }
         deviceAddress?.let { putString(KEY_DEVICE_ADDRESS, it) }
         firmwareVersion?.let { putString(KEY_FIRMWARE, it) }
+        formFactor?.let { putString(KEY_FORM_FACTOR, it) }
         modelImageUrl?.let { putString(KEY_MODEL_IMAGE, it) }
         modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
 
@@ -112,6 +118,7 @@ data class SonyStateSnapshot(
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_DEVICE_ADDRESS = "device_address"
         private const val KEY_FIRMWARE = "firmware"
+        private const val KEY_FORM_FACTOR = "form_factor"
         private const val KEY_MODEL_IMAGE = "model_image_url"
         private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
         private const val KEY_BATTERY_SINGLE = "battery_single"
@@ -145,6 +152,7 @@ data class SonyStateSnapshot(
             deviceName = bundle.getString(KEY_DEVICE_NAME),
             deviceAddress = bundle.getString(KEY_DEVICE_ADDRESS),
             firmwareVersion = bundle.getString(KEY_FIRMWARE),
+            formFactor = bundle.getString(KEY_FORM_FACTOR),
             modelImageUrl = bundle.getString(KEY_MODEL_IMAGE),
             modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
@@ -186,10 +194,11 @@ data class SonyStateSnapshot(
                 connected = state.connectedDevice != null,
                 protocolReady = state.deviceInfo.protocolReady,
                 probeComplete = state.probeComplete,
-                deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
-                deviceAddress = state.connectedDevice?.address,
-                firmwareVersion = state.deviceInfo.firmwareVersion,
-                modelImageUrl = state.deviceInfo.modelImageUrl,
+deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
+            deviceAddress = state.connectedDevice?.address,
+            firmwareVersion = state.deviceInfo.firmwareVersion,
+            formFactor = state.connectedProfile?.capabilities?.formFactor?.name,
+            modelImageUrl = state.deviceInfo.modelImageUrl,
                 modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
