@@ -11,7 +11,10 @@ import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTandemV1Table1Protocol
+import dev.sonypods.protocol.SonyV1FunctionType
+import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.unsigned
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -70,14 +73,17 @@ class SonyTandemProfileRoutingTest {
     }
 
     @Test
-    fun linkBudsS_eqRefresh_usesPresetEqOnly() {
+    fun linkBudsS_eqRefresh_queriesPresetEqAndEbb() {
         val profile = linkBudsSProfile()
         val commands = SonyTandemHeadphoneAdapter.buildRefreshEqCommands(profile)
         val labels = commands.map { it.label }
 
-        assertEquals(listOf("GET EQ status PRESET_EQ", "GET EQ param PRESET_EQ"), labels)
+        // V2 probe advertises PRESET_EQ + EBB, so both are queried (no CUSTOM_EQ).
+        assertTrue(labels.any { it == "GET EQ status PRESET_EQ" })
+        assertTrue(labels.any { it == "GET EQ param PRESET_EQ" })
+        assertTrue(labels.any { it == "GET EQ status EBB" })
+        assertTrue(labels.any { it == "GET EQ param EBB" })
         assertFalse(labels.any { it.contains("CUSTOM_EQ") })
-        assertFalse(labels.any { it.contains("EBB") })
     }
 
     @Test
@@ -302,14 +308,11 @@ class SonyTandemProfileRoutingTest {
         val commands = SonyTandemHeadphoneAdapter.buildRefreshEqCommands(profile)
 
         val labels = commands.map { it.label }
-        // XM4 uses V1 type codes: queries PRESET_EQ param for preset+bands
+        // XM4 V1 probe advertises PRESET_EQ + EBB; both are queried, no CUSTOM_EQ.
         assertFalse(labels.any { it == "GET EQ status CUSTOM_EQ" })
         assertTrue(labels.any { it == "GET EQ param PRESET_EQ" })
         assertTrue(labels.any { it == "GET EQ extended PRESET_EQ" })
-        val paramLabels = labels.filter { it.startsWith("GET EQ param") }
-        assertEquals(1, paramLabels.size)
-        assertFalse(paramLabels.any { it.contains("CUSTOM_EQ") })
-        assertFalse(paramLabels.any { it.contains("EBB") })
+        assertFalse(labels.any { it.contains("CUSTOM_EQ") })
         assertArrayEquals(
             byteArrayOf(0x0E, 0x5A, 0x01),
             commands.first { it.label == "GET EQ extended PRESET_EQ" }.bytes,
@@ -536,25 +539,84 @@ class SonyTandemProfileRoutingTest {
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    private fun xm4Profile(): ConnectedHeadphoneProfile =
-        HeadphoneAdapterRegistry.resolve(
-            DiscoveredSonyDevice(
-                name = "WH-1000XM4",
-                address = "00:11:22:33:44:55",
-                rssi = 0,
-                source = "bonded",
-                isLikelyControlEndpoint = true,
-            )
+    private fun fn(code: Byte, order: Int = 0) = SonySupportedFunction(code, order)
+    private fun v2(type: SonyV2FunctionType, order: Int = 0) = SonySupportedFunction(type.code, order)
+    private fun v1(type: SonyV1FunctionType, order: Int = 0) = SonySupportedFunction(type.code, order)
+
+    private fun v2NcAsm17(): List<SonySupportedFunction> = listOf(
+        v2(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 0),
+    )
+
+    private fun v2Eq(): List<SonySupportedFunction> = listOf(
+        v2(SonyV2FunctionType.PRESET_EQ, 1),
+        v2(SonyV2FunctionType.EBB, 2),
+    )
+
+    private fun v2TwsBattery(): List<SonySupportedFunction> = listOf(
+        v2(SonyV2FunctionType.LEFT_RIGHT_BATTERY_LEVEL_INDICATOR, 3),
+        v2(SonyV2FunctionType.CRADLE_BATTERY_LEVEL_INDICATOR, 4),
+    )
+
+    private fun v2Play(): List<SonySupportedFunction> = listOf(
+        v2(SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT, 5),
+    )
+
+    private fun v2Lea(): List<SonySupportedFunction> = listOf(
+        v2(SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD, 6),
+    )
+
+    private fun v1FullSet(): List<SonySupportedFunction> = listOf(
+        v1(SonyV1FunctionType.BATTERY_LEVEL, 0),
+        v1(SonyV1FunctionType.NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE, 1),
+        v1(SonyV1FunctionType.PRESET_EQ, 2),
+        v1(SonyV1FunctionType.EBB, 3),
+        v1(SonyV1FunctionType.PLAYBACK_CONTROLLER, 4),
+    )
+
+    private fun xm4Device(): DiscoveredSonyDevice =
+        DiscoveredSonyDevice(
+            name = "WH-1000XM4",
+            address = "00:11:22:33:44:55",
+            rssi = 0,
+            source = "bonded",
+            isLikelyControlEndpoint = true,
         )
 
-    private fun linkBudsSProfile(): ConnectedHeadphoneProfile =
-        HeadphoneAdapterRegistry.resolve(
-            DiscoveredSonyDevice(
-                name = "LinkBuds S",
-                address = "00:11:22:33:44:56",
-                rssi = 0,
-                source = "bonded",
-                isLikelyControlEndpoint = true,
-            )
+    private fun linkBudsSDevice(): DiscoveredSonyDevice =
+        DiscoveredSonyDevice(
+            name = "LinkBuds S",
+            address = "00:11:22:33:44:56",
+            rssi = 0,
+            source = "bonded",
+            isLikelyControlEndpoint = true,
         )
+
+    private fun xm4Profile(): ConnectedHeadphoneProfile =
+        probedV1(xm4Device(), v1FullSet())
+
+    private fun linkBudsSProfile(): ConnectedHeadphoneProfile =
+        probed(linkBudsSDevice(), v2NcAsm17(), v2Eq(), v2TwsBattery(), v2Play(), v2Lea())
+
+    private fun probed(
+        device: DiscoveredSonyDevice,
+        vararg functionSets: List<SonySupportedFunction>,
+    ): ConnectedHeadphoneProfile {
+        val functions = functionSets.flatMap { it }.sortedBy { it.order }
+        return SonyCapabilityProbe.applyToProfile(
+            HeadphoneAdapterRegistry.resolve(device),
+            functions,
+            HeadphoneTransport.GATT_HPC,
+        )
+    }
+
+    private fun probedV1(
+        device: DiscoveredSonyDevice,
+        functions: List<SonySupportedFunction>,
+    ): ConnectedHeadphoneProfile {
+        val neutral = SonyTandemHeadphoneAdapter.withEndpointChannels(
+            HeadphoneAdapterRegistry.resolve(device),
+            setOf(TandemChannel.GATT_V1_MC),
+        )
+        return SonyCapabilityProbe.applyToProfile(neutral, functions, HeadphoneTransport.GATT_MC)
+    }
 }

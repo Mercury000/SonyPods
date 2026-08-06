@@ -28,6 +28,66 @@ object SonyTandemFrame {
         TandemMessage(SonyTandemConstants.DATA_MDR, command, payload).toByteArray()
 }
 
+/**
+ * Parse a CONNECT_RET_PROTOCOL_INFO payload (command 0x01, V1 or V2).
+ *
+ * V1 (`v2=false`, SC `qe0.C26580m2`): message body after dataType is
+ *   [cmd 0x01][type 0x00][vhi][vlo]
+ * so the engine payload (dataType+command stripped) is
+ *   [0]=type, [1]=version-hi, [2]=version-lo  (2-byte BE version).
+ *
+ * V2 (`v2=true`, SC `ff0.C16477k`): message body after dataType is
+ *   [cmd 0x01][type 0x00][v3][v2][v1][v0][ena][ena]  (8 bytes, length-gated
+ *   in SC by `mo604b`), and SC reads the 4-byte BE version from body[2..5]
+ *   via `m69436c()`. The engine payload (dataType+command stripped) therefore
+ *   is [0]=type, [1]=v3, [2]=v2, [3]=v1, [4]=v0.
+ */
+fun parseProtocolInfoPayload(payload: ByteArray, v2: Boolean = false): ParsedTandemResponse.ProtocolInfo? {
+    if (v2) {
+        if (payload.size < 5) return null
+        val version = (payload[1].unsigned shl 24) or
+            (payload[2].unsigned shl 16) or
+            (payload[3].unsigned shl 8) or
+            payload[4].unsigned
+        return ParsedTandemResponse.ProtocolInfo(
+            protocolVersion = version,
+            raw = payload.copyOf(),
+        )
+    }
+    if (payload.size < 3) return null
+    val version = (payload[1].unsigned shl 8) or payload[2].unsigned
+    return ParsedTandemResponse.ProtocolInfo(
+        protocolVersion = version,
+        raw = payload.copyOf(),
+    )
+}
+
+/** Parse a CONNECT_RET_CAPABILITY_INFO (0x03) engine payload — identical layout in
+ * V1 and V2. The engine payload (dataType+command stripped) is
+ * `[0]=type FIXED_VALUE 0x00, [1]=capabilityCounter, [2]=identifierLen, [3..3+len-1]=identifier`.
+ * SC V1 (`qe0.C26624v1.mo94092c`: type=bArr[1], counter=bArr[2], len=bArr[3],
+ * id=bArr[4..]) and V2 (`ff0.C16471e`: gate `bArr.length - 4 == bArr[3]`, counter
+ * m69415c()=bArr[2], id m69416e()=bArr[4..]) both read the counter from header
+ * position 2 and cap the identifier at 128 bytes (excess is dropped, never an error).
+ * Returns null for non-FIXED_VALUE type or truncated payloads.
+ */
+fun parseConnectRetCapabilityInfoPayload(
+    payload: ByteArray,
+): ParsedTandemResponse.ConnectCapabilityInfo? {
+    if (payload.size < 4) return null
+    if (payload[0].unsigned != 0x00) return null
+    val counter = payload[1].unsigned
+    val len = payload[2].unsigned
+    val effectiveLen = minOf(len, 128)
+    if (payload.size < 3 + effectiveLen) return null
+    val identifier = String(payload, 3, effectiveLen, Charsets.UTF_8)
+    return ParsedTandemResponse.ConnectCapabilityInfo(
+        capabilityCounter = counter,
+        identifier = identifier,
+        raw = payload.copyOf(),
+    )
+}
+
 sealed interface ParsedTandemResponse {
     val raw: ByteArray
 
@@ -123,6 +183,98 @@ sealed interface ParsedTandemResponse {
         val values: List<Int>,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
+
+    /** CONNECT_RET_PROTOCOL_INFO: the runtime protocol-version number the device
+     * negotiates at connection time. SC validates it against a fixed whitelist
+     * (`C29903d.f85968b`, protocol versions 0x1000..0x7030) and refuses to
+     * continue for out-of-whitelist values. Wire payload (after dataType):
+     * `[cmd 0x01][type 0x00][protocol-version 2 bytes BE]`. */
+    data class ProtocolInfo(
+        val protocolVersion: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ProtocolInfo) return false
+            return protocolVersion == other.protocolVersion && raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int = 31 * protocolVersion + raw.contentHashCode()
+    }
+
+    /** CONNECT_RET_SUPPORT_FUNCTION: the authoritative per-model FunctionType list. */
+    data class SupportFunction(
+        val functions: List<SonySupportedFunction>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SupportFunction) return false
+            return functions == other.functions && raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int = 31 * functions.hashCode() + raw.contentHashCode()
+    }
+
+    /**
+     * CONNECT_RET_CAPABILITY_INFO (0x03): the connect-time capability counter and
+     * identifier. SC (`C29903d.m109368F` / `C30916e`) compares the counter against
+     * the persisted one for this device (keyed by the identifier); a match means the
+     * cached capability tableset is still valid, so the per-domain capability probe
+     * is skipped ("Omit the getting capability") and the stored tableset restored.
+     * Wire layout is identical in V1 and V2 — engine payload (dataType+command
+     * stripped) is `[0]=type FIXED_VALUE, [1]=capabilityCounter, [2]=identifierLen,
+     * [3..]=identifier` (SC V1 `qe0.C26624v1`, V2 `ff0.C16471e`).
+     */
+    data class ConnectCapabilityInfo(
+        val capabilityCounter: Int,
+        val identifier: String,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ConnectCapabilityInfo) return false
+            return capabilityCounter == other.capabilityCounter &&
+                identifier == other.identifier &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = capabilityCounter
+            result = 31 * result + identifier.hashCode()
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
+
+    /** RET_CAPABILITY for a capability domain (NCASM/EQEBB/PLAY/...). The raw
+     * payload is the authoritative per-(domain, InquiredType) capability blob the
+     * device returns to a GET_CAPABILITY probe; the engine records it as probe
+     * evidence and derives its feature/query/writable sets from the FunctionType
+     * list that triggered the probe (SC builds its capability tableset the same way). */
+    data class CapabilityInfo(
+        val domain: String,
+        val inquiredTypeCode: Int?,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is CapabilityInfo) return false
+            return domain == other.domain &&
+                inquiredTypeCode == other.inquiredTypeCode &&
+                values == other.values &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = domain.hashCode()
+            result = 31 * result + (inquiredTypeCode ?: 0)
+            result = 31 * result + values.hashCode()
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
 
     data class Unknown(
         val dataType: Int?,

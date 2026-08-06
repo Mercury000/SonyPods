@@ -2,6 +2,7 @@ package dev.sonypods
 
 import android.app.Application
 import android.util.Log
+import dev.sonypods.config.CapabilityProbeCache
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
 import io.github.libxposed.service.XposedService
@@ -29,6 +30,10 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // store, so the hook process can read them via openRemoteFile.
         // Skipped if already migrated once.
         PodImagePrefs.migrateImagesToRemote(this, service)
+        // Flush any capability-probe cache the engine pushed while the service was
+        // unavailable, so the shared remote-prefs store is authoritative across a scope
+        // restart (the engine reads it back on the next connection).
+        CapabilityProbeCache.flushPending(service)
     }
 
     override fun onServiceDied(service: XposedService) {

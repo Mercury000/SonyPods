@@ -38,6 +38,11 @@ enum class EqEbbInquiredType(val code: Byte) {
     SOUND_EFFECT(0x30),
     CUSTOM_EQ(0x31),
     TURN_KEY_EQ(0x32),
+    CUSTOMIZABLE_SOUND_EFFECT_SELECT(0x33),
+    CUSTOMIZABLE_SOUND_EFFECT_SELECT_RESET(0x34),
+    CUSTOMIZABLE_SOUND_EFFECT_SELECT_CUSTOM(0x35),
+    CUSTOMIZABLE_SOUND_EFFECT_SELECT_EXTERNAL_UPDATE(0x36),
+    ULT_BTN_SOUND_EFFECT_ASSIGN(0x40),
 }
 
 enum class EqBandInformationType(val code: Byte) {
@@ -77,8 +82,8 @@ enum class EqPresetId(val code: Byte, val displayName: String) {
 enum class NcAsmInquiredType(val code: Byte) {
     V1_TABLE_SET1_NC_ASM(0x02),
     NC_ON_OFF(0x01),
-    NC_ON_OFF_AND_ASM_ON_OFF(0x11),
-    NC_MODE_SWITCH_AND_ASM_ON_OFF(0x12),
+    NC_ON_OFF_AND_ASM_ON_OFF(0x02),
+    NC_MODE_SWITCH_AND_ASM_ON_OFF(0x03),
     NC_ON_OFF_AND_ASM_SEAMLESS(0x13),
     NC_MODE_SWITCH_AND_ASM_SEAMLESS(0x14),
     MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS(0x15),
@@ -89,6 +94,7 @@ enum class NcAsmInquiredType(val code: Byte) {
     ASM_ON_OFF(0x21),
     ASM_SEAMLESS(0x22),
     NC_AMB_TOGGLE(0x30),
+    NC_TEST_MODE(0x40),
 }
 
 enum class PlaybackControl(val code: Byte) {

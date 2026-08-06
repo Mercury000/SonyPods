@@ -12,6 +12,7 @@ import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table1Protocol
+import dev.sonypods.protocol.SystemInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table2Protocol
 import dev.sonypods.protocol.SonyTandemV2Table1Protocol
 import dev.sonypods.protocol.SonyTandemV2Table2Protocol
@@ -20,7 +21,9 @@ interface TandemCodec {
     val variant: HeadphoneProtocolVariant
     val defaultChannel: TandemChannel
     fun parse(raw: ByteArray): ParsedTandemResponse
+    fun buildGetSupportFunction(): ByteArray? = null
     fun buildGetProtocolInfo(): ByteArray? = null
+    fun buildGetCapabilityInfo(): ByteArray? = null
     fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray? = null
     fun buildGetDisplayFirmwareVersion(): ByteArray? = null
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray? = null
@@ -40,6 +43,10 @@ interface TandemCodec {
     fun buildSetClearBass(level: Int): ByteArray? = null
     fun buildGetNcAsmStatus(type: NcAsmInquiredType): ByteArray? = null
     fun buildGetNcAsmParam(type: NcAsmInquiredType): ByteArray? = null
+    fun buildGetNcAsmCapability(type: NcAsmInquiredType): ByteArray? = null
+    fun buildGetEqEbbCapability(type: EqEbbInquiredType): ByteArray? = null
+    fun buildGetPlayCapability(type: PlayInquiredType): ByteArray? = null
+    fun buildGetSystemCapability(type: SystemInquiredType): ByteArray? = null
     fun buildSetNoiseControlMode(
         type: NcAsmInquiredType,
         mode: NoiseControlMode,
@@ -89,6 +96,15 @@ object SonyTandemV1Table1Codec : TandemCodec {
     override val variant: HeadphoneProtocolVariant = HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
     override val defaultChannel: TandemChannel = TandemChannel.GATT_V1_MC
 
+    override fun buildGetSupportFunction(): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetSupportFunction()
+
+    override fun buildGetProtocolInfo(): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetProtocolInfo()
+
+    override fun buildGetCapabilityInfo(): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetCapabilityInfo()
+
     override fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemV1Table1Protocol.buildGetDeviceInfo(type)
 
@@ -104,6 +120,18 @@ object SonyTandemV1Table1Codec : TandemCodec {
         } else {
             null
         }
+
+    override fun buildGetNcAsmCapability(type: NcAsmInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetNcAsmCapability(type)
+
+    override fun buildGetEqEbbCapability(type: EqEbbInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetEqEbbCapability(type)
+
+    override fun buildGetPlayCapability(type: PlayInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetPlayCapability(type)
+
+    override fun buildGetSystemCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetSystemCapability(type)
 
     fun buildSetNoiseControlMode(
         mode: NoiseControlMode,
@@ -177,8 +205,14 @@ object SonyTandemV2Table1Codec : TandemCodec {
     override val variant: HeadphoneProtocolVariant = HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
     override val defaultChannel: TandemChannel = TandemChannel.GATT_V2_HPC
 
+    override fun buildGetSupportFunction(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetSupportFunction()
+
     override fun buildGetProtocolInfo(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetProtocolInfo()
+
+    override fun buildGetCapabilityInfo(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetCapabilityInfo()
 
     override fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetDeviceInfo(type)
@@ -230,6 +264,15 @@ object SonyTandemV2Table1Codec : TandemCodec {
     override fun buildGetNcAsmParam(type: NcAsmInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetNcAsmParam(type)
 
+    override fun buildGetNcAsmCapability(type: NcAsmInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetNcAsmCapability(type)
+
+    override fun buildGetEqEbbCapability(type: EqEbbInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetEqEbbCapability(type)
+
+    override fun buildGetPlayCapability(type: PlayInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetPlayCapability(type)
+
     fun buildSetNoiseControlMode(
         mode: NoiseControlMode,
         ambientLevel: Int,
@@ -251,15 +294,11 @@ object SonyTandemV2Table1Codec : TandemCodec {
         ambientMode: AmbientSoundMode,
     ): ByteArray? =
         when (type) {
-            NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                SonyTandemV2Table1Protocol.buildSetNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode, type)
-            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, type)
-            NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                SonyTandemV2Table1Protocol.buildSetAutoNcModeSwitchAndAmbientLevel(mode, ambientLevel, ambientMode)
-            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA ->
-                SonyTandemV2Table1Protocol.buildSetDualNcAsmSeamlessNa(mode, ambientLevel, ambientMode)
-            else -> null
+            // All V2 NCASM types share the same official-layout dispatcher; V1
+            // and the test-mode type have no V2 SET_PARAM and stay unsupported.
+            NcAsmInquiredType.V1_TABLE_SET1_NC_ASM,
+            NcAsmInquiredType.NC_TEST_MODE -> null
+            else -> SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, type)
         }
 
     override fun buildSetNcOnOff(enabled: Boolean): ByteArray =

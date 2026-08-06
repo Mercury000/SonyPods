@@ -1,12 +1,6 @@
 package dev.sonypods.headphones
 
 import dev.sonypods.ble.DiscoveredSonyDevice
-import dev.sonypods.headphones.sonydevices.LinkBudsFitProfile
-import dev.sonypods.headphones.sonydevices.LinkBudsSProfile
-import dev.sonypods.headphones.sonydevices.Wf1000Xm4Profile
-import dev.sonypods.headphones.sonydevices.Wf1000Xm5Profile
-import dev.sonypods.headphones.sonydevices.Wh1000Xm4Profile
-import dev.sonypods.headphones.sonydevices.Wh1000Xm5Profile
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.CommonInquiredType
 import dev.sonypods.protocol.DeviceInfoType
@@ -50,15 +44,6 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     val legacyIds: Set<String> = setOf("sony-tandem-v2")
 
-    private val templates = listOf(
-        Wh1000Xm4Profile.template,
-        Wh1000Xm5Profile.template,
-        LinkBudsSProfile.template,
-        LinkBudsFitProfile.template,
-        Wf1000Xm5Profile.template,
-        Wf1000Xm4Profile.template,
-    )
-
     private fun command(
         profile: ConnectedHeadphoneProfile,
         feature: HeadphoneFeature,
@@ -70,20 +55,23 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     private fun codecFor(profile: ConnectedHeadphoneProfile, feature: HeadphoneFeature): TandemCodec =
         TandemCodecRegistry.codecFor(profile.protocolFor(feature))
 
+    /**
+     * Pure-dynamic matching: no model is judged by its name. A neutral profile
+     * is always returned and refined at connection time from the transport
+     * endpoints (generation) plus the RET_PROTOCOL_INFO version and the
+     * RET_SUPPORT_FUNCTION capability probe.
+     */
     override fun match(
         device: DiscoveredSonyDevice,
         reportedModelName: String?,
-    ): ConnectedHeadphoneProfile? {
-        return templates.firstOrNull { template ->
-            matchTemplate(template, device, reportedModelName) != null
-        }?.let { template ->
-            matchTemplate(template, device, reportedModelName)
-        }
-    }
+    ): ConnectedHeadphoneProfile? = null
 
     override fun fallbackProfile(device: DiscoveredSonyDevice): ConnectedHeadphoneProfile =
+        neutralProfile(device.name)
+
+    private fun neutralProfile(deviceName: String): ConnectedHeadphoneProfile =
         ProfileTemplate(
-            modelName = device.name.removePrefix("LE_").takeIf { it.isNotBlank() } ?: "Sony audio device",
+            modelName = deviceName.removePrefix("LE_").takeIf { it.isNotBlank() } ?: "Sony audio device",
             series = null,
             capabilities = HeadphoneCapabilities(
                 features = setOf(HeadphoneFeature.DEVICE_INFO, HeadphoneFeature.BATTERY),
@@ -92,7 +80,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 noiseControlQueryTypes = emptyList(),
                 writableNoiseControlTypes = emptySet(),
                 eqConfig = EqDeviceConfig(
-                    availablePresets = listOf(EqPresetId.OFF),
+                    // Empty until the probe confirms EQ; the probe fills the
+                    // official preset set (see SonyCapabilityProbe.DEFAULT_PRESETS).
+                    availablePresets = emptyList(),
                     writeInquiredType = EqEbbInquiredType.PRESET_EQ,
                     statusQueryTypes = emptyList(),
                     paramQueryTypes = emptyList(),
@@ -100,20 +90,59 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                     hasClearBass = false,
                 ),
             ),
-            featureProtocolMap = mapOf(
-                HeadphoneFeature.DEVICE_INFO to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
-                HeadphoneFeature.BATTERY to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
-            ),
+            // Generic V2 channel map: every feature has a resolvable binding so
+            // the probe and refresh can address any domain. Which features are
+            // actually usable is gated by the probed `capabilities.features`.
+            featureProtocolMap = allFeatures.associateWith { HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1 },
             knownStaticProfile = false,
-        ).toProfile(id, brand, protocolName, device.name)
+        ).toProfile(id, brand, protocolName, deviceName)
+
+    /** Every feature the Sony engine can address, mapped onto a neutral V2 channel. */
+    private val allFeatures: Set<HeadphoneFeature> =
+        HeadphoneFeature.entries.toSet()
+
+    /**
+     * Bind a profile to the protocol generation implied by the transport
+     * endpoints. A V1 MC GATT endpoint means V1; SPP and V2 HPC/MC endpoints
+     * mean V2 (the V1 fallback only triggers when no V2/SPP endpoint exists).
+     * Returns the profile unchanged when the generation already matches.
+     */
+    fun withEndpointChannels(
+        profile: ConnectedHeadphoneProfile,
+        channels: Set<TandemChannel>,
+    ): ConnectedHeadphoneProfile {
+        val variant = bindVariantFromChannels(channels) ?: return profile
+        if (variant == profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) return profile
+        return rebindProfile(profile, variant)
+    }
+
+    fun bindVariantFromChannels(channels: Set<TandemChannel>): HeadphoneProtocolVariant? = when {
+        channels.isEmpty() -> null
+        TandemChannel.SPP_MDR in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+        TandemChannel.GATT_V2_HPC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+        TandemChannel.GATT_V2_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+        TandemChannel.GATT_V1_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
+        else -> null
+    }
+
+    private fun rebindProfile(
+        profile: ConnectedHeadphoneProfile,
+        variant: HeadphoneProtocolVariant,
+    ): ConnectedHeadphoneProfile {
+        val newMap = profile.featureProtocolMap.mapValues { variant }
+        return profile.copy(
+            featureProtocolMap = newMap,
+            featureBindings = buildFeatureBindings(newMap, profile.capabilities),
+        ).rebounded()
+    }
 
     override fun buildRefreshCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         buildList {
             val deviceInfoCodec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
-            if (profile.capabilities.queryProtocolInfo) {
-                deviceInfoCodec.buildGetProtocolInfo()?.let {
-                    add(command(profile, HeadphoneFeature.DEVICE_INFO, "GET protocol info", it))
-                }
+            // Unconditional first exchange (SC C29903d/C30916e): the runtime
+            // protocol version from RET_PROTOCOL_INFO drives the whitelist check.
+            deviceInfoCodec.buildGetProtocolInfo()?.let {
+                add(command(profile, HeadphoneFeature.DEVICE_INFO, "GET protocol info", it))
             }
             if (profile.supports(HeadphoneFeature.DEVICE_INFO)) {
                 DeviceInfoType.entries.forEach {
@@ -156,10 +185,8 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             HeadphoneFeature.AMBIENT_LEVEL,
             HeadphoneFeature.AMBIENT_VOICE_MODE ->
                 profile.supports(feature) && profile.capabilities.writableNoiseControlTypes.isNotEmpty()
-            HeadphoneFeature.EQ,
-            HeadphoneFeature.CLEAR_BASS,
-            HeadphoneFeature.PLAYBACK_CONTROL ->
-                profile.supports(feature) && profile.protocolEvidence.any { it.startsWith("static-profile:") }
+            // EQ/Clear Bass/playback writes are gated purely by the probed
+            // capability set; no static-profile evidence is required.
             else -> profile.supports(feature)
         }
 

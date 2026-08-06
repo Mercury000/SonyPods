@@ -4,6 +4,15 @@ import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
 
 object SonyTandemV1Table1Protocol {
     // ── Connection / device information (V1) ──
+    private const val CONNECT_GET_PROTOCOL_INFO: Byte = 0x00
+    private const val CONNECT_RET_PROTOCOL_INFO: Byte = 0x01
+    private const val CONNECT_GET_CAPABILITY_INFO: Byte = 0x02
+    private const val CONNECT_RET_CAPABILITY_INFO: Byte = 0x03
+    // SC V1 InquiredType FIXED_VALUE = 0x00 (`qe0.C26552h.mo65499f` sends
+    // [cmd 0x02][FIXED_VALUE]); RET layout identical to V2.
+    private const val CONNECT_GET_CAPABILITY_INFO_FIXED_VALUE: Byte = 0x00
+    private const val CONNECT_GET_SUPPORT_FUNCTION: Byte = 0x06
+    private const val CONNECT_RET_SUPPORT_FUNCTION: Byte = 0x07
     private const val CONNECT_RET_DEVICE_INFO: Byte = 0x05
     private const val CONNECT_GET_DEVICE_INFO: Byte = 0x04
 
@@ -43,6 +52,14 @@ object SonyTandemV1Table1Protocol {
     private const val EQEBB_NTFY_PARAM: Byte = 0x59
     private const val EQEBB_GET_EXTENDED_INFO: Byte = 0x5A
     private const val EQEBB_RET_EXTENDED_INFO: Byte = 0x5B
+    private const val EQEBB_GET_CAPABILITY: Byte = 0x50
+    private const val EQEBB_RET_CAPABILITY: Byte = 0x51
+    private const val NCASM_GET_CAPABILITY: Byte = 0x60
+    private const val NCASM_RET_CAPABILITY: Byte = 0x61
+    private const val PLAY_GET_CAPABILITY: Byte = 0xA0.toByte()
+    private const val PLAY_RET_CAPABILITY: Byte = 0xA1.toByte()
+    private const val SYSTEM_GET_CAPABILITY: Byte = 0xF0.toByte()
+    private const val SYSTEM_RET_CAPABILITY: Byte = 0xF1.toByte()
 
     // V1 inquired-type sub-codes
     private const val V1_PRESET_EQ: Byte = 0x01
@@ -53,6 +70,68 @@ object SonyTandemV1Table1Protocol {
 
     fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemFrame.message(CONNECT_GET_DEVICE_INFO, byteArrayOf(type.code))
+
+    /**
+     * CONNECT_GET_CAPABILITY_INFO (0x02) with the fixed
+     * `[type 0x00 FIXED_VALUE]` payload, identical to V2 (SC `qe0.C26552h`).
+     * Response (RET_CAPABILITY_INFO 0x03) carries the capability counter +
+     * identifier used to decide whether the per-domain capability probe may be
+     * omitted on reconnection.
+     */
+    fun buildGetCapabilityInfo(): ByteArray =
+        SonyTandemFrame.message(CONNECT_GET_CAPABILITY_INFO, byteArrayOf(CONNECT_GET_CAPABILITY_INFO_FIXED_VALUE))
+
+    /**
+     * Parse a V1 CONNECT_RET_CAPABILITY_INFO payload (0x03); layout shared
+     * with V2, see [parseConnectRetCapabilityInfoPayload].
+     */
+    fun parseConnectRetCapabilityInfo(payload: ByteArray): ParsedTandemResponse.ConnectCapabilityInfo? =
+        parseConnectRetCapabilityInfoPayload(payload)
+
+    /**
+     * CONNECT_GET_PROTOCOL_INFO (0x00) with the fixed
+     * `[type 0x00 FIXED_VALUE]` payload, identical to V2 (SC `qe0.C26634y`
+     * / `ff0.C16469c`, body `[cmd 0x00][type 0x00]`). Sent unconditionally as
+     * the first exchange after transport ready.
+     */
+    fun buildGetProtocolInfo(): ByteArray =
+        SonyTandemFrame.message(CONNECT_GET_PROTOCOL_INFO, byteArrayOf(0x00))
+
+    /**
+     * Parse a V1 CONNECT_RET_PROTOCOL_INFO payload (0x01); see the shared
+     * [parseProtocolInfoPayload] for the byte layout.
+     */
+    fun parseProtocolInfo(payload: ByteArray): ParsedTandemResponse.ProtocolInfo? =
+        parseProtocolInfoPayload(payload)
+
+    /**
+     * CONNECT_GET_SUPPORT_FUNCTION (0x06) with a single FIXED_VALUE (0x00)
+     * byte, identical to V2 (SC `qe0.C26538e0`).
+     */
+    fun buildGetSupportFunction(): ByteArray =
+        SonyTandemFrame.message(CONNECT_GET_SUPPORT_FUNCTION, byteArrayOf(0x00))
+
+    /**
+     * Parse a V1 CONNECT_RET_SUPPORT_FUNCTION payload (0x07). V1 carries a
+     * flat single-byte FunctionType list (no order field); SC `qe0.C26610s2`
+     * message body is
+     *   [0]=0x07 command, [1]=FIXED_VALUE, [2]=count, [3..]=FunctionType bytes,
+     * so the engine payload (dataType+command stripped) is
+     *   [0]=0x00, [1]=count, [2+i]=code.
+     * Unknown FunctionTypes are dropped (SC `FunctionType.fromByteCode` → NO_USE).
+     */
+    fun parseSupportFunction(payload: ByteArray): List<SonySupportedFunction> {
+        if (payload.size < 2) return emptyList()
+        val count = payload.getOrNull(1)?.toInt()?.and(0xFF) ?: 0
+        return buildList {
+            for (i in 0 until count) {
+                val code = payload.getOrNull(2 + i) ?: break
+                if (SonyV1FunctionType.fromByteCode(code) != SonyV1FunctionType.OUT_OF_RANGE) {
+                    add(SonySupportedFunction(code, order = i))
+                }
+            }
+        }
+    }
 
     // ── Battery ──
 
@@ -120,6 +199,21 @@ object SonyTandemV1Table1Protocol {
     fun buildGetEqEbbExtendedInfo(type: EqEbbInquiredType): ByteArray =
         SonyTandemFrame.message(EQEBB_GET_EXTENDED_INFO, byteArrayOf(v1TypeCode(type)))
 
+    // ── Capability-probe GET_CAPABILITY builders (V1 SC `qe0.C26592p` NCASM,
+    //    `qe0.C26572l` EQEBB, `qe0.C26622v` PLAY) ──
+
+    fun buildGetNcAsmCapability(type: NcAsmInquiredType): ByteArray =
+        SonyTandemFrame.message(NCASM_GET_CAPABILITY, byteArrayOf(type.code))
+
+    fun buildGetEqEbbCapability(type: EqEbbInquiredType): ByteArray =
+        SonyTandemFrame.message(EQEBB_GET_CAPABILITY, byteArrayOf(v1TypeCode(type), 0x00))
+
+    fun buildGetPlayCapability(type: PlayInquiredType): ByteArray =
+        SonyTandemFrame.message(PLAY_GET_CAPABILITY, byteArrayOf(type.code))
+
+    fun buildGetSystemCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(type.code))
+
     fun buildSetEqPreset(
         preset: EqPresetId,
         type: EqEbbInquiredType,
@@ -155,6 +249,38 @@ object SonyTandemV1Table1Protocol {
         val command = normalized.getOrNull(1)
         val payload = if (normalized.size > 2) normalized.copyOfRange(2, normalized.size) else byteArrayOf()
         return when (command) {
+            CONNECT_RET_PROTOCOL_INFO -> parseProtocolInfo(payload)
+                ?: unknown(command, payload, raw)
+            CONNECT_RET_SUPPORT_FUNCTION -> ParsedTandemResponse.SupportFunction(
+                functions = parseSupportFunction(payload),
+                raw = raw,
+            )
+            CONNECT_RET_CAPABILITY_INFO -> parseConnectRetCapabilityInfo(payload)
+                ?: unknown(command, payload, raw)
+            NCASM_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
+                domain = "NCASM",
+                inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+            EQEBB_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
+                domain = "EQEBB",
+                inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+            PLAY_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
+                domain = "PLAY",
+                inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+            SYSTEM_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
+                domain = "SYSTEM",
+                inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
             CONNECT_RET_DEVICE_INFO -> parseDeviceInfo(payload, raw)
             COMMON_RET_BATTERY_LEVEL -> parseBattery(payload, raw)
             COMMON_NTFY_BATTERY_LEVEL -> if (looksLikeV1BatteryPayload(payload)) {

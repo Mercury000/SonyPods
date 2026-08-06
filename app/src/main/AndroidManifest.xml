@@ -64,6 +64,11 @@
             android:authorities="com.mercury.sonypods.podimages"
             android:exported="true"
             android:grantUriPermissions="false" />
+        <!-- Receives the capability-probe cache pushed by the engine so it can be
+             persisted into the shared remote-prefs store (the only writable side). -->
+        <receiver
+            android:name="dev.sonypods.config.CapabilityCacheReceiver"
+            android:exported="true" />
         <!-- Set as Xposed Module -->
         <meta-data
             android:name="xposedmodule"

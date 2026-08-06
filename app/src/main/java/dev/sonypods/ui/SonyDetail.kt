@@ -27,9 +27,12 @@ fun SonyStateSnapshot.toBatteryParams(): BatteryParams = BatteryParams(
     case = batteryCradle?.let { PodParams(battery = it, isConnected = true) },
 )
 
-/** Single-battery pod (headband form factor) or null when the device reports L/R levels. */
+/** Single-battery pod (headband form factor), or null when the device reports L/R
+ * levels. Preferring L/R over a stray single reply keeps TWS devices off the
+ * single-battery card even if a stale BATTERY response slipped through. */
 fun SonyStateSnapshot.toSinglePodParams(): PodParams? =
-    batterySingle?.let { PodParams(battery = it, isConnected = true) }
+    if (batteryLeft != null || batteryRight != null) null
+    else batterySingle?.let { PodParams(battery = it, isConnected = true) }
 
 val SonyStateSnapshot.displayName: String
     get() = deviceName.orEmpty()

@@ -2,6 +2,8 @@ package dev.sonypods.headphones
 
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.protocol.PlaybackControl
+import dev.sonypods.protocol.SonySupportedFunction
+import dev.sonypods.protocol.SonyV2FunctionType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -50,15 +52,20 @@ class ProtocolCompatibilityArchitectureTest {
     }
 
     @Test
-    fun playbackCommandsAreTandemFirstForStaticProfiles() {
-        val profile = HeadphoneAdapterRegistry.resolve(
+    fun playbackCommandsAreTandemFirstForProbeDerivedProfiles() {
+        // Playback dispatch is TANDEM_FIRST only after the probe confirms the
+        // feature; a neutral profile (not yet probed) keeps media fallback.
+        val profile = probed(
             DiscoveredSonyDevice(
                 name = "LinkBuds S",
                 address = "00:11:22:33:44:55",
                 rssi = 0,
                 source = "bonded",
                 isLikelyControlEndpoint = true,
-            )
+            ),
+            listOf(
+                SonySupportedFunction(SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT.code, 0),
+            ),
         )
 
         assertEquals(PlaybackDispatchStrategy.TANDEM_FIRST, profile.playbackDispatchStrategy)
@@ -67,6 +74,16 @@ class ProtocolCompatibilityArchitectureTest {
         assertEquals(0xA4, command.bytes[1].toInt() and 0xFF)
         assertEquals(0x01, command.bytes[2].toInt() and 0xFF)
     }
+
+    private fun probed(
+        device: DiscoveredSonyDevice,
+        functions: List<SonySupportedFunction>,
+    ): ConnectedHeadphoneProfile =
+        SonyCapabilityProbe.applyToProfile(
+            HeadphoneAdapterRegistry.resolve(device),
+            functions.sortedBy { it.order },
+            HeadphoneTransport.GATT_HPC,
+        )
 
     @Test
     fun adapterDoesNotImportProtocolObjectsDirectly() {

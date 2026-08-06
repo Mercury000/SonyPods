@@ -1,0 +1,301 @@
+package dev.sonypods.headphones
+
+import dev.sonypods.protocol.EqEbbInquiredType
+import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.PlayInquiredType
+import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.SonySupportedFunction
+import dev.sonypods.protocol.SonyV1FunctionType
+import dev.sonypods.protocol.SonyV2FunctionType
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Unit tests for [SonyCapabilityProbe] — the connection-time dynamic capability
+ * discovery mirroring Sound Connect 13.2.1 (C29903d V1 / C30916e V2 sequencers):
+ * RET_SUPPORT_FUNCTION FunctionTypes are mapped to per-domain GET_CAPABILITY
+ * probes and to the engine's feature/query/writable sets.
+ */
+class SonyCapabilityProbeTest {
+
+    private val v2Profile = ConnectedHeadphoneProfile(
+        adapterId = "sony-tandem",
+        brand = "Sony",
+        modelName = "TEST",
+        displayName = "TEST",
+        protocolName = "Sony Tandem V2",
+        transport = HeadphoneTransport.GATT_HPC,
+        capabilities = baseCapabilities(),
+        featureProtocolMap = mapOf(
+            HeadphoneFeature.DEVICE_INFO to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            HeadphoneFeature.NOISE_CONTROL to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            HeadphoneFeature.EQ to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            HeadphoneFeature.PLAYBACK_CONTROL to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            HeadphoneFeature.BATTERY to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+        ),
+        protocolEvidence = listOf("static-profile:TEST"),
+    )
+
+    private val v1Profile = v2Profile.copy(
+        protocolName = "Sony Tandem V1",
+        featureProtocolMap = mapOf(
+            HeadphoneFeature.DEVICE_INFO to HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+            HeadphoneFeature.NOISE_CONTROL to HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+            HeadphoneFeature.EQ to HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+            HeadphoneFeature.BATTERY to HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+        ),
+    )
+
+    private fun baseCapabilities() = HeadphoneCapabilities(
+        features = setOf(HeadphoneFeature.DEVICE_INFO),
+        formFactor = HeadphoneFormFactor.TRUE_WIRELESS,
+        batteryQueries = emptyList(),
+        noiseControlQueryTypes = emptyList(),
+        writableNoiseControlTypes = emptySet(),
+        eqConfig = EqDeviceConfig(
+            availablePresets = listOf(EqPresetId.OFF),
+            writeInquiredType = EqEbbInquiredType.PRESET_EQ,
+            statusQueryTypes = emptyList(),
+            paramQueryTypes = emptyList(),
+            bandCount = 0,
+            hasClearBass = false,
+        ),
+    )
+
+    private fun fn(type: SonyV2FunctionType, order: Int = 0) =
+        SonySupportedFunction(type.code, order)
+
+    private fun fn1(type: SonyV1FunctionType, order: Int = 0) =
+        SonySupportedFunction(type.code, order)
+
+    // ── Domain derivation from FunctionTypes ─────────────────────────────────
+
+    @Test
+    fun ncAsmFunction_derivesNoiseControlAndAmbientLevel() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.NOISE_CANCELLING_ONOFF_AND_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT)),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.NOISE_CONTROL in caps.features)
+        assertTrue(HeadphoneFeature.AMBIENT_LEVEL in caps.features)
+        assertEquals(
+            listOf(NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS),
+            caps.noiseControlQueryTypes,
+        )
+        assertEquals(
+            setOf(NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS),
+            caps.writableNoiseControlTypes,
+        )
+    }
+
+    @Test
+    fun ncOnOffOnlyFunction_derivesNoiseControlWithoutAmbientLevel() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.NOISE_CANCELLING_ONOFF)),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.NOISE_CONTROL in caps.features)
+        assertFalse(HeadphoneFeature.AMBIENT_LEVEL in caps.features)
+        assertEquals(listOf(NcAsmInquiredType.NC_ON_OFF), caps.noiseControlQueryTypes)
+    }
+
+    @Test
+    fun v1NcFunction_mapsToV1TableSet1Type() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn1(SonyV1FunctionType.NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE)),
+            fallback = baseCapabilities(),
+            profile = v1Profile,
+        )
+        assertTrue(HeadphoneFeature.NOISE_CONTROL in caps.features)
+        assertEquals(
+            listOf(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM),
+            caps.noiseControlQueryTypes,
+        )
+    }
+
+    @Test
+    fun v1EqFunction_mapsToV1EqTypes() {
+        // V1 EBB=0x52 collides with V2 PRESET_EQ_NON_CUSTOMIZABLE=0x52; the V1
+        // profile must interpret it as EBB, not as a V2 EQ type.
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn1(SonyV1FunctionType.EBB)),
+            fallback = baseCapabilities(),
+            profile = v1Profile,
+        )
+        assertTrue(HeadphoneFeature.EQ in caps.features)
+        assertEquals(EqEbbInquiredType.EBB, caps.eqConfig.writeInquiredType)
+    }
+
+    @Test
+    fun autoAndDualNcAsm_prefersDualForWrites() {
+        // LinkBuds S / WF-1000XM5 advertise AUTO_NCASM (0x15) AND the DUAL
+        // type (0x17); the device only honors level/voice through the DUAL
+        // layout, so the writable set must prefer DUAL even when AUTO is listed
+        // first (AUTO_NCASM appears before MODE_NC_ASM_DUAL in the list).
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(
+                fn(SonyV2FunctionType.AUTO_NCASM, 1),
+                fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 6),
+            ),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.AMBIENT_LEVEL in caps.features)
+        assertTrue(HeadphoneFeature.AMBIENT_VOICE_MODE in caps.features)
+        assertEquals(
+            setOf(NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS),
+            caps.writableNoiseControlTypes,
+        )
+    }
+
+    @Test
+    fun autoNcAsmOnly_keepsAutoForWrites() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.AUTO_NCASM, 1)),
+            fallback = baseCapabilities(),
+        )
+        assertEquals(
+            setOf(NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS),
+            caps.writableNoiseControlTypes,
+        )
+    }
+
+    @Test
+    fun eqFunction_enablesEqWithWriteType() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.PRESET_EQ), fn(SonyV2FunctionType.EBB, 1)),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.EQ in caps.features)
+        assertEquals(EqEbbInquiredType.PRESET_EQ, caps.eqConfig.writeInquiredType)
+        assertTrue(caps.eqConfig.hasClearBass)
+        // A device advertising PRESET_EQ writes Clear Bass by resending the
+        // PRESET_EQ bands (capture evidence), not via a standalone EBB param.
+        assertEquals(ClearBassWriteMode.PRESET_EQ_BANDS, caps.eqConfig.clearBassWriteMode)
+    }
+
+    @Test
+    fun playFunction_enablesPlaybackControl() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT)),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.PLAYBACK_CONTROL in caps.features)
+        assertEquals(
+            PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT,
+            caps.playbackControlType,
+        )
+    }
+
+    @Test
+    fun batteryFunctions_collectQueries() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(
+                fn(SonyV2FunctionType.LEFT_RIGHT_BATTERY_LEVEL_INDICATOR),
+                fn(SonyV2FunctionType.CRADLE_BATTERY_LEVEL_INDICATOR, 1),
+            ),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.BATTERY in caps.features)
+        assertEquals(
+            listOf(PowerInquiredType.LEFT_RIGHT_BATTERY, PowerInquiredType.CRADLE_BATTERY),
+            caps.batteryQueries,
+        )
+    }
+
+    @Test
+    fun unknownFunction_isSkipped() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.CONCIERGE_DATA)),
+            fallback = baseCapabilities(),
+        )
+        assertEquals(setOf(HeadphoneFeature.DEVICE_INFO), caps.features)
+        assertEquals(emptyList<NcAsmInquiredType>(), caps.noiseControlQueryTypes)
+    }
+
+    // ── Capability probe command generation ──────────────────────────────────
+
+    @Test
+    fun probeCommands_generatesPerDomainGetCap() {
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v2Profile,
+            functions = listOf(
+                fn(SonyV2FunctionType.NOISE_CANCELLING_ONOFF_AND_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 0),
+                fn(SonyV2FunctionType.PRESET_EQ, 1),
+                fn(SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT, 2),
+            ),
+        )
+        val labels = commands.map { it.label }
+        assertTrue(labels.any { it.contains("GET NCASM capability") })
+        assertTrue(labels.any { it.contains("GET EQEBB capability") })
+        assertTrue(labels.any { it.contains("GET EQEBB extended") })
+        assertTrue(labels.any { it.contains("GET PLAY capability") })
+        // NCASM GET_CAPABILITY payload: [NCASM 0x60][NcAsm type code]
+        val ncasm = commands.first { it.label.contains("GET NCASM") }
+        assertEquals(
+            listOf(0x0E, 0x60, NcAsmInquiredType.NC_ON_OFF_AND_ASM_SEAMLESS.code.toInt().and(0xFF)),
+            ncasm.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+        // EQEBB GET_CAPABILITY payload: [EQEBB 0x50][type code][DisplayLanguage 0x00]
+        val eqebb = commands.first { it.label.contains("GET EQEBB capability") }
+        assertEquals(
+            listOf(0x0E, 0x50, EqEbbInquiredType.PRESET_EQ.code.toInt().and(0xFF), 0x00),
+            eqebb.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+        // PLAY GET_CAPABILITY payload: [PLAY 0xA0][type code]
+        val play = commands.first { it.label.contains("GET PLAY capability") }
+        assertEquals(
+            listOf(0x0E, 0xA0, PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT.code.toInt().and(0xFF)),
+            play.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+    }
+
+    @Test
+    fun probeCommands_skipsUnrecognisedFunctions() {
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v2Profile,
+            functions = listOf(fn(SonyV2FunctionType.CONCIERGE_DATA)),
+        )
+        assertEquals(emptyList<HeadphoneCommand>(), commands)
+    }
+
+    @Test
+    fun applyToProfile_recordsProbeEvidenceAndKeepsStaticMarkers() {
+        val applied = SonyCapabilityProbe.applyToProfile(
+            profile = v2Profile,
+            functions = listOf(
+                fn(SonyV2FunctionType.NOISE_CANCELLING_ONOFF_AND_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 0),
+                fn(SonyV2FunctionType.PRESET_EQ, 1),
+            ),
+            transport = HeadphoneTransport.GATT_HPC,
+        )
+        assertTrue(applied.protocolEvidence.any { it.startsWith("static-profile:") })
+        assertTrue(applied.protocolEvidence.any { it == "probe:ret-support-function(2)" })
+        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:NCASM:") })
+        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:EQEBB:") })
+        assertTrue(HeadphoneFeature.NOISE_CONTROL in applied.capabilities.features)
+        assertTrue(HeadphoneFeature.EQ in applied.capabilities.features)
+    }
+
+    @Test
+    fun v1ProbeCommands_generatesNcAsmSystemProbe() {
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v1Profile,
+            functions = listOf(
+                fn1(SonyV1FunctionType.NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE, 0),
+                fn1(SonyV1FunctionType.CONTROL_BY_WEARING, 1),
+            ),
+        )
+        val labels = commands.map { it.label }
+        assertTrue(labels.any { it.contains("GET NCASM capability V1") })
+        assertTrue(labels.any { it.contains("GET SYSTEM capability") })
+        val system = commands.first { it.label.contains("GET SYSTEM capability") }
+        // V1 SYSTEM GET_CAPABILITY: [SYSTEM 0xF0][type code 0x06]
+        assertEquals(
+            listOf(0x0E, 0xF0, 0x06),
+            system.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+    }
+}

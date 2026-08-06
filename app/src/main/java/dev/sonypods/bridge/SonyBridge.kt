@@ -18,11 +18,22 @@ object SonyBridge {
     /** Consumers -> engine: a control command, see [EXTRA_COMMAND]. */
     const val ACTION_COMMAND = "dev.sonypods.action.command"
 
+    /**
+     * Engine -> app (durable persistence) and app -> engine (value push):
+     * the encoded capability-probe cache. The payload is [EXTRA_CAPABILITY_JSON].
+     * The engine broadcasts it to the app, which persists it into the shared
+     * remote-prefs store (the only side where that store is writable) and echoes
+     * it back so the engine's in-process overlay stays current even when the
+     * hook-side remote-prefs read comes back empty.
+     */
+    const val ACTION_CAPABILITY_CACHE = "dev.sonypods.action.capability_cache"
+
     const val EXTRA_COMMAND = "command"
     const val EXTRA_INT = "value_int"
     const val EXTRA_BOOL = "value_bool"
     const val EXTRA_STRING = "value_string"
     const val EXTRA_INDEX = "index"
+    const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
@@ -99,4 +110,21 @@ object SonyBridge {
             putExtra(EXTRA_STRING, address)
             putExtra("device_name", name)
         }
+
+    /**
+     * Push the encoded capability-probe cache to the engine (app -> engine value
+     * push, mirroring the config broadcast; used by the app receiver to echo the
+     * engine's own write back so the in-process overlay stays current).
+     */
+    fun sendCapabilityCache(context: Context, json: String) {
+        runCatching {
+            context.sendBroadcast(
+                Intent(ACTION_CAPABILITY_CACHE).apply {
+                    putExtra(EXTRA_CAPABILITY_JSON, json)
+                    setPackage(ENGINE_PACKAGE)
+                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                }
+            )
+        }
+    }
 }

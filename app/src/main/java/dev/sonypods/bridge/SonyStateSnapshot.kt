@@ -21,6 +21,10 @@ import dev.sonypods.protocol.PlaybackStatus
 data class SonyStateSnapshot(
     val connected: Boolean = false,
     val protocolReady: Boolean = false,
+    /** True once the connection-time capability probe finished (cache restore or
+     * full probe). The app detail UI is gated on it so it never opens against an
+     * empty half-probed profile. */
+    val probeComplete: Boolean = false,
     val deviceName: String? = null,
     val deviceAddress: String? = null,
     val firmwareVersion: String? = null,
@@ -64,6 +68,7 @@ data class SonyStateSnapshot(
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(KEY_CONNECTED, connected)
         putBoolean(KEY_PROTOCOL_READY, protocolReady)
+        putBoolean(KEY_PROBE_COMPLETE, probeComplete)
         deviceName?.let { putString(KEY_DEVICE_NAME, it) }
         deviceAddress?.let { putString(KEY_DEVICE_ADDRESS, it) }
         firmwareVersion?.let { putString(KEY_FIRMWARE, it) }
@@ -103,6 +108,7 @@ data class SonyStateSnapshot(
 
         private const val KEY_CONNECTED = "connected"
         private const val KEY_PROTOCOL_READY = "protocol_ready"
+        private const val KEY_PROBE_COMPLETE = "probe_complete"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_DEVICE_ADDRESS = "device_address"
         private const val KEY_FIRMWARE = "firmware"
@@ -135,6 +141,7 @@ data class SonyStateSnapshot(
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
             connected = bundle.getBoolean(KEY_CONNECTED, false),
             protocolReady = bundle.getBoolean(KEY_PROTOCOL_READY, false),
+            probeComplete = bundle.getBoolean(KEY_PROBE_COMPLETE, false),
             deviceName = bundle.getString(KEY_DEVICE_NAME),
             deviceAddress = bundle.getString(KEY_DEVICE_ADDRESS),
             firmwareVersion = bundle.getString(KEY_FIRMWARE),
@@ -178,6 +185,7 @@ data class SonyStateSnapshot(
             return SonyStateSnapshot(
                 connected = state.connectedDevice != null,
                 protocolReady = state.deviceInfo.protocolReady,
+                probeComplete = state.probeComplete,
                 deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
                 deviceAddress = state.connectedDevice?.address,
                 firmwareVersion = state.deviceInfo.firmwareVersion,

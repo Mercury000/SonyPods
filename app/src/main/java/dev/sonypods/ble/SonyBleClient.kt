@@ -66,6 +66,10 @@ data class SonyBleConnectionInfo(
     val writableValueLength: Int? = null,
     val optimalMtu: Int? = null,
     val transport: String = "GATT_HPC",
+    /** Channels the transport actually exposes (GATT endpoints + SPP). Used at
+     * connection time to bind the neutral profile to the protocol generation
+     * the hardware speaks, replacing the deleted static per-model templates. */
+    val channels: Set<TandemChannel> = emptySet(),
 )
 
 data class GattTandemEndpoint(
@@ -548,6 +552,11 @@ class SonyBleClient(
                 )
                 val socket = createSppSocket(classicRemote)
                 socket.connect()
+                // Publish the connected device BEFORE the read loop starts: the headphone
+                // pushes its first frame immediately, and onMessage() requires
+                // connectedDevice/connectedProfile to be present (ensureConnectedProfile
+                // throws otherwise, killing the SPP thread and the whole probe).
+                listener.onConnectionStateChanged(true, connectedDevice)
                 sppTransport = SonySppTransport(
                     socket = socket,
                     onPayload = { payload -> listener.onMessage(TandemChannel.SPP_MDR, payload) },
@@ -560,7 +569,7 @@ class SonyBleClient(
                 ).also { it.start() }
                 log("SPP connected")
                 listener.onConnectionStateChanged(true, connectedDevice)
-                listener.onReady(SonyBleConnectionInfo(mtu = SPP_WRITABLE_VALUE_LENGTH, transport = "SPP"))
+                listener.onReady(SonyBleConnectionInfo(mtu = SPP_WRITABLE_VALUE_LENGTH, transport = "SPP", channels = setOf(TandemChannel.SPP_MDR)))
             } catch (e: IOException) {
                 log("SPP connection failed: ${e.message}")
                 closeSpp(notify = true)
@@ -894,6 +903,7 @@ class SonyBleClient(
                     writableValueLength = writableValueLength,
                     optimalMtu = optimalMtu,
                     transport = gattTransportLabel(),
+                    channels = gattEndpoints.keys.toSet(),
                 )
             )
             return

@@ -150,7 +150,7 @@ object SonyTandemV2Table2Protocol {
     // ── GET builders ────────────────────────────────────────────────────────
 
     fun buildGetSupportFunction(): ByteArray =
-        TandemMessage(DT, CONNECT_GET_SUPPORT_FUNCTION).toByteArray()
+        TandemMessage(DT, CONNECT_GET_SUPPORT_FUNCTION, byteArrayOf(0x00)).toByteArray()
 
     fun buildGetPowerStatus(type: PowerInquiredTypeTable2): ByteArray =
         TandemMessage(DT, POWER_GET_STATUS, byteArrayOf(type.code)).toByteArray()
@@ -214,7 +214,10 @@ object SonyTandemV2Table2Protocol {
         }
 
         return when (command) {
-            CONNECT_RET_SUPPORT_FUNCTION -> parseCommon(payload, raw, command)
+            CONNECT_RET_SUPPORT_FUNCTION -> ParsedTandemResponse.SupportFunction(
+                functions = parseSupportFunction(payload),
+                raw = raw,
+            )
             POWER_RET_CAPABILITY, POWER_RET_STATUS, POWER_NTFY_STATUS,
             POWER_RET_PARAM, POWER_NTFY_PARAM -> parsePower(payload, raw)
             PERI_RET_CAPABILITY, PERI_RET_STATUS, PERI_NTFY_STATUS,
@@ -234,13 +237,28 @@ object SonyTandemV2Table2Protocol {
         }
     }
 
-    private fun parseCommon(payload: ByteArray, raw: ByteArray, command: Byte): ParsedTandemResponse =
-        ParsedTandemResponse.Table2Common(
-            family = Table2Family.CONNECT.name,
-            command = command.unsigned,
-            values = payload.unsignedList(),
-            raw = raw,
-        )
+    /**
+     * Parse a V2 Table2 CONNECT_RET_SUPPORT_FUNCTION payload. Same wire layout
+     * as Table1 (SC `ff0.C16478l`: [0]=0x07 [1]=0x00 [2]=count [3..]=(code,order)
+     * pairs) but the FunctionTypes belong to Table NO_2. Returns the list
+     * sorted by the order field.
+     */
+    fun parseSupportFunction(payload: ByteArray): List<SonySupportedFunction> =
+        if (payload.size < 2) {
+            emptyList()
+        } else {
+            val count = payload.getOrNull(1)?.toInt()?.and(0xFF) ?: 0
+            buildList {
+                for (i in 0 until count) {
+                    val code = payload.getOrNull(2 + i * 2) ?: break
+                    val order = payload.getOrNull(3 + i * 2)?.toInt()?.and(0xFF) ?: break
+                    val resolved = SonyV2FunctionType.fromByteCode(SonyTable.NO_2, code)
+                    if (resolved != SonyV2FunctionType.OUT_OF_RANGE) {
+                        add(SonySupportedFunction(code, order))
+                    }
+                }
+            }.sortedBy { it.order }
+        }
 
     private fun parsePower(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val type = payload.firstOrNull()?.let { PowerInquiredTypeTable2.fromCode(it) }

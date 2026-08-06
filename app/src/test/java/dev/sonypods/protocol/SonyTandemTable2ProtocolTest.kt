@@ -108,8 +108,9 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v2_buildGetSupportFunction_matchesCommandShape() {
+        // CONNECT_GET_SUPPORT_FUNCTION 0x06 with FIXED_VALUE payload 0x00
         val bytes = SonyTandemV2Table2Protocol.buildGetSupportFunction()
-        assertArrayEquals(byteArrayOf(0x0F, 0x06), bytes)
+        assertArrayEquals(byteArrayOf(0x0F, 0x06, 0x00), bytes)
     }
 
     @Test
@@ -195,13 +196,39 @@ class SonyTandemTable2ProtocolTest {
     }
 
     @Test
-    fun v2_parse_connectRetSupportFunction_returnsTable2Common() {
-        val raw = byteArrayOf(0x0F, 0x07, 0x00)
+    fun v2_parse_connectRetSupportFunction_returnsSupportFunction() {
+        // 0x0F 0x07 [0x00 fixed] [0x03 count] (FunctionType.code, order) pairs,
+        // resolved via Table NO_2 and sorted by order.
+        val raw = byteArrayOf(
+            0x0F, 0x07, 0x00, 0x03,
+            0x50, 0x00, // SAFE_LISTENING_HBS_1
+            0x62, 0x02, // LE_AUDIO_CONNECTION_MODE
+            0x51, 0x01, // SAFE_LISTENING_TWS_1
+        )
         val parsed = SonyTandemV2Table2Protocol.parse(raw)
 
-        assertTrue("Expected Table2Common but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.Table2Common)
-        parsed as ParsedTandemResponse.Table2Common
-        assertEquals("CONNECT", parsed.family)
+        assertTrue(
+            "Expected SupportFunction but got ${parsed::class.simpleName}",
+            parsed is ParsedTandemResponse.SupportFunction,
+        )
+        parsed as ParsedTandemResponse.SupportFunction
+        assertEquals(
+            listOf(
+                SonySupportedFunction(0x50, 0),
+                SonySupportedFunction(0x51, 1),
+                SonySupportedFunction(0x62, 2),
+            ),
+            parsed.functions,
+        )
+    }
+
+    @Test
+    fun v2_parse_connectRetSupportFunction_emptyPayloadIsEmptyList() {
+        val raw = byteArrayOf(0x0F, 0x07, 0x00)
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+        assertTrue("Expected SupportFunction but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.SupportFunction)
+        parsed as ParsedTandemResponse.SupportFunction
+        assertEquals(emptyList<SonySupportedFunction>(), parsed.functions)
     }
 
     @Test

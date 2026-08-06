@@ -135,6 +135,12 @@ data class ConnectedHeadphoneProfile(
     val featureBindings: Map<HeadphoneFeature, FeatureProtocolBinding> = emptyMap(),
     val protocolEvidence: List<String> = emptyList(),
     val playbackDispatchStrategy: PlaybackDispatchStrategy = PlaybackDispatchStrategy.TANDEM_FIRST,
+    /** Runtime protocol version reported by CONNECT_RET_PROTOCOL_INFO (2 bytes BE),
+     * validated against [dev.sonypods.protocol.SonyTandemConstants.PROTOCOL_VERSIONS]. */
+    val protocolVersion: Int? = null,
+    /** Bumped whenever the profile is rebound to a different protocol generation
+     * or transport; stale probe-derived evidence is discarded on a rebind. */
+    val rebindGeneration: Int = 0,
 ) {
     fun supports(feature: HeadphoneFeature): Boolean = feature in capabilities.features
     fun protocolFor(feature: HeadphoneFeature): HeadphoneProtocolVariant =
@@ -153,6 +159,15 @@ data class ConnectedHeadphoneProfile(
             ?.channel
             ?: featureBindings.values.firstOrNull()?.channel
             ?: TandemChannel.SPP_MDR
+
+    /** Record the validated runtime protocol version from RET_PROTOCOL_INFO. */
+    fun withProtocolVersion(version: Int): ConnectedHeadphoneProfile =
+        copy(protocolVersion = version)
+
+    /** Mark this profile as rebound (new generation/transport); clears the
+     * protocol version so a stale whitelist verdict is never reused. */
+    fun rebounded(): ConnectedHeadphoneProfile =
+        copy(rebindGeneration = rebindGeneration + 1, protocolVersion = null)
 }
 
 data class ProfileTemplate(
@@ -172,34 +187,7 @@ data class ProfileTemplate(
     }
 
     val featureBindings: Map<HeadphoneFeature, FeatureProtocolBinding> by lazy {
-        featureProtocolMap.mapValues { (feature, variant) ->
-            FeatureProtocolBinding(
-                feature = feature,
-                variant = variant,
-                channel = defaultChannelFor(variant),
-                queryTypes = queryTypesFor(feature),
-                writableTypes = writableTypesFor(feature),
-            )
-        }
-    }
-
-    private fun queryTypesFor(feature: HeadphoneFeature): List<Any> = when (feature) {
-        HeadphoneFeature.BATTERY -> capabilities.batteryQueries
-        HeadphoneFeature.NOISE_CONTROL,
-        HeadphoneFeature.AMBIENT_LEVEL,
-        HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.noiseControlQueryTypes
-        HeadphoneFeature.EQ,
-        HeadphoneFeature.CLEAR_BASS -> capabilities.eqConfig.statusQueryTypes + capabilities.eqConfig.paramQueryTypes
-        HeadphoneFeature.PLAYBACK_CONTROL -> listOf(capabilities.playbackControlType)
-        else -> emptyList()
-    }
-
-    private fun writableTypesFor(feature: HeadphoneFeature): Set<Any> = when (feature) {
-        HeadphoneFeature.NOISE_CONTROL,
-        HeadphoneFeature.AMBIENT_LEVEL,
-        HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.writableNoiseControlTypes
-        HeadphoneFeature.PLAYBACK_CONTROL -> setOf(capabilities.playbackControlType)
-        else -> emptySet()
+        buildFeatureBindings(featureProtocolMap, capabilities)
     }
 
     fun toProfile(adapterId: String, brand: String, protocolName: String, displayName: String): ConnectedHeadphoneProfile =
@@ -235,6 +223,48 @@ data class ProfileTemplate(
 
 val ConnectedHeadphoneProfile.eqUiCapability: EqUiCapability
     get() = EqProtocolEngine.uiCapability(capabilities.eqConfig)
+
+/** Build the per-feature protocol/channel/query bindings for a feature map.
+ * Shared by [ProfileTemplate] and dynamic rebinding, so a profile rebound to a
+ * different protocol generation keeps every domain addressable. */
+fun buildFeatureBindings(
+    featureProtocolMap: Map<HeadphoneFeature, HeadphoneProtocolVariant>,
+    capabilities: HeadphoneCapabilities,
+): Map<HeadphoneFeature, FeatureProtocolBinding> =
+    featureProtocolMap.mapValues { (feature, variant) ->
+        FeatureProtocolBinding(
+            feature = feature,
+            variant = variant,
+            channel = defaultChannelFor(variant),
+            queryTypes = queryTypesForFeature(feature, capabilities),
+            writableTypes = writableTypesForFeature(feature, capabilities),
+        )
+    }
+
+private fun queryTypesForFeature(
+    feature: HeadphoneFeature,
+    capabilities: HeadphoneCapabilities,
+): List<Any> = when (feature) {
+    HeadphoneFeature.BATTERY -> capabilities.batteryQueries
+    HeadphoneFeature.NOISE_CONTROL,
+    HeadphoneFeature.AMBIENT_LEVEL,
+    HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.noiseControlQueryTypes
+    HeadphoneFeature.EQ,
+    HeadphoneFeature.CLEAR_BASS -> capabilities.eqConfig.statusQueryTypes + capabilities.eqConfig.paramQueryTypes
+    HeadphoneFeature.PLAYBACK_CONTROL -> listOf(capabilities.playbackControlType)
+    else -> emptyList()
+}
+
+private fun writableTypesForFeature(
+    feature: HeadphoneFeature,
+    capabilities: HeadphoneCapabilities,
+): Set<Any> = when (feature) {
+    HeadphoneFeature.NOISE_CONTROL,
+    HeadphoneFeature.AMBIENT_LEVEL,
+    HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.writableNoiseControlTypes
+    HeadphoneFeature.PLAYBACK_CONTROL -> setOf(capabilities.playbackControlType)
+    else -> emptySet()
+}
 
 interface HeadphoneAdapter {
     val id: String

@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
+import android.content.SharedPreferences
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.ble.SonyBleClient
 import dev.sonypods.ble.SonyBleClientListener
@@ -26,8 +27,13 @@ import dev.sonypods.headphones.HeadphoneFeature
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.headphones.HeadphoneTransport
 import dev.sonypods.headphones.PlaybackDispatchStrategy
+import dev.sonypods.headphones.SonyCapabilityProbe
+import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.media.MediaPlaybackController
+import dev.sonypods.config.CapabilityCacheEntry
+import dev.sonypods.config.CapabilityProbeCache
+import dev.sonypods.config.FunctionCode
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
@@ -39,11 +45,14 @@ import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.QuickAccessKey
+import dev.sonypods.protocol.SonySupportedFunction
+import dev.sonypods.protocol.SonyTandemConstants
 import dev.sonypods.protocol.hexString
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.concurrent.ConcurrentHashMap
 
 private const val EQ_BAND_STEP_CENTER = 10
 private const val EQ_CLEAR_BASS_RAW_INDEX = 0
@@ -51,6 +60,9 @@ private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
+/** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
+ * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
+private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
 
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
@@ -66,6 +78,10 @@ data class DeviceInfoState(
     val modelImageUrl: String? = null,
     val modelImageSourceColor: String? = null,
     val protocolReady: Boolean = false,
+    /** Runtime protocol version reported by RET_PROTOCOL_INFO (2 bytes BE). */
+    val protocolVersion: Int? = null,
+    /** Whether [protocolVersion] passed the SC whitelist check (null until checked). */
+    val protocolVersionAccepted: Boolean? = null,
 )
 
 data class BatteryState(
@@ -167,6 +183,13 @@ data class SonyHeadphoneUiState(
     val autoReconnect: Boolean = false,
     val strictSonyScanFilter: Boolean = false,
     val preferredProtocol: String = "Sony Tandem",
+    /**
+     * True once the connection-time capability probe has finished (either from a
+     * cache restore when the CONNECT_RET_CAPABILITY_INFO counter matched, or from
+     * the full RET_SUPPORT_FUNCTION probe). The detail UI is gated on this so it
+     * never opens against an empty half-probed profile.
+     */
+    val probeComplete: Boolean = false,
 )
 
 /**
@@ -189,6 +212,34 @@ class SonyHeadphoneRepository private constructor(
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
+
+    // ── Capability-probe cache (SC `exchanged_capabilities` semantics) ──
+
+    /**
+     * Framework-backed remote-preference provider (hook-side, read-only). Wired by
+     * the host; null when the engine runs outside a hooked process (plain app).
+     */
+    @Volatile
+    private var prefsProvider: (() -> SharedPreferences?)? = null
+
+    /** Sink for the encoded cache map; the host broadcasts it to the app process,
+     * which is the only side allowed to write the shared remote-prefs store. */
+    @Volatile
+    private var cacheSink: ((String) -> Unit)? = null
+
+    /** In-process cache overlay: consulted before the prefs store on every connect. */
+    private val capabilityCache = ConcurrentHashMap<String, CapabilityCacheEntry>()
+
+    private var awaitingCapabilityInfo = false
+    private var pendingCapabilityCounter: Int? = null
+    private var pendingCapabilityIdentifier = ""
+    private val capabilityInfoTimeoutRunnable = Runnable {
+        if (awaitingCapabilityInfo) {
+            awaitingCapabilityInfo = false
+            appendLog("GET_CAPABILITY_INFO timed out; falling back to full support-function probe")
+            runProbeFromSupportFunction(ensureConnectedProfile())
+        }
+    }
 
     val state: StateFlow<SonyHeadphoneUiState> = _state.asStateFlow()
 
@@ -241,6 +292,49 @@ class SonyHeadphoneRepository private constructor(
         client.disconnect()
     }
 
+    /**
+     * Wire the framework-backed remote-preference provider (hook-side read-only
+     * store). Called by the host once the LSPosed remote-prefs bridge is up.
+     */
+    fun attachPrefsProvider(provider: (() -> SharedPreferences?)?) {
+        prefsProvider = provider
+        // Seed the in-process overlay from whatever the store already has (e.g. a
+        // cache persisted before a scope restart), so a reconnect shortly after the
+        // bridge comes up benefits without waiting for a fresh probe.
+        refreshCapabilityCacheFromPrefs()
+    }
+
+    /** Wire the sink that carries the encoded cache to the app process for durable
+     * persistence into the shared remote-prefs store. */
+    fun attachCapabilityCacheSink(sink: ((String) -> Unit)?) {
+        cacheSink = sink
+    }
+
+    /** Re-read the cache map from the remote-prefs store into the in-process overlay. */
+    fun refreshCapabilityCacheFromPrefs() {
+        val entries = CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())
+        if (entries.isNotEmpty()) {
+            capabilityCache.putAll(entries)
+            appendLog("Capability cache loaded ${entries.size} entries from prefs", writeLogcat = false)
+        }
+    }
+
+    /** Install a cache map pushed from the app process by value (survives an empty
+     * remote-prefs read in the hook process). */
+    fun installCapabilityCache(json: String) {
+        val entries = CapabilityProbeCache.decode(json)
+        if (entries.isNotEmpty()) {
+            capabilityCache.clear()
+            capabilityCache.putAll(entries)
+            appendLog("Capability cache installed ${entries.size} entries via broadcast", writeLogcat = false)
+        }
+    }
+
+    private fun readCapabilityCache(address: String): CapabilityCacheEntry? {
+        capabilityCache[address]?.let { return it }
+        return CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())[address]
+    }
+
     fun refreshBasics() {
         if (!_state.value.deviceInfo.protocolReady) {
             if (_state.value.connectedDevice != null && _state.value.endpointDiagnostic != null) {
@@ -255,6 +349,123 @@ class SonyHeadphoneRepository private constructor(
         HeadphoneAdapterRegistry.buildRefreshCommands(profile)
             .forEach(::sendCommand)
         updatePlaybackStatusFromAudioManager()
+    }
+
+    /**
+     * Connection-time capability probe (mirrors SC C29903d/C30916e).
+     *
+     * SC first sends CONNECT_GET_CAPABILITY_INFO (0x02) and compares the returned
+     * capability counter against the persisted one for this device; on a match the
+     * per-domain capability probe is omitted and the cached tableset restored
+     * ("Omit the getting capability"), otherwise the full RET_SUPPORT_FUNCTION
+     * probe runs and its result is persisted. We mirror that: send GET_CAPABILITY_INFO
+     * first, restore from cache on a counter match, and fall back to the full
+     * support-function probe on a mismatch or when the device never replies.
+     */
+    private fun probeCapabilities() {
+        if (awaitingCapabilityInfo) return
+        val profile = ensureConnectedProfile()
+        val address = _state.value.connectedDevice?.address
+        if (address != null && address.isNotBlank()) {
+            val capabilityInfoCommand = runCatching {
+                SonyCapabilityProbe.buildGetCapabilityInfoCommand(profile)
+            }.getOrNull()
+            if (capabilityInfoCommand != null) {
+                awaitingCapabilityInfo = true
+                appendLog("Sending GET_CAPABILITY_INFO (SC counter gate)")
+                sendCommand(capabilityInfoCommand)
+                mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
+                mainHandler.postDelayed(capabilityInfoTimeoutRunnable, CAPABILITY_INFO_TIMEOUT_MS)
+                return
+            }
+        }
+        runProbeFromSupportFunction(profile)
+    }
+
+    /** The RET_SUPPORT_FUNCTION-driven probe (used on counter mismatch / no reply). */
+    private fun runProbeFromSupportFunction(profile: ConnectedHeadphoneProfile) {
+        val supportCommand = runCatching { SonyCapabilityProbe.buildGetSupportFunctionCommand(profile) }
+            .getOrNull()
+        if (supportCommand == null) {
+            appendLog("No support-function probe for ${profile.protocolName}; falling back to direct refresh")
+            markProbeComplete()
+            refreshBasics()
+            return
+        }
+        appendLog("Probing support function (SC C29903d/C30916e capability sequence)")
+        sendCommand(supportCommand)
+    }
+
+    /** CONNECT_RET_CAPABILITY_INFO (0x03): the capability counter gate. */
+    private fun applyConnectCapabilityInfo(response: ParsedTandemResponse.ConnectCapabilityInfo) {
+        if (!awaitingCapabilityInfo) return
+        awaitingCapabilityInfo = false
+        mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
+        val address = _state.value.connectedDevice?.address.orEmpty()
+        val cached = readCapabilityCache(address)
+        if (cached != null && cached.counter == response.capabilityCounter && restoreProfileFromCache(cached)) {
+            appendLog(
+                "Capability counter ${response.capabilityCounter} matches cache " +
+                    "(identifier=${response.identifier}) → omit capability probe; restoring profile"
+            )
+            markProbeComplete()
+            refreshBasics()
+            return
+        }
+        appendLog(
+            "Capability counter ${response.capabilityCounter} cache=${cached?.counter ?: "none"} " +
+                "(identifier=${response.identifier}) → start get capability"
+        )
+        pendingCapabilityCounter = response.capabilityCounter
+        pendingCapabilityIdentifier = response.identifier
+        runProbeFromSupportFunction(ensureConnectedProfile())
+    }
+
+    /** Re-derive the probe-derived profile from a cached function list. Returns
+     * false when the cached entry has no functions (nothing to restore). */
+    private fun restoreProfileFromCache(entry: CapabilityCacheEntry): Boolean {
+        if (entry.functions.isEmpty()) return false
+        val profile = _state.value.connectedProfile ?: return false
+        val functions = SonyCapabilityProbe.restoreFunctions(profile, entry.functions)
+        if (functions.isEmpty()) return false
+        val restored = SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
+        _state.update {
+            it.copy(
+                connectedProfile = restored,
+                eqUiCapability = restored.eqUiCapability,
+                supportedFeatures = featureStatusesFor(restored),
+            )
+        }
+        appendLog(
+            "Restored profile from cache: ${functions.size} functions, " +
+                "battery=${restored.capabilities.batteryQueries}, writableNC=${restored.protocolEvidence.count { it.startsWith("probe:NCASM") }}",
+            writeLogcat = false,
+        )
+        return true
+    }
+
+    /** Persist the current probe result (counter + function list) for this device. */
+    private fun saveCapabilityCache(functions: List<SonySupportedFunction>) {
+        val address = _state.value.connectedDevice?.address ?: return
+        val counter = pendingCapabilityCounter ?: return
+        val profile = _state.value.connectedProfile ?: return
+        val entry = CapabilityCacheEntry(
+            counter = counter,
+            identifier = pendingCapabilityIdentifier,
+            variant = profile.protocolName,
+            transport = profile.transport.name,
+            functions = functions.map { FunctionCode(it.code.toInt() and 0xFF, it.order) },
+            savedAtMs = System.currentTimeMillis(),
+        )
+        capabilityCache[address] = entry
+        appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
+        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+    }
+
+    private fun markProbeComplete() {
+        if (_state.value.probeComplete) return
+        _state.update { it.copy(probeComplete = true) }
+        appendLog("Capability probe complete", writeLogcat = false)
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -564,6 +775,10 @@ class SonyHeadphoneRepository private constructor(
         if (!connected) {
             clearPendingPlaybackTransition()
             mainHandler.removeCallbacks(playbackRefreshRunnable)
+            awaitingCapabilityInfo = false
+            pendingCapabilityCounter = null
+            pendingCapabilityIdentifier = ""
+            mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
         }
         _state.update {
             val deviceInfo = if (connected) {
@@ -571,8 +786,18 @@ class SonyHeadphoneRepository private constructor(
             } else {
                 DeviceInfoState()
             }
+            // Keep a probe-derived profile when the same device re-fires a
+            // connection-state event (GATT then SPP handshakes each call this).
+            // Re-resolving to the neutral profile here would discard the
+            // RET_SUPPORT_FUNCTION probe results (batteryQueries, writable NC
+            // types), reverting refresh to single battery and disabling writes.
+            val sameDevice = it.connectedDevice?.address == device?.address
             val profile = if (connected && device != null) {
-                HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
+                if (sameDevice && it.connectedProfile != null) {
+                    it.connectedProfile
+                } else {
+                    HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
+                }
             } else {
                 null
             }
@@ -608,33 +833,44 @@ class SonyHeadphoneRepository private constructor(
                 permissionIssue = if (connected) it.permissionIssue else null,
                 scanState = if (connected) "Connected" else "Idle",
                 supportedFeatures = featureStatusesFor(profile),
+                probeComplete = if (connected) it.probeComplete else false,
             )
         }
     }
 
     override fun onReady(info: SonyBleConnectionInfo) {
         _state.update {
-            val profile = (it.connectedProfile ?: it.connectedDevice?.let { device ->
+            val base = (it.connectedProfile ?: it.connectedDevice?.let { device ->
                 HeadphoneAdapterRegistry.resolve(device, it.deviceInfo.modelName)
             })?.copy(transport = info.transport.toHeadphoneTransport())
+            // Bind the neutral profile to the protocol generation the transport
+            // endpoints actually expose (V1 MC endpoint → V1, V2 HPC/SPP → V2).
+            val profile = base?.let { p ->
+                SonyTandemHeadphoneAdapter.withEndpointChannels(p, info.channels)
+            }
             it.copy(
                 connectionInfo = info,
                 connectedProfile = profile,
                 eqUiCapability = profile?.eqUiCapability,
-                deviceInfo = it.deviceInfo.copy(protocolReady = true),
+                deviceInfo = it.deviceInfo.copy(protocolReady = true, protocolVersion = null, protocolVersionAccepted = null),
                 endpointDiagnostic = null,
                 table2Diagnostic = null,
                 permissionIssue = null,
                 supportedFeatures = featureStatusesFor(profile),
             )
         }
-        appendLog("Tandem channel ready: transport=${info.transport}, mtu=${info.mtu}, writable=${info.writableValueLength}")
-        refreshBasics()
+        appendLog("Tandem channel ready: transport=${info.transport}, mtu=${info.mtu}, writable=${info.writableValueLength}, channels=${info.channels}")
+        probeCapabilities()
     }
 
     override fun onMessage(channel: TandemChannel, raw: ByteArray) {
         appendLog("RX [$channel] ${raw.hexString()}")
-        val profile = _state.value.connectedProfile ?: ensureConnectedProfile()
+        val profile = _state.value.connectedProfile
+            ?: runCatching { ensureConnectedProfile() }.getOrNull()
+            ?: run {
+                appendLog("Drop RX [$channel] frame: no connected device yet")
+                return
+            }
         when (val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)) {
             is ParsedTandemResponse.DeviceInfo -> applyDeviceInfo(parsed)
             is ParsedTandemResponse.CommonStatus -> applyCommonStatus(parsed)
@@ -650,6 +886,10 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.Unknown -> applyKnownOrUnknown(parsed)
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.Table2Generic -> applyTable2Diagnostic(channel, parsed)
+            is ParsedTandemResponse.SupportFunction -> applySupportFunction(parsed)
+            is ParsedTandemResponse.ProtocolInfo -> applyProtocolInfo(parsed)
+            is ParsedTandemResponse.ConnectCapabilityInfo -> applyConnectCapabilityInfo(parsed)
+            is ParsedTandemResponse.CapabilityInfo -> applyCapabilityInfo(parsed)
         }
     }
 
@@ -675,10 +915,11 @@ class SonyHeadphoneRepository private constructor(
                 else -> info
             }.withResolvedModelImage(current.connectedDevice)
                 .withProfileFallback(current.connectedProfile)
-            val profile = current.connectedDevice?.let { device ->
-                HeadphoneAdapterRegistry.resolve(device, updatedInfo.modelName)
-                    .copy(transport = current.connectionInfo?.transport.toHeadphoneTransport())
-            } ?: current.connectedProfile
+            // Preserve the probe-derived profile. Re-resolving here would return
+            // the neutral static profile (pure-dynamic match is always null) and
+            // discard the RET_SUPPORT_FUNCTION probe results (batteryQueries,
+            // writable NC types). Device-info responses arrive on every refresh.
+            val profile = current.connectedProfile
             current.copy(
                 deviceInfo = updatedInfo,
                 connectedProfile = profile,
@@ -730,21 +971,33 @@ class SonyHeadphoneRepository private constructor(
     private fun applyBattery(response: ParsedTandemResponse.Battery) {
         _state.update { current ->
             val battery = current.batteryState
+            // Which battery kinds this device actually queries. A plain BATTERY
+            // reply only makes sense for single-battery devices (headsets); on TWS
+            // it is a stray reply to the neutral-profile GET sent while the
+            // capability gate is still running and must not populate `single`
+            // (otherwise the UI renders a single battery next to L/R/Cradle).
+            val supported = current.connectedProfile?.capabilities?.batteryQueries.orEmpty()
             current.copy(
                 batteryState = when (response.kind) {
-                    PowerInquiredType.BATTERY -> battery.copy(
-                        // A reported 0% for a bud means it is not on-link (disconnected);
-                        // map it to null so consumers render "disconnected" instead of a
-                        // misleading 0%. The charging case (CRADLE) keeps its raw value.
-                        single = response.values.firstOrNull().takeIf { it != 0 },
-                        raw = response.values.filterNotNull(),
-                    )
+                    PowerInquiredType.BATTERY ->
+                        if (PowerInquiredType.BATTERY in supported) battery.copy(
+                            // A reported 0% for a bud means it is not on-link (disconnected);
+                            // map it to null so consumers render "disconnected" instead of a
+                            // misleading 0%. The charging case (CRADLE) keeps its raw value.
+                            single = response.values.firstOrNull().takeIf { it != 0 },
+                            left = null,
+                            right = null,
+                            cradle = null,
+                            raw = response.values.filterNotNull(),
+                        ) else battery
                     PowerInquiredType.LEFT_RIGHT_BATTERY -> battery.copy(
+                        single = null,
                         left = response.values.getOrNull(0).takeIf { it != 0 },
                         right = response.values.getOrNull(1).takeIf { it != 0 },
                         raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.CRADLE_BATTERY -> battery.copy(
+                        single = null,
                         cradle = response.values.firstOrNull(),
                         raw = response.values.filterNotNull(),
                     )
@@ -805,6 +1058,27 @@ class SonyHeadphoneRepository private constructor(
         appendLog(
             "EQ/EBB extended type=${response.type} bands=${response.bands} values=${response.values}"
         )
+        // Band geometry is only discoverable at runtime; the extended-info bands
+        // list is the authoritative band count (raw bands, Clear Bass included).
+        if (response.bands.size > 0) {
+            _state.update { current ->
+                val profile = current.connectedProfile
+                if (profile == null || profile.capabilities.eqConfig.bandCount == response.bands.size) {
+                    current
+                } else {
+                    current.copy(
+                        connectedProfile = profile.copy(
+                            capabilities = profile.capabilities.copy(
+                                eqConfig = profile.capabilities.eqConfig.copy(bandCount = response.bands.size),
+                            )
+                        ),
+                        eqUiCapability = profile.eqUiCapability.copy(
+                            visibleBandCount = (response.bands.size - 1).coerceAtLeast(0),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     private fun sendEqBandSteps(label: String, rawSteps: List<Int>, preset: EqPresetId?) {
@@ -971,6 +1245,85 @@ class SonyHeadphoneRepository private constructor(
         appendLog("Table2 ${response::class.simpleName} channel=$channel raw=${response.raw.hexString()}")
         val diagnostic = table2DiagnosticStateFor(channel, response) ?: return
         _state.update { it.copy(table2Diagnostic = diagnostic) }
+    }
+
+    private fun applyProtocolInfo(response: ParsedTandemResponse.ProtocolInfo) {
+        val version = response.protocolVersion
+        // V1 (2-byte BE, C29903d.f85968b) and V2 (4-byte BE, C30916e.f88128b)
+        // whitelists are disjoint, so a single membership test covers both.
+        val accepted = SonyTandemConstants.PROTOCOL_VERSIONS.contains(version) ||
+            SonyTandemConstants.PROTOCOL_VERSIONS_V2.contains(version)
+        if (accepted) {
+            appendLog("Protocol version 0x%08X accepted (SC whitelist V1/V2)".format(version))
+        } else {
+            appendLog("Protocol version 0x%08X rejected: not in SC whitelist".format(version))
+        }
+        _state.update { current ->
+            current.copy(
+                deviceInfo = current.deviceInfo.copy(
+                    protocolVersion = version,
+                    protocolVersionAccepted = accepted,
+                ),
+                connectedProfile = if (accepted) {
+                    current.connectedProfile?.withProtocolVersion(version)
+                } else {
+                    current.connectedProfile
+                },
+            )
+        }
+    }
+
+    private fun applySupportFunction(response: ParsedTandemResponse.SupportFunction) {
+        appendLog("Support function list=${response.functions.size} functions=${response.functions.joinToString { it.toString() }}")
+        // SC aborts initialization for out-of-whitelist protocol versions
+        // (InitializationFailedCause); mirror that by skipping capability probing.
+        if (_state.value.deviceInfo.protocolVersionAccepted == false) {
+            appendLog("Protocol version rejected; capability probing aborted (SC C29903d/C30916e)")
+            markProbeComplete()
+            return
+        }
+        val alreadyProbed = _state.value.connectedProfile?.protocolEvidence
+            ?.any { it.startsWith("probe:ret-support-function") } == true
+        val probeCommands = runCatching {
+            _state.value.connectedProfile?.let { profile ->
+                SonyCapabilityProbe.buildCapabilityProbeCommands(profile, response.functions)
+            } ?: emptyList()
+        }.getOrElse { emptyList() }
+        _state.update { current ->
+            val profile = current.connectedProfile?.let { profile ->
+                SonyCapabilityProbe.applyToProfile(profile, response.functions, profile.transport)
+            } ?: current.connectedProfile
+            current.copy(
+                connectedProfile = profile,
+                eqUiCapability = profile?.eqUiCapability,
+                supportedFeatures = featureStatusesFor(profile),
+            )
+        }
+        if (!alreadyProbed) {
+            probeCommands.forEach(::sendCommand)
+        }
+        refreshBasics()
+        // The profile is now fully derived from RET_SUPPORT_FUNCTION; persist the
+        // probe result (counter + function list) so the next connection can omit
+        // the probe when the counter matches (SC `exchanged_capabilities`).
+        saveCapabilityCache(response.functions)
+        markProbeComplete()
+    }
+
+    private fun applyCapabilityInfo(response: ParsedTandemResponse.CapabilityInfo) {
+        val typeHex = response.inquiredTypeCode?.let { "0x%02X".format(it) } ?: "?"
+        appendLog(
+            "Probe capability domain=${response.domain} type=$typeHex len=${response.raw.size} raw=${response.raw.hexString()}",
+            writeLogcat = false,
+        )
+        _state.update { current ->
+            current.copy(
+                connectedProfile = current.connectedProfile?.copy(
+                    protocolEvidence = current.connectedProfile.protocolEvidence +
+                        listOf("probe:ret-capability(${response.domain},type=$typeHex,len=${response.raw.size})"),
+                )
+            )
+        }
     }
 
     private fun applyKnownOrUnknown(response: ParsedTandemResponse.Unknown) {

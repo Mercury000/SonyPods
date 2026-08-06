@@ -145,7 +145,10 @@ fun MainUI(
     val sonyConnected = sonyState.connected
     val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
     val displayTitle = sonyState.displayName
-    val canShowDetailPage = sonyConnected
+    // The capability probe is what turns the neutral profile into the real one
+    // (battery layout, writable NC types, EQ support); gating the detail page on
+    // it prevents opening against an empty half-probed profile while connecting.
+    val canShowDetailPage = sonyConnected && sonyState.probeComplete
     val showEarphoneDetail = canShowDetailPage && !showDevicePicker
 
     val sonyActions = remember(context) {
