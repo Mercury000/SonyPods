@@ -18,12 +18,7 @@ The protocol layer is based on OpenBuds' clean-room Sony Tandem implementation
 
 ### Supported models 
 
-- WH-1000XM4
-- WF-1000XM4
-- WF-1000XM5
-- WH-1000XM5
-- LinkBuds S
-- LinkBuds Fit
+Theoretically supports all released Sony headphones
 
 ### Headphone features
 

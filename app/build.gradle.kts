@@ -22,8 +22,8 @@ android {
         applicationId = "com.mercury.sonypods"
         minSdk = 35
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.1.2"
+        versionCode = 5
+        versionName = "1.2.0"
         buildConfigField("long", "BUILD_TIMESTAMP", System.currentTimeMillis().toString())
     }
 

@@ -17,12 +17,7 @@ OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 
 ### 支持型号
 
-- WH-1000XM4
-- WF-1000XM4
-- WF-1000XM5
-- WH-1000XM5
-- LinkBuds S
-- LinkBuds Fit
+理论支持所有已发布的索尼耳机
 
 ### 耳机功能
 
