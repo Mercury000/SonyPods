@@ -38,6 +38,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private var hasTransparencyVocalEnhancementState = false
     private var currentAddress: String? = null
     private var currentName: String? = null
+    private var currentFormFactor: String? = null
 
     private val stateMirror = HookStateMirror { snapshot ->
         snapshot.deviceAddress?.let {
@@ -45,6 +46,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             knownSonyAddresses.add(it.uppercase())
         }
         snapshot.deviceName?.let { currentName = it }
+        snapshot.formFactor?.let { currentFormFactor = it }
         currentBattery = BatteryParams(
             left = (snapshot.batteryLeft ?: snapshot.batterySingle)
                 ?.let { PodParams(battery = it, isConnected = true) },
@@ -58,8 +60,16 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }
         currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
         hasTransparencyVocalEnhancementState = true
-        Log.d(TAG, "state applied address=$currentAddress anc=$currentAnc battery=${currentBattery.debugString()}")
-        notifyRealStatus("engine-state")
+        Log.d(TAG, "state applied address=$currentAddress connected=${snapshot.connected} anc=$currentAnc battery=${currentBattery.debugString()}")
+        // Never re-forward an empty/disconnected state into the real MIUI BT stack:
+        // a stale or incomplete mirror would push "255,255,255,,,,,0000" as refreshStatus,
+        // which the settings headset fragment renders as "-" and fights the correct
+        // value injected by the settings hook (visible as a battery flash).
+        if (snapshot.connected && (currentBattery?.hasAnyLevel == true || hasTransparencyVocalEnhancementState)) {
+            notifyRealStatus("engine-state")
+        } else {
+            Log.d(TAG, "state mirror not connected or empty; skipped real refreshStatus")
+        }
     }
 
     override fun onHook() {
@@ -663,9 +673,17 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun miuiRefreshPayload(battery: BatteryParams?, anc: Int, transparencyVocalEnhancement: Boolean): String {
         val values = MutableList(16) { "" }
-        values[0] = miuiBatteryValue(battery?.left)
-        values[1] = miuiBatteryValue(battery?.right)
-        values[2] = miuiBatteryValue(battery?.case)
+        // Over-ear (single battery) must land in the RIGHT slot to match the settings
+        // hook's encoding; projecting it onto the left slot makes the two hooks fight
+        // and the battery flash between its value and "-".
+        val isOverEar = currentFormFactor == "HEADSET" || (battery?.left != null && battery.right == null && battery.case == null)
+        if (isOverEar) {
+            values[1] = miuiBatteryValue(battery?.left)
+        } else {
+            values[0] = miuiBatteryValue(battery?.left)
+            values[1] = miuiBatteryValue(battery?.right)
+            values[2] = miuiBatteryValue(battery?.case)
+        }
         values[7] = miuiAncLevel(anc, transparencyVocalEnhancement)
         values[8] = "true"
         values[11] = "00"

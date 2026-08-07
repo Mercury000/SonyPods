@@ -197,7 +197,7 @@ object MiBluetoothToastHook : HookContext() {
                 if (focusExtras != null) {
                     val aodParts = mutableListOf<String>()
                     if (batteryParams.left?.isConnected == true)
-                        aodParts.add("L ${batteryParams.left!!.battery}%")
+                        aodParts.add(if (singleBattery) "电量${batteryParams.left!!.battery}%" else "L ${batteryParams.left!!.battery}%")
                     if (batteryParams.right?.isConnected == true)
                         aodParts.add("R ${batteryParams.right!!.battery}%")
                     val aodTitle = aodParts.joinToString(" | ")

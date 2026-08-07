@@ -10,11 +10,14 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import com.mercury.sonypods.BuildConfig
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -26,11 +29,16 @@ object SettingsHeadsetHook : HookContext() {
     private const val TAG = "SonyPods-Settings"
     private const val PREFS_NAME = "sonypods_milink_state"
     private const val SETTINGS_REFRESH_INTERVAL_MS = 3_000L
+    private const val REPUBLISH_DEBOUNCE_MS = 600L
     private const val FORM_FACTOR_HEADSET = "HEADSET"
     private const val PKG_SETTINGS = "com.android.settings"
     private val knownSonyAddresses = linkedSetOf<String>()
     private val batteryViews = WeakHashMap<Any, BluetoothDevice>()
+    private val batteryValuesCache = WeakHashMap<Any, String>()
     private val headsetFragments = WeakHashMap<Any, Boolean>()
+    private val batteryLabelOriginals = WeakHashMap<TextView, CharSequence>()
+    private var hasLiveSnapshot = false
+    private var hasAncState = false
     private var context: Context? = null
     private var receiverRegistered = false
     private var currentAddress: String? = null
@@ -45,6 +53,7 @@ object SettingsHeadsetHook : HookContext() {
     private var proxyGetCommonConfigCalls = 0
     private val refreshHandler = Handler(Looper.getMainLooper())
     private var refreshLoopStarted = false
+    private var lastRepublishAt = 0L
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (headsetFragments.keys.any { isSonyFragment(it) }) {
@@ -169,7 +178,11 @@ object SettingsHeadsetHook : HookContext() {
         hookProxyStringArgResult(proxyClass, "isSupportAudioSwitch") { "1" }
         hookProxyStringArgResult(proxyClass, "setCommonCommand", Int::class.java, String::class.java, BluetoothDevice::class.java) { commandArgs ->
             val command = commandArgs[0] as? Int
-            if (command == 102) "0" else "1"
+            // Command 102 is the wear-status probe. MIUI blocks ANC changes when it equals
+            // RECORD_SYNCED ("0") with a "请连接并佩戴耳机" toast, so report RECORD_UNSYNCED
+            // ("1", i.e. "worn/connected") to let the official updateAncMode/updateAncLevel
+            // guards pass even if our fragment hook does not swallow a call.
+            if (command == 102) "1" else "1"
         }
         hookProxyVoidDeviceNoop(proxyClass, "connect", BluetoothDevice::class.java)
         hookProxyVoidDeviceNoop(proxyClass, "getDeviceConfig", BluetoothDevice::class.java)
@@ -237,6 +250,7 @@ object SettingsHeadsetHook : HookContext() {
                 if (!isSonyPod(device)) return@hookBefore
                 val sonyMode = mode(args) ?: return@hookBefore
                 currentAnc = sonyMode
+                hasAncState = true
                 sendSonyAnc(sonyMode)
                 sendAncChanged(sonyMode)
                 this.result = null
@@ -365,6 +379,7 @@ object SettingsHeadsetHook : HookContext() {
                 if (!updateDevice) return@hookBefore
                 val sonyMode = mode(args) ?: return@hookBefore
                 currentAnc = sonyMode
+                hasAncState = true
                 sendSonyAnc(sonyMode)
                 sendAncChanged(sonyMode)
                 runCatching { callMethod(instance, "updateAncUi", settingsAncLevel(), false) }
@@ -395,12 +410,27 @@ object SettingsHeadsetHook : HookContext() {
                         val snapshot = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT)
                             ?.let { SonyStateSnapshot.fromBundle(it) }
                         if (snapshot != null && snapshot.deviceAddress != null) {
+                            hasLiveSnapshot = true
                             currentAddress = snapshot.deviceAddress
                             currentName = snapshot.deviceName
                             currentFormFactor = snapshot.formFactor
                             currentBattery = snapshotBattery(snapshot)
+                            // Reconcile the ANC/transparency-vocal state from the engine's live
+                            // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
+                            // stay at their initial defaults and injectFragmentStatus keeps pushing a
+                            // stale level (e.g. "0200,false") that fights the real "0201,true" state,
+                            // making the vocal-enhancement toggle appear unresponsive.
+                            snapshot.noiseControlMode?.let { mode ->
+                                currentAnc = when (mode) {
+                                    NoiseControlMode.OFF -> 1
+                                    NoiseControlMode.AMBIENT_SOUND -> 3
+                                    else -> 2
+                                }
+                            }
+                            currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
+                            hasAncState = true
                             currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-                            Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor battery=${settingsBatteryString()}")
+                            Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
                             saveState(context)
                             applyBatteryLayouts()
                             updateBatteryViews()
@@ -412,11 +442,13 @@ object SettingsHeadsetHook : HookContext() {
                         updateFragments()
                     }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {
+                        hasLiveSnapshot = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
                         currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                     }
                     SonyPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
+                        hasLiveSnapshot = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
                         currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
@@ -427,6 +459,7 @@ object SettingsHeadsetHook : HookContext() {
                     SonyPodsAction.ACTION_PODS_ANC_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentAnc = intent.getIntExtra("status", currentAnc)
+                        hasAncState = true
                         currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                         saveState(context)
                         updateFragments()
@@ -434,6 +467,7 @@ object SettingsHeadsetHook : HookContext() {
                     SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentTransparencyVocalEnhancement = intent.getBooleanExtra("enabled", currentTransparencyVocalEnhancement)
+                        hasAncState = true
                         currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                         saveState(context)
                         updateFragments()
@@ -449,6 +483,18 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun requestBluetoothStatus(reason: String) {
         val ctx = context ?: return
+        // Ask the engine to re-broadcast its current state. Without this the settings
+        // process only receives a snapshot after the engine *changes* state (battery/
+        // ANC tick), so opening the headset page can show "-" for the battery until
+        // the user toggles ANC. CMD_REPUBLISH re-publishes the last known snapshot.
+        // Debounce: page open fires this from several hooks (receiver-register,
+        // battery-init, fragment-create, service-connected) in the same moment; each
+        // would otherwise trigger a full cross-process republish round trip.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRepublishAt > REPUBLISH_DEBOUNCE_MS) {
+            lastRepublishAt = now
+            SonyBridge.sendCommand(ctx, SonyBridge.CMD_REPUBLISH)
+        }
         listOf(SonyPodsAction.ACTION_PODS_UI_INIT, SonyPodsAction.ACTION_REFRESH_STATUS).forEach { action ->
             ctx.sendBroadcast(Intent(action).apply {
                 setPackage(BuildConfig.APPLICATION_ID)
@@ -473,7 +519,17 @@ object SettingsHeadsetHook : HookContext() {
         }
     }
 
-    private fun isOverEar(): Boolean = currentFormFactor == FORM_FACTOR_HEADSET
+    private fun isOverEar(device: BluetoothDevice? = null): Boolean {
+        currentFormFactor?.let { return it == FORM_FACTOR_HEADSET }
+        val name = device?.let { runCatching { it.name ?: it.alias }.getOrNull() } ?: currentName
+        return formFactorForName(name) == FORM_FACTOR_HEADSET
+    }
+
+    /** Over-ear Sony models are wh-/wi- prefixed; TWS use wf-/linkbuds etc. */
+    private fun formFactorForName(name: String?): String? {
+        val normalized = name?.trim().orEmpty().lowercase()
+        return if (normalized.startsWith("wh-") || normalized.startsWith("wi-")) FORM_FACTOR_HEADSET else null
+    }
 
     /** Applies (or reverts) the single-battery rendering to every battery view we know. */
     private fun applyBatteryLayouts() {
@@ -484,44 +540,116 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun updateBatteryView(view: Any?) {
-        val values = settingsBatteryValues()
-        callMethod(view, "onBatteryChanged", values[0], values[1], values[2])
+        // Apply the single-vs-three slot layout immediately (it is driven by the persisted
+        // form factor, which is stable). Render battery values from the persisted state right
+        // away when we have any, then let the live snapshot refresh it moments later: waiting
+        // for the first ACTION_STATE would leave the reading on "-" for the whole cross-process
+        // REPUBLISH round trip and looks like a slow load.
         applyBatteryLayout(view)
-        Log.d(TAG, "Battery.onBatteryChanged(int,int,int) forced=${values.joinToString(",")} overEar=${isOverEar()}")
+        val values = settingsBatteryValues()
+        val key = values.joinToString(",")
+        if (!hasLiveSnapshot && !hasCurrentBattery()) {
+            Log.d(TAG, "Battery update skipped: no battery data yet overEar=${isOverEar()}")
+            return
+        }
+        if (batteryValuesCache[view] != key) {
+            batteryValuesCache[view] = key
+            callMethod(view, "onBatteryChanged", values[0], values[1], values[2])
+            Log.d(TAG, "Battery.onBatteryChanged(int,int,int) forced=$key overEar=${isOverEar()}")
+        }
     }
 
     /**
      * Official MIUI uses a single three-slot custom view (MiuiHeadsetBattery) for both
      * TWS earbuds (left/right/case) and over-ear headphones. For over-ear it just fills
-     * the extra slots with "-". Our hooked Sony adapter instead hides the case/right slots
-     * and centers the single remaining value, mirroring how the module UI renders a headset.
+     * the extra slots with "-". Our hooked Sony adapter instead hides the left/case slot
+     * columns and lets the single right slot expand, mirroring how the module UI renders
+     * a headset (single battery value shown in the right slot).
+     *
+     * Each slot is laid out as a column (icon + label + value) inside the battery card
+     * container `groupBatteryCard`. Hiding only the leaf value/icon views would leave the
+     * empty column with its label behind, so we resolve the slot column at runtime by
+     * walking up from the slot's value view until we reach the direct child of the row.
      */
     private fun applyBatteryLayout(view: Any?) {
         val rootView = batteryRootView(view) ?: return
-        val overEar = isOverEar()
-        if (overEar) {
-            setSlot(rootView, "rightBattery", View.GONE)
-            setSlot(rootView, "boxBattery", View.GONE)
-            setSlot(rootView, "imageRightBattery", View.GONE)
-            setSlot(rootView, "imageBoxBattery", View.GONE)
-        } else {
-            setSlot(rootView, "rightBattery", View.VISIBLE)
-            setSlot(rootView, "boxBattery", View.VISIBLE)
-            setSlot(rootView, "imageRightBattery", View.VISIBLE)
-            setSlot(rootView, "imageBoxBattery", View.VISIBLE)
-        }
-        val leftId = rootView.resources.getIdentifier("leftBattery", "id", PKG_SETTINGS)
-        if (leftId != 0) rootView.findViewById<View>(leftId)?.let { left ->
-            left.layoutParams = (left.layoutParams ?: ViewGroup.LayoutParams(0, 0)).also {
-                it.width = if (overEar) ViewGroup.LayoutParams.MATCH_PARENT else 0
+        val device = batteryViews[view]
+        val overEar = isOverEar(device)
+        val card = findView(rootView, "groupBatteryCard")
+        val rightColumn = batterySlotColumn(rootView, "rightBattery")
+        val row = rightColumn?.parent as? ViewGroup
+        if (row != null) {
+            // row (@7F0B05F0) holds [left column, divider, right column, divider, box column].
+            // Over-ear: hide every direct child except the right (value) column, which already
+            // has weight=1 and therefore expands to fill the row.
+            for (i in 0 until row.childCount) {
+                val child = row.getChildAt(i)
+                val newVis = if (overEar && child !== rightColumn) View.GONE else View.VISIBLE
+                if (child.visibility != newVis) child.visibility = newVis
             }
+            if (overEar) {
+                val lp = rightColumn.layoutParams
+                if (lp != null && lp.width != ViewGroup.LayoutParams.MATCH_PARENT) {
+                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+                    rightColumn.layoutParams = lp
+                }
+            }
+            Log.d(TAG, "battery layout applied overEar=$overEar row=$row rightColumn=$rightColumn")
+        } else {
+            // Fallback: hide the known left/box leaf pairs, keep right visible.
+            setSlot(rootView, "leftBattery", if (overEar) View.GONE else View.VISIBLE)
+            setSlot(rootView, "imageLeftBattery", if (overEar) View.GONE else View.VISIBLE)
+            setSlot(rootView, "boxBattery", if (overEar) View.GONE else View.VISIBLE)
+            setSlot(rootView, "imageBoxBattery", if (overEar) View.GONE else View.VISIBLE)
+            Log.d(TAG, "battery layout fallback overEar=$overEar card=$card")
         }
-        Log.d(TAG, "battery layout applied overEar=$overEar root=$rootView")
+        updateBatterySlotLabel(rootView, rightColumn, overEar)
+    }
+
+    /**
+     * The right slot's label reads "右" (right). For over-ear it is replaced with
+     * "电量"; the original text is remembered per TextView and restored for TWS.
+     *
+     * The label shares its resource id (textViewHeadset) across all three slots, so it is
+     * resolved structurally: it is the TextView sibling of the slot's value inside the
+     * inner vertical cell (image + value + label).
+     */
+    private fun updateBatterySlotLabel(rootView: View, rightColumn: View?, overEar: Boolean) {
+        val value = findView(rootView, "rightBattery") ?: return
+        val innerCell = value.parent as? ViewGroup ?: return
+        val label = (0 until innerCell.childCount)
+            .mapNotNull { innerCell.getChildAt(it) as? TextView }
+            .firstOrNull { it !== value }
+            ?: return
+        if (overEar) {
+            if (!batteryLabelOriginals.containsKey(label)) {
+                batteryLabelOriginals[label] = label.text
+            }
+            label.text = "电量"
+        } else {
+            batteryLabelOriginals.remove(label)?.let { label.text = it }
+        }
+    }
+
+    /**
+     * Resolves the per-slot column view for a battery value. The layout is:
+     * groupBatteryCard -> CardView -> row(horizontal) -> [column(inner vertical-cell -> value), divider, ...].
+     * The value's direct parent is the inner vertical cell; its parent is the actual horizontal
+     * slot column (@7F0B01BC/@7F0B01BD/@7F0B01BB) that is a direct child of the row.
+     */
+    private fun batterySlotColumn(rootView: View, valueName: String): View? {
+        val value = findView(rootView, valueName) ?: return null
+        val cell = value.parent as? ViewGroup ?: return null
+        return cell.parent as? View
+    }
+
+    private fun findView(rootView: View, name: String): View? {
+        val id = rootView.resources.getIdentifier(name, "id", PKG_SETTINGS)
+        return if (id != 0) rootView.findViewById<View>(id) else null
     }
 
     private fun setSlot(rootView: View, name: String, visibility: Int) {
-        val id = rootView.context.resources.getIdentifier(name, "id", PKG_SETTINGS)
-        if (id != 0) rootView.findViewById<View>(id)?.visibility = visibility
+        findView(rootView, name)?.visibility = visibility
     }
 
     /** The headset battery control keeps the inflated layout in a WeakReference mRootView. */
@@ -625,14 +753,14 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     /** Maps the current snapshot into the three-slot MIUI encoding.
-     *  Over-ear headphones expose a single value; it lands in the first slot and the
-     *  remaining slots stay "not present" (255), while the extra slot views are hidden. */
+     *  Over-ear headphones expose a single value; it lands in the right slot and the
+     *  left/case slots stay "not present" (255), while those slot views are hidden. */
     private fun settingsBatteryValues(): List<Int> {
         loadState()
         return if (isOverEar()) {
             listOf(
-                batteryValue(currentBattery.left),
                 255,
+                batteryValue(currentBattery.left),
                 255
             )
         } else {
@@ -678,8 +806,10 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun settingsAncLevel(): String {
         loadState()
-        // MIUI Settings level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep, 0201=Transparency vocal enhancement.
+        // MIUI Settings level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep,
+        // 0200=Transparency, 0201=Transparency vocal enhancement, 0000=Off.
         return when (currentAnc) {
+            2 -> "0100"
             5 -> "0103"
             6 -> "0101"
             7 -> "0100"
@@ -734,11 +864,17 @@ object SettingsHeadsetHook : HookContext() {
         }
     }
 
-    private fun sonyAncFromLevelCommand(level: String): Int? {
+    private fun sonyAncFromLevelCommand(level: String): Int {
+        // "02xx" is the transparency path (0200=transparency, 0201=transparency vocal
+        // enhancement). It must return a non-null mode so the fragment hook swallows the
+        // official call; returning null here let the real MiuiHeadsetFragment.updateAncLevel
+        // run, whose wear-status guard (setCommonCommand(102)=="0") shows the
+        // "请连接并佩戴耳机" toast and reverts the control.
         if (level.startsWith("02")) {
             currentAnc = 3
+            hasAncState = true
             sendSonyAmbientVoiceFromLevel(level)
-            return null
+            return 3
         }
         return sonyAncFromLevel(level)
     }
@@ -748,11 +884,13 @@ object SettingsHeadsetHook : HookContext() {
             Log.d(TAG, "sendSonyAnc skipped: context is null mode=$mode")
             return
         }
-        ctx.sendBroadcast(Intent(SonyPodsAction.ACTION_ANC_SELECT).apply {
-            putExtra("status", mode)
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
+        val sonyMode = when (mode) {
+            2, 5, 6, 7, 8 -> NoiseControlMode.NOISE_CANCELLING
+            3 -> NoiseControlMode.AMBIENT_SOUND
+            else -> NoiseControlMode.OFF
+        }
+        SonyBridge.setNoiseControl(ctx, sonyMode)
+        Log.d(TAG, "sendSonyAnc command sent mode=$mode sony=$sonyMode")
     }
 
     private fun sendSonyAmbientVoice(enabled: Boolean) {
@@ -761,11 +899,8 @@ object SettingsHeadsetHook : HookContext() {
             return
         }
         currentTransparencyVocalEnhancement = enabled
-        ctx.sendBroadcast(Intent(SonyPodsAction.ACTION_AMBIENT_VOICE_SET).apply {
-            putExtra("enabled", enabled)
-            setPackage(BuildConfig.APPLICATION_ID)
-            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        })
+        hasAncState = true
+        SonyBridge.setAmbientVoice(ctx, enabled)
         ctx.sendBroadcast(Intent(SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED).apply {
             putExtra("enabled", enabled)
             setPackage(BuildConfig.APPLICATION_ID)
@@ -775,7 +910,7 @@ object SettingsHeadsetHook : HookContext() {
             setPackage(BuildConfig.APPLICATION_ID)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
-        Log.d(TAG, "sendSonyAmbientVoice broadcast sent enabled=$enabled")
+        Log.d(TAG, "sendSonyAmbientVoice command sent enabled=$enabled")
     }
 
     private fun sendAncChanged(mode: Int) {
@@ -847,16 +982,23 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun loadState() {
         val prefs = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) ?: return
-        val hasSavedBattery = prefs.getBoolean("left_connected", false) ||
-            prefs.getBoolean("right_connected", false) ||
-            prefs.getBoolean("case_connected", false)
         currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
-        currentFormFactor = prefs.getString("form_factor", currentFormFactor)
+        if (currentFormFactor == null) {
+            currentFormFactor = prefs.getString("form_factor", null)
+        }
+        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+        // Live snapshot data wins; persisted ANC/voice are only a bootstrap until the
+        // first live state arrives. Overwriting here reverted the UI after every tap
+        // (vocal-enhancement looked unclickable) because settingsAncLevel() calls
+        // loadState() on every inject and reloaded the stale persisted value.
+        if (hasAncState) return
         currentAnc = prefs.getInt("anc", currentAnc)
         currentTransparencyVocalEnhancement = prefs.getBoolean("transparency_vocal_enhancement", currentTransparencyVocalEnhancement)
-        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
-        if (!hasSavedBattery && hasCurrentBattery()) return
+        // Live snapshot data wins; persisted battery is only a bootstrap until the first
+        // ACTION_STATE arrives. Overwriting live values here made the reading jump between
+        // the live value and whatever was last saved.
+        if (hasCurrentBattery()) return
         currentBattery = BatteryParams(
             left = PodParams(
                 prefs.getInt("left_battery", currentBattery.left?.battery ?: 0),

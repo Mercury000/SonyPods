@@ -21,4 +21,7 @@ data class BatteryParams(
     var left: PodParams? = null,
     var right: PodParams? = null,
     var case: PodParams? = null
-) : Parcelable
+) : Parcelable {
+    val hasAnyLevel: Boolean
+        get() = (left?.battery ?: 0) > 0 || (right?.battery ?: 0) > 0 || (case?.battery ?: 0) > 0
+}
