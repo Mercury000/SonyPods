@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Process
 import dev.sonypods.protocol.NoiseControlMode
 
 /**
@@ -41,6 +42,8 @@ object SonyBridge {
     const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
     const val EXTRA_OFFICIAL_LEASE_ID = "official_lease_id"
     const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
+    const val EXTRA_OFFICIAL_SENDER_PACKAGE = "official_sender_package"
+    const val EXTRA_OFFICIAL_SENDER_UID = "official_sender_uid"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
@@ -137,6 +140,8 @@ object SonyBridge {
             Intent(ACTION_COMMAND).apply {
                 putExtra(EXTRA_COMMAND, command)
                 putExtra(EXTRA_OFFICIAL_LEASE_ID, leaseId)
+                putExtra(EXTRA_OFFICIAL_SENDER_PACKAGE, OFFICIAL_APP_PACKAGE)
+                putExtra(EXTRA_OFFICIAL_SENDER_UID, Process.myUid())
                 putExtras(Bundle().apply { putBinder(EXTRA_OFFICIAL_LEASE_TOKEN, token) })
                 setPackage(ENGINE_PACKAGE)
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)

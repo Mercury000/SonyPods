@@ -286,9 +286,9 @@ object SonyEngineHost {
             Log.w(TAG, "ignored Sound Connect acquire without Binder token")
             return
         }
-        if (officialAppLeaseId == leaseId) return
+        if (officialAppLeaseId == leaseId && officialAppLeaseToken == token) return
 
-        // A newer foreground lease replaces an older one without briefly reconnecting.
+        // A newer ownership lease replaces an older one without briefly reconnecting.
         clearOfficialAppLease(reconnect = false, reason = "replaced")
         val deathRecipient = IBinder.DeathRecipient {
             scope.launch {
@@ -311,9 +311,13 @@ object SonyEngineHost {
         Log.d(TAG, "Sound Connect acquired Tandem lease id=$leaseId; SonyPods disconnected")
     }
 
-    private fun releaseOfficialAppLease(leaseId: String, reason: String) {
+    private fun releaseOfficialAppLease(leaseId: String, reason: String, token: IBinder? = null) {
         if (officialAppLeaseId != leaseId) {
             Log.d(TAG, "ignored stale Sound Connect release id=$leaseId current=$officialAppLeaseId")
+            return
+        }
+        if (token != null && officialAppLeaseToken != token) {
+            Log.w(TAG, "ignored Sound Connect release with mismatched Binder token id=$leaseId")
             return
         }
         clearOfficialAppLease(reconnect = true, reason = reason)
@@ -426,8 +430,6 @@ object SonyEngineHost {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         handleCommand(
                             intent ?: return,
-                            sentFromPackage,
-                            sentFromUid,
                         )
                     }
                 },
@@ -511,18 +513,19 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "capability cache push receiver registration failed", it) }
     }
 
-    private fun handleCommand(intent: Intent, senderPackage: String?, senderUid: Int) {
+    private fun handleCommand(intent: Intent) {
         val command = intent.getStringExtra(SonyBridge.EXTRA_COMMAND) ?: return
         if (command == SonyBridge.CMD_OFFICIAL_APP_ACQUIRE || command == SonyBridge.CMD_OFFICIAL_APP_RELEASE) {
-            if (!isOfficialAppSender(senderPackage, senderUid)) {
-                Log.w(TAG, "ignored forged Sound Connect lease command sender=$senderPackage uid=$senderUid")
+            if (!isValidOfficialLeaseIntent(intent)) {
+                Log.w(TAG, "ignored invalid Sound Connect lease command")
                 return
             }
             when (command) {
                 SonyBridge.CMD_OFFICIAL_APP_ACQUIRE -> acquireOfficialAppLease(intent)
                 SonyBridge.CMD_OFFICIAL_APP_RELEASE -> {
                     val leaseId = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_LEASE_ID) ?: return
-                    releaseOfficialAppLease(leaseId, "official app left foreground")
+                    val token = intent.extras?.getBinder(SonyBridge.EXTRA_OFFICIAL_LEASE_TOKEN) ?: return
+                    releaseOfficialAppLease(leaseId, "official app released Tandem lease", token)
                 }
             }
             return
@@ -618,13 +621,25 @@ object SonyEngineHost {
         }
     }
 
-    private fun isOfficialAppSender(senderPackage: String?, senderUid: Int): Boolean {
-        if (senderPackage == SonyBridge.OFFICIAL_APP_PACKAGE) return true
-        if (senderUid < 0) return false
-        return runCatching {
-            appContext?.packageManager?.getPackagesForUid(senderUid)
+    private fun isValidOfficialLeaseIntent(intent: Intent): Boolean {
+        // Android 15/HyperOS delivers this explicit, dynamically registered
+        // cross-process broadcast without usable system sender metadata. The
+        // lease therefore carries the official process declaration; verify it
+        // against PackageManager and require the process-bound Binder token.
+        if (intent.`package` != SonyBridge.ENGINE_PACKAGE) return false
+        val declaredPackage = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_SENDER_PACKAGE)
+        val declaredUid = intent.getIntExtra(SonyBridge.EXTRA_OFFICIAL_SENDER_UID, -1)
+        val packageOwnsUid = runCatching {
+            appContext?.packageManager?.getPackagesForUid(declaredUid)
                 ?.contains(SonyBridge.OFFICIAL_APP_PACKAGE) == true
         }.getOrDefault(false)
+        val leaseId = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_LEASE_ID)
+        val token = intent.extras?.getBinder(SonyBridge.EXTRA_OFFICIAL_LEASE_TOKEN)
+        return declaredPackage == SonyBridge.OFFICIAL_APP_PACKAGE &&
+            declaredUid >= 0 &&
+            packageOwnsUid &&
+            !leaseId.isNullOrBlank() &&
+            token?.pingBinder() == true
     }
 
     // ── State fan-out ──

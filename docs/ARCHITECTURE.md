@@ -37,15 +37,16 @@ flowchart LR
 
 ## 3. Sound Connect 连接让权
 
-`com.sony.songpal.mdr` 在 Xposed 作用域内由 `SoundConnectHandoverHook` 监听主进程 Activity 生命周期：
+`com.sony.songpal.mdr` 在 Xposed 作用域内由 `SoundConnectHandoverHook` 协调官方 App 对 Tandem 的多来源持有：
 
-1. 第一个界面创建/进入可见状态时，通过 `SonyBridge` 向 `com.android.bluetooth` 发送 `official_app_acquire`；
+1. Activity 创建/可见、`KeepConnectionForegroundService` 运行、或官方 MDR connection controller 中仍存在实际 session，任一条件成立即通过 `SonyBridge` 向 `com.android.bluetooth` 发送 `official_app_acquire`；
 2. `SonyEngineHost` 设置官方 App 独占状态，断开 SonyPods Tandem session，并阻止 A2DP 回调、手动命令和 15 秒 `reconcileConnection()` 自愈任务重新抢占；
-3. 最后一个界面停止时发送 `official_app_release`，引擎绕过正常 10 秒连接冷却并立即发起恢复；
-4. acquire 同时携带官方 App 进程创建的 Binder token。若 App 崩溃或被强杀，`IBinder.DeathRecipient` 直接触发 release；
-5. 若 `com.android.bluetooth` 在租约期间重启，引擎发送 `engine_ready`，官方 App Hook 立即重发当前租约，避免重启后误抢连接。
+3. 所有持有来源均消失后进入 2 秒可取消宽限期。新 Activity、后台保活服务或 MDR session 在此期间出现会取消 release，从而避免 Activity 页面切换和官方内部 session 迁移产生瞬时抢连；
+4. 宽限期结束后发送 `official_app_release`，引擎绕过正常 10 秒连接冷却并立即发起恢复；
+5. acquire 同时携带官方 App 进程创建的 Binder token。若 App 崩溃或被强杀，`IBinder.DeathRecipient` 直接触发 release；
+6. 若 `com.android.bluetooth` 在租约期间重启，引擎发送 `engine_ready`；只要仍有持有来源或正在宽限期内，官方 App Hook 就立即重申当前租约，避免重启后误抢连接。
 
-该机制不轮询 Sound Connect 的进程或前后台状态。15 秒 reconcile 仍只负责 SonyPods 自身连接自愈，并在官方 App 持有租约期间无条件跳过。租约命令还会校验广播发送 UID/package，避免其他应用伪造长期抑制状态。
+官方 13.2.1 的实际 session 检测基于其混淆 connection controller，安装失败时会自动降级为稳定类名的 Activity + `KeepConnectionForegroundService` 生命周期，不会导致整个 Hook 失效。由于本模块只面向 Android 15/HyperOS，租约统一使用该平台实际可用的校验方式：官方进程 UID/package 声明由引擎通过 PackageManager 核验，并同时检查明确目标包、lease ID 和 Binder 存活性；普通命令不进入租约校验。该机制不轮询 Sound Connect 的进程或前后台状态。15 秒 reconcile 仍只负责 SonyPods 自身连接自愈，并在官方 App 持有租约期间无条件跳过。
 
 ## 4. 协议选择
 
