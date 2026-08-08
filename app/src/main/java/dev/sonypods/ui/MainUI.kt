@@ -111,6 +111,16 @@ fun MainUI(
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
     var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
+    // Keep the navigation intent separate from the transport handshake. The
+    // engine reports connected before capability probing finishes, so clearing
+    // the connection marker at that point must not lose the request to open the
+    // detail page once probeComplete becomes true.
+    var pendingAutoOpenAddress by remember { mutableStateOf<String?>(null) }
+    // Scope restart puts the UI on the picker, while Bluetooth normally
+    // restores the previous Sony connection without a row click. Keep that
+    // reconnect navigation intent separately from the address-based click
+    // intent.
+    var autoOpenAfterScopeRestart by remember { mutableStateOf(false) }
     var showConnectErrorDialog by remember { mutableStateOf(false) }
     var lastBluetoothServiceAliveMs by remember { mutableStateOf(0L) }
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
@@ -146,7 +156,15 @@ fun MainUI(
     // (battery layout, writable NC types, EQ support); gating the detail page on
     // it prevents opening against an empty half-probed profile while connecting.
     val canShowDetailPage = sonyConnected && sonyState.probeComplete
-    val showEarphoneDetail = canShowDetailPage && !showDevicePicker
+    // A device selection is itself a navigation request. Do not make the
+    // request depend solely on the effect below winning a particular
+    // recomposition: the connection broadcast and the picker state can be
+    // delivered in either order. While the selected session is probing, keep
+    // the picker visible; as soon as the probe completes, the pending request
+    // makes the detail page the target even before the effect clears the
+    // picker flag.
+    val showEarphoneDetail = canShowDetailPage &&
+        (!showDevicePicker || pendingAutoOpenAddress != null)
 
     val sonyActions = remember(context) {
         SonyDetailActions(
@@ -176,10 +194,25 @@ fun MainUI(
     }
 
     // Connection established: record the device so the automatic model image can be
-    // associated with its Bluetooth address, then open the detail page if requested.
-    LaunchedEffect(sonyConnected, connectedDeviceAddress) {
+    // associated with its Bluetooth address. Navigation waits for the capability
+    // probe, because the detail page is intentionally gated on probeComplete.
+    LaunchedEffect(
+        sonyConnected,
+        connectedDeviceAddress,
+        sonyState.probeComplete,
+    ) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
-            val shouldOpenEarphones = connectingDeviceAddress != null || !hasAppliedDefaultTab
+            // The selected Bluetooth address can be represented by different
+            // GATT/SPP endpoint callbacks during one session. The pending marker
+            // is therefore intentionally treated as a connection-session intent,
+            // not compared byte-for-byte with the address in the latest snapshot.
+            val shouldAutoOpen = pendingAutoOpenAddress != null ||
+                autoOpenAfterScopeRestart ||
+                !hasAppliedDefaultTab
+
+            // The transport is connected even while the capability probe is in
+            // flight; stop showing the row-level spinner but retain the separate
+            // pendingAutoOpenAddress navigation intent.
             connectingDeviceAddress = null
             showConnectErrorDialog = false
             earphonePrefs.value = PodImagePrefs.upsertConnected(
@@ -188,12 +221,13 @@ fun MainUI(
                 address = connectedDeviceAddress,
                 name = displayTitle,
             )
-            if (shouldOpenEarphones) {
-                if (!hasAppliedDefaultTab) {
-                    selectedTab = MainTab.Earphones
-                }
+
+            if (sonyState.probeComplete && shouldAutoOpen) {
+                selectedTab = MainTab.Earphones
                 hasAppliedDefaultTab = true
                 showDevicePicker = false
+                pendingAutoOpenAddress = null
+                autoOpenAfterScopeRestart = false
             }
             Log.i("SonyPods", "Sony device connected: $displayTitle ($connectedDeviceAddress)")
         }
@@ -205,10 +239,20 @@ fun MainUI(
         delay(CONNECT_TIMEOUT_MS)
         if (connectingDeviceAddress == address && !sonyConnected) {
             connectingDeviceAddress = null
+            pendingAutoOpenAddress = null
+            autoOpenAfterScopeRestart = false
             showConnectErrorDialog = true
             showDevicePicker = true
             SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
         }
+    }
+
+    // If the Bluetooth scope does not restore its connection, do not let the
+    // restart intent affect a later unrelated connection.
+    LaunchedEffect(autoOpenAfterScopeRestart) {
+        if (!autoOpenAfterScopeRestart) return@LaunchedEffect
+        delay(60_000L)
+        autoOpenAfterScopeRestart = false
     }
 
     val broadcastReceiver = remember {
@@ -303,6 +347,8 @@ fun MainUI(
 
     fun clearPodConnectionState() {
         connectingDeviceAddress = null
+        pendingAutoOpenAddress = null
+        autoOpenAfterScopeRestart = true
         showConnectErrorDialog = false
         showDevicePicker = true
         selectedTab = MainTab.Earphones
@@ -310,6 +356,8 @@ fun MainUI(
 
     fun onDeviceSelected(device: BluetoothDevice) {
         connectingDeviceAddress = device.address
+        pendingAutoOpenAddress = device.address
+        autoOpenAfterScopeRestart = false
         showConnectErrorDialog = false
         showDevicePicker = true
         selectedTab = MainTab.Earphones
@@ -321,6 +369,10 @@ fun MainUI(
         if (device.address == connectingDeviceAddress) {
             connectingDeviceAddress = null
         }
+        if (device.address.equals(pendingAutoOpenAddress, ignoreCase = true)) {
+            pendingAutoOpenAddress = null
+        }
+        autoOpenAfterScopeRestart = false
         if (device.address.equals(connectedDeviceAddress, ignoreCase = true) || connectedDeviceAddress.isBlank()) {
             SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
         }
@@ -328,11 +380,16 @@ fun MainUI(
 
     fun onConnectedDeviceClick() {
         if (!sonyConnected) return
+        pendingAutoOpenAddress = null
+        autoOpenAfterScopeRestart = false
+        connectingDeviceAddress = null
         showDevicePicker = false
         selectedTab = MainTab.Earphones
     }
 
     fun backToDevicePicker() {
+        pendingAutoOpenAddress = null
+        autoOpenAfterScopeRestart = false
         showDevicePicker = true
     }
 
@@ -346,6 +403,8 @@ fun MainUI(
     }
 
     fun openDevicePicker() {
+        pendingAutoOpenAddress = null
+        autoOpenAfterScopeRestart = false
         showDevicePicker = true
         selectedTab = MainTab.Earphones
     }

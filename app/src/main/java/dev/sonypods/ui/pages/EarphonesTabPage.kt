@@ -52,6 +52,7 @@ internal fun EarphonesTabPage(
             )
         } else {
             DevicePickerPage(
+                isConnected = uiState.connected,
                 connectedDeviceName = displayTitle,
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,

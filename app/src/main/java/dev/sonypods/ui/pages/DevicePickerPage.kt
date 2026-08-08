@@ -67,6 +67,7 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 @SuppressLint("MissingPermission")
 @Composable
 fun DevicePickerPage(
+    isConnected: Boolean = false,
     connectedDeviceName: String = "",
     connectedDeviceAddress: String = "",
     connectingDeviceAddress: String? = null,
@@ -193,11 +194,11 @@ fun DevicePickerPage(
             }
             if (bluetoothEnabled) {
                 items(pairedDevices, key = { it.address }) { device ->
-                    val connected = device.address == connectedDeviceAddress || (
+                    val connected = isConnected && (device.address == connectedDeviceAddress || (
                         connectedDeviceAddress.isBlank() &&
                             connectedDeviceName.isNotBlank() &&
                             device.name == connectedDeviceName
-                    )
+                    ))
                     DeviceRow(
                         title = device.name ?: stringResource(R.string.unknown_device),
                         summary = device.address,
