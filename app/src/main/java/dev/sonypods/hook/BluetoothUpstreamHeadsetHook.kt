@@ -676,7 +676,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         // Over-ear (single battery) must land in the RIGHT slot to match the settings
         // hook's encoding; projecting it onto the left slot makes the two hooks fight
         // and the battery flash between its value and "-".
-        val isOverEar = currentFormFactor == "HEADSET" || (battery?.left != null && battery.right == null && battery.case == null)
+        val isOverEar = currentFormFactor == "HEADSET"
         if (isOverEar) {
             values[1] = miuiBatteryValue(battery?.left)
         } else {

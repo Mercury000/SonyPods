@@ -285,7 +285,7 @@ object SonyCapabilityProbe {
 
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
-            formFactor = formFactorFromBattery(batteryQueries, fallback.formFactor),
+            formFactor = formFactorFromBattery(batteryQueries),
             batteryQueries = batteryQueries.ifEmpty { fallback.batteryQueries },
             noiseControlQueryTypes = noiseQueries.distinct().ifEmpty { fallback.noiseControlQueryTypes },
             writableNoiseControlTypes = preferDualWriteTypes(writableNoise)
@@ -296,22 +296,17 @@ object SonyCapabilityProbe {
     }
 
     /**
-     * Form factor is derived from the battery FunctionTypes the device reports,
-     * never from its name: left/right battery (with or without a separately
-     * advertised cradle function) implies TRUE_WIRELESS, a lone single-battery
-     * read implies an over-ear/neck HEADSET. A TWS that advertises only
-     * LEFT_RIGHT_BATTERY is still a TWS (SC ships the same battery layout for
-     * every in-ear model); only an all-or-nothing battery set must fall back.
+     * Form factor mirrors Sound Connect's `DeviceCapabilityTableset.t()`
+     * (BatterySupportType): the sole discriminator is whether the device advertises
+     * a LEFT/RIGHT (or crate/bud capsule) battery function. Any model without one
+     * is a single-battery over-ear/neck headset — SC's unconditional `SINGLE_BATTERY`
+     * default. There is no "UNKNOWN" fallback: the absence of a dual-bud battery
+     * evidence is itself the headset signal.
      */
-    private fun formFactorFromBattery(
-        batteryQueries: List<PowerInquiredType>,
-        fallback: HeadphoneFormFactor,
-    ): HeadphoneFormFactor = when {
-        batteryQueries.isEmpty() -> fallback
+    private fun formFactorFromBattery(batteryQueries: List<PowerInquiredType>): HeadphoneFormFactor = when {
         PowerInquiredType.LEFT_RIGHT_BATTERY in batteryQueries -> HeadphoneFormFactor.TRUE_WIRELESS
         PowerInquiredType.CRADLE_BATTERY in batteryQueries -> HeadphoneFormFactor.TRUE_WIRELESS
-        batteryQueries == listOf(PowerInquiredType.BATTERY) -> HeadphoneFormFactor.HEADSET
-        else -> fallback
+        else -> HeadphoneFormFactor.HEADSET
     }
 
     /** A probe-derived profile, or null when the probe supplied nothing new. */

@@ -29,8 +29,7 @@ object SettingsHeadsetHook : HookContext() {
     private const val TAG = "SonyPods-Settings"
     private const val PREFS_NAME = "sonypods_milink_state"
     private const val SETTINGS_REFRESH_INTERVAL_MS = 3_000L
-    private const val REPUBLISH_DEBOUNCE_MS = 600L
-    private const val FORM_FACTOR_HEADSET = "HEADSET"
+private const val REPUBLISH_DEBOUNCE_MS = 600L
     private const val PKG_SETTINGS = "com.android.settings"
     private val knownSonyAddresses = linkedSetOf<String>()
     private val batteryViews = WeakHashMap<Any, BluetoothDevice>()
@@ -519,17 +518,7 @@ object SettingsHeadsetHook : HookContext() {
         }
     }
 
-    private fun isOverEar(device: BluetoothDevice? = null): Boolean {
-        currentFormFactor?.let { return it == FORM_FACTOR_HEADSET }
-        val name = device?.let { runCatching { it.name ?: it.alias }.getOrNull() } ?: currentName
-        return formFactorForName(name) == FORM_FACTOR_HEADSET
-    }
-
-    /** Over-ear Sony models are wh-/wi- prefixed; TWS use wf-/linkbuds etc. */
-    private fun formFactorForName(name: String?): String? {
-        val normalized = name?.trim().orEmpty().lowercase()
-        return if (normalized.startsWith("wh-") || normalized.startsWith("wi-")) FORM_FACTOR_HEADSET else null
-    }
+    private fun isOverEar(): Boolean = currentFormFactor == "HEADSET"
 
     /** Applies (or reverts) the single-battery rendering to every battery view we know. */
     private fun applyBatteryLayouts() {
@@ -573,8 +562,7 @@ object SettingsHeadsetHook : HookContext() {
      */
     private fun applyBatteryLayout(view: Any?) {
         val rootView = batteryRootView(view) ?: return
-        val device = batteryViews[view]
-        val overEar = isOverEar(device)
+        val overEar = isOverEar()
         val card = findView(rootView, "groupBatteryCard")
         val rightColumn = batterySlotColumn(rootView, "rightBattery")
         val row = rightColumn?.parent as? ViewGroup

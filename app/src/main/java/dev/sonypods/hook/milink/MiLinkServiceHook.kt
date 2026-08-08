@@ -11,6 +11,7 @@ import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.hook.HookContext
 import dev.sonypods.hook.Log
@@ -33,7 +34,6 @@ object MiLinkServiceHook : HookContext() {
      * the TWS carrier or it would render as a case+left+right earbud set.
      */
     private const val HEADPHONES_DEVICE_ID = "01013A04"
-    private const val FORM_FACTOR_HEADSET = "HEADSET"
 
     /** headsetPropertyChangeListener update types observed in the MiUI headset runtime. */
     private const val UPDATE_TYPE_BATTERY = 4
@@ -46,10 +46,13 @@ object MiLinkServiceHook : HookContext() {
     private var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
-    /** "HEADSET" / "TRUE_WIRELESS" / null. Over-ear devices carry a single battery
-     * and must not be projected onto MiLink's TWS case/left/right slot layout. */
+    /** Over-ear devices carry a single battery and must not be projected onto
+     * MiLink's TWS case/left/right slot layout. Follows the engine's capability-
+     * derived form factor (SC BatterySupportType): left/right (+ case) is TWS,
+     * anything else is an over-ear/neck headset. */
     private var currentFormFactor: String? = null
-    internal val isOverEar: Boolean get() = currentFormFactor == FORM_FACTOR_HEADSET
+    internal val isOverEar: Boolean
+        get() = currentFormFactor == HeadphoneFormFactor.HEADSET.name
     internal var currentSpatialAudioMode = ConfigManager.SPATIAL_AUDIO_OFF
     internal var lastAncBatteryController: Any? = null
     internal var lastProfileContext: Any? = null
@@ -217,7 +220,11 @@ object MiLinkServiceHook : HookContext() {
         // Recover the device identity before the panel can ask: the hooks decline to
         // answer for addresses they do not recognise as Sony, so an empty set at the
         // first query loses that round even once the snapshot arrives.
-        loadState()
+        // The credential-protected pref is only readable after the user (id 0) unlocks,
+        // but this process can start earlier than that (e.g. boot providers). Guard the
+        // seed: it is best-effort and is recovered from the broadcast snapshot anyway.
+        runCatching { loadState() }
+            .onFailure { Log.d(TAG, "loadState skipped (storage locked); will seed from snapshot", it) }
         stateMirror.register(context)
         runCatching {
             context?.registerReceiver(object : BroadcastReceiver() {
@@ -248,7 +255,7 @@ object MiLinkServiceHook : HookContext() {
             else -> 1
         }
         saveState(context)
-        Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc")
+        Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         pushStateToPanel()
     }
 
@@ -583,7 +590,9 @@ object MiLinkServiceHook : HookContext() {
         stateSeeded = true
         currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
-        currentFormFactor = prefs.getString("form_factor", currentFormFactor)
+        if (currentFormFactor == null) {
+            currentFormFactor = prefs.getString("form_factor", null)
+        }
         currentAnc = prefs.getInt("anc", currentAnc)
         currentSpatialAudioMode = prefs.getInt("spatial_audio_mode", currentSpatialAudioMode)
             .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)

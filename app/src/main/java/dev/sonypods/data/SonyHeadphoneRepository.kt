@@ -444,6 +444,19 @@ class SonyHeadphoneRepository private constructor(
         return true
     }
 
+    /** Restore a freshly-resolved (neutral) profile from any cached probe result
+     * for this address, so an early connection-state event does not reset
+     * formFactor to UNKNOWN. Returns the input unchanged when there is nothing
+     * to restore. */
+    private fun resolveFromCache(resolved: ConnectedHeadphoneProfile, address: String?): ConnectedHeadphoneProfile {
+        if (address.isNullOrBlank()) return resolved
+        val entry = readCapabilityCache(address) ?: return resolved
+        if (entry.functions.isEmpty()) return resolved
+        val functions = SonyCapabilityProbe.restoreFunctions(resolved, entry.functions)
+        if (functions.isEmpty()) return resolved
+        return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport)
+    }
+
     /** Persist the current probe result (counter + function list) for this device. */
     private fun saveCapabilityCache(functions: List<SonySupportedFunction>) {
         val address = _state.value.connectedDevice?.address ?: return
@@ -796,15 +809,25 @@ class SonyHeadphoneRepository private constructor(
                 if (sameDevice && it.connectedProfile != null) {
                     it.connectedProfile
                 } else {
-                    HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
+                    // A connection-state event may arrive before the capability
+                    // probe runs (GATT and SPP each fire one). Resolving to the
+                    // neutral profile here would reset formFactor to UNKNOWN and
+                    // leave the headset rendered as TWS until a fresh probe lands.
+                    // If a probe result is cached for this device, restore it now.
+                    val resolved = HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
+                    resolveFromCache(resolved, device.address)
                 }
             } else {
                 null
             }
             val resolvedDeviceInfo = deviceInfo.withProfileFallback(profile)
-            val systemBattery = if (connected && device != null &&
-                profile?.capabilities?.formFactor == HeadphoneFormFactor.HEADSET
-            ) {
+            // Read the stack-level battery (AVRCP/A2DP) as a fallback for the Tandem
+            // read. The Tandem battery is empty until the capability probe resolves
+            // the model (formFactor is UNKNOWN before then), which left over-ear
+            // devices without any reported battery — the stack still has one. Only
+            // fall back when no directional (L/R) level is present, so TWS with a
+            // valid Tandem left/right read keep their richer layout.
+            val systemBattery = if (connected && device != null) {
                 readSystemBatteryLevel(device.address)
             } else {
                 null
@@ -820,7 +843,14 @@ class SonyHeadphoneRepository private constructor(
                 connectedProfile = profile,
                 deviceInfo = resolvedDeviceInfo,
                 batteryState = if (connected) {
-                    systemBattery?.let { level -> BatteryState(single = level, raw = listOf(level)) } ?: it.batteryState
+                    val current = it.batteryState
+                    val fallbackSingle = systemBattery
+                        ?.takeIf { current.single == null && current.left == null && current.right == null }
+                    if (fallbackSingle != null) {
+                        BatteryState(single = fallbackSingle, raw = listOf(fallbackSingle))
+                    } else {
+                        current
+                    }
                 } else {
                     BatteryState()
                 },
