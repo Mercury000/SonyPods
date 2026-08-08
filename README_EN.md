@@ -41,7 +41,8 @@ Theoretically supports all released Sony headphones
 ### Usage
 
 1. Install the APK, enable the module in LSPosed with scopes:
-   `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`, `com.android.settings`
+   `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`, `com.android.settings`, `com.sony.songpal.mdr`
+   (`com.sony.songpal.mdr` is the official Sony Sound Connect package; it lets SonyPods hand over the headphone connection while the official app is active and restore it immediately after exit.)
 2. Restart the scopes (one-tap root restart inside the app)
 3. Open the app, grant Bluetooth / notification permissions, connect your Sony headphones
 

@@ -40,7 +40,8 @@ OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 ### 使用
 
 1. 安装 APK，在 LSPosed 中启用模块，勾选作用域：
-   `com.android.bluetooth`、`com.milink.service`、`com.xiaomi.bluetooth`、`com.android.settings`
+   `com.android.bluetooth`、`com.milink.service`、`com.xiaomi.bluetooth`、`com.android.settings`、`com.sony.songpal.mdr`
+   （`com.sony.songpal.mdr` 为 Sony Sound Connect 官方包名，用于官方 App 启动时让出耳机连接、退出后立即恢复。）
 2. 重启作用域（App 内可一键 root 重启）
 3. 打开 App 授予蓝牙 / 通知权限，连接 Sony 耳机
 

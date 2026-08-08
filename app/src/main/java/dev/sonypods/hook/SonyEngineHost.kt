@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.os.SystemClock
+import android.os.IBinder
+import android.os.RemoteException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -76,6 +78,17 @@ object SonyEngineHost {
     private var lastRenderedAddress: String? = null
     private var lastConnectAttemptMs = 0L
 
+    /**
+     * Sound Connect holds this lease while it owns the headphone control session.
+     * The lease is backed by a Binder token from the official app process, so a
+     * process death also releases it without any polling.
+     */
+    @Volatile
+    private var officialAppOwnsTandem = false
+    private var officialAppLeaseId: String? = null
+    private var officialAppLeaseToken: IBinder? = null
+    private var officialAppDeathRecipient: IBinder.DeathRecipient? = null
+
     /** Address + which sides report; the connect animation replays when this changes. */
     private var lastConnectAnimationKey: String? = null
 
@@ -119,6 +132,7 @@ object SonyEngineHost {
         registerCommandReceiver(ctx)
         registerConfigReceiver(ctx)
         registerCapabilityCacheReceiver(ctx)
+        announceEngineReadyToOfficialApp(ctx)
 
         scope.launch {
             repo.state.collect { uiState ->
@@ -196,6 +210,10 @@ object SonyEngineHost {
 
     /** Audio routing changing usually means a bud joined or left; re-read state now. */
     fun refreshNow(reason: String) {
+        if (officialAppOwnsTandem) {
+            Log.d(TAG, "refresh skipped while Sound Connect owns Tandem reason=$reason")
+            return
+        }
         val repo = repository ?: return
         if (!repo.state.value.deviceInfo.protocolReady) return
         Log.d(TAG, "refresh requested: $reason")
@@ -205,6 +223,10 @@ object SonyEngineHost {
 
     @SuppressLint("MissingPermission")
     fun connectDevice(device: BluetoothDevice, force: Boolean = false) {
+        if (officialAppOwnsTandem) {
+            Log.d(TAG, "connect skipped while Sound Connect owns Tandem")
+            return
+        }
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
         val current = repo.state.value
@@ -212,7 +234,7 @@ object SonyEngineHost {
             current.deviceInfo.protocolReady
         if (alreadyLive && !force) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
+        if (!force && now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
         lastConnectAttemptMs = now
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
         Log.d(TAG, "connecting Tandem session to $name ($address)")
@@ -232,6 +254,10 @@ object SonyEngineHost {
      */
     @SuppressLint("MissingPermission")
     private fun reconcileConnection() {
+        if (officialAppOwnsTandem) {
+            Log.d(TAG, "reconcile skipped while Sound Connect owns Tandem")
+            return
+        }
         val repo = repository ?: return
         if (repo.state.value.deviceInfo.protocolReady) return
         val allConnected = runCatching { a2dpProxy?.connectedDevices }.getOrNull()
@@ -250,6 +276,75 @@ object SonyEngineHost {
         runCatching {
             a2dpProxy?.connectedDevices?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
         }.getOrNull()
+
+    private fun acquireOfficialAppLease(intent: Intent) {
+        val leaseId = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_LEASE_ID) ?: run {
+            Log.w(TAG, "ignored Sound Connect acquire without lease id")
+            return
+        }
+        val token = intent.extras?.getBinder(SonyBridge.EXTRA_OFFICIAL_LEASE_TOKEN) ?: run {
+            Log.w(TAG, "ignored Sound Connect acquire without Binder token")
+            return
+        }
+        if (officialAppLeaseId == leaseId) return
+
+        // A newer foreground lease replaces an older one without briefly reconnecting.
+        clearOfficialAppLease(reconnect = false, reason = "replaced")
+        val deathRecipient = IBinder.DeathRecipient {
+            scope.launch {
+                releaseOfficialAppLease(leaseId, "Sound Connect process died")
+            }
+        }
+        officialAppLeaseId = leaseId
+        officialAppLeaseToken = token
+        officialAppDeathRecipient = deathRecipient
+        officialAppOwnsTandem = true
+        try {
+            token.linkToDeath(deathRecipient, 0)
+        } catch (_: RemoteException) {
+            clearOfficialAppLease(reconnect = true, reason = "token already dead")
+            return
+        }
+
+        lastConnectAttemptMs = 0L
+        repository?.disconnect()
+        Log.d(TAG, "Sound Connect acquired Tandem lease id=$leaseId; SonyPods disconnected")
+    }
+
+    private fun releaseOfficialAppLease(leaseId: String, reason: String) {
+        if (officialAppLeaseId != leaseId) {
+            Log.d(TAG, "ignored stale Sound Connect release id=$leaseId current=$officialAppLeaseId")
+            return
+        }
+        clearOfficialAppLease(reconnect = true, reason = reason)
+    }
+
+    private fun clearOfficialAppLease(reconnect: Boolean, reason: String) {
+        val token = officialAppLeaseToken
+        val deathRecipient = officialAppDeathRecipient
+        if (token != null && deathRecipient != null) {
+            runCatching { token.unlinkToDeath(deathRecipient, 0) }
+        }
+        val previousLeaseId = officialAppLeaseId
+        officialAppLeaseId = null
+        officialAppLeaseToken = null
+        officialAppDeathRecipient = null
+        officialAppOwnsTandem = false
+
+        if (previousLeaseId == null) return
+        Log.d(TAG, "Sound Connect lease cleared id=$previousLeaseId reason=$reason reconnect=$reconnect")
+        if (!reconnect) return
+
+        // This is an event-driven hand-back. Force intentionally bypasses the normal
+        // reconnect cooldown so the Tandem session is re-established immediately.
+        lastConnectAttemptMs = 0L
+        val device = connectedSonyDevice()
+        if (device == null) {
+            Log.d(TAG, "Sound Connect released Tandem but no Sony A2DP device is connected")
+            return
+        }
+        connectDevice(device, force = true)
+    }
 
     /**
      * Everything published while the device is still locked lands in consumers that
@@ -329,7 +424,11 @@ object SonyEngineHost {
             context.registerReceiver(
                 object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
-                        handleCommand(intent ?: return)
+                        handleCommand(
+                            intent ?: return,
+                            sentFromPackage,
+                            sentFromUid,
+                        )
                     }
                 },
                 IntentFilter(SonyBridge.ACTION_COMMAND),
@@ -337,6 +436,17 @@ object SonyEngineHost {
             )
             Log.d(TAG, "command receiver registered")
         }.onFailure { Log.w(TAG, "command receiver registration failed", it) }
+    }
+
+    private fun announceEngineReadyToOfficialApp(context: Context) {
+        runCatching {
+            context.sendBroadcast(
+                Intent(SonyBridge.ACTION_ENGINE_READY).apply {
+                    setPackage(SonyBridge.OFFICIAL_APP_PACKAGE)
+                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                }
+            )
+        }.onFailure { Log.w(TAG, "engine-ready broadcast to Sound Connect failed", it) }
     }
 
     private var configReceiverRegistered = false
@@ -401,9 +511,29 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "capability cache push receiver registration failed", it) }
     }
 
-    private fun handleCommand(intent: Intent) {
-        val repo = repository ?: return
+    private fun handleCommand(intent: Intent, senderPackage: String?, senderUid: Int) {
         val command = intent.getStringExtra(SonyBridge.EXTRA_COMMAND) ?: return
+        if (command == SonyBridge.CMD_OFFICIAL_APP_ACQUIRE || command == SonyBridge.CMD_OFFICIAL_APP_RELEASE) {
+            if (!isOfficialAppSender(senderPackage, senderUid)) {
+                Log.w(TAG, "ignored forged Sound Connect lease command sender=$senderPackage uid=$senderUid")
+                return
+            }
+            when (command) {
+                SonyBridge.CMD_OFFICIAL_APP_ACQUIRE -> acquireOfficialAppLease(intent)
+                SonyBridge.CMD_OFFICIAL_APP_RELEASE -> {
+                    val leaseId = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_LEASE_ID) ?: return
+                    releaseOfficialAppLease(leaseId, "official app left foreground")
+                }
+            }
+            return
+        }
+
+        if (officialAppOwnsTandem && command !in setOf(SonyBridge.CMD_REPUBLISH, SonyBridge.CMD_SURFACES_READY)) {
+            Log.d(TAG, "command=$command skipped while Sound Connect owns Tandem")
+            return
+        }
+
+        val repo = repository ?: return
         Log.d(TAG, "command=$command")
         when (command) {
             SonyBridge.CMD_SET_NOISE_CONTROL -> {
@@ -486,6 +616,15 @@ object SonyEngineHost {
             SonyBridge.CMD_DEBUG_RAW ->
                 repo.runDebugAction("raw", intent.getStringExtra(SonyBridge.EXTRA_STRING))
         }
+    }
+
+    private fun isOfficialAppSender(senderPackage: String?, senderUid: Int): Boolean {
+        if (senderPackage == SonyBridge.OFFICIAL_APP_PACKAGE) return true
+        if (senderUid < 0) return false
+        return runCatching {
+            appContext?.packageManager?.getPackagesForUid(senderUid)
+                ?.contains(SonyBridge.OFFICIAL_APP_PACKAGE) == true
+        }.getOrDefault(false)
     }
 
     // ── State fan-out ──

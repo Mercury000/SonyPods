@@ -30,6 +30,8 @@ class HookEntry : XposedModule() {
                 loadHook(MiBluetoothToastHook, param.defaultClassLoader, param.packageName)
                 loadHook(BluetoothUpstreamHeadsetHook(), param.defaultClassLoader, param.packageName)
             }
+            "com.sony.songpal.mdr" ->
+                loadHook(SoundConnectHandoverHook, param.defaultClassLoader, param.packageName)
         }
     }
 

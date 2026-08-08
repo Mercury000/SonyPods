@@ -16,6 +16,7 @@ flowchart LR
     A --> R["SonyHeadphoneRepository"]
     R --> B["SonyBridge / Hook state mirror"]
     R --> U["App UI"]
+    O["Sound Connect lifecycle hook"] --> B
     B --> X["HyperOS / bluetooth / MiLink / Settings hooks"]
 ```
 
@@ -31,10 +32,22 @@ flowchart LR
 | Adapter | `headphones/SonyTandemHeadphoneAdapter.kt` | 功能到 variant/channel/query/write type 的绑定，生成命令和解析路由 |
 | Capability | `headphones/SonyCapabilityProbe.kt` | 解析 support function，构建域 capability probe，推导设备能力 |
 | State/API | `data/SonyHeadphoneRepository.kt` | 连接状态、能力缓存、产品 setter/query、响应合并和 UI state |
-| Cross-process | `bridge/`、`hook/` | 将耳机状态和操作桥接到 HyperOS 系统进程及系统 UI |
+| Cross-process | `bridge/`、`hook/` | 将耳机状态和操作桥接到 HyperOS 系统进程及系统 UI，并处理 Sound Connect 的连接让权 |
 | UI | `ui/` | 展示状态并调用 Repository 的产品级 API |
 
-## 3. 协议选择
+## 3. Sound Connect 连接让权
+
+`com.sony.songpal.mdr` 在 Xposed 作用域内由 `SoundConnectHandoverHook` 监听主进程 Activity 生命周期：
+
+1. 第一个界面创建/进入可见状态时，通过 `SonyBridge` 向 `com.android.bluetooth` 发送 `official_app_acquire`；
+2. `SonyEngineHost` 设置官方 App 独占状态，断开 SonyPods Tandem session，并阻止 A2DP 回调、手动命令和 15 秒 `reconcileConnection()` 自愈任务重新抢占；
+3. 最后一个界面停止时发送 `official_app_release`，引擎绕过正常 10 秒连接冷却并立即发起恢复；
+4. acquire 同时携带官方 App 进程创建的 Binder token。若 App 崩溃或被强杀，`IBinder.DeathRecipient` 直接触发 release；
+5. 若 `com.android.bluetooth` 在租约期间重启，引擎发送 `engine_ready`，官方 App Hook 立即重发当前租约，避免重启后误抢连接。
+
+该机制不轮询 Sound Connect 的进程或前后台状态。15 秒 reconcile 仍只负责 SonyPods 自身连接自愈，并在官方 App 持有租约期间无条件跳过。租约命令还会校验广播发送 UID/package，避免其他应用伪造长期抑制状态。
+
+## 4. 协议选择
 
 项目使用四种 `HeadphoneProtocolVariant`：
 
@@ -54,7 +67,7 @@ flowchart LR
 
 SPP 使用统一 `SPP_MDR` channel，由 `SonySppPayloadMapper` 在 Tandem 内部 marker 与 SPP 外层 frame type 之间转换。一个设备的不同功能可以通过 `featureProtocolMap` / `FeatureProtocolBinding` 绑定到不同 variant 和 channel，不能假定整台设备只使用一张表。
 
-## 4. 能力驱动
+## 5. 能力驱动
 
 连接后优先使用真实协议证据，而不是型号名猜测：
 
@@ -67,7 +80,7 @@ SPP 使用统一 `SPP_MDR` channel，由 `SonySppPayloadMapper` 在 Tandem 内�
 
 型号只用于识别、显示、图片和必要 quirk。仅在没有动态证据时才允许保守 fallback；fallback 不应开放未经确认的写操作。
 
-## 5. 当前产品 API
+## 6. 当前产品 API
 
 `SonyHeadphoneRepository` 当前直接提供：
 
@@ -80,7 +93,7 @@ SPP 使用统一 `SPP_MDR` channel，由 `SonySppPayloadMapper` 在 Tandem 内�
 
 关机、自动待机、充电保护、语音提示、多设备管理等尚未形成产品 API，具体状态见 [耳机命令目录](HEADPHONE_COMMAND_CATALOG.md)。
 
-## 6. 扩展边界
+## 7. 扩展边界
 
 新增协议功能必须遵循：
 

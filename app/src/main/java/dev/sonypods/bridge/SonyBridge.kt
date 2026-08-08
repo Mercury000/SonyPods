@@ -2,6 +2,8 @@ package dev.sonypods.bridge
 
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.os.IBinder
 import dev.sonypods.protocol.NoiseControlMode
 
 /**
@@ -17,6 +19,9 @@ object SonyBridge {
 
     /** Consumers -> engine: a control command, see [EXTRA_COMMAND]. */
     const val ACTION_COMMAND = "dev.sonypods.action.command"
+
+    /** Engine -> official app hook: reassert a live lease after bluetooth-process restart. */
+    const val ACTION_ENGINE_READY = "dev.sonypods.action.engine_ready"
 
     /**
      * Engine -> app (durable persistence) and app -> engine (value push):
@@ -34,6 +39,8 @@ object SonyBridge {
     const val EXTRA_STRING = "value_string"
     const val EXTRA_INDEX = "index"
     const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
+    const val EXTRA_OFFICIAL_LEASE_ID = "official_lease_id"
+    const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
@@ -48,6 +55,8 @@ object SonyBridge {
     const val CMD_PLAYBACK_NEXT = "playback_next"
     const val CMD_CONNECT = "connect"
     const val CMD_DISCONNECT = "disconnect"
+    const val CMD_OFFICIAL_APP_ACQUIRE = "official_app_acquire"
+    const val CMD_OFFICIAL_APP_RELEASE = "official_app_release"
     const val CMD_REFRESH = "refresh"
     /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
     const val CMD_REPUBLISH = "republish"
@@ -62,6 +71,7 @@ object SonyBridge {
 
     /** The process that hosts the engine; all commands are addressed to it. */
     const val ENGINE_PACKAGE = "com.android.bluetooth"
+    const val OFFICIAL_APP_PACKAGE = "com.sony.songpal.mdr"
 
     /** Processes that render headphone state in system surfaces, plus the module app. */
     val STATE_CONSUMERS = listOf(
@@ -110,6 +120,29 @@ object SonyBridge {
             putExtra(EXTRA_STRING, address)
             putExtra("device_name", name)
         }
+
+    fun acquireOfficialAppLease(context: Context, leaseId: String, token: IBinder): Boolean =
+        sendOfficialAppLease(context, CMD_OFFICIAL_APP_ACQUIRE, leaseId, token)
+
+    fun releaseOfficialAppLease(context: Context, leaseId: String, token: IBinder): Boolean =
+        sendOfficialAppLease(context, CMD_OFFICIAL_APP_RELEASE, leaseId, token)
+
+    private fun sendOfficialAppLease(
+        context: Context,
+        command: String,
+        leaseId: String,
+        token: IBinder,
+    ): Boolean = runCatching {
+        context.sendBroadcast(
+            Intent(ACTION_COMMAND).apply {
+                putExtra(EXTRA_COMMAND, command)
+                putExtra(EXTRA_OFFICIAL_LEASE_ID, leaseId)
+                putExtras(Bundle().apply { putBinder(EXTRA_OFFICIAL_LEASE_TOKEN, token) })
+                setPackage(ENGINE_PACKAGE)
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+            }
+        )
+    }.isSuccess
 
     /**
      * Push the encoded capability-probe cache to the engine (app -> engine value
