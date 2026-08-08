@@ -842,43 +842,59 @@ class SonyHeadphoneRepository private constructor(
             return
         }
         val gesture = _state.value.gestureOperationsState
-        val keys = gesture.uiKeys()
-        val presets = currentGesturePresetsForWrite()
-        val mappings = currentGestureMappingsForWrite(presets).toMutableList()
-        if (mappings.isEmpty()) {
-            appendLog("Gesture ambient-mode write ignored: no complete current mapping set")
+        // Sound Connect keeps the complete EXT_PARAM list and changes only the
+        // ambient-control preset entry.  EXT_PARAM has no key byte, so rebuilding
+        // the list by left/right UI key can shift or drop presets and is not safe.
+        val ambientPresets = listOf(
+            AssignableSettingsPreset.AMBIENT_SOUND_CONTROL,
+            AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS,
+            AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS_BT_CLASSIC_ONLY,
+            AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_MIC,
+            AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_LISTENING_MODE,
+        )
+        val ambientPreset = ambientPresets.firstOrNull { preset ->
+            gesture.capabilities.any { capability -> preset in capability.presets } &&
+                gesture.mappings.any { mapping -> mapping.preset == preset }
+        } ?: ambientPresets.firstOrNull { preset -> gesture.mappings.any { it.preset == preset } }
+
+        if (ambientPreset == null) {
+            appendLog("Gesture ambient-mode write ignored: no ambient-control preset in current mapping set")
             return
         }
-        var changed = false
-        keys.forEachIndexed { keyIndex, key ->
-            val mapping = mappings.getOrNull(keyIndex) ?: return@forEachIndexed
-            val actionIndex = key.actions.indexOfFirst { action ->
-                val ambientFunction = action.function.isGestureAmbientFunction() ||
-                    action.availableFunctions.any { it.isGestureAmbientFunction() }
-                ambientFunction && function in action.availableFunctions
-            }
-            if (actionIndex < 0) return@forEachIndexed
-            val action = key.actions[actionIndex]
-            val actionMappingIndex = mapping.mappings.indexOfFirst { it.action == action.action }
-            val replacement = AssignableSettingsActionFunction(action.action, function)
-            val updated = mapping.mappings.toMutableList()
-            if (actionMappingIndex >= 0) {
-                if (updated[actionMappingIndex] != replacement) {
-                    updated[actionMappingIndex] = replacement
-                    changed = true
-                }
-            } else {
-                updated += replacement
-                changed = true
-            }
-            mappings[keyIndex] = mapping.copy(mappings = updated)
+        val mappingIndex = gesture.mappings.indexOfFirst { it.preset == ambientPreset }
+        val mapping = gesture.mappings.getOrNull(mappingIndex)
+        if (mapping == null || mapping.mappings.isEmpty()) {
+            appendLog("Gesture ambient-mode write ignored: ambient preset has no actions")
+            return
         }
-        if (!changed) {
+        // The official app identifies this action by its current ambient function.
+        // Do the same instead of searching every physical key/action capability.
+        val actionIndex = mapping.mappings.indexOfFirst { it.function.isGestureAmbientFunction() }
+        if (actionIndex < 0) {
+            appendLog("Gesture ambient-mode write ignored: no ambient action in preset=$ambientPreset")
+            return
+        }
+        val currentAction = mapping.mappings[actionIndex]
+        if (currentAction.function == function) {
             appendLog("Gesture ambient modes already use ${function.name}", writeLogcat = false)
             return
         }
+
+        // Preserve every returned preset, its order, and every unrelated action.
+        val mappings = gesture.mappings.toMutableList()
+        mappings[mappingIndex] = mapping.copy(
+            mappings = mapping.mappings.toMutableList().also {
+                it[actionIndex] = currentAction.copy(function = function)
+            },
+        )
         val profile = ensureConnectedProfile()
-        HeadphoneAdapterRegistry.buildSetGestureMappingsCommands(profile, mappings).forEach(::sendCommand)
+        val commands = HeadphoneAdapterRegistry.buildSetGestureMappingsCommands(profile, mappings)
+        if (commands.isEmpty()) {
+            appendLog("Gesture ambient-mode write produced no command")
+            return
+        }
+        appendLog("Writing ambient gesture preset=$ambientPreset action=${currentAction.action} function=${function.name}")
+        commands.forEach(::sendCommand)
         scheduleGestureRefresh()
     }
 
