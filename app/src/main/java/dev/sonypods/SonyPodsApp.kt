@@ -26,9 +26,8 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // Flush any config that was saved while the service was unavailable, so the
         // engine's remote-prefs store is authoritative and survives a scope restart.
         ConfigManager.flushPendingRemote(service)
-        // Migrate any pod images that exist only in local filesDir into the Remote Files
-        // store, so the hook process can read them via openRemoteFile.
-        // Skipped if already migrated once.
+        // Migrate model images saved before the Remote Files path was introduced so
+        // hooked system surfaces can continue to read the automatic catalog image.
         PodImagePrefs.migrateImagesToRemote(this, service)
         // Flush any capability-probe cache the engine pushed while the service was
         // unavailable, so the shared remote-prefs store is authoritative across a scope

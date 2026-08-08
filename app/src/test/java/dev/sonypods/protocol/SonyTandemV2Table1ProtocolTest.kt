@@ -116,6 +116,22 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
+    fun v1PowerOff_matchesSoundConnectCommandShape() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x22, 0x00, 0x01),
+            SonyTandemV1Table1Protocol.buildPowerOff(),
+        )
+    }
+
+    @Test
+    fun v2PowerOff_matchesSoundConnectCommandShape() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x24, 0x03, 0x01),
+            SonyTandemV2Table1Protocol.buildPowerOff(),
+        )
+    }
+
+    @Test
     fun v1CommonGetBattery_matchesReverseCommandShape() {
         assertArrayEquals(
             byteArrayOf(0x0E, 0x10, 0x00),

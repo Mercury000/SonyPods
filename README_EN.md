@@ -27,6 +27,7 @@ Theoretically supports all released Sony headphones
 - **Battery** — TWS left / right / case, single level for headbands
 - **Playback** — previous / play-pause / next
 - **Status** — LE Audio, Quick Access, wearing detection, firmware version
+- **Headphone power off** — sends Sony USER_POWER_OFF on supported models
 - **Tandem debug** — TX/RX log viewer and raw HEX sender
 
 ### HyperOS integration
@@ -36,7 +37,7 @@ Theoretically supports all released Sony headphones
 - **Focus Island / notifications** — connect & battery island, AOD battery, ANC-cycle notification button
 - **Fusion device center** — battery and ANC state read/write
 - **Quick popup** — control popup from the notification
-- **Model images** — cloud catalog matched by model + color, custom images supported
+- **Model images** — automatically matched from the Sound Connect model/colour catalog, without custom image configuration
 
 ### Usage
 

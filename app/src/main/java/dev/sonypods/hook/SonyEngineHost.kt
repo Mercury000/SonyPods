@@ -585,6 +585,8 @@ object SonyEngineHost {
             SonyBridge.CMD_SET_CLEAR_BASS ->
                 repo.setClearBass(intent.getIntExtra(SonyBridge.EXTRA_INT, 0))
 
+            SonyBridge.CMD_POWER_OFF -> repo.powerOff()
+
             SonyBridge.CMD_SET_EQ_BAND -> repo.setCustomEqBand(
                 intent.getIntExtra(SonyBridge.EXTRA_INDEX, 0),
                 intent.getIntExtra(SonyBridge.EXTRA_INT, 0),

@@ -20,6 +20,9 @@ object SonyTandemV1Table1Protocol {
     private const val COMMON_GET_BATTERY_LEVEL: Byte = 0x10
     private const val COMMON_RET_BATTERY_LEVEL: Byte = 0x11
     private const val COMMON_NTFY_BATTERY_LEVEL: Byte = 0x13
+    private const val COMMON_SET_POWER_OFF: Byte = 0x22
+    private const val POWER_OFF_FIXED_VALUE: Byte = 0x00
+    private const val POWER_OFF_USER_REQUEST: Byte = 0x01
 
     // ── Playback (V1) ──
     private const val PLAY_GET_STATUS: Byte = 0xA2.toByte()
@@ -137,6 +140,13 @@ object SonyTandemV1Table1Protocol {
 
     fun buildGetBatteryStatus(type: PowerInquiredType = PowerInquiredType.BATTERY): ByteArray =
         SonyTandemFrame.message(COMMON_GET_BATTERY_LEVEL, byteArrayOf(type.code))
+
+    /** Sound Connect V1 Table1 USER_POWER_OFF: 0E 22 00 01. */
+    fun buildPowerOff(): ByteArray =
+        SonyTandemFrame.message(
+            COMMON_SET_POWER_OFF,
+            byteArrayOf(POWER_OFF_FIXED_VALUE, POWER_OFF_USER_REQUEST),
+        )
 
     // ── NC/ASM ──
 

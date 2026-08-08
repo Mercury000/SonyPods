@@ -2,7 +2,6 @@ package dev.sonypods.ui
 
 import android.bluetooth.BluetoothDevice
 import android.content.res.Configuration
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,16 +28,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.config.EarphonePref
 import io.github.libxposed.service.XposedService
 import com.mercury.sonypods.R
-import dev.sonypods.config.EarphonePref
-import dev.sonypods.config.PodImageResource
 import dev.sonypods.ui.dialogs.RestartScope
 import dev.sonypods.ui.dialogs.RestartScopeDialog
-import dev.sonypods.ui.dialogs.PodImageConfigDialog
+import dev.sonypods.ui.dialogs.PowerOffDialog
 import dev.sonypods.ui.pages.EarphonesTabPage
 import dev.sonypods.ui.pages.HomePage
 import dev.sonypods.ui.pages.SettingsPage
+import dev.sonypods.ui.components.AppIcons
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
@@ -49,7 +48,6 @@ import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.icon.extended.Edit
 import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Settings
@@ -115,7 +113,6 @@ internal fun MainTabsScaffold(
     onRestartScopes: (List<String>) -> Unit,
     onBackToDevicePicker: () -> Unit,
     onOpenSystemHeadsetSettings: () -> Unit,
-    onSavePodImages: (String, String, Map<PodImageResource, Uri?>, Set<PodImageResource>) -> Unit,
 ) {
     val pagerState = rememberPagerState(
         initialPage = selectedTab.ordinal,
@@ -131,7 +128,7 @@ internal fun MainTabsScaffold(
     val currentEarphonePref = earphonePrefs.firstOrNull {
         it.address.equals(connectedDeviceAddress, ignoreCase = true)
     }
-    var showPodImageDialog by remember { mutableStateOf(false) }
+    var showPowerOffDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedTab) {
         val targetPage = selectedTab.ordinal
@@ -211,7 +208,8 @@ internal fun MainTabsScaffold(
                         onDeviceDisconnect = onDeviceDisconnect,
                         onDismissConnectError = onDismissConnectError,
                         onBackToDevicePicker = onBackToDevicePicker,
-                        onOpenPodImageConfig = { showPodImageDialog = true },
+                        onPowerOff = { showPowerOffDialog = true },
+                        powerOffEnabled = sonyState.supportsPowerOff,
                         onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                     )
 
@@ -246,7 +244,8 @@ internal fun MainTabsScaffold(
             if (isLandscapeDetail) {
                 LandscapeDetailActions(
                     onBackToDevicePicker = onBackToDevicePicker,
-                    onOpenPodImageConfig = { showPodImageDialog = true },
+                    onPowerOff = { showPowerOffDialog = true },
+                    powerOffEnabled = sonyState.supportsPowerOff,
                     onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                 )
             }
@@ -259,15 +258,13 @@ internal fun MainTabsScaffold(
             onConfirm = onRestartScopes,
         )
 
-        PodImageConfigDialog(
-            show = showPodImageDialog,
-            earphones = earphonePrefs,
-            currentAddress = connectedDeviceAddress,
-            currentName = displayTitle,
-            onDismissRequest = { showPodImageDialog = false },
-            onSave = { address, name, images, clearedImages ->
-                onSavePodImages(address, name, images, clearedImages)
-                showPodImageDialog = false
+        PowerOffDialog(
+            show = showPowerOffDialog,
+            deviceName = displayTitle,
+            onDismissRequest = { showPowerOffDialog = false },
+            onConfirm = {
+                showPowerOffDialog = false
+                sonyActions.onPowerOff()
             },
         )
     }
@@ -342,7 +339,8 @@ private fun EarphonesTabShell(
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
     onDismissConnectError: () -> Unit,
     onBackToDevicePicker: () -> Unit,
-    onOpenPodImageConfig: () -> Unit,
+    onPowerOff: () -> Unit,
+    powerOffEnabled: Boolean,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
@@ -363,7 +361,8 @@ private fun EarphonesTabShell(
                     actions = {
                         if (showEarphoneDetail) {
                             EarphoneDetailActions(
-                                onOpenPodImageConfig = onOpenPodImageConfig,
+                                onPowerOff = onPowerOff,
+                                powerOffEnabled = powerOffEnabled,
                                 onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                             )
                         }
@@ -465,7 +464,8 @@ private fun SettingsTabPage(
 @Composable
 private fun LandscapeDetailActions(
     onBackToDevicePicker: () -> Unit,
-    onOpenPodImageConfig: () -> Unit,
+    onPowerOff: () -> Unit,
+    powerOffEnabled: Boolean,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     IconButton(
@@ -477,17 +477,19 @@ private fun LandscapeDetailActions(
         Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
     }
     Box(Modifier.fillMaxSize()) {
-        IconButton(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 8.dp, end = 56.dp)
-                .zIndex(1f),
-            onClick = onOpenPodImageConfig,
-        ) {
-            Icon(
-                imageVector = MiuixIcons.Edit,
-                contentDescription = stringResource(R.string.custom_pod_images),
-            )
+        if (powerOffEnabled) {
+            IconButton(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 56.dp)
+                    .zIndex(1f),
+                onClick = onPowerOff,
+            ) {
+                Icon(
+                    imageVector = AppIcons.Power,
+                    contentDescription = stringResource(R.string.power_off),
+                )
+            }
         }
         IconButton(
             modifier = Modifier
@@ -506,15 +508,18 @@ private fun LandscapeDetailActions(
 
 @Composable
 private fun EarphoneDetailActions(
-    onOpenPodImageConfig: () -> Unit,
+    onPowerOff: () -> Unit,
+    powerOffEnabled: Boolean,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
-    IconButton(onClick = onOpenPodImageConfig) {
-        Icon(
-            imageVector = MiuixIcons.Edit,
-            modifier = Modifier.size(23.dp),
-            contentDescription = stringResource(R.string.custom_pod_images),
-        )
+    if (powerOffEnabled) {
+        IconButton(onClick = onPowerOff) {
+            Icon(
+                imageVector = AppIcons.Power,
+                modifier = Modifier.size(23.dp),
+                contentDescription = stringResource(R.string.power_off),
+            )
+        }
     }
     IconButton(onClick = onOpenSystemHeadsetSettings) {
         Icon(

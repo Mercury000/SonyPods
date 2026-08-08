@@ -193,10 +193,9 @@ data class SonyHeadphoneUiState(
 )
 
 /**
- * @param resourceContext context used for our own resources (the model image catalog
- *   asset). When hosted inside the bluetooth process this is the module package context,
- *   because the host app's assets do not contain our files.
- * @param systemContext context used for the bluetooth/audio system services. Defaults to
+ * @param resourceContext base module context. It is retained as the primary constructor
+ *   context for callers hosted in the Bluetooth process.
+ * @param systemContext context used for Bluetooth/audio system services. Defaults to
  *   [resourceContext], which is correct when the repository runs in the module app.
  */
 class SonyHeadphoneRepository private constructor(
@@ -561,6 +560,27 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
+    }
+
+    /** Send the Sony Tandem USER_POWER_OFF command and let the headset close the
+     * transport itself. Do not refresh or explicitly disconnect afterwards: the
+     * power-off frame must finish writing before the link disappears. */
+    fun powerOff() {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot power off.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.POWER_OFF)) {
+            appendLog("Power-off write is disabled for current profile")
+            return
+        }
+        val commands = HeadphoneAdapterRegistry.buildPowerOffCommands(ensureConnectedProfile())
+        if (commands.isEmpty()) {
+            appendLog("Power-off command unavailable for current protocol")
+            return
+        }
+        appendLog("Sending Sony USER_POWER_OFF; headset is expected to disconnect")
+        commands.forEach(::sendCommand)
     }
 
     fun setEqPreset(preset: EqPresetId) {
@@ -970,23 +990,6 @@ class SonyHeadphoneRepository private constructor(
         }
     }
 
-    private fun DeviceInfoState.withResolvedModelImage(device: DiscoveredSonyDevice?): DeviceInfoState {
-        val preferredModelName = modelName ?: device?.name?.removePrefix("LE_")
-        val match = modelImageCatalog.resolve(
-            preferredModelName,
-            modelColor ?: parseModelColor(seriesAndColor),
-            modelColorCode,
-        )
-        return copy(
-            modelImageUrl = match?.imageUrl,
-            modelImageSourceColor = match?.sourceColor,
-            // Prefer the catalog's colour label so the stored value reflects the image
-            // we actually resolved, instead of the fragile per-protocol label text.
-            modelColor = match?.modelColor ?: modelColor ?: parseModelColor(seriesAndColor),
-            modelColorCode = modelColorCode,
-        )
-    }
-
     private fun DeviceInfoState.withProfileFallback(profile: ConnectedHeadphoneProfile?): DeviceInfoState =
         if (profile == null) {
             this
@@ -997,6 +1000,21 @@ class SonyHeadphoneRepository private constructor(
                 modelColor = modelColor ?: "Default",
             )
         }
+
+    private fun DeviceInfoState.withResolvedModelImage(device: DiscoveredSonyDevice?): DeviceInfoState {
+        val preferredModelName = modelName ?: device?.name?.removePrefix("LE_")
+        val match = modelImageCatalog.resolve(
+            preferredModelName,
+            modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode,
+        )
+        return copy(
+            modelImageUrl = match?.imageUrl,
+            modelImageSourceColor = match?.sourceColor,
+            modelColor = match?.modelColor ?: modelColor ?: parseModelColor(seriesAndColor),
+            modelColorCode = modelColorCode,
+        )
+    }
 
     private fun applyBattery(response: ParsedTandemResponse.Battery) {
         _state.update { current ->
@@ -1630,6 +1648,7 @@ fun featureStatusesFor(profile: ConnectedHeadphoneProfile?): List<FeatureStatus>
     FeatureStatus("扫描与连接", profile?.let { "${it.protocolName} via ${it.transport}" } ?: "BLE scan, GATT/SPP discovery", true),
     FeatureStatus("设备信息", "Model, firmware, protocol basics", profile.supports(HeadphoneFeature.DEVICE_INFO)),
     FeatureStatus("电量", "Single/headset, left/right, and cradle-compatible reads", profile.supports(HeadphoneFeature.BATTERY)),
+    FeatureStatus("耳机关机", "Sony USER_POWER_OFF command", profile.supports(HeadphoneFeature.POWER_OFF)),
     FeatureStatus("降噪开关", "NC/ASM gated by current device profile", profile.supports(HeadphoneFeature.NOISE_CONTROL)),
     FeatureStatus("环境声等级", "ASM seamless level when confirmed writable", profile.supports(HeadphoneFeature.AMBIENT_LEVEL)),
     FeatureStatus("播放控制", "Play, pause, previous, next", profile.supports(HeadphoneFeature.PLAYBACK_CONTROL)),

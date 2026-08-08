@@ -12,7 +12,7 @@ import java.lang.ref.WeakReference
 
 /**
  * Hooks MiuiHeadsetAnimation in com.android.settings so that the Bluetooth settings page
- * (MiuiHeadsetActivity) shows the user's box image for Sony devices instead of the default
+ * (MiuiHeadsetActivity) shows the catalog box image for Sony devices instead of the default
  * headset silhouette.
  *
  * fakeDeviceId 01010607 matches HeadsetIDConstants.isK73WhiteHeadset, so loadDefaultInternal
@@ -75,7 +75,7 @@ class SettingsRenderHook : HookContext() {
 
                 // Post at the same 50ms delay the stock code uses.
                 val action = Runnable {
-                    Log.i(TAG, "setting custom box image")
+                    Log.i(TAG, "setting catalog box image")
                     ticId.setImageDrawable(drawable)
                 }
                 handler?.postDelayed(action, 50L) ?: action.run()

@@ -271,8 +271,8 @@ object ConfigManager {
      * Unconditionally write the current [cachedConfig] to the remote-preference store.
      *
      * This repairs a remote-prefs store that is stale or missing [PREF_KEY_CONFIG_JSON] —
-     * for example after an older build of the module wrote only [PodImagePrefs.PREF_KEY_EARPHONES]
-     * into remote prefs (evicting config_json), leaving the engine with no config on startup.
+     * for example after an older build of the module wrote unrelated data into remote prefs,
+     * evicting config_json, leaving the engine with no config on startup.
      * Unlike [flushPendingRemote], which only acts when there is a buffered write, this always
      * writes and is therefore safe to call on every [onServiceBind].
      */

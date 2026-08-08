@@ -28,6 +28,7 @@ enum class HeadphoneFormFactor {
 enum class HeadphoneFeature {
     DEVICE_INFO,
     BATTERY,
+    POWER_OFF,
     NOISE_CONTROL,
     AMBIENT_LEVEL,
     AMBIENT_VOICE_MODE,
@@ -322,6 +323,8 @@ interface HeadphoneAdapter {
 
     fun buildRefreshBatteryCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
 
+    fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
+
     fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
 
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
@@ -390,6 +393,9 @@ object HeadphoneAdapterRegistry {
 
     fun buildRefreshBatteryCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildRefreshBatteryCommands(profile)
+
+    fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
+        adapterFor(profile).buildPowerOffCommands(profile)
 
     fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildRefreshPlaybackCommands(profile)

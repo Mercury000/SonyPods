@@ -27,6 +27,7 @@ interface TandemCodec {
     fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray? = null
     fun buildGetDisplayFirmwareVersion(): ByteArray? = null
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray? = null
+    fun buildPowerOff(): ByteArray? = null
     fun buildGetEqEbbStatus(type: EqEbbInquiredType): ByteArray? = null
     fun buildGetEqEbbParam(type: EqEbbInquiredType): ByteArray? = null
     fun buildGetEqEbbExtendedInfo(type: EqEbbInquiredType): ByteArray? = null
@@ -110,6 +111,9 @@ object SonyTandemV1Table1Codec : TandemCodec {
 
     override fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray =
         SonyTandemV1Table1Protocol.buildGetBatteryStatus(type)
+
+    override fun buildPowerOff(): ByteArray =
+        SonyTandemV1Table1Protocol.buildPowerOff()
 
     fun buildGetNcAsmParam(): ByteArray =
         SonyTandemV1Table1Protocol.buildGetNcAsmParam()
@@ -222,6 +226,9 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetBatteryStatus(type)
+
+    override fun buildPowerOff(): ByteArray =
+        SonyTandemV2Table1Protocol.buildPowerOff()
 
     override fun buildGetEqEbbStatus(type: EqEbbInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetEqEbbStatus(type)

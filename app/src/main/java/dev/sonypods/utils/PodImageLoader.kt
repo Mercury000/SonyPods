@@ -15,9 +15,9 @@ object PodImageLoader {
     /**
      * Hook-only image reader backed by libxposed Remote Files. Set by [dev.sonypods.hook.HookEntry]
      * in each hooked process; null in the module app process (which reads images via the
-     * PodImageProvider ContentProvider / local files). When non-null, [loadCustom] reads the
+     * PodImageProvider ContentProvider / local files). When non-null, [loadCached] reads the
      * image via `openRemoteFile` first — this is what makes the notification (com.xiaomi.bluetooth)
-     * and the island (com.android.bluetooth) show the user's image instead of the stock fallback,
+     * and the island (com.android.bluetooth) show the catalog image instead of the stock fallback,
      * without depending on a cross-process ContentProvider query.
      */
     @Volatile
@@ -30,22 +30,22 @@ object PodImageLoader {
         resource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        loadCustom(context, prefs, address, listOf(resource))?.let { return it }
+        loadCached(context, prefs, address, listOf(resource))?.let { return it }
         val moduleContext = runCatching {
             context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull() ?: return null
         return BitmapFactory.decodeResource(moduleContext.resources, fallbackResId)
     }
 
-    fun loadBitmapWithCustomFallback(
+    fun loadBitmapWithFallback(
         context: Context,
         prefs: SharedPreferences,
         address: String,
         resource: PodImageResource,
-        customFallbackResource: PodImageResource,
+        fallbackResource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        loadCustom(context, prefs, address, listOf(resource, customFallbackResource))?.let { return it }
+        loadCached(context, prefs, address, listOf(resource, fallbackResource))?.let { return it }
         val moduleContext = runCatching {
             context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull() ?: return null
@@ -53,12 +53,12 @@ object PodImageLoader {
     }
 
     /**
-     * Resolve a user-configured image for [address], trying each [resources] in order.
+     * Resolve a cached catalog image for [address], trying each [resources] in order.
      * In a hooked process the Remote Files reader is tried first (cold-safe).
      * In the module app process (or on a remote-file miss) it falls back to the local file
-     * directly. Returns null if no custom image is available.
+     * directly. Returns null if no cached catalog image is available.
      */
-    private fun loadCustom(
+    private fun loadCached(
         context: Context,
         prefs: SharedPreferences,
         address: String,
@@ -83,23 +83,23 @@ object PodImageLoader {
 
 
     fun loadIslandLeftBitmap(context: Context, prefs: SharedPreferences, address: String): Bitmap? {
-        return loadBitmapWithCustomFallback(
+        return loadBitmapWithFallback(
             context = context,
             prefs = prefs,
             address = address,
             resource = PodImageResource.LEFT,
-            customFallbackResource = PodImageResource.BOX,
+            fallbackResource = PodImageResource.BOX,
             fallbackResId = R.drawable.img_left,
         )
     }
 
     fun loadIslandRightBitmap(context: Context, prefs: SharedPreferences, address: String): Bitmap? {
-        return loadBitmapWithCustomFallback(
+        return loadBitmapWithFallback(
             context = context,
             prefs = prefs,
             address = address,
             resource = PodImageResource.RIGHT,
-            customFallbackResource = PodImageResource.BOX,
+            fallbackResource = PodImageResource.BOX,
             fallbackResId = R.drawable.img_right,
         )
     }

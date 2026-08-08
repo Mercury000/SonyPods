@@ -21,6 +21,9 @@ object SonyTandemV2Table1Protocol {
     private const val POWER_GET_STATUS: Byte = 0x22
     private const val POWER_RET_STATUS: Byte = 0x23
     private const val POWER_NTFY_STATUS: Byte = 0x25
+    private const val POWER_SET_STATUS: Byte = 0x24
+    private const val POWER_OFF: Byte = 0x03
+    private const val POWER_OFF_USER_REQUEST: Byte = 0x01
     private const val SYSTEM_GET_PARAM: Byte = 0xF6.toByte()
     private const val SYSTEM_RET_PARAM: Byte = 0xF7.toByte()
     private const val SYSTEM_NTFY_PARAM: Byte = 0xF9.toByte()
@@ -139,6 +142,13 @@ object SonyTandemV2Table1Protocol {
 
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray =
         SonyTandemFrame.message(POWER_GET_STATUS, byteArrayOf(type.code))
+
+    /** Sound Connect V2 Table1 USER_POWER_OFF: 0E 24 03 01. */
+    fun buildPowerOff(): ByteArray =
+        SonyTandemFrame.message(
+            POWER_SET_STATUS,
+            byteArrayOf(POWER_OFF, POWER_OFF_USER_REQUEST),
+        )
 
     // ── Capability-probe GET_CAPABILITY builders (SC `pf0.C25895a` NCASM 0x60,
     //    `gf0.C16901b` EQEBB 0x50, `tf0.C28926a` PLAY 0xA0) ────────────────

@@ -14,8 +14,8 @@ import java.io.File
 import java.net.URL
 
 /**
- * Downloads the cloud model image and stores it where [dev.sonypods.config.PodImageProvider]
- * can serve it to the system notification and focus island.
+ * Downloads the cloud model image and stores it where the system notification and focus island
+ * can serve it through the module's image cache.
  *
  * This stays in the app process: the image lives in our private files dir, which the
  * bluetooth process cannot write to. The engine only reports the URL.
@@ -37,10 +37,9 @@ object ModelImageSync {
         val appContext = context.applicationContext ?: context
         val prefs = appContext.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
         val existing = PodImagePrefs.find(prefs, address)
-        val userProvided = existing?.boxImagePath != null && existing.autoImageUrl == null
         val upToDate = existing?.autoImageUrl == url &&
             existing.boxImagePath?.let { File(it).exists() } == true
-        if (userProvided || upToDate) {
+        if (upToDate) {
             lastHandledKey = key
             return
         }

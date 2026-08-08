@@ -33,6 +33,11 @@
     <string name="cancel">取消</string>
     <string name="connecting">连接中...</string>
     <string name="connect_failed">连接失败，请确认设备已开机且在附近。</string>
+    <string name="power_off">关机</string>
+    <string name="power_off_title">关闭耳机？</string>
+    <string name="power_off_summary">向 %1$s 发送 Sony 关机命令。</string>
+    <string name="power_off_warning">耳机关机后会断开连接；再次使用前需要手动开机。</string>
+    <string name="power_off_confirm">关机</string>
     <string name="retry">重试</string>
     <string name="bt_permission_required">需要蓝牙权限才能发现耳机。</string>
     <string name="grant_permission">授予权限</string>
@@ -40,13 +45,6 @@
     <string name="done">完成</string>
     <string name="confirm">确认</string>
     <string name="save">保存</string>
-    <string name="custom_pod_images">自定义图片</string>
-    <string name="custom_image_box">耳机盒图片</string>
-    <string name="custom_image_left">左耳图片</string>
-    <string name="custom_image_right">右耳图片</string>
-    <string name="custom_image_selected">已选择自定义图片</string>
-    <string name="custom_image_default">使用默认图片</string>
-    <string name="custom_image_restore_default">恢复默认图片</string>
     <string name="theme_title">主题</string>
     <string name="theme_follow_system">跟随系统</string>
     <string name="theme_light">浅色</string>

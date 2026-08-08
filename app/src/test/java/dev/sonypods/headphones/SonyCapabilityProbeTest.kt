@@ -206,6 +206,26 @@ class SonyCapabilityProbeTest {
     }
 
     @Test
+    fun powerOffFunction_isEnabledOnlyForTable1Profiles() {
+        val functions = listOf(fn(SonyV2FunctionType.POWER_OFF))
+        val table1 = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = functions,
+            fallback = baseCapabilities(),
+            profile = v2Profile,
+        )
+        val table2 = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = functions,
+            fallback = baseCapabilities(),
+            profile = v2Profile.copy(
+                featureProtocolMap = v2Profile.featureProtocolMap.mapValues { HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2 },
+            ),
+        )
+
+        assertTrue(HeadphoneFeature.POWER_OFF in table1.features)
+        assertFalse(HeadphoneFeature.POWER_OFF in table2.features)
+    }
+
+    @Test
     fun unknownFunction_isSkipped() {
         val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
             functions = listOf(fn(SonyV2FunctionType.CONCIERGE_DATA)),

@@ -1,6 +1,4 @@
 package dev.sonypods.utils
-import com.mercury.sonypods.R
-
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -12,7 +10,9 @@ import android.os.Handler
 import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.hook.Log
+import dev.sonypods.utils.PodImageLoader
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
+import com.mercury.sonypods.R
 
 @SuppressLint("WrongConstant")
 object FocusIslandUtil {

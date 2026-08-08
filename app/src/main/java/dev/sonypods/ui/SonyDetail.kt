@@ -17,6 +17,7 @@ data class SonyDetailActions(
     val onPlaybackPrevious: () -> Unit = {},
     val onPlaybackPlayPause: () -> Unit = {},
     val onPlaybackNext: () -> Unit = {},
+    val onPowerOff: () -> Unit = {},
     val onRefresh: () -> Unit = {},
 )
 

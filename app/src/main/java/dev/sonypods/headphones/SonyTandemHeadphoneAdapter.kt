@@ -404,6 +404,15 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
         }
 
+    override fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
+        if (!profile.supports(HeadphoneFeature.POWER_OFF)) {
+            emptyList()
+        } else {
+            codecFor(profile, HeadphoneFeature.POWER_OFF).buildPowerOff()?.let {
+                listOf(command(profile, HeadphoneFeature.POWER_OFF, "POWER OFF", it))
+            }.orEmpty()
+        }
+
     override fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)
             .buildGetPlaybackStatus(profile.capabilities.playbackControlType)

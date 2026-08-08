@@ -33,12 +33,11 @@ data class SonyStateSnapshot(
      * device center, settings injection) can present a single-battery over-ear
      * headphone instead of projecting it onto a TWS case/left/right layout. */
     val formFactor: String? = null,
-    /** Cloud catalog image for this model+colour; the app downloads and caches it. */
+    /** Cloud catalog image URL for this model and colour. */
     val modelImageUrl: String? = null,
-    /** Catalog accent colour (ARGB hex, e.g. "FFf7594e") for the resolved image, if any.
-     * Consumers use it to tint system surfaces so they match the depicted headphone. */
+    /** Catalog accent colour (ARGB hex) for system surfaces. */
     val modelImageSourceColor: String? = null,
-
+    val supportsPowerOff: Boolean = false,
     val batterySingle: Int? = null,
     val batteryLeft: Int? = null,
     val batteryRight: Int? = null,
@@ -80,6 +79,7 @@ data class SonyStateSnapshot(
         formFactor?.let { putString(KEY_FORM_FACTOR, it) }
         modelImageUrl?.let { putString(KEY_MODEL_IMAGE, it) }
         modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
+        putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
 
         batterySingle?.let { putInt(KEY_BATTERY_SINGLE, it) }
         batteryLeft?.let { putInt(KEY_BATTERY_LEFT, it) }
@@ -121,6 +121,7 @@ data class SonyStateSnapshot(
         private const val KEY_FORM_FACTOR = "form_factor"
         private const val KEY_MODEL_IMAGE = "model_image_url"
         private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
+        private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
         private const val KEY_BATTERY_SINGLE = "battery_single"
         private const val KEY_BATTERY_LEFT = "battery_left"
         private const val KEY_BATTERY_RIGHT = "battery_right"
@@ -155,6 +156,7 @@ data class SonyStateSnapshot(
             formFactor = bundle.getString(KEY_FORM_FACTOR),
             modelImageUrl = bundle.getString(KEY_MODEL_IMAGE),
             modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
+            supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
             batteryLeft = bundle.optInt(KEY_BATTERY_LEFT),
             batteryRight = bundle.optInt(KEY_BATTERY_RIGHT),
@@ -194,12 +196,13 @@ data class SonyStateSnapshot(
                 connected = state.connectedDevice != null,
                 protocolReady = state.deviceInfo.protocolReady,
                 probeComplete = state.probeComplete,
-deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
-            deviceAddress = state.connectedDevice?.address,
-            firmwareVersion = state.deviceInfo.firmwareVersion,
-            formFactor = state.connectedProfile?.capabilities?.formFactor?.name,
-            modelImageUrl = state.deviceInfo.modelImageUrl,
+                deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
+                deviceAddress = state.connectedDevice?.address,
+                firmwareVersion = state.deviceInfo.firmwareVersion,
+                formFactor = state.connectedProfile?.capabilities?.formFactor?.name,
+                modelImageUrl = state.deviceInfo.modelImageUrl,
                 modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
+                supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
                 batteryRight = state.batteryState.right,

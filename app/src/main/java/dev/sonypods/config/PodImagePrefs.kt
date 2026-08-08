@@ -2,7 +2,6 @@ package dev.sonypods.config
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.net.Uri
 import android.util.Log
 import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
@@ -16,7 +15,6 @@ enum class PodImageResource(val fileSuffix: String) {
     LEFT("left"),
     RIGHT("right"),
 }
-
 @Serializable
 data class EarphonePref(
     val address: String,
@@ -25,7 +23,7 @@ data class EarphonePref(
     val leftImagePath: String? = null,
     val rightImagePath: String? = null,
     val lastConnectedAt: Long = System.currentTimeMillis(),
-    /** Cloud catalog URL the box image was auto-downloaded from; null = user-provided image. */
+    /** Cloud catalog URL the box image was downloaded from; null = no catalog image cached. */
     val autoImageUrl: String? = null,
 ) {
     fun imagePath(resource: PodImageResource): String? = when (resource) {
@@ -74,7 +72,11 @@ object PodImagePrefs {
         if (address.isBlank()) return load(prefs)
         val current = load(prefs)
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        val updated = (existing ?: EarphonePref(address = address, name = name)).copy(
+        // Drop records created by the removed custom-image feature. Catalog images keep
+        // their URL marker and are refreshed by ModelImageSync when needed.
+        val base = existing?.takeIf { it.autoImageUrl != null }
+            ?: EarphonePref(address = address, name = name)
+        val updated = base.copy(
             name = name.ifBlank { existing?.name.orEmpty() },
             lastConnectedAt = System.currentTimeMillis(),
         )
@@ -86,39 +88,6 @@ object PodImagePrefs {
         // falls back to the stock image. This is safe now that config_json is written to
         // remote prefs separately (ConfigManager.writeRemoteConfig); readConfig never reads
         // earphone_prefs_json, so it cannot default the engine config.
-        return saveBoth(prefs, service, normalized)
-    }
-
-    fun saveImages(
-        context: Context,
-        prefs: SharedPreferences,
-        service: XposedService?,
-        address: String,
-        name: String,
-        selectedImages: Map<PodImageResource, Uri?>,
-        clearedImages: Set<PodImageResource> = emptySet(),
-    ): List<EarphonePref> {
-        if (address.isBlank()) return load(prefs)
-        val current = load(prefs)
-        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        var updated = existing ?: EarphonePref(address = address, name = name)
-        clearedImages.forEach { resource ->
-            updated = updated.withImagePath(resource, null)
-        }
-        selectedImages.forEach { (resource, uri) ->
-            if (uri != null) {
-                updated = updated.withImagePath(resource, copyImage(context, service, address, resource, uri))
-            }
-        }
-        // The box image is now user-managed: stop treating it as auto-downloaded.
-        if (PodImageResource.BOX in clearedImages || selectedImages[PodImageResource.BOX] != null) {
-            updated = updated.copy(autoImageUrl = null)
-        }
-        updated = updated.copy(
-            name = name.ifBlank { updated.name },
-            lastConnectedAt = System.currentTimeMillis(),
-        )
-        val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
         return saveBoth(prefs, service, normalized)
     }
 
@@ -134,7 +103,10 @@ object PodImagePrefs {
         if (address.isBlank()) return load(prefs)
         val current = load(prefs)
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        var updated = existing ?: EarphonePref(address = address, name = name)
+        // Never carry image paths from the removed custom-image records into the
+        // automatic catalog cache.
+        var updated = existing?.takeIf { it.autoImageUrl != null }
+            ?: EarphonePref(address = address, name = name)
         images.forEach { (resource, bytes) ->
             if (bytes.isNotEmpty()) {
                 updated = updated.withImagePath(resource, copyImage(context, service, address, resource, bytes))
@@ -238,24 +210,6 @@ object PodImagePrefs {
         service: XposedService?,
         address: String,
         resource: PodImageResource,
-        uri: Uri,
-    ): String {
-        val dir = imageDir(context)
-        val file = File(dir, imageFileName(address, resource))
-        val bytes = context.contentResolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "Unable to open image uri: $uri" }
-            input.readBytes()
-        }
-        file.writeBytes(bytes)
-        writeImageToRemote(service, file.name, bytes)
-        return file.absolutePath
-    }
-
-    private fun copyImage(
-        context: Context,
-        service: XposedService?,
-        address: String,
-        resource: PodImageResource,
         bytes: ByteArray,
     ): String {
         val dir = imageDir(context)
@@ -272,14 +226,4 @@ object PodImagePrefs {
     }
 
     private fun String.safeFileName(): String = replace(Regex("[^A-Za-z0-9._-]"), "_")
-}
-
-fun EarphonePref.imageUri(resource: PodImageResource): Uri? {
-    val path = imagePath(resource) ?: return null
-    val fileName = File(path).name.takeIf { it.isNotBlank() } ?: return null
-    return Uri.Builder()
-        .scheme("content")
-        .authority(PodImagePrefs.AUTHORITY)
-        .appendPath(fileName)
-        .build()
 }

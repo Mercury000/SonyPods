@@ -187,6 +187,9 @@ object SonyCapabilityProbe {
         val playTypes = mutableSetOf<PlayInquiredType>()
 
         for (function in functions) {
+            if (function.isPowerOff(profile)) {
+                features.add(HeadphoneFeature.POWER_OFF)
+            }
             when (function.domain(profile)) {
                 ProbeDomain.NCASM -> if (function.isV1(profile)) {
                     noiseQueries.add(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM)
@@ -414,6 +417,7 @@ object SonyCapabilityProbe {
         HeadphoneFeature.CLEAR_BASS,
         HeadphoneFeature.PLAYBACK_CONTROL,
         HeadphoneFeature.BATTERY,
+        HeadphoneFeature.POWER_OFF,
         HeadphoneFeature.LEA_STATUS,
         HeadphoneFeature.QUICK_ACCESS,
         HeadphoneFeature.WEARING_STATUS,
@@ -424,6 +428,20 @@ object SonyCapabilityProbe {
 
     private fun SonySupportedFunction.v1Type(): SonyV1FunctionType? =
         SonyV1FunctionType.fromByteCode(code).takeIf { it != SonyV1FunctionType.OUT_OF_RANGE }
+
+    private fun SonySupportedFunction.isPowerOff(profile: ConnectedHeadphoneProfile?): Boolean =
+        if (profile != null && profile.protocolFor(HeadphoneFeature.DEVICE_INFO) !in setOf(
+                HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+                HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+            )
+        ) {
+            false
+        } else if (isV1(profile)) {
+            v1Type() == SonyV1FunctionType.POWER_OFF
+        } else {
+            v2Type() == SonyV2FunctionType.POWER_OFF ||
+                (v2Type() == null && v1Type() == SonyV1FunctionType.POWER_OFF)
+        }
 
     /**
      * V1 and V2 FunctionType byte codes collide (V1 NOISE_CANCELLING_AND_ASM=0x62

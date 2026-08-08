@@ -11,7 +11,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.provider.Settings
 import android.os.SystemClock
 import android.util.Log
@@ -49,7 +48,6 @@ import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
-import dev.sonypods.config.PodImageResource
 import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
@@ -114,7 +112,6 @@ fun MainUI(
     var restartingScopes by remember { mutableStateOf(false) }
     var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
     var showConnectErrorDialog by remember { mutableStateOf(false) }
-    var pendingOpenEarphonesAfterPickerLoaded by remember { mutableStateOf(false) }
     var lastBluetoothServiceAliveMs by remember { mutableStateOf(0L) }
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
     val backgroundColor = appBackground()
@@ -162,6 +159,7 @@ fun MainUI(
             onPlaybackPrevious = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PREVIOUS) },
             onPlaybackPlayPause = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PLAY_PAUSE) },
             onPlaybackNext = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_NEXT) },
+            onPowerOff = { SonyBridge.sendCommand(context, SonyBridge.CMD_POWER_OFF) },
             onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
         )
     }
@@ -177,7 +175,8 @@ fun MainUI(
         }
     }
 
-    // Connection established: remember the device for image prefs and open the detail page.
+    // Connection established: record the device so the automatic model image can be
+    // associated with its Bluetooth address, then open the detail page if requested.
     LaunchedEffect(sonyConnected, connectedDeviceAddress) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
             val shouldOpenEarphones = connectingDeviceAddress != null || !hasAppliedDefaultTab
@@ -257,9 +256,8 @@ fun MainUI(
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
-        // The control service downloads the cloud model image asynchronously;
-        // reload the earphone prefs whenever they change so the picture appears
-        // without restarting the app.
+        // The control service downloads the cloud model image asynchronously; reload
+        // the cached path so the built-in catalog image appears without a restart.
         val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
             if (key == PodImagePrefs.PREF_KEY_EARPHONES) {
                 earphonePrefs.value = PodImagePrefs.load(changed)
@@ -305,7 +303,6 @@ fun MainUI(
 
     fun clearPodConnectionState() {
         connectingDeviceAddress = null
-        pendingOpenEarphonesAfterPickerLoaded = false
         showConnectErrorDialog = false
         showDevicePicker = true
         selectedTab = MainTab.Earphones
@@ -313,7 +310,6 @@ fun MainUI(
 
     fun onDeviceSelected(device: BluetoothDevice) {
         connectingDeviceAddress = device.address
-        pendingOpenEarphonesAfterPickerLoaded = false
         showConnectErrorDialog = false
         showDevicePicker = true
         selectedTab = MainTab.Earphones
@@ -380,15 +376,6 @@ fun MainUI(
             runCatching { context.startActivity(this) }
                 .onFailure { Toast.makeText(context, R.string.connect_failed, Toast.LENGTH_SHORT).show() }
         }
-    }
-
-    fun savePodImages(
-        address: String,
-        name: String,
-        images: Map<PodImageResource, Uri?>,
-        clearedImages: Set<PodImageResource>,
-    ) {
-        earphonePrefs.value = PodImagePrefs.saveImages(context, prefs, xposedService, address, name, images, clearedImages)
     }
 
     fun restartScopes(packages: List<String>) {
@@ -514,9 +501,6 @@ fun MainUI(
                 onRestartScopes = { restartScopes(it) },
                 onBackToDevicePicker = { backToDevicePicker() },
                 onOpenSystemHeadsetSettings = { openSystemHeadsetSettings() },
-                onSavePodImages = { address, name, images, clearedImages ->
-                    savePodImages(address, name, images, clearedImages)
-                },
             )
         }
         entry<Screen.About> {

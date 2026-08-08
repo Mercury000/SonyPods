@@ -9,6 +9,24 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 object AppIcons {
+    val Power: ImageVector = ImageVector.Builder(
+        name = "Power",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(12f, 3f)
+            verticalLineTo(11f)
+            moveTo(7.05f, 5.85f)
+            curveTo(4.6f, 7.48f, 3f, 10.3f, 3f, 13.5f)
+            curveTo(3f, 18.2f, 7f, 22f, 12f, 22f)
+            curveTo(17f, 22f, 21f, 18.2f, 21f, 13.5f)
+            curveTo(21f, 10.3f, 19.4f, 7.48f, 16.95f, 5.85f)
+        }
+    }.build()
+
     val Home: ImageVector = ImageVector.Builder(
         name = "Home",
         defaultWidth = 24.dp,

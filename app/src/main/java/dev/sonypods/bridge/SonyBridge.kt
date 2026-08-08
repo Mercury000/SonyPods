@@ -52,6 +52,7 @@ object SonyBridge {
     const val CMD_SET_AMBIENT_VOICE = "set_ambient_voice"
     const val CMD_SET_EQ_PRESET = "set_eq_preset"
     const val CMD_SET_CLEAR_BASS = "set_clear_bass"
+    const val CMD_POWER_OFF = "power_off"
     const val CMD_SET_EQ_BAND = "set_eq_band"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
     const val CMD_PLAYBACK_PLAY_PAUSE = "playback_play_pause"

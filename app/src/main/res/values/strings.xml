@@ -32,6 +32,11 @@
     <string name="cancel">Cancel</string>
     <string name="connecting">Connecting...</string>
     <string name="connect_failed">Connection failed. Please make sure the device is nearby and powered on.</string>
+    <string name="power_off">Power off</string>
+    <string name="power_off_title">Power off headphones?</string>
+    <string name="power_off_summary">Send the Sony power-off command to %1$s.</string>
+    <string name="power_off_warning">The headphones will disconnect and need to be powered on manually before reconnecting.</string>
+    <string name="power_off_confirm">Power off</string>
     <string name="retry">Retry</string>
     <string name="bt_permission_required">Bluetooth permission is required to discover earphones.</string>
     <string name="grant_permission">Grant Permission</string>
@@ -39,13 +44,6 @@
     <string name="done">Done</string>
     <string name="confirm">Confirm</string>
     <string name="save">Save</string>
-    <string name="custom_pod_images">Custom Images</string>
-    <string name="custom_image_box">Case image</string>
-    <string name="custom_image_left">Left earbud image</string>
-    <string name="custom_image_right">Right earbud image</string>
-    <string name="custom_image_selected">Custom image selected</string>
-    <string name="custom_image_default">Use default image</string>
-    <string name="custom_image_restore_default">Restore default image</string>
     <string name="theme_title">Theme</string>
     <string name="theme_follow_system">Follow System</string>
     <string name="theme_light">Light</string>
