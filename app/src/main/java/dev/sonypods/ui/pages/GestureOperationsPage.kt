@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.QuickAccessActionSnapshot
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.data.GestureOperationAction
 import dev.sonypods.data.GestureOperationKey
 import dev.sonypods.protocol.AssignableSettingsAction
 import dev.sonypods.protocol.AssignableSettingsFunction
@@ -131,7 +132,6 @@ private fun GestureKeyCard(
         if (key.availablePresets.isNotEmpty()) {
             OverlayDropdownPreference(
                 title = gestureKeyLabel(key.key, key.type),
-                summary = gesturePresetLabel(key.currentPreset),
                 items = key.availablePresets.map(::gesturePresetLabel),
                 selectedIndex = key.availablePresets.indexOf(key.currentPreset).coerceAtLeast(0),
                 onSelectedIndexChange = { index ->
@@ -146,6 +146,39 @@ private fun GestureKeyCard(
             // "触控 · 已启用" summary.
             BasicComponent(title = gestureKeyLabel(key.key, key.type))
         }
+        if (key.actions.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                key.actions.forEach { action ->
+                    ReadOnlyGestureAction(action)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadOnlyGestureAction(action: GestureOperationAction) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = gestureActionLabel(action.action),
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = gestureFunctionLabel(action.function),
+            fontSize = 13.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
     }
 }
 
@@ -177,7 +210,6 @@ private fun QuickAccessCard(
             if (functions.isNotEmpty()) {
                 OverlayDropdownPreference(
                     title = gestureActionLabel(action.actionCode),
-                    summary = quickAccessFunctionLabel(current),
                     items = functions.map(::quickAccessFunctionLabel),
                     selectedIndex = functions.indexOf(current).coerceAtLeast(0),
                     onSelectedIndexChange = { selected ->

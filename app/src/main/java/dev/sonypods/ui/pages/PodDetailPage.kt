@@ -226,7 +226,6 @@ private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         OverlayDropdownPreference(
             title = stringResource(R.string.sony_eq_title),
-            summary = currentPreset?.localizedName() ?: stringResource(R.string.eq_unknown),
             items = presets.map { it.localizedName() },
             selectedIndex = presets.indexOf(currentPreset).coerceAtLeast(0),
             onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
