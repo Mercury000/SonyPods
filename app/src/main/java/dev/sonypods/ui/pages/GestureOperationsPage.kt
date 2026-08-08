@@ -32,8 +32,8 @@ import dev.sonypods.protocol.AssignableSettingsFunction
 import dev.sonypods.protocol.AssignableSettingsKey
 import dev.sonypods.protocol.AssignableSettingsPreset
 import dev.sonypods.protocol.AssignableSettingsType
-import dev.sonypods.protocol.QuickAccessFunction
 import dev.sonypods.protocol.GestureNoiseControlMode
+import dev.sonypods.protocol.QuickAccessServiceCatalog
 import dev.sonypods.ui.SonyDetailActions
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
@@ -196,17 +196,16 @@ private fun QuickAccessCard(
             val current = currentFunctionCodes.getOrNull(index)
                 ?: action.currentFunctionCode
                 ?: action.defaultFunctionCode
-            // The device capability response can omit a service after the user
-            // switches away from it. Sound Connect keeps the complete service
-            // catalog available, so retain the known catalog in every selector
-            // and append any newer/raw IDs reported by the device.
-            val functions = buildList {
-                addAll(QuickAccessFunction.entries
-                    .filter { it != QuickAccessFunction.OUT_OF_RANGE }
-                    .map { it.code.toInt() and 0xFF })
-                addAll(action.availableFunctionCodes)
-                add(current)
-            }.distinct()
+            // Quick Access capability is slot/action metadata, not the complete
+            // SAR service directory.  A service disappears from that response
+            // after switching away from it, while Sound Connect keeps it in the
+            // selector.  Keep the static directory and append raw capability /
+            // current IDs for forward compatibility.
+            val functions = QuickAccessServiceCatalog.candidates(
+                capabilityCodes = action.availableFunctionCodes,
+                currentCode = current,
+                defaultCode = action.defaultFunctionCode,
+            )
             if (functions.isNotEmpty()) {
                 OverlayDropdownPreference(
                     title = gestureActionLabel(action.actionCode),
@@ -463,18 +462,4 @@ private fun gesturePresetLabel(preset: AssignableSettingsPreset): String = when 
     AssignableSettingsPreset.OUT_OF_RANGE -> "未知操作组"
 }
 
-private fun quickAccessFunctionLabel(code: Int): String = when (code) {
-    0x00 -> "无操作"
-    0x01 -> "Spotify"
-    0x02 -> "Endel"
-    0x03 -> "Amazon Music"
-    0x04 -> "腾讯小微"
-    0x05 -> "喜马拉雅"
-    0x06 -> "酷狗音乐"
-    0x07 -> "QQ音乐"
-    0x08 -> "Eye Navi"
-    0x09 -> "网易云音乐"
-    0x0A -> "Apple Music"
-    0x0C -> "YouTube Music"
-    else -> "服务（0x%02X）".format(code)
-}
+private fun quickAccessFunctionLabel(code: Int): String = QuickAccessServiceCatalog.label(code)

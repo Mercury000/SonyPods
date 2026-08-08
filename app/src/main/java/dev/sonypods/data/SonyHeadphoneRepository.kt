@@ -46,6 +46,7 @@ import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.QuickAccessKey
+import dev.sonypods.protocol.QuickAccessServiceCatalog
 import dev.sonypods.protocol.AssignableSettingsType
 import dev.sonypods.protocol.AssignableSettingsAction
 import dev.sonypods.protocol.AssignableSettingsFunction
@@ -70,6 +71,7 @@ private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
 private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
+private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
@@ -300,6 +302,16 @@ class SonyHeadphoneRepository private constructor(
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
+    private var pendingQuickAccessFunctionCodes: List<Int>? = null
+    private val quickAccessConfirmTimeoutRunnable = Runnable {
+        val expected = pendingQuickAccessFunctionCodes ?: return@Runnable
+        val actual = _state.value.quickAccessState.functionCodes
+        appendLog("Quick Access write was not confirmed expected=$expected actual=$actual")
+        pendingQuickAccessFunctionCodes = null
+        if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
+            refreshBasics()
+        }
+    }
 
     // ── Capability-probe cache (SC `exchanged_capabilities` semantics) ──
 
@@ -769,8 +781,20 @@ class SonyHeadphoneRepository private constructor(
         }
         val quickAccess = _state.value.quickAccessState
         val action = quickAccess.actions.getOrNull(actionIndex)
-        if (action == null || functionCode !in action.availableFunctionCodes) {
-            appendLog("Quick Access function $functionCode is not in capability action $actionIndex")
+        if (action == null || functionCode !in 0..0xFF) {
+            appendLog("Quick Access function $functionCode is invalid for action $actionIndex")
+            return
+        }
+        // The capability table describes the slot/action and is not the complete
+        // SAR service directory. A previously unselected service can be absent
+        // here even though Sound Connect still allows it to be assigned.
+        val currentFunctionCode = quickAccess.functionCodes.getOrNull(actionIndex)
+            ?: action.currentFunctionCode
+        val accepted = QuickAccessServiceCatalog.isKnown(functionCode) ||
+            functionCode in action.availableFunctionCodes ||
+            functionCode == currentFunctionCode
+        if (!accepted) {
+            appendLog("Quick Access function $functionCode is not in catalog or capability action $actionIndex")
             return
         }
         val functionCodes = quickAccess.actions.mapIndexed { index, item ->
@@ -779,8 +803,15 @@ class SonyHeadphoneRepository private constructor(
         if (actionIndex !in functionCodes.indices) return
         functionCodes[actionIndex] = functionCode
         val profile = ensureConnectedProfile()
-        HeadphoneAdapterRegistry.buildSetQuickAccessFunction(profile, functionCodes)
-            .forEach(::sendCommand)
+        val commands = HeadphoneAdapterRegistry.buildSetQuickAccessFunction(profile, functionCodes)
+        if (commands.isEmpty()) {
+            appendLog("Quick Access write produced no command")
+            return
+        }
+        pendingQuickAccessFunctionCodes = functionCodes.toList()
+        mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
+        commands.forEach(::sendCommand)
+        mainHandler.postDelayed(quickAccessConfirmTimeoutRunnable, QUICK_ACCESS_CONFIRM_TIMEOUT_MS)
         mainHandler.postDelayed({
             if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
                 refreshBasics()
@@ -1163,6 +1194,8 @@ class SonyHeadphoneRepository private constructor(
     override fun onConnectionStateChanged(connected: Boolean, device: DiscoveredSonyDevice?) {
         if (!connected) {
             clearPendingPlaybackTransition()
+            pendingQuickAccessFunctionCodes = null
+            mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
             mainHandler.removeCallbacks(playbackRefreshRunnable)
             awaitingCapabilityInfo = false
             pendingCapabilityCounter = null
@@ -1636,7 +1669,14 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyQuickAccess(response: ParsedTandemResponse.QuickAccess) {
-        appendLog("Quick Access key=${response.key} functions=${response.functionCodes}")
+        val expected = pendingQuickAccessFunctionCodes
+        if (expected != null && response.functionCodes == expected) {
+            pendingQuickAccessFunctionCodes = null
+            mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
+            appendLog("Quick Access write confirmed functions=${response.functionCodes}")
+        } else {
+            appendLog("Quick Access key=${response.key} functions=${response.functionCodes}")
+        }
         _state.update { current ->
             val quickAccess = current.quickAccessState
             val functionName = response.functions.firstOrNull()?.name
