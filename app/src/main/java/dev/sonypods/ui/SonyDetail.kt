@@ -3,6 +3,11 @@ package dev.sonypods.ui
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.protocol.AssignableSettingsAction
+import dev.sonypods.protocol.AssignableSettingsFunction
+import dev.sonypods.protocol.AssignableSettingsKey
+import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 
@@ -14,6 +19,11 @@ data class SonyDetailActions(
     val onEqPresetChange: (EqPresetId) -> Unit = {},
     val onClearBassChange: (Int) -> Unit = {},
     val onCustomEqBandChange: (Int, Int) -> Unit = { _, _ -> },
+    val onGesturePresetChange: (AssignableSettingsKey, AssignableSettingsPreset) -> Unit = { _, _ -> },
+    val onGestureFunctionChange: (AssignableSettingsKey, AssignableSettingsAction, AssignableSettingsFunction) -> Unit = { _, _, _ -> },
+    val onQuickAccessFunctionChange: (Int, Int) -> Unit = { _, _ -> },
+    val onGestureAmbientModesChange: (Set<GestureNoiseControlMode>) -> Unit = {},
+    val onOpenGestureOperations: () -> Unit = {},
     val onPlaybackPrevious: () -> Unit = {},
     val onPlaybackPlayPause: () -> Unit = {},
     val onPlaybackNext: () -> Unit = {},

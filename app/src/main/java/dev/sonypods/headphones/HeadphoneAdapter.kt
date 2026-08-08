@@ -10,6 +10,9 @@ import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.AssignableSettingsMapping
+import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.SystemInquiredType
 
 enum class HeadphoneProtocolVariant {
     SONY_TANDEM_V1_TABLE1,
@@ -38,6 +41,7 @@ enum class HeadphoneFeature {
     LEA_STATUS,
     QUICK_ACCESS,
     WEARING_STATUS,
+    GESTURE_OPERATIONS,
 }
 
 enum class HeadphoneTransport {
@@ -119,6 +123,8 @@ data class HeadphoneCapabilities(
         hasClearBass = false,
     ),
     val playbackControlType: PlayInquiredType = PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT,
+    /** System parameter family used by the assignable-settings feature. */
+    val gestureSettingsType: SystemInquiredType = SystemInquiredType.ASSIGNABLE_SETTINGS,
     val queryProtocolInfo: Boolean = true,
     val queryNoiseControlParams: Boolean = true,
 )
@@ -327,6 +333,23 @@ interface HeadphoneAdapter {
 
     fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
 
+    fun buildRefreshGestureOperationsCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetQuickAccessFunction(
+        profile: ConnectedHeadphoneProfile,
+        functionCodes: List<Int>,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetGesturePresetsCommands(
+        profile: ConnectedHeadphoneProfile,
+        presets: List<AssignableSettingsPreset>,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetGestureMappingsCommands(
+        profile: ConnectedHeadphoneProfile,
+        mappings: List<AssignableSettingsMapping>,
+    ): List<HeadphoneCommand> = emptyList()
+
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         emptyList()
 
@@ -402,6 +425,24 @@ object HeadphoneAdapterRegistry {
 
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         adapterFor(profile).buildPlaybackCommands(profile, control)
+
+    fun buildRefreshGestureOperationsCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
+        adapterFor(profile).buildRefreshGestureOperationsCommands(profile)
+
+    fun buildSetQuickAccessFunction(
+        profile: ConnectedHeadphoneProfile,
+        functionCodes: List<Int>,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetQuickAccessFunction(profile, functionCodes)
+
+    fun buildSetGesturePresetsCommands(
+        profile: ConnectedHeadphoneProfile,
+        presets: List<AssignableSettingsPreset>,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetGesturePresetsCommands(profile, presets)
+
+    fun buildSetGestureMappingsCommands(
+        profile: ConnectedHeadphoneProfile,
+        mappings: List<AssignableSettingsMapping>,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetGestureMappingsCommands(profile, mappings)
 
     fun parse(profile: ConnectedHeadphoneProfile, channel: TandemChannel, raw: ByteArray): ParsedTandemResponse =
         adapterFor(profile).parse(profile, channel, raw)

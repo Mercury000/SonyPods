@@ -137,7 +137,7 @@
     <string name="firmware_version">固件版本</string>
     <string name="wearing_status">佩戴状态</string>
     <string name="lea_status">LE Audio</string>
-    <string name="quick_access">快捷访问</string>
+    <string name="quick_access">Quick Access</string>
     <string name="tandem_debug_title">Tandem 调试</string>
     <string name="service_channel_name">Sony 耳机服务</string>
     <string name="service_disconnected">未连接</string>

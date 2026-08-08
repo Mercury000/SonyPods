@@ -2,6 +2,7 @@ package dev.sonypods.ui
 
 import android.bluetooth.BluetoothDevice
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -122,13 +123,23 @@ internal fun MainTabsScaffold(
     val mainPagerState = remember(pagerState, coroutineScope) {
         MainTabsPagerState(pagerState, coroutineScope)
     }
+    var showGestureOperations by remember { mutableStateOf(false) }
     val isLandscapeDetail = selectedTab == MainTab.Earphones &&
             showEarphoneDetail &&
+            !showGestureOperations &&
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val currentEarphonePref = earphonePrefs.firstOrNull {
         it.address.equals(connectedDeviceAddress, ignoreCase = true)
     }
     var showPowerOffDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showEarphoneDetail) {
+        if (!showEarphoneDetail) showGestureOperations = false
+    }
+
+    BackHandler(enabled = selectedTab == MainTab.Earphones && showGestureOperations) {
+        showGestureOperations = false
+    }
 
     LaunchedEffect(selectedTab) {
         val targetPage = selectedTab.ordinal
@@ -194,6 +205,9 @@ internal fun MainTabsScaffold(
                     MainTab.Earphones -> EarphonesTabShell(
                         isLandscapeDetail = isLandscapeDetail,
                         showEarphoneDetail = showEarphoneDetail,
+                        showGestureOperations = showGestureOperations,
+                        onOpenGestureOperations = { showGestureOperations = true },
+                        onBackFromGestureOperations = { showGestureOperations = false },
                         mainTitle = mainTitle,
                         displayTitle = displayTitle,
                         sonyState = sonyState,
@@ -325,6 +339,9 @@ private fun ModuleTabPage(
 private fun EarphonesTabShell(
     isLandscapeDetail: Boolean,
     showEarphoneDetail: Boolean,
+    showGestureOperations: Boolean,
+    onOpenGestureOperations: () -> Unit,
+    onBackFromGestureOperations: () -> Unit,
     mainTitle: String,
     displayTitle: String,
     sonyState: SonyStateSnapshot,
@@ -348,18 +365,22 @@ private fun EarphonesTabShell(
         topBar = {
             if (!isLandscapeDetail) {
                 TopAppBar(
-                    title = mainTitle.ifEmpty { stringResource(R.string.pod_info) },
-                    largeTitle = mainTitle.ifEmpty { stringResource(R.string.pod_info) },
+                    title = if (showGestureOperations) "手势操作" else mainTitle.ifEmpty { stringResource(R.string.pod_info) },
+                    largeTitle = if (showGestureOperations) "手势操作" else mainTitle.ifEmpty { stringResource(R.string.pod_info) },
                     scrollBehavior = scrollBehavior,
                     navigationIcon = {
-                        if (showEarphoneDetail) {
+                        if (showGestureOperations) {
+                            IconButton(onClick = onBackFromGestureOperations) {
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                            }
+                        } else if (showEarphoneDetail) {
                             IconButton(onClick = onBackToDevicePicker) {
                                 Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
                             }
                         }
                     },
                     actions = {
-                        if (showEarphoneDetail) {
+                        if (showEarphoneDetail && !showGestureOperations) {
                             EarphoneDetailActions(
                                 onPowerOff = onPowerOff,
                                 powerOffEnabled = powerOffEnabled,
@@ -373,9 +394,10 @@ private fun EarphonesTabShell(
     ) { pagePadding ->
         EarphonesTabPage(
             showEarphoneDetail = showEarphoneDetail,
+            showGestureOperations = showGestureOperations,
             displayTitle = displayTitle,
             uiState = sonyState,
-            actions = sonyActions,
+            actions = sonyActions.copy(onOpenGestureOperations = onOpenGestureOperations),
             boxImagePath = boxImagePath,
             connectedDeviceAddress = connectedDeviceAddress,
             connectingDeviceAddress = connectingDeviceAddress,

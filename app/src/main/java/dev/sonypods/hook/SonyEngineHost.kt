@@ -18,6 +18,7 @@ import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -595,6 +596,31 @@ object SonyEngineHost {
                 intent.getIntExtra(SonyBridge.EXTRA_INDEX, 0),
                 intent.getIntExtra(SonyBridge.EXTRA_INT, 0),
             )
+
+            SonyBridge.CMD_SET_GESTURE_PRESET -> repo.setGesturePreset(
+                intent.getIntExtra(SonyBridge.EXTRA_KEY_CODE, -1),
+                intent.getIntExtra(SonyBridge.EXTRA_PRESET_CODE, -1),
+            )
+
+            SonyBridge.CMD_SET_GESTURE_FUNCTION -> repo.setGestureFunction(
+                intent.getIntExtra(SonyBridge.EXTRA_KEY_CODE, -1),
+                intent.getIntExtra(SonyBridge.EXTRA_ACTION_CODE, -1),
+                intent.getIntExtra(SonyBridge.EXTRA_FUNCTION_CODE, -1),
+            )
+
+            SonyBridge.CMD_SET_QUICK_ACCESS_FUNCTION -> repo.setQuickAccessFunction(
+                intent.getIntExtra(SonyBridge.EXTRA_QUICK_ACCESS_ACTION_INDEX, -1),
+                intent.getIntExtra(SonyBridge.EXTRA_QUICK_ACCESS_FUNCTION_CODE, -1),
+            )
+
+            SonyBridge.CMD_SET_GESTURE_AMBIENT_MODES -> {
+                val modes = intent.getIntArrayExtra(SonyBridge.EXTRA_FUNCTION_CODE)
+                    ?.asSequence()
+                    ?.mapNotNull { code -> GestureNoiseControlMode.entries.getOrNull(code) }
+                    ?.toSet()
+                    ?: emptySet()
+                repo.setGestureAmbientModes(modes)
+            }
 
             SonyBridge.CMD_PLAYBACK_PREVIOUS -> repo.playbackPrevious()
             SonyBridge.CMD_PLAYBACK_PLAY_PAUSE -> repo.playbackPlayPause()

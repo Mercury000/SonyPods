@@ -39,6 +39,12 @@ object SonyBridge {
     const val EXTRA_BOOL = "value_bool"
     const val EXTRA_STRING = "value_string"
     const val EXTRA_INDEX = "index"
+    const val EXTRA_KEY_CODE = "gesture_key_code"
+    const val EXTRA_ACTION_CODE = "gesture_action_code"
+    const val EXTRA_FUNCTION_CODE = "gesture_function_code"
+    const val EXTRA_QUICK_ACCESS_ACTION_INDEX = "quick_access_action_index"
+    const val EXTRA_QUICK_ACCESS_FUNCTION_CODE = "quick_access_function_code"
+    const val EXTRA_PRESET_CODE = "gesture_preset_code"
     const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
     const val EXTRA_OFFICIAL_LEASE_ID = "official_lease_id"
     const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
@@ -54,6 +60,10 @@ object SonyBridge {
     const val CMD_SET_CLEAR_BASS = "set_clear_bass"
     const val CMD_POWER_OFF = "power_off"
     const val CMD_SET_EQ_BAND = "set_eq_band"
+    const val CMD_SET_GESTURE_PRESET = "set_gesture_preset"
+    const val CMD_SET_GESTURE_FUNCTION = "set_gesture_function"
+    const val CMD_SET_QUICK_ACCESS_FUNCTION = "set_quick_access_function"
+    const val CMD_SET_GESTURE_AMBIENT_MODES = "set_gesture_ambient_modes"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
     const val CMD_PLAYBACK_PLAY_PAUSE = "playback_play_pause"
     const val CMD_PLAYBACK_NEXT = "playback_next"
@@ -122,6 +132,30 @@ object SonyBridge {
         sendCommand(context, CMD_SET_EQ_BAND) {
             putExtra(EXTRA_INDEX, index)
             putExtra(EXTRA_INT, level)
+        }
+
+    fun setGesturePreset(context: Context, keyCode: Int, presetCode: Int) =
+        sendCommand(context, CMD_SET_GESTURE_PRESET) {
+            putExtra(EXTRA_KEY_CODE, keyCode)
+            putExtra(EXTRA_PRESET_CODE, presetCode)
+        }
+
+    fun setGestureFunction(context: Context, keyCode: Int, actionCode: Int, functionCode: Int) =
+        sendCommand(context, CMD_SET_GESTURE_FUNCTION) {
+            putExtra(EXTRA_KEY_CODE, keyCode)
+            putExtra(EXTRA_ACTION_CODE, actionCode)
+            putExtra(EXTRA_FUNCTION_CODE, functionCode)
+        }
+
+    fun setQuickAccessFunction(context: Context, actionIndex: Int, functionCode: Int) =
+        sendCommand(context, CMD_SET_QUICK_ACCESS_FUNCTION) {
+            putExtra(EXTRA_QUICK_ACCESS_ACTION_INDEX, actionIndex)
+            putExtra(EXTRA_QUICK_ACCESS_FUNCTION_CODE, functionCode)
+        }
+
+    fun setGestureAmbientModes(context: Context, modeCodes: IntArray) =
+        sendCommand(context, CMD_SET_GESTURE_AMBIENT_MODES) {
+            putExtra(EXTRA_FUNCTION_CODE, modeCodes)
         }
 
     fun connect(context: Context, address: String, name: String) =

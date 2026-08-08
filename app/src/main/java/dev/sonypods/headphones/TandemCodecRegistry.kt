@@ -16,6 +16,8 @@ import dev.sonypods.protocol.SystemInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table2Protocol
 import dev.sonypods.protocol.SonyTandemV2Table1Protocol
 import dev.sonypods.protocol.SonyTandemV2Table2Protocol
+import dev.sonypods.protocol.AssignableSettingsMapping
+import dev.sonypods.protocol.AssignableSettingsPreset
 
 interface TandemCodec {
     val variant: HeadphoneProtocolVariant
@@ -67,7 +69,40 @@ interface TandemCodec {
     fun buildGetLeaStatus(type: LeaInquiredType): ByteArray? = null
     fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray? = null
     fun buildGetQuickAccess(): ByteArray? = null
+    fun buildGetQuickAccessCapability(): ByteArray? = null
+    fun buildGetQuickAccessStatus(): ByteArray? = null
+    fun buildSetQuickAccess(functionCodes: List<Int>): ByteArray? = null
     fun buildGetWearingStatus(): ByteArray? = null
+    fun buildGetAssignableSettingsCapability(): ByteArray? = null
+    fun buildGetAssignableSettingsCapability(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) buildGetAssignableSettingsCapability() else null
+    fun buildGetAssignableSettingsStatus(): ByteArray? = null
+    fun buildGetAssignableSettingsStatus(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) buildGetAssignableSettingsStatus() else null
+    fun buildGetAssignableSettingsPresets(): ByteArray? = null
+    fun buildGetAssignableSettingsPresets(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) buildGetAssignableSettingsPresets() else null
+    fun buildGetAssignableSettingsExtendedParam(): ByteArray? = null
+    fun buildGetAssignableSettingsExtendedParam(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) buildGetAssignableSettingsExtendedParam() else null
+    fun buildSetAssignableSettingsPresets(presets: List<AssignableSettingsPreset>): ByteArray? = null
+    fun buildSetAssignableSettingsPresets(
+        type: SystemInquiredType,
+        presets: List<AssignableSettingsPreset>,
+    ): ByteArray? = if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) {
+        buildSetAssignableSettingsPresets(presets)
+    } else {
+        null
+    }
+    fun buildSetAssignableSettingsExtendedParam(mappings: List<AssignableSettingsMapping>): ByteArray? = null
+    fun buildSetAssignableSettingsExtendedParam(
+        type: SystemInquiredType,
+        mappings: List<AssignableSettingsMapping>,
+    ): ByteArray? = if (type == SystemInquiredType.ASSIGNABLE_SETTINGS) {
+        buildSetAssignableSettingsExtendedParam(mappings)
+    } else {
+        null
+    }
 }
 
 object TandemCodecRegistry {
@@ -332,8 +367,60 @@ object SonyTandemV2Table1Codec : TandemCodec {
     override fun buildGetQuickAccess(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetQuickAccess()
 
+    override fun buildGetQuickAccessCapability(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetQuickAccessCapability()
+
+    override fun buildGetQuickAccessStatus(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetQuickAccessStatus()
+
+    override fun buildSetQuickAccess(functionCodes: List<Int>): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetQuickAccessCodes(functionCodes)
+
     override fun buildGetWearingStatus(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetWearingStatus()
+
+    override fun buildGetAssignableSettingsCapability(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsCapability()
+
+    override fun buildGetAssignableSettingsCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsCapability(type)
+
+    override fun buildGetSystemCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetSystemCapability(type)
+
+    override fun buildGetAssignableSettingsStatus(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsStatus()
+
+    override fun buildGetAssignableSettingsStatus(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsStatus(type)
+
+    override fun buildGetAssignableSettingsPresets(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsPresets()
+
+    override fun buildGetAssignableSettingsPresets(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsPresets(type)
+
+    override fun buildGetAssignableSettingsExtendedParam(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsExtendedParam()
+
+    override fun buildGetAssignableSettingsExtendedParam(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAssignableSettingsExtendedParam(type)
+
+    override fun buildSetAssignableSettingsPresets(presets: List<AssignableSettingsPreset>): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetAssignableSettingsPresets(presets)
+
+    override fun buildSetAssignableSettingsPresets(
+        type: SystemInquiredType,
+        presets: List<AssignableSettingsPreset>,
+    ): ByteArray = SonyTandemV2Table1Protocol.buildSetAssignableSettingsPresets(type, presets)
+
+    override fun buildSetAssignableSettingsExtendedParam(mappings: List<AssignableSettingsMapping>): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetAssignableSettingsExtendedParam(mappings)
+
+    override fun buildSetAssignableSettingsExtendedParam(
+        type: SystemInquiredType,
+        mappings: List<AssignableSettingsMapping>,
+    ): ByteArray = SonyTandemV2Table1Protocol.buildSetAssignableSettingsExtendedParam(type, mappings)
 
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV2Table1Protocol.parse(raw)

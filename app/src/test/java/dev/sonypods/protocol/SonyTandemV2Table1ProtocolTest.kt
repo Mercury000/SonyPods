@@ -1186,14 +1186,44 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
-    fun parser_quickAccessRetParam_extractsKeyAndFunction() {
-        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x0D, 0x00, 0x02)
+    fun parser_quickAccessRetParam_extractsFunctionList() {
+        // QUICK_ACCESS RET_PARAM is [systemType][count][serviceId...].
+        // The key belongs to the capability response, not the current value.
+        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x0D, 0x01, 0x02)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.QuickAccess)
         parsed as ParsedTandemResponse.QuickAccess
-        assertEquals(QuickAccessKey.L_R_KEY, parsed.key)
-        assertEquals(QuickAccessFunction.NC_ASM, parsed.function)
+        assertEquals(null, parsed.key)
+        assertEquals(listOf(QuickAccessFunction.ENDEL), parsed.functions)
+        assertEquals(listOf(0x02), parsed.functionCodes)
+    }
+
+    @Test
+    fun parser_quickAccessRetParam_mapsCurrentSoundConnectServices() {
+        val serviceCodes = byteArrayOf(
+            0x06, // KuGou Music (formerly used by the removed Audible service)
+            0x08, // Eye Navi
+            0x09, // NetEase Cloud Music
+            0x0A, // Apple Music
+            0x0C, // YouTube Music
+        )
+        val raw = byteArrayOf(0x0E, 0xF7.toByte(), 0x0D, serviceCodes.size.toByte()) + serviceCodes
+        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.QuickAccess)
+        parsed as ParsedTandemResponse.QuickAccess
+        assertEquals(
+            listOf(
+                QuickAccessFunction.KUGOU_MUSIC,
+                QuickAccessFunction.EYE_NAVI,
+                QuickAccessFunction.NETEASE_CLOUD_MUSIC,
+                QuickAccessFunction.APPLE_MUSIC,
+                QuickAccessFunction.YOUTUBE_MUSIC,
+            ),
+            parsed.functions,
+        )
+        assertEquals(serviceCodes.map { it.toInt() and 0xFF }, parsed.functionCodes)
     }
 
     // ── Wearing Detection ──────────────────────────────────────────────────

@@ -26,7 +26,17 @@ object SonyTandemV2Table1Protocol {
     private const val POWER_OFF_USER_REQUEST: Byte = 0x01
     private const val SYSTEM_GET_PARAM: Byte = 0xF6.toByte()
     private const val SYSTEM_RET_PARAM: Byte = 0xF7.toByte()
+    private const val SYSTEM_SET_PARAM: Byte = 0xF8.toByte()
     private const val SYSTEM_NTFY_PARAM: Byte = 0xF9.toByte()
+    private const val SYSTEM_GET_EXT_PARAM: Byte = 0xFA.toByte()
+    private const val SYSTEM_RET_EXT_PARAM: Byte = 0xFB.toByte()
+    private const val SYSTEM_SET_EXT_PARAM: Byte = 0xFC.toByte()
+    private const val SYSTEM_NTFY_EXT_PARAM: Byte = 0xFD.toByte()
+    private const val SYSTEM_GET_CAPABILITY: Byte = 0xF0.toByte()
+    private const val SYSTEM_RET_CAPABILITY: Byte = 0xF1.toByte()
+    private const val SYSTEM_GET_STATUS: Byte = 0xF2.toByte()
+    private const val SYSTEM_RET_STATUS: Byte = 0xF3.toByte()
+    private const val SYSTEM_NTFY_STATUS: Byte = 0xF5.toByte()
     private const val LEA_GET_STATUS: Byte = 0x42
     private const val LEA_RET_STATUS: Byte = 0x43
     private const val LEA_NTFY_STATUS: Byte = 0x45
@@ -333,6 +343,118 @@ object SonyTandemV2Table1Protocol {
     fun buildGetQuickAccess(): ByteArray =
         SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.QUICK_ACCESS.code))
 
+    fun buildGetQuickAccessCapability(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(SystemInquiredType.QUICK_ACCESS.code))
+
+    fun buildGetQuickAccessStatus(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(SystemInquiredType.QUICK_ACCESS.code))
+
+    /** SYSTEM_SET_PARAM for QUICK_ACCESS: [systemType][count][function...]. */
+    fun buildSetQuickAccess(functions: List<QuickAccessFunction>): ByteArray {
+        return buildSetQuickAccessCodes(functions.map { it.code.unsigned })
+    }
+
+    /**
+     * Raw-ID variant of [buildSetQuickAccess].  Quick Access services are
+     * supplied by Sound Connect/SAR and newer services are not necessarily
+     * present in this module's enum.  Do not discard those IDs while writing.
+     */
+    fun buildSetQuickAccessCodes(functionCodes: List<Int>): ByteArray {
+        require(functionCodes.isNotEmpty() && functionCodes.size <= 255) {
+            "Quick Access function list is invalid"
+        }
+        require(functionCodes.all { it in 0..255 }) {
+            "Quick Access function ID is invalid"
+        }
+        return SonyTandemFrame.message(
+            SYSTEM_SET_PARAM,
+            byteArrayOf(SystemInquiredType.QUICK_ACCESS.code, functionCodes.size.toByte()) +
+                functionCodes.map { it.toByte() }.toByteArray(),
+        )
+    }
+
+    /**
+     * ASSIGNABLE_SETTINGS is the complete Sony touch/button gesture API. The
+     * three reads are deliberately kept separate: capability describes the
+     * legal actions/functions, SET_PARAM state describes the selected preset
+     * for each key, and EXT_PARAM contains the actual action mappings.
+     */
+    fun buildGetAssignableSettingsCapability(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(SystemInquiredType.ASSIGNABLE_SETTINGS.code))
+
+    fun buildGetAssignableSettingsCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(type.code))
+
+    fun buildGetSystemCapability(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(type.code))
+
+    fun buildGetAssignableSettingsStatus(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(SystemInquiredType.ASSIGNABLE_SETTINGS.code))
+
+    fun buildGetAssignableSettingsStatus(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(type.code))
+
+    fun buildGetAssignableSettingsPresets(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.ASSIGNABLE_SETTINGS.code))
+
+    fun buildGetAssignableSettingsPresets(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(type.code))
+
+    fun buildGetAssignableSettingsExtendedParam(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_EXT_PARAM, byteArrayOf(SystemInquiredType.ASSIGNABLE_SETTINGS.code))
+
+    fun buildGetAssignableSettingsExtendedParam(type: SystemInquiredType): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_EXT_PARAM, byteArrayOf(type.code))
+
+    fun buildSetAssignableSettingsPresets(
+        presets: List<AssignableSettingsPreset>,
+    ): ByteArray {
+        return buildSetAssignableSettingsPresets(SystemInquiredType.ASSIGNABLE_SETTINGS, presets)
+    }
+
+    fun buildSetAssignableSettingsPresets(
+        type: SystemInquiredType,
+        presets: List<AssignableSettingsPreset>,
+    ): ByteArray {
+        require(presets.isNotEmpty() && presets.size <= 255) { "Assignable preset list is invalid" }
+        require(presets.none { it == AssignableSettingsPreset.OUT_OF_RANGE }) { "Assignable preset is invalid" }
+        return SonyTandemFrame.message(
+            SYSTEM_SET_PARAM,
+            byteArrayOf(type.code, presets.size.toByte()) +
+                presets.map { it.code }.toByteArray(),
+        )
+    }
+
+    fun buildSetAssignableSettingsExtendedParam(
+        mappings: List<AssignableSettingsMapping>,
+    ): ByteArray {
+        return buildSetAssignableSettingsExtendedParam(SystemInquiredType.ASSIGNABLE_SETTINGS, mappings)
+    }
+
+    fun buildSetAssignableSettingsExtendedParam(
+        type: SystemInquiredType,
+        mappings: List<AssignableSettingsMapping>,
+    ): ByteArray {
+        require(mappings.isNotEmpty() && mappings.size <= 255) { "Assignable mapping list is invalid" }
+        val body = buildList<Byte> {
+            add(type.code)
+            add(mappings.size.toByte())
+            mappings.forEach { mapping ->
+                require(mapping.preset != AssignableSettingsPreset.OUT_OF_RANGE)
+                require(mapping.mappings.isNotEmpty() && mapping.mappings.size <= 255)
+                add(mapping.preset.code)
+                add(mapping.mappings.size.toByte())
+                mapping.mappings.forEach { pair ->
+                    require(pair.action != AssignableSettingsAction.OUT_OF_RANGE)
+                    require(pair.function != AssignableSettingsFunction.OUT_OF_RANGE)
+                    add(pair.action.code)
+                    add(pair.function.code)
+                }
+            }
+        }.toByteArray()
+        return SonyTandemFrame.message(SYSTEM_SET_EXT_PARAM, body)
+    }
+
     fun buildGetWearingStatus(): ByteArray =
         SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.WEARING_STATUS_DETECTOR.code))
 
@@ -427,6 +549,8 @@ object SonyTandemV2Table1Protocol {
                 raw = raw,
             )
             CONNECT_RET_DEVICE_INFO -> parseDeviceInfo(payload, raw)
+            SYSTEM_RET_CAPABILITY -> parseSystemRetCapability(payload, raw)
+            SYSTEM_RET_STATUS, SYSTEM_NTFY_STATUS -> parseSystemStatus(payload, raw)
             COMMON_RET_STATUS, COMMON_NTFY_STATUS -> parseCommonStatus(payload, raw)
             POWER_RET_STATUS, POWER_NTFY_STATUS -> parseBattery(payload, raw)
             EQEBB_RET_STATUS, EQEBB_NTFY_STATUS,
@@ -449,6 +573,7 @@ object SonyTandemV2Table1Protocol {
             LEA_RET_STATUS, LEA_NTFY_STATUS -> parseLeaStatus(payload, raw)
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaParam(payload, raw)
             SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
+            SYSTEM_RET_EXT_PARAM, SYSTEM_NTFY_EXT_PARAM -> parseSystemRetExtendedParam(payload, raw)
             else -> ParsedTandemResponse.Unknown(dataType.unsigned, command.unsigned, payload, raw)
         }
     }
@@ -779,26 +904,313 @@ object SonyTandemV2Table1Protocol {
     private fun Byte.toLeaStreamingStatus(): LeaStreamingStatus? =
         LeaStreamingStatus.entries.firstOrNull { it.code == this }
 
+    /** Parse the SC cg0.c capability format after dataType+command are stripped.
+     * ASSIGNABLE_SETTINGS_WITH_LIMITATION inserts a LimitationType byte between
+     * the system type and the key count; the key grammar is otherwise identical.
+     */
+    private fun parseAssignableSettingsCapability(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        val systemType = payload.firstOrNull()?.let { code ->
+            SystemInquiredType.entries.firstOrNull { it.code == code }
+        }
+        val headerSize = when (systemType) {
+            SystemInquiredType.ASSIGNABLE_SETTINGS -> 2
+            SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION -> 3
+            else -> 0
+        }
+        if (headerSize == 0) return ParsedTandemResponse.Unknown(
+            null,
+            SYSTEM_RET_CAPABILITY.unsigned,
+            payload,
+            raw,
+        )
+        val count = payload.getOrNull(headerSize - 1)?.unsigned ?: return ParsedTandemResponse.Unknown(
+            null,
+            SYSTEM_RET_CAPABILITY.unsigned,
+            payload,
+            raw,
+        )
+        var offset = headerSize
+        val keys = mutableListOf<ParsedTandemResponse.AssignableSettingsKeyCapability>()
+        repeat(count) {
+            if (offset + 4 > payload.size) return@repeat
+            val key = AssignableSettingsKey.entries.firstOrNull { it.code == payload[offset] }
+            val type = AssignableSettingsType.entries.firstOrNull { it.code == payload[offset + 1] }
+            val defaultPreset = AssignableSettingsPreset.entries.firstOrNull { it.code == payload[offset + 2] }
+            val presetCount = payload[offset + 3].unsigned
+            offset += 4
+            if (key == null || type == null || defaultPreset == null ||
+                key == AssignableSettingsKey.OUT_OF_RANGE ||
+                type == AssignableSettingsType.OUT_OF_RANGE ||
+                defaultPreset == AssignableSettingsPreset.OUT_OF_RANGE
+            ) return@repeat
+
+            val presets = mutableListOf<AssignableSettingsPreset>()
+            val actionsByPreset = linkedMapOf<AssignableSettingsPreset, List<ParsedTandemResponse.AssignableSettingsActionCapability>>()
+            repeat(presetCount) {
+                if (offset + 3 > payload.size) return@repeat
+                val preset = AssignableSettingsPreset.entries.firstOrNull { it.code == payload[offset] }
+                val singleCount = payload[offset + 1].unsigned
+                val multipleCount = payload[offset + 2].unsigned
+                offset += 3
+                if (preset == null || preset == AssignableSettingsPreset.OUT_OF_RANGE) return@repeat
+                val actions = linkedMapOf<AssignableSettingsAction, ParsedTandemResponse.AssignableSettingsActionCapability>()
+                repeat(singleCount) {
+                    if (offset + 2 > payload.size) return@repeat
+                    val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
+                    val function = AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                    offset += 2
+                    if (action != null && function != null &&
+                        action != AssignableSettingsAction.OUT_OF_RANGE &&
+                        function != AssignableSettingsFunction.OUT_OF_RANGE
+                    ) {
+                        actions[action] = ParsedTandemResponse.AssignableSettingsActionCapability(
+                            action = action,
+                            defaultFunction = function,
+                            availableFunctions = listOf(function),
+                        )
+                    }
+                }
+                repeat(multipleCount) {
+                    if (offset + 3 > payload.size) return@repeat
+                    val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
+                    val defaultFunction = AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                    val functionCount = payload[offset + 2].unsigned
+                    offset += 3
+                    val functions = buildList {
+                        repeat(functionCount) {
+                            if (offset < payload.size) {
+                                AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset] }
+                                    ?.takeIf { it != AssignableSettingsFunction.OUT_OF_RANGE }
+                                    ?.let(::add)
+                            }
+                            offset++
+                        }
+                    }
+                    if (action != null && defaultFunction != null &&
+                        action != AssignableSettingsAction.OUT_OF_RANGE &&
+                        defaultFunction != AssignableSettingsFunction.OUT_OF_RANGE &&
+                        functions.isNotEmpty()
+                    ) {
+                        actions[action] = ParsedTandemResponse.AssignableSettingsActionCapability(
+                            action = action,
+                            defaultFunction = defaultFunction,
+                            availableFunctions = functions.distinct(),
+                        )
+                    }
+                }
+                presets += preset
+                actionsByPreset[preset] = actions.values.sortedBy { it.action.code.unsigned }
+            }
+            keys += ParsedTandemResponse.AssignableSettingsKeyCapability(
+                key = key,
+                type = type,
+                defaultPreset = defaultPreset,
+                presets = presets,
+                actionsByPreset = actionsByPreset,
+            )
+        }
+        return ParsedTandemResponse.AssignableSettingsCapability(
+            keys = keys,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    private fun parseSystemRetCapability(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        return when (payload.firstOrNull()) {
+            SystemInquiredType.QUICK_ACCESS.code -> parseQuickAccessCapability(payload, raw)
+            SystemInquiredType.ASSIGNABLE_SETTINGS.code,
+            SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION.code ->
+                parseAssignableSettingsCapability(payload, raw)
+            else -> ParsedTandemResponse.Unknown(
+                null,
+                SYSTEM_RET_CAPABILITY.unsigned,
+                payload,
+                raw,
+            )
+        }
+    }
+
+    /**
+     * Parse the official QUICK_ACCESS capability grammar (`ag0.n0`):
+     * [systemType][quickAccessKey][type][actionCount]
+     * [(action)(defaultFunction)(functionCount)(functions...)]*.
+     */
+    private fun parseQuickAccessCapability(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        if (payload.size < 4) {
+            return ParsedTandemResponse.Unknown(null, SYSTEM_RET_CAPABILITY.unsigned, payload, raw)
+        }
+        val key = QuickAccessKey.entries.firstOrNull { it.code == payload[1] }
+        val type = AssignableSettingsType.entries.firstOrNull { it.code == payload[2] }
+        val actionCount = payload[3].unsigned
+        if (key == null || type == null ||
+            key == QuickAccessKey.OUT_OF_RANGE || type == AssignableSettingsType.OUT_OF_RANGE
+        ) {
+            return ParsedTandemResponse.Unknown(null, SYSTEM_RET_CAPABILITY.unsigned, payload, raw)
+        }
+        var offset = 4
+        val actions = buildList {
+            repeat(actionCount) {
+                if (offset + 3 > payload.size) return@repeat
+                val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
+                val defaultFunction = QuickAccessFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                val defaultFunctionCode = payload[offset + 1].unsigned
+                val functionCount = payload[offset + 2].unsigned
+                offset += 3
+                val functionCodes = buildList {
+                    repeat(functionCount) {
+                        if (offset < payload.size) add(payload[offset].unsigned)
+                        offset++
+                    }
+                }.distinct()
+                val functions = buildList {
+                    functionCodes.mapNotNullTo(this) { code ->
+                        QuickAccessFunction.entries.firstOrNull { it.code.unsigned == code }
+                            ?.takeIf { it != QuickAccessFunction.OUT_OF_RANGE }
+                    }
+                }.distinct()
+                if (action != null &&
+                    action != AssignableSettingsAction.OUT_OF_RANGE &&
+                    functionCodes.isNotEmpty()
+                ) {
+                    add(
+                        ParsedTandemResponse.QuickAccessActionCapability(
+                            action = action,
+                            defaultFunction = defaultFunction,
+                            defaultFunctionCode = defaultFunctionCode,
+                            availableFunctions = functions,
+                            availableFunctionCodes = functionCodes,
+                        )
+                    )
+                }
+            }
+        }
+        if (offset != payload.size) {
+            return ParsedTandemResponse.Unknown(null, SYSTEM_RET_CAPABILITY.unsigned, payload, raw)
+        }
+        return ParsedTandemResponse.QuickAccessCapability(
+            key = key,
+            type = type,
+            actions = actions,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /** Parse the cg0.g current-preset list: [type][count][preset...] */
+    private fun parseAssignableSettingsPresets(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        val presets = payload.drop(2).take(count).mapNotNull { code ->
+            AssignableSettingsPreset.entries.firstOrNull { it.code == code }
+                ?.takeIf { it != AssignableSettingsPreset.OUT_OF_RANGE }
+        }
+        return ParsedTandemResponse.AssignableSettingsPresets(
+            presets = presets,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /** Parse the cg0.h enable/disable list: [type][count][status...] */
+    private fun parseAssignableSettingsStatus(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        val enabled = payload.drop(2).take(count).map { it == AssignableSettingsEnableDisable.ENABLE.code }
+        return ParsedTandemResponse.AssignableSettingsStatus(
+            enabled = enabled,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /** Parse the cg0.e extended mapping list. */
+    private fun parseSystemRetExtendedParam(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        var offset = 2
+        val mappings = mutableListOf<AssignableSettingsMapping>()
+        repeat(count) {
+            if (offset + 2 > payload.size) return@repeat
+            val preset = AssignableSettingsPreset.entries.firstOrNull { it.code == payload[offset] }
+            val mappingCount = payload[offset + 1].unsigned
+            offset += 2
+            if (preset == null || preset == AssignableSettingsPreset.OUT_OF_RANGE) return@repeat
+            val actions = mutableListOf<AssignableSettingsActionFunction>()
+            repeat(mappingCount) {
+                if (offset + 2 > payload.size) return@repeat
+                val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
+                val function = AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                offset += 2
+                if (action != null && function != null &&
+                    action != AssignableSettingsAction.OUT_OF_RANGE &&
+                    function != AssignableSettingsFunction.OUT_OF_RANGE
+                ) {
+                    actions += AssignableSettingsActionFunction(action, function)
+                }
+            }
+            if (actions.isNotEmpty()) mappings += AssignableSettingsMapping(preset, actions)
+        }
+        return ParsedTandemResponse.AssignableSettingsExtendedParam(
+            mappings = mappings,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
     private fun parseSystemRetParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
         when (payload.firstOrNull()) {
+            SystemInquiredType.ASSIGNABLE_SETTINGS.code,
+            SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION.code ->
+                parseAssignableSettingsPresets(payload, raw)
             SystemInquiredType.QUICK_ACCESS.code -> parseQuickAccess(payload, raw)
             SystemInquiredType.WEARING_STATUS_DETECTOR.code -> parseWearingStatus(payload, raw)
             else -> ParsedTandemResponse.Unknown(null, SYSTEM_RET_PARAM.unsigned, payload, raw)
         }
 
     private fun parseQuickAccess(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
-        val key = payload.getOrNull(1)?.let { k ->
-            QuickAccessKey.entries.firstOrNull { it.code == k }
-        }
-        val function = payload.getOrNull(2)?.let { f ->
-            QuickAccessFunction.entries.firstOrNull { it.code == f }
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        val functionCodes = payload.drop(2).take(count).map { it.unsigned }
+        val functions = functionCodes.mapNotNull { code ->
+            QuickAccessFunction.entries.firstOrNull { it.code.unsigned == code }
+                ?.takeIf { it != QuickAccessFunction.OUT_OF_RANGE }
         }
         return ParsedTandemResponse.QuickAccess(
-            key = key,
-            function = function,
+            functions = functions,
+            functionCodes = functionCodes,
             values = payload.unsignedList(),
             raw = raw,
         )
+    }
+
+    private fun parseSystemStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        return when (payload.firstOrNull()) {
+            SystemInquiredType.QUICK_ACCESS.code ->
+                ParsedTandemResponse.QuickAccessStatus(
+                    enabled = payload.getOrNull(1)?.unsigned == AssignableSettingsEnableDisable.ENABLE.code.unsigned,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            SystemInquiredType.ASSIGNABLE_SETTINGS.code,
+            SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION.code ->
+                parseAssignableSettingsStatus(payload, raw)
+            else -> ParsedTandemResponse.Unknown(null, SYSTEM_RET_STATUS.unsigned, payload, raw)
+        }
     }
 
     private fun parseWearingStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {

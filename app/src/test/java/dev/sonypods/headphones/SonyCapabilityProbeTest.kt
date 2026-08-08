@@ -5,6 +5,15 @@ import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.AssignableSettingsAction
+import dev.sonypods.protocol.AssignableSettingsActionCapability
+import dev.sonypods.protocol.AssignableSettingsActionFunction
+import dev.sonypods.protocol.AssignableSettingsFunction
+import dev.sonypods.protocol.AssignableSettingsKey
+import dev.sonypods.protocol.AssignableSettingsKeyCapability
+import dev.sonypods.protocol.AssignableSettingsMapping
+import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.AssignableSettingsType
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
@@ -316,6 +325,78 @@ class SonyCapabilityProbeTest {
         assertEquals(
             listOf(0x0E, 0xF0, 0x06),
             system.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+    }
+
+    @Test
+    fun limitationAssignableSetting_usesLimitationSystemType() {
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v2Profile,
+            functions = listOf(fn(SonyV2FunctionType.ASSIGNABLE_SETTING_WITH_LIMITATION)),
+        )
+        val system = commands.single()
+        assertEquals(
+            listOf(0x0E, 0xF0, 0x0E),
+            system.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+
+        val capabilities = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(fn(SonyV2FunctionType.ASSIGNABLE_SETTING_WITH_LIMITATION)),
+            fallback = baseCapabilities(),
+            profile = v2Profile,
+        )
+        assertTrue(HeadphoneFeature.GESTURE_OPERATIONS in capabilities.features)
+        assertEquals(
+            dev.sonypods.protocol.SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION,
+            capabilities.gestureSettingsType,
+        )
+    }
+
+    @Test
+    fun gestureUiKeepsDuplicatePresetMappingsInCapabilityOrder() {
+        val action = AssignableSettingsAction.SINGLE_TAP
+        val preset = AssignableSettingsPreset.PLAYBACK_CONTROL
+        val capability = { key: AssignableSettingsKey, defaultFunction: AssignableSettingsFunction ->
+            AssignableSettingsKeyCapability(
+                key = key,
+                type = AssignableSettingsType.TOUCH_SENSOR,
+                defaultPreset = preset,
+                presets = listOf(preset),
+                actionsByPreset = mapOf(
+                    preset to listOf(
+                        AssignableSettingsActionCapability(
+                            action = action,
+                            defaultFunction = defaultFunction,
+                            availableFunctions = listOf(
+                                AssignableSettingsFunction.PLAY_PAUSE,
+                                AssignableSettingsFunction.NEXT_TRACK,
+                            ),
+                        )
+                    )
+                ),
+            )
+        }
+        val state = dev.sonypods.data.GestureOperationsState(
+            capabilities = listOf(
+                capability(AssignableSettingsKey.LEFT_SIDE, AssignableSettingsFunction.PLAY_PAUSE),
+                capability(AssignableSettingsKey.RIGHT_SIDE, AssignableSettingsFunction.NEXT_TRACK),
+            ),
+            presets = listOf(preset, preset),
+            mappings = listOf(
+                AssignableSettingsMapping(
+                    preset,
+                    listOf(AssignableSettingsActionFunction(action, AssignableSettingsFunction.PLAY_PAUSE)),
+                ),
+                AssignableSettingsMapping(
+                    preset,
+                    listOf(AssignableSettingsActionFunction(action, AssignableSettingsFunction.NEXT_TRACK)),
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(AssignableSettingsFunction.PLAY_PAUSE, AssignableSettingsFunction.NEXT_TRACK),
+            state.uiKeys().map { it.actions.single().function },
         )
     }
 }

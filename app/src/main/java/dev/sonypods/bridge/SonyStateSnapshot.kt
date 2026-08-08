@@ -1,7 +1,15 @@
 package dev.sonypods.bridge
 
 import android.os.Bundle
+import dev.sonypods.data.GestureOperationAction
+import dev.sonypods.data.GestureOperationKey
+import dev.sonypods.data.QuickAccessActionState
 import dev.sonypods.data.SonyHeadphoneUiState
+import dev.sonypods.protocol.AssignableSettingsAction
+import dev.sonypods.protocol.AssignableSettingsFunction
+import dev.sonypods.protocol.AssignableSettingsKey
+import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.AssignableSettingsType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.PlaybackStatus
@@ -38,6 +46,7 @@ data class SonyStateSnapshot(
     /** Catalog accent colour (ARGB hex) for system surfaces. */
     val modelImageSourceColor: String? = null,
     val supportsPowerOff: Boolean = false,
+    val supportsGestureOperations: Boolean = false,
     val batterySingle: Int? = null,
     val batteryLeft: Int? = null,
     val batteryRight: Int? = null,
@@ -61,6 +70,12 @@ data class SonyStateSnapshot(
     val leaStatus: String? = null,
     val quickAccessLeftRight: String? = null,
     val quickAccessNcAmb: String? = null,
+    val quickAccessKeyCode: Int? = null,
+    val quickAccessTypeCode: Int? = null,
+    val quickAccessEnabled: Boolean? = null,
+    val quickAccessFunctionCodes: List<Int> = emptyList(),
+    val quickAccessActions: List<QuickAccessActionSnapshot> = emptyList(),
+    val gestureOperationKeys: List<GestureOperationKey> = emptyList(),
     val wearingStatus: String? = null,
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val scanState: String? = null,
@@ -80,6 +95,8 @@ data class SonyStateSnapshot(
         modelImageUrl?.let { putString(KEY_MODEL_IMAGE, it) }
         modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
         putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
+        putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
+        putParcelableArrayList(KEY_GESTURES, ArrayList(gestureOperationKeys.map { it.toBundle() }))
 
         batterySingle?.let { putInt(KEY_BATTERY_SINGLE, it) }
         batteryLeft?.let { putInt(KEY_BATTERY_LEFT, it) }
@@ -104,6 +121,14 @@ data class SonyStateSnapshot(
         leaStatus?.let { putString(KEY_LEA, it) }
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
+        quickAccessKeyCode?.let { putInt(KEY_QA_KEY, it) }
+        quickAccessTypeCode?.let { putInt(KEY_QA_TYPE, it) }
+        quickAccessEnabled?.let {
+            putBoolean(KEY_QA_ENABLED_KNOWN, true)
+            putBoolean(KEY_QA_ENABLED, it)
+        }
+        putIntArray(KEY_QA_FUNCTION_CODES, quickAccessFunctionCodes.toIntArray())
+        putParcelableArrayList(KEY_QA_ACTIONS, ArrayList(quickAccessActions.map { it.toBundle() }))
         wearingStatus?.let { putString(KEY_WEARING, it) }
         putString(KEY_PLAYBACK, playbackStatus.name)
         scanState?.let { putString(KEY_SCAN_STATE, it) }
@@ -122,6 +147,18 @@ data class SonyStateSnapshot(
         private const val KEY_MODEL_IMAGE = "model_image_url"
         private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
         private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
+        private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
+        private const val KEY_GESTURES = "gesture_operations"
+        private const val KEY_ACTIONS = "actions"
+        private const val KEY_KEY = "key"
+        private const val KEY_TYPE = "type"
+        private const val KEY_ENABLED_KNOWN = "enabled_known"
+        private const val KEY_ENABLED = "enabled"
+        private const val KEY_PRESET = "preset"
+        private const val KEY_PRESETS = "presets"
+        private const val KEY_ACTION = "action"
+        private const val KEY_FUNCTION = "function"
+        private const val KEY_FUNCTIONS = "functions"
         private const val KEY_BATTERY_SINGLE = "battery_single"
         private const val KEY_BATTERY_LEFT = "battery_left"
         private const val KEY_BATTERY_RIGHT = "battery_right"
@@ -142,6 +179,16 @@ data class SonyStateSnapshot(
         private const val KEY_LEA = "lea"
         private const val KEY_QA_LR = "qa_lr"
         private const val KEY_QA_NC = "qa_nc"
+        private const val KEY_QA_KEY = "qa_key"
+        private const val KEY_QA_TYPE = "qa_type"
+        private const val KEY_QA_ENABLED_KNOWN = "qa_enabled_known"
+        private const val KEY_QA_ENABLED = "qa_enabled"
+        private const val KEY_QA_FUNCTION_CODES = "qa_function_codes"
+        private const val KEY_QA_ACTIONS = "qa_actions"
+        private const val KEY_QA_ACTION = "qa_action"
+        private const val KEY_QA_FUNCTION = "qa_function"
+        private const val KEY_QA_DEFAULT = "qa_default"
+        private const val KEY_QA_FUNCTIONS = "qa_functions"
         private const val KEY_WEARING = "wearing"
         private const val KEY_PLAYBACK = "playback"
         private const val KEY_SCAN_STATE = "scan_state"
@@ -157,6 +204,7 @@ data class SonyStateSnapshot(
             modelImageUrl = bundle.getString(KEY_MODEL_IMAGE),
             modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
             supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
+            supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
             batteryLeft = bundle.optInt(KEY_BATTERY_LEFT),
             batteryRight = bundle.optInt(KEY_BATTERY_RIGHT),
@@ -183,6 +231,14 @@ data class SonyStateSnapshot(
             leaStatus = bundle.getString(KEY_LEA),
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
+            quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),
+            quickAccessTypeCode = bundle.optInt(KEY_QA_TYPE),
+            quickAccessEnabled = if (bundle.getBoolean(KEY_QA_ENABLED_KNOWN, false)) {
+                bundle.getBoolean(KEY_QA_ENABLED)
+            } else null,
+            quickAccessFunctionCodes = bundle.getIntArray(KEY_QA_FUNCTION_CODES)?.toList().orEmpty(),
+            quickAccessActions = bundle.quickAccessActions(),
+            gestureOperationKeys = bundle.gestureKeys(),
             wearingStatus = bundle.getString(KEY_WEARING),
             playbackStatus = bundle.getString(KEY_PLAYBACK)?.let { name ->
                 PlaybackStatus.entries.firstOrNull { it.name == name }
@@ -203,6 +259,7 @@ data class SonyStateSnapshot(
                 modelImageUrl = state.deviceInfo.modelImageUrl,
                 modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
                 supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
+                supportsGestureOperations = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.GESTURE_OPERATIONS) == true,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
                 batteryRight = state.batteryState.right,
@@ -223,12 +280,115 @@ data class SonyStateSnapshot(
                 leaStatus = state.leaState.enabled,
                 quickAccessLeftRight = state.quickAccessState.lrKeyFunction,
                 quickAccessNcAmb = state.quickAccessState.ncAmbKeyFunction,
+                quickAccessKeyCode = state.quickAccessState.key?.code?.toInt()?.and(0xFF),
+                quickAccessTypeCode = state.quickAccessState.type?.code?.toInt()?.and(0xFF),
+                quickAccessEnabled = state.quickAccessState.enabled,
+                quickAccessFunctionCodes = state.quickAccessState.functionCodes,
+                quickAccessActions = state.quickAccessState.actions.map { it.toSnapshot() },
+                gestureOperationKeys = state.gestureOperationsState.uiKeys(),
                 wearingStatus = state.wearingState.status,
                 playbackStatus = state.playbackStatus,
                 scanState = state.scanState,
             )
         }
 
+        @Suppress("DEPRECATION")
+        private fun Bundle.gestureKeys(): List<GestureOperationKey> =
+            getParcelableArrayList<Bundle>(KEY_GESTURES).orEmpty().map { keyBundle ->
+                val actions = keyBundle.getParcelableArrayList<Bundle>(KEY_ACTIONS).orEmpty().map { actionBundle ->
+                    GestureOperationAction(
+                        action = AssignableSettingsAction.entries.firstOrNull {
+                            it.code.toInt() and 0xFF == actionBundle.getInt(KEY_ACTION)
+                        } ?: AssignableSettingsAction.OUT_OF_RANGE,
+                        function = AssignableSettingsFunction.entries.firstOrNull {
+                            it.code.toInt() and 0xFF == actionBundle.getInt(KEY_FUNCTION)
+                        } ?: AssignableSettingsFunction.OUT_OF_RANGE,
+                        availableFunctions = (actionBundle.getIntArray(KEY_FUNCTIONS) ?: intArrayOf()).toList().mapNotNull { code ->
+                            AssignableSettingsFunction.entries.firstOrNull {
+                                it.code.toInt() and 0xFF == code
+                            }?.takeIf { it != AssignableSettingsFunction.OUT_OF_RANGE }
+                        },
+                    )
+                }
+                GestureOperationKey(
+                    key = AssignableSettingsKey.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == keyBundle.getInt(KEY_KEY)
+                    } ?: AssignableSettingsKey.OUT_OF_RANGE,
+                    type = AssignableSettingsType.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == keyBundle.getInt(KEY_TYPE)
+                    } ?: AssignableSettingsType.OUT_OF_RANGE,
+                    enabled = if (keyBundle.getBoolean(KEY_ENABLED_KNOWN, false)) {
+                        keyBundle.getBoolean(KEY_ENABLED)
+                    } else null,
+                    currentPreset = AssignableSettingsPreset.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == keyBundle.getInt(KEY_PRESET)
+                    } ?: AssignableSettingsPreset.NO_FUNCTION,
+                    availablePresets = (keyBundle.getIntArray(KEY_PRESETS) ?: intArrayOf()).toList().mapNotNull { code ->
+                        AssignableSettingsPreset.entries.firstOrNull {
+                            it.code.toInt() and 0xFF == code
+                        }?.takeIf { it != AssignableSettingsPreset.OUT_OF_RANGE }
+                    },
+                    actions = actions,
+                )
+            }
+
+        private fun GestureOperationKey.toBundle(): Bundle = Bundle().apply {
+            putInt(KEY_KEY, key.code.toInt() and 0xFF)
+            putInt(KEY_TYPE, type.code.toInt() and 0xFF)
+            enabled?.let {
+                putBoolean(KEY_ENABLED_KNOWN, true)
+                putBoolean(KEY_ENABLED, it)
+            }
+            putInt(KEY_PRESET, currentPreset.code.toInt() and 0xFF)
+            putIntArray(KEY_PRESETS, availablePresets.map { it.code.toInt() and 0xFF }.toIntArray())
+            putParcelableArrayList(KEY_ACTIONS, ArrayList(actions.map { it.toBundle() }))
+        }
+
+        private fun GestureOperationAction.toBundle(): Bundle = Bundle().apply {
+            putInt(KEY_ACTION, action.code.toInt() and 0xFF)
+            putInt(KEY_FUNCTION, function.code.toInt() and 0xFF)
+            putIntArray(KEY_FUNCTIONS, availableFunctions.map { it.code.toInt() and 0xFF }.toIntArray())
+        }
+
+        @Suppress("DEPRECATION")
+        private fun Bundle.quickAccessActions(): List<QuickAccessActionSnapshot> =
+            getParcelableArrayList<Bundle>(KEY_QA_ACTIONS).orEmpty().map { actionBundle ->
+                QuickAccessActionSnapshot(
+                    actionCode = actionBundle.getInt(KEY_QA_ACTION),
+                    currentFunctionCode = if (actionBundle.getBoolean("${KEY_QA_FUNCTION}_known", false)) {
+                        actionBundle.getInt(KEY_QA_FUNCTION)
+                    } else null,
+                    defaultFunctionCode = actionBundle.getInt(KEY_QA_DEFAULT),
+                    availableFunctionCodes = (actionBundle.getIntArray(KEY_QA_FUNCTIONS) ?: intArrayOf()).toList(),
+                )
+            }
+
+        private fun QuickAccessActionState.toSnapshot(): QuickAccessActionSnapshot =
+            QuickAccessActionSnapshot(
+                actionCode = action.code.toInt() and 0xFF,
+                currentFunctionCode = currentFunctionCode,
+                defaultFunctionCode = defaultFunctionCode,
+                availableFunctionCodes = availableFunctionCodes,
+            )
+
+        private fun QuickAccessActionSnapshot.toBundle(): Bundle = Bundle().apply {
+            putInt(KEY_QA_ACTION, actionCode)
+            currentFunctionCode?.let {
+                putBoolean("${KEY_QA_FUNCTION}_known", true)
+                putInt(KEY_QA_FUNCTION, it)
+            }
+            putInt(KEY_QA_DEFAULT, defaultFunctionCode)
+            putIntArray(KEY_QA_FUNCTIONS, availableFunctionCodes.toIntArray())
+        }
+
         private fun Bundle.optInt(key: String): Int? = if (containsKey(key)) getInt(key) else null
     }
 }
+
+/** Flat cross-process representation of a Quick Access capability action. */
+data class QuickAccessActionSnapshot(
+    val actionCode: Int,
+    val currentFunctionCode: Int?,
+    val defaultFunctionCode: Int,
+    val availableFunctionCodes: List<Int>,
+)

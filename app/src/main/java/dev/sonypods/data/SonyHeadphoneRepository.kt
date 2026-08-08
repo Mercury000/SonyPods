@@ -38,6 +38,7 @@ import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
@@ -45,6 +46,14 @@ import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.QuickAccessKey
+import dev.sonypods.protocol.AssignableSettingsType
+import dev.sonypods.protocol.AssignableSettingsAction
+import dev.sonypods.protocol.AssignableSettingsFunction
+import dev.sonypods.protocol.AssignableSettingsKey
+import dev.sonypods.protocol.AssignableSettingsMapping
+import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.AssignableSettingsKeyCapability
+import dev.sonypods.protocol.AssignableSettingsActionFunction
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTandemConstants
 import dev.sonypods.protocol.hexString
@@ -60,6 +69,7 @@ private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
+private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
@@ -124,7 +134,85 @@ data class LeaState(
 data class QuickAccessState(
     val lrKeyFunction: String? = null,
     val ncAmbKeyFunction: String? = null,
+    val key: QuickAccessKey? = null,
+    val type: AssignableSettingsType? = null,
+    val actions: List<QuickAccessActionState> = emptyList(),
+    val functionCodes: List<Int> = emptyList(),
+    val enabled: Boolean? = null,
     val raw: List<Int> = emptyList(),
+)
+
+/** One Quick Access action.  Function IDs are intentionally raw integers: SAR
+ * services can be added by Sound Connect without a module update. */
+data class QuickAccessActionState(
+    val action: AssignableSettingsAction,
+    val currentFunctionCode: Int?,
+    val defaultFunctionCode: Int,
+    val availableFunctionCodes: List<Int>,
+)
+
+data class GestureOperationsState(
+    val capabilities: List<AssignableSettingsKeyCapability> = emptyList(),
+    val presets: List<AssignableSettingsPreset> = emptyList(),
+    val enabled: List<Boolean> = emptyList(),
+    val mappings: List<AssignableSettingsMapping> = emptyList(),
+    val rawCapability: List<Int> = emptyList(),
+    val rawPresets: List<Int> = emptyList(),
+    val rawStatus: List<Int> = emptyList(),
+    val rawMappings: List<Int> = emptyList(),
+) {
+    /** Build the UI-facing per-key model without exposing raw protocol layout. */
+    fun uiKeys(): List<GestureOperationKey> {
+        // EXT_PARAM has no physical-key byte.  The official app associates the
+        // returned entries with the capability/current-preset order.  Consume
+        // each mapping at most once so two controls that happen to use the same
+        // preset do not accidentally display the same action table.
+        val usedMappingIndices = mutableSetOf<Int>()
+        return capabilities.mapIndexed { index, capability ->
+            val currentPreset = presets.getOrNull(index) ?: capability.defaultPreset
+            val mappingIndex = mappings.indices.firstOrNull { mappingIndex ->
+                mappingIndex == index &&
+                    mappingIndex !in usedMappingIndices &&
+                    mappings[mappingIndex].preset == currentPreset
+            } ?: mappings.indices.firstOrNull { mappingIndex ->
+                mappingIndex !in usedMappingIndices && mappings[mappingIndex].preset == currentPreset
+            }
+            mappingIndex?.let(usedMappingIndices::add)
+            val currentMappings = mappingIndex?.let { mappings[it].mappings }.orEmpty()
+        val actions = capability.actionsByPreset[currentPreset].orEmpty().map { action ->
+            val currentFunction = currentMappings.firstOrNull { it.action == action.action }?.function
+                ?: action.defaultFunction
+            GestureOperationAction(
+                action = action.action,
+                function = currentFunction,
+                availableFunctions = action.availableFunctions,
+            )
+        }
+        GestureOperationKey(
+            key = capability.key,
+            type = capability.type,
+            enabled = enabled.getOrNull(index),
+            currentPreset = currentPreset,
+            availablePresets = capability.presets,
+            actions = actions,
+        )
+        }
+    }
+}
+
+data class GestureOperationKey(
+    val key: AssignableSettingsKey,
+    val type: dev.sonypods.protocol.AssignableSettingsType,
+    val enabled: Boolean?,
+    val currentPreset: AssignableSettingsPreset,
+    val availablePresets: List<AssignableSettingsPreset>,
+    val actions: List<GestureOperationAction>,
+)
+
+data class GestureOperationAction(
+    val action: AssignableSettingsAction,
+    val function: AssignableSettingsFunction,
+    val availableFunctions: List<AssignableSettingsFunction>,
 )
 
 data class WearingState(
@@ -173,6 +261,7 @@ data class SonyHeadphoneUiState(
     val eqUiCapability: EqUiCapability? = null,
     val leaState: LeaState = LeaState(),
     val quickAccessState: QuickAccessState = QuickAccessState(),
+    val gestureOperationsState: GestureOperationsState = GestureOperationsState(),
     val wearingState: WearingState = WearingState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val endpointDiagnostic: EndpointDiagnosticState? = null,
@@ -645,6 +734,273 @@ class SonyHeadphoneRepository private constructor(
         refreshEqState()
     }
 
+    fun setGesturePreset(keyCode: Int, presetCode: Int) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change gesture preset.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.GESTURE_OPERATIONS)) {
+            appendLog("Gesture preset write is disabled for current profile")
+            return
+        }
+        val gesture = _state.value.gestureOperationsState
+        val keys = gesture.uiKeys()
+        val keyIndex = keys.indexOfFirst { it.key.code.toInt() and 0xFF == keyCode }
+        val target = keys.getOrNull(keyIndex) ?: return
+        val preset = target.availablePresets.firstOrNull { it.code.toInt() and 0xFF == presetCode }
+            ?: return
+        val presets = currentGesturePresetsForWrite().toMutableList()
+        if (keyIndex !in presets.indices) return
+        presets[keyIndex] = preset
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetGesturePresetsCommands(profile, presets).forEach(::sendCommand)
+        scheduleGestureRefresh()
+    }
+
+    /** Set one Quick Access slot while preserving all other raw service IDs. */
+    fun setQuickAccessFunction(actionIndex: Int, functionCode: Int) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change Quick Access.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.QUICK_ACCESS)) {
+            appendLog("Quick Access write is disabled for current profile")
+            return
+        }
+        val quickAccess = _state.value.quickAccessState
+        val action = quickAccess.actions.getOrNull(actionIndex)
+        if (action == null || functionCode !in action.availableFunctionCodes) {
+            appendLog("Quick Access function $functionCode is not in capability action $actionIndex")
+            return
+        }
+        val functionCodes = quickAccess.actions.mapIndexed { index, item ->
+            quickAccess.functionCodes.getOrNull(index) ?: item.defaultFunctionCode
+        }.toMutableList()
+        if (actionIndex !in functionCodes.indices) return
+        functionCodes[actionIndex] = functionCode
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetQuickAccessFunction(profile, functionCodes)
+            .forEach(::sendCommand)
+        mainHandler.postDelayed({
+            if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
+                refreshBasics()
+            }
+        }, GESTURE_REFRESH_AFTER_WRITE_MS)
+    }
+
+    /**
+     * Select the NC/NCSS/ambient/off states cycled by an ambient-sound gesture.
+     * Sony encodes the selected set as one AssignableSettingsFunction; the
+     * ordinary gesture action itself remains read-only in the UI.
+     */
+    fun setGestureAmbientModes(selected: Set<GestureNoiseControlMode>) {
+        if (selected.size < 2) {
+            appendLog("Ambient gesture selection ignored: at least two modes are required")
+            return
+        }
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change gesture ambient modes.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.GESTURE_OPERATIONS)) {
+            appendLog("Gesture ambient-mode write is disabled for current profile")
+            return
+        }
+        val function = gestureFunctionForModes(selected) ?: run {
+            appendLog("No Sony gesture function represents ambient modes=$selected")
+            return
+        }
+        val gesture = _state.value.gestureOperationsState
+        val keys = gesture.uiKeys()
+        val presets = currentGesturePresetsForWrite()
+        val mappings = currentGestureMappingsForWrite(presets).toMutableList()
+        if (mappings.isEmpty()) {
+            appendLog("Gesture ambient-mode write ignored: no complete current mapping set")
+            return
+        }
+        var changed = false
+        keys.forEachIndexed { keyIndex, key ->
+            val mapping = mappings.getOrNull(keyIndex) ?: return@forEachIndexed
+            val actionIndex = key.actions.indexOfFirst { action ->
+                val ambientFunction = action.function.isGestureAmbientFunction() ||
+                    action.availableFunctions.any { it.isGestureAmbientFunction() }
+                ambientFunction && function in action.availableFunctions
+            }
+            if (actionIndex < 0) return@forEachIndexed
+            val action = key.actions[actionIndex]
+            val actionMappingIndex = mapping.mappings.indexOfFirst { it.action == action.action }
+            val replacement = AssignableSettingsActionFunction(action.action, function)
+            val updated = mapping.mappings.toMutableList()
+            if (actionMappingIndex >= 0) {
+                if (updated[actionMappingIndex] != replacement) {
+                    updated[actionMappingIndex] = replacement
+                    changed = true
+                }
+            } else {
+                updated += replacement
+                changed = true
+            }
+            mappings[keyIndex] = mapping.copy(mappings = updated)
+        }
+        if (!changed) {
+            appendLog("Gesture ambient modes already use ${function.name}", writeLogcat = false)
+            return
+        }
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetGestureMappingsCommands(profile, mappings).forEach(::sendCommand)
+        scheduleGestureRefresh()
+    }
+
+    private fun AssignableSettingsFunction.isGestureAmbientFunction(): Boolean = this in setOf(
+        AssignableSettingsFunction.NC_ASM_OFF,
+        AssignableSettingsFunction.NC_ASM,
+        AssignableSettingsFunction.NC_OFF,
+        AssignableSettingsFunction.ASM_OFF,
+        AssignableSettingsFunction.NC_NCSS_ASM_OFF,
+        AssignableSettingsFunction.NC_NCSS_ASM,
+        AssignableSettingsFunction.NC_NCSS_OFF,
+        AssignableSettingsFunction.NCSS_ASM_OFF,
+        AssignableSettingsFunction.NC_NCSS,
+        AssignableSettingsFunction.NCSS_ASM,
+        AssignableSettingsFunction.NCSS_OFF,
+    )
+
+    private fun gestureFunctionForModes(
+        modes: Set<GestureNoiseControlMode>,
+    ): AssignableSettingsFunction? = when (modes) {
+        setOf(GestureNoiseControlMode.NOISE_CANCELLING, GestureNoiseControlMode.AMBIENT_SOUND) ->
+            AssignableSettingsFunction.NC_ASM
+        setOf(GestureNoiseControlMode.NOISE_CANCELLING, GestureNoiseControlMode.OFF) ->
+            AssignableSettingsFunction.NC_OFF
+        setOf(GestureNoiseControlMode.AMBIENT_SOUND, GestureNoiseControlMode.OFF) ->
+            AssignableSettingsFunction.ASM_OFF
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING,
+            GestureNoiseControlMode.AMBIENT_SOUND,
+            GestureNoiseControlMode.OFF,
+        ) -> AssignableSettingsFunction.NC_ASM_OFF
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING,
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+        ) -> AssignableSettingsFunction.NC_NCSS
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING,
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.AMBIENT_SOUND,
+        ) -> AssignableSettingsFunction.NC_NCSS_ASM
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING,
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.OFF,
+        ) -> AssignableSettingsFunction.NC_NCSS_OFF
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING,
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.AMBIENT_SOUND,
+            GestureNoiseControlMode.OFF,
+        ) -> AssignableSettingsFunction.NC_NCSS_ASM_OFF
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.AMBIENT_SOUND,
+            GestureNoiseControlMode.OFF,
+        ) -> AssignableSettingsFunction.NCSS_ASM_OFF
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.AMBIENT_SOUND,
+        ) -> AssignableSettingsFunction.NCSS_ASM
+        setOf(
+            GestureNoiseControlMode.NOISE_CANCELLING_SPEECH,
+            GestureNoiseControlMode.OFF,
+        ) -> AssignableSettingsFunction.NCSS_OFF
+        else -> null
+    }
+
+    fun setGestureFunction(keyCode: Int, actionCode: Int, functionCode: Int) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change gesture action.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.GESTURE_OPERATIONS)) {
+            appendLog("Gesture action write is disabled for current profile")
+            return
+        }
+        val gesture = _state.value.gestureOperationsState
+        val keys = gesture.uiKeys()
+        val keyIndex = keys.indexOfFirst { it.key.code.toInt() and 0xFF == keyCode }
+        val targetKey = keys.getOrNull(keyIndex) ?: return
+        val targetAction = targetKey.actions.firstOrNull {
+            it.action.code.toInt() and 0xFF == actionCode &&
+                it.availableFunctions.any { function -> function.code.toInt() and 0xFF == functionCode }
+        } ?: return
+        val function = targetAction.availableFunctions.first { it.code.toInt() and 0xFF == functionCode }
+        val presets = currentGesturePresetsForWrite()
+        val mappings = currentGestureMappingsForWrite(presets).toMutableList()
+        if (mappings.isEmpty()) {
+            appendLog("Gesture action write ignored: no complete current mapping set")
+            return
+        }
+        val current = mappings.getOrNull(keyIndex) ?: return
+        val actionIndex = current.mappings.indexOfFirst { it.action == targetAction.action }
+        val updatedActions = current.mappings.toMutableList()
+        val updated = AssignableSettingsActionFunction(targetAction.action, function)
+        if (actionIndex < 0) {
+            // A RET_EXT_PARAM can be partial on some firmware. Do not lose a
+            // legal capability action merely because it was absent in that read.
+            updatedActions += updated
+        } else {
+            updatedActions[actionIndex] = updated
+        }
+        mappings[keyIndex] = current.copy(mappings = updatedActions)
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetGestureMappingsCommands(profile, mappings).forEach(::sendCommand)
+        scheduleGestureRefresh()
+    }
+
+    private fun currentGesturePresetsForWrite(): List<AssignableSettingsPreset> {
+        val gesture = _state.value.gestureOperationsState
+        val keys = gesture.uiKeys()
+        return keys.mapIndexed { index, key ->
+            gesture.presets.getOrNull(index) ?: key.currentPreset
+        }
+    }
+
+    private fun currentGestureMappingsForWrite(
+        presets: List<AssignableSettingsPreset>,
+    ): List<AssignableSettingsMapping> {
+        val gesture = _state.value.gestureOperationsState
+        val keys = gesture.uiKeys()
+        val usedMappingIndices = mutableSetOf<Int>()
+        val result = keys.mapIndexed { index, key ->
+            val preset = presets.getOrNull(index) ?: key.currentPreset
+            val mappingIndex = gesture.mappings.indices.firstOrNull { mappingIndex ->
+                mappingIndex == index &&
+                    mappingIndex !in usedMappingIndices &&
+                    gesture.mappings[mappingIndex].preset == preset
+            } ?: gesture.mappings.indices.firstOrNull { mappingIndex ->
+                mappingIndex !in usedMappingIndices && gesture.mappings[mappingIndex].preset == preset
+            }
+            mappingIndex?.let(usedMappingIndices::add)
+            val current = mappingIndex?.let { gesture.mappings[it] }
+            val actions = current?.mappings?.toMutableList()
+                ?: key.actions.map { action ->
+                    AssignableSettingsActionFunction(action.action, action.function)
+                }.toMutableList()
+            AssignableSettingsMapping(preset, actions)
+        }
+        // The wire format has no key byte; dropping an empty item would shift
+        // every following key's mapping. Refuse the write instead of emitting a
+        // corrupt key-to-mapping association.
+        return result.takeIf { it.all { mapping -> mapping.mappings.isNotEmpty() } }.orEmpty()
+    }
+
+    private fun scheduleGestureRefresh() {
+        mainHandler.postDelayed({
+            if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
+                refreshGestureOperationsState()
+            }
+        }, GESTURE_REFRESH_AFTER_WRITE_MS)
+    }
+
     fun runDebugAction(action: String, rawHex: String? = null) {
         appendLog("Debug action requested: $action raw=${rawHex.orEmpty()}")
         when (action.lowercase()) {
@@ -876,6 +1232,7 @@ class SonyHeadphoneRepository private constructor(
                 },
                 noiseControlState = if (connected) it.noiseControlState else NoiseControlState(),
                 eqState = if (connected) it.eqState else EqState(),
+                gestureOperationsState = if (connected) it.gestureOperationsState else GestureOperationsState(),
                 eqUiCapability = if (connected) profile?.eqUiCapability else null,
                 playbackStatus = if (connected) it.playbackStatus else PlaybackStatus.UNKNOWN,
                 endpointDiagnostic = if (connected) it.endpointDiagnostic else null,
@@ -932,6 +1289,12 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
+            is ParsedTandemResponse.QuickAccessCapability -> applyQuickAccessCapability(parsed)
+            is ParsedTandemResponse.QuickAccessStatus -> applyQuickAccessStatus(parsed)
+            is ParsedTandemResponse.AssignableSettingsCapability -> applyAssignableSettingsCapability(parsed)
+            is ParsedTandemResponse.AssignableSettingsPresets -> applyAssignableSettingsPresets(parsed)
+            is ParsedTandemResponse.AssignableSettingsStatus -> applyAssignableSettingsStatus(parsed)
+            is ParsedTandemResponse.AssignableSettingsExtendedParam -> applyAssignableSettingsExtendedParam(parsed)
             is ParsedTandemResponse.WearingStatus -> applyWearingStatus(parsed)
             is ParsedTandemResponse.Unknown -> applyKnownOrUnknown(parsed)
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
@@ -1161,6 +1524,12 @@ class SonyHeadphoneRepository private constructor(
             .forEach(::sendCommandIfReady)
     }
 
+    private fun refreshGestureOperationsState() {
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildRefreshGestureOperationsCommands(profile)
+            .forEach(::sendCommandIfReady)
+    }
+
     private fun refreshPlaybackStatusAfterCommand() {
         if (_state.value.connectedDevice == null) return
         if (shouldUseTandemPlaybackStatus()) {
@@ -1267,14 +1636,114 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyQuickAccess(response: ParsedTandemResponse.QuickAccess) {
-        appendLog("Quick Access key=${response.key} function=${response.function}")
+        appendLog("Quick Access key=${response.key} functions=${response.functionCodes}")
         _state.update { current ->
-            val functionName = response.function?.name
-            current.copy(quickAccessState = when (response.key) {
-                QuickAccessKey.L_R_KEY -> current.quickAccessState.copy(lrKeyFunction = functionName)
-                QuickAccessKey.NC_AMB_KEY -> current.quickAccessState.copy(ncAmbKeyFunction = functionName)
-                else -> current.quickAccessState
-            }.copy(raw = response.values))
+            val quickAccess = current.quickAccessState
+            val functionName = response.functions.firstOrNull()?.name
+            quickAccess.copy(
+                lrKeyFunction = if (quickAccess.key == QuickAccessKey.L_R_KEY) functionName else quickAccess.lrKeyFunction,
+                ncAmbKeyFunction = if (quickAccess.key == QuickAccessKey.NC_AMB_KEY) functionName else quickAccess.ncAmbKeyFunction,
+                functionCodes = response.functionCodes,
+                actions = quickAccess.actions.mapIndexed { index, action ->
+                    action.copy(currentFunctionCode = response.functionCodes.getOrNull(index) ?: action.currentFunctionCode)
+                },
+                raw = response.values,
+            ).let { updated -> current.copy(quickAccessState = updated) }
+        }
+    }
+
+    private fun applyQuickAccessCapability(response: ParsedTandemResponse.QuickAccessCapability) {
+        appendLog(
+            "Quick Access capability key=${response.key} actions=${response.actions.size}",
+            writeLogcat = false,
+        )
+        _state.update { current ->
+            val quickAccess = current.quickAccessState
+            val actions = response.actions.mapIndexed { index, action ->
+                QuickAccessActionState(
+                    action = action.action,
+                    currentFunctionCode = quickAccess.functionCodes.getOrNull(index),
+                    defaultFunctionCode = action.defaultFunctionCode,
+                    availableFunctionCodes = action.availableFunctionCodes,
+                )
+            }
+            current.copy(
+                quickAccessState = quickAccess.copy(
+                    key = response.key,
+                    type = response.type,
+                    actions = actions,
+                    raw = response.values,
+                )
+            )
+        }
+    }
+
+    private fun applyQuickAccessStatus(response: ParsedTandemResponse.QuickAccessStatus) {
+        appendLog("Quick Access enabled=${response.enabled}", writeLogcat = false)
+        _state.update { current ->
+            current.copy(
+                quickAccessState = current.quickAccessState.copy(
+                    enabled = response.enabled,
+                    raw = response.values,
+                )
+            )
+        }
+    }
+
+    private fun applyAssignableSettingsCapability(response: ParsedTandemResponse.AssignableSettingsCapability) {
+        appendLog(
+            "Gesture capability keys=${response.keys.size} " +
+                response.keys.joinToString { "${it.key}/${it.type}/${it.defaultPreset}" },
+            writeLogcat = false,
+        )
+        _state.update { current ->
+            current.copy(
+                gestureOperationsState = current.gestureOperationsState.copy(
+                    capabilities = response.keys,
+                    rawCapability = response.values,
+                )
+            )
+        }
+    }
+
+    private fun applyAssignableSettingsPresets(response: ParsedTandemResponse.AssignableSettingsPresets) {
+        appendLog("Gesture presets=${response.presets}", writeLogcat = false)
+        _state.update { current ->
+            current.copy(
+                gestureOperationsState = current.gestureOperationsState.copy(
+                    presets = response.presets,
+                    rawPresets = response.values,
+                )
+            )
+        }
+    }
+
+    private fun applyAssignableSettingsStatus(response: ParsedTandemResponse.AssignableSettingsStatus) {
+        appendLog("Gesture enabled=${response.enabled}", writeLogcat = false)
+        _state.update { current ->
+            current.copy(
+                gestureOperationsState = current.gestureOperationsState.copy(
+                    enabled = response.enabled,
+                    rawStatus = response.values,
+                )
+            )
+        }
+    }
+
+    private fun applyAssignableSettingsExtendedParam(response: ParsedTandemResponse.AssignableSettingsExtendedParam) {
+        appendLog(
+            "Gesture mappings=" + response.mappings.joinToString { mapping ->
+                "${mapping.preset}:${mapping.mappings.joinToString { "${it.action}=${it.function}" }}"
+            },
+            writeLogcat = false,
+        )
+        _state.update { current ->
+            current.copy(
+                gestureOperationsState = current.gestureOperationsState.copy(
+                    mappings = response.mappings,
+                    rawMappings = response.values,
+                )
+            )
         }
     }
 
@@ -1655,6 +2124,7 @@ fun featureStatusesFor(profile: ConnectedHeadphoneProfile?): List<FeatureStatus>
     FeatureStatus("EQ / Clear Bass", "Preset EQ, custom EQ, and Clear Bass", profile.supports(HeadphoneFeature.EQ)),
     FeatureStatus("LE Audio 状态", "Connection type, streaming status, paired history", profile.supports(HeadphoneFeature.LEA_STATUS)),
     FeatureStatus("Quick Access", "Customizable button actions L/R and NC/AMB keys", profile.supports(HeadphoneFeature.QUICK_ACCESS)),
+    FeatureStatus("手势操作", "Touch, button and face-tap action assignments", profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)),
     FeatureStatus("佩戴检测", "Earpiece fitting and wearing detection status", profile.supports(HeadphoneFeature.WEARING_STATUS)),
     FeatureStatus("Sense / AutoPlay / Multipoint / FOTA", "Advanced modules reserved", false),
 )

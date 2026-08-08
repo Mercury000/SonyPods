@@ -172,7 +172,88 @@ sealed interface ParsedTandemResponse {
 
     data class QuickAccess(
         val key: QuickAccessKey? = null,
-        val function: QuickAccessFunction? = null,
+        val functions: List<QuickAccessFunction> = emptyList(),
+        /** Raw service IDs.  The list is cloud/device supplied and is not a
+         * closed enum; unknown IDs must survive a read/write round trip. */
+        val functionCodes: List<Int> = emptyList(),
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        val function: QuickAccessFunction?
+            get() = functions.firstOrNull()
+    }
+
+    data class QuickAccessActionCapability(
+        val action: AssignableSettingsAction,
+        val defaultFunction: QuickAccessFunction?,
+        val defaultFunctionCode: Int,
+        val availableFunctions: List<QuickAccessFunction>,
+        val availableFunctionCodes: List<Int>,
+    )
+
+    data class QuickAccessCapability(
+        val key: QuickAccessKey,
+        val type: AssignableSettingsType,
+        val actions: List<QuickAccessActionCapability>,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class QuickAccessStatus(
+        val enabled: Boolean,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** One action/function pair reported by ASSIGNABLE_SETTINGS capability data. */
+    data class AssignableSettingsActionCapability(
+        val action: AssignableSettingsAction,
+        val defaultFunction: AssignableSettingsFunction,
+        val availableFunctions: List<AssignableSettingsFunction>,
+    )
+
+    /** Capability data for one physical key/control group. */
+    data class AssignableSettingsKeyCapability(
+        val key: AssignableSettingsKey,
+        val type: AssignableSettingsType,
+        val defaultPreset: AssignableSettingsPreset,
+        val presets: List<AssignableSettingsPreset>,
+        val actionsByPreset: Map<AssignableSettingsPreset, List<AssignableSettingsActionCapability>>,
+    )
+
+    data class AssignableSettingsCapability(
+        val keys: List<AssignableSettingsKeyCapability>,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** SYSTEM_RET_PARAM / NTFY_PARAM for ASSIGNABLE_SETTINGS: current preset per key. */
+    data class AssignableSettingsPresets(
+        val presets: List<AssignableSettingsPreset>,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** SYSTEM_RET_STATUS / NTFY_STATUS for ASSIGNABLE_SETTINGS: enabled per key. */
+    data class AssignableSettingsStatus(
+        val enabled: List<Boolean>,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class AssignableSettingsMapping(
+        val preset: AssignableSettingsPreset,
+        val mappings: List<AssignableSettingsActionFunction>,
+    )
+
+    data class AssignableSettingsActionFunction(
+        val action: AssignableSettingsAction,
+        val function: AssignableSettingsFunction,
+    )
+
+    /** SYSTEM_RET_EXT_PARAM / NTFY_EXT_PARAM for ASSIGNABLE_SETTINGS. */
+    data class AssignableSettingsExtendedParam(
+        val mappings: List<AssignableSettingsMapping>,
         val values: List<Int>,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
@@ -331,6 +412,12 @@ sealed interface ParsedTandemResponse {
         }
     }
 }
+
+typealias AssignableSettingsActionCapability = ParsedTandemResponse.AssignableSettingsActionCapability
+typealias AssignableSettingsKeyCapability = ParsedTandemResponse.AssignableSettingsKeyCapability
+typealias AssignableSettingsCapability = ParsedTandemResponse.AssignableSettingsCapability
+typealias AssignableSettingsMapping = ParsedTandemResponse.AssignableSettingsMapping
+typealias AssignableSettingsActionFunction = ParsedTandemResponse.AssignableSettingsActionFunction
 
 val Byte.unsigned: Int
     get() = toInt() and 0xFF

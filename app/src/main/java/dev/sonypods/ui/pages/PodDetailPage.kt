@@ -65,7 +65,6 @@ fun PodDetailPage(
     boxImagePath: String? = null,
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-
     if (isLandscape) {
         Row(
             modifier = modifier
@@ -101,7 +100,7 @@ fun PodDetailPage(
                     .weight(1f)
                     .fillMaxSize(),
                 contentPadding = PaddingValues(top = 12.dp),
-                verticalArrangement = Arrangement.Center,
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 podControlItems(
@@ -117,7 +116,8 @@ fun PodDetailPage(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Image(
@@ -175,7 +175,7 @@ private fun LazyListScope.podControlItems(
 
     item {
         Card(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
+            modifier = Modifier.padding(horizontal = 12.dp)
         ) {
             AncSwitch(
                 ancStatus = uiState.noiseControlMode,
@@ -194,6 +194,18 @@ private fun LazyListScope.podControlItems(
 
     item {
         PlaybackCard(uiState = uiState, actions = actions)
+    }
+
+    if (uiState.supportsGestureOperations) {
+        item {
+            Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                BasicComponent(
+                    title = "手势操作",
+                    summary = if (uiState.gestureOperationKeys.isEmpty()) "读取耳机支持的触控与按键操作" else "自定义触控、按键和面部轻击操作",
+                    onClick = actions.onOpenGestureOperations,
+                )
+            }
+        }
     }
 
     item {
@@ -313,7 +325,7 @@ private fun LabeledLevelSlider(
 
 @Composable
 private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
-    Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

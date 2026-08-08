@@ -44,6 +44,7 @@ import androidx.navigation3.ui.NavDisplay
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
@@ -178,6 +179,23 @@ fun MainUI(
             onPlaybackPlayPause = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PLAY_PAUSE) },
             onPlaybackNext = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_NEXT) },
             onPowerOff = { SonyBridge.sendCommand(context, SonyBridge.CMD_POWER_OFF) },
+            onGesturePresetChange = { key, preset ->
+                SonyBridge.setGesturePreset(context, key.code.toInt() and 0xFF, preset.code.toInt() and 0xFF)
+            },
+            onGestureFunctionChange = { key, action, function ->
+                SonyBridge.setGestureFunction(
+                    context,
+                    key.code.toInt() and 0xFF,
+                    action.code.toInt() and 0xFF,
+                    function.code.toInt() and 0xFF,
+                )
+            },
+            onQuickAccessFunctionChange = { actionIndex, functionCode ->
+                SonyBridge.setQuickAccessFunction(context, actionIndex, functionCode)
+            },
+            onGestureAmbientModesChange = { modes ->
+                SonyBridge.setGestureAmbientModes(context, modes.map { it.ordinal }.toIntArray())
+            },
             onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
         )
     }

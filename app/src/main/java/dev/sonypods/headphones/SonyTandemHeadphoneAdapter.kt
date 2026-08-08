@@ -12,6 +12,8 @@ import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.AssignableSettingsMapping
+import dev.sonypods.protocol.AssignableSettingsPreset
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR_NO2
 
@@ -36,6 +38,13 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     private const val NCASM_RET_PARAM: Byte = 0x67
     private const val NCASM_SET_PARAM: Byte = 0x68
     private const val NCASM_NTFY_PARAM: Byte = 0x69
+    private const val SYSTEM_RET_CAPABILITY: Byte = 0xF1.toByte()
+    private const val SYSTEM_RET_STATUS: Byte = 0xF3.toByte()
+    private const val SYSTEM_NTFY_STATUS: Byte = 0xF5.toByte()
+    private const val SYSTEM_RET_PARAM: Byte = 0xF7.toByte()
+    private const val SYSTEM_NTFY_PARAM: Byte = 0xF9.toByte()
+    private const val SYSTEM_RET_EXT_PARAM: Byte = 0xFB.toByte()
+    private const val SYSTEM_NTFY_EXT_PARAM: Byte = 0xFD.toByte()
     private const val PLAY_RET_STATUS: Byte = 0xA3.toByte()
     private const val PLAY_NTFY_STATUS: Byte = 0xA5.toByte()
     override val id: String = "sony-tandem"
@@ -184,9 +193,19 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 addAll(buildRefreshLeaCommands(profile))
             }
             if (profile.supports(HeadphoneFeature.QUICK_ACCESS)) {
-                codecFor(profile, HeadphoneFeature.QUICK_ACCESS).buildGetQuickAccess()?.let {
+                val codec = codecFor(profile, HeadphoneFeature.QUICK_ACCESS)
+                codec.buildGetQuickAccessCapability()?.let {
+                    add(command(profile, HeadphoneFeature.QUICK_ACCESS, "GET Quick Access capability", it))
+                }
+                codec.buildGetQuickAccessStatus()?.let {
+                    add(command(profile, HeadphoneFeature.QUICK_ACCESS, "GET Quick Access status", it))
+                }
+                codec.buildGetQuickAccess()?.let {
                     add(command(profile, HeadphoneFeature.QUICK_ACCESS, "GET Quick Access", it))
                 }
+            }
+            if (profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
+                addAll(buildRefreshGestureOperationsCommands(profile))
             }
             if (profile.supports(HeadphoneFeature.WEARING_STATUS)) {
                 codecFor(profile, HeadphoneFeature.WEARING_STATUS).buildGetWearingStatus()?.let {
@@ -404,6 +423,70 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
         }
 
+    override fun buildRefreshGestureOperationsCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
+        if (!profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
+            emptyList()
+        } else {
+            val codec = codecFor(profile, HeadphoneFeature.GESTURE_OPERATIONS)
+            val type = profile.capabilities.gestureSettingsType
+            listOfNotNull(
+                codec.buildGetAssignableSettingsCapability(type)?.let {
+                    command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "GET gesture capability", it)
+                },
+                codec.buildGetAssignableSettingsStatus(type)?.let {
+                    command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "GET gesture status", it)
+                },
+                codec.buildGetAssignableSettingsPresets(type)?.let {
+                    command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "GET gesture presets", it)
+                },
+                codec.buildGetAssignableSettingsExtendedParam(type)?.let {
+                    command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "GET gesture mappings", it)
+                },
+            )
+        }
+
+    override fun buildSetQuickAccessFunction(
+        profile: ConnectedHeadphoneProfile,
+        functionCodes: List<Int>,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.QUICK_ACCESS)) {
+        emptyList()
+    } else {
+        codecFor(profile, HeadphoneFeature.QUICK_ACCESS)
+            .buildSetQuickAccess(functionCodes)
+            ?.let {
+                listOf(command(profile, HeadphoneFeature.QUICK_ACCESS, "SET Quick Access", it))
+            }
+            .orEmpty()
+    }
+
+    override fun buildSetGesturePresetsCommands(
+        profile: ConnectedHeadphoneProfile,
+        presets: List<AssignableSettingsPreset>,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
+        emptyList()
+    } else {
+        codecFor(profile, HeadphoneFeature.GESTURE_OPERATIONS)
+            .buildSetAssignableSettingsPresets(profile.capabilities.gestureSettingsType, presets)
+            ?.let {
+                listOf(command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "SET gesture presets", it))
+            }
+            .orEmpty()
+    }
+
+    override fun buildSetGestureMappingsCommands(
+        profile: ConnectedHeadphoneProfile,
+        mappings: List<AssignableSettingsMapping>,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
+        emptyList()
+    } else {
+        codecFor(profile, HeadphoneFeature.GESTURE_OPERATIONS)
+            .buildSetAssignableSettingsExtendedParam(profile.capabilities.gestureSettingsType, mappings)
+            ?.let {
+                listOf(command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "SET gesture mappings", it))
+            }
+            .orEmpty()
+    }
+
     override fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         if (!profile.supports(HeadphoneFeature.POWER_OFF)) {
             emptyList()
@@ -542,8 +625,23 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         NCASM_GET_PARAM, NCASM_RET_PARAM, NCASM_SET_PARAM,
         NCASM_NTFY_PARAM -> HeadphoneFeature.NOISE_CONTROL
         PLAY_RET_STATUS, PLAY_NTFY_STATUS -> HeadphoneFeature.PLAYBACK_CONTROL
+        SYSTEM_RET_CAPABILITY,
+        SYSTEM_RET_STATUS,
+        SYSTEM_NTFY_STATUS,
+        SYSTEM_RET_PARAM,
+        SYSTEM_NTFY_PARAM,
+        SYSTEM_RET_EXT_PARAM,
+        SYSTEM_NTFY_EXT_PARAM -> classifySystemResponse(payload)
         else -> HeadphoneFeature.DEVICE_INFO
     }
+
+    private fun classifySystemResponse(payload: ByteArray): HeadphoneFeature =
+        when (payload.firstOrNull()?.toInt()?.and(0xFF)) {
+            0x03, 0x0E -> HeadphoneFeature.GESTURE_OPERATIONS
+            0x0D -> HeadphoneFeature.QUICK_ACCESS
+            0x06 -> HeadphoneFeature.WEARING_STATUS
+            else -> HeadphoneFeature.DEVICE_INFO
+        }
 
     /**
      * 0x13 is overloaded: V2 COMMON_RET_STATUS and V1 COMMON_NTFY_BATTERY_LEVEL.

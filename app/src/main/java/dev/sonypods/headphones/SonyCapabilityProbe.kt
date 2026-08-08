@@ -145,13 +145,16 @@ object SonyCapabilityProbe {
                     }
 
                     ProbeDomain.SYSTEM -> function.systemInquired(profile)?.let { system ->
-                        val systemCodec = codec as? SonyTandemV1Table1Codec
-                        systemCodec?.buildGetSystemCapability(system)?.let { bytes ->
+                        deviceInfoCodec.buildGetSystemCapability(system)?.let { bytes ->
                             add(
                                 HeadphoneCommand(
                                     label = "GET SYSTEM capability ${system.name}",
                                     bytes = bytes,
-                                    channel = systemCodec.defaultChannel,
+                                    // All Table1 SYSTEM requests share the connection
+                                    // channel. Use DEVICE_INFO here instead of requiring
+                                    // a synthetic GESTURE_OPERATIONS binding; this also
+                                    // keeps the probe valid for older test/V1 profiles.
+                                    channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
                                 )
                             )
                         }
@@ -185,6 +188,7 @@ object SonyCapabilityProbe {
         val writableNoise = mutableSetOf<NcAsmInquiredType>()
         val eqTypes = mutableSetOf<EqEbbInquiredType>()
         val playTypes = mutableSetOf<PlayInquiredType>()
+        var gestureSettingsType: SystemInquiredType? = null
 
         for (function in functions) {
             if (function.isPowerOff(profile)) {
@@ -229,6 +233,13 @@ object SonyCapabilityProbe {
                             features.add(HeadphoneFeature.WEARING_STATUS)
                         SystemInquiredType.QUICK_ACCESS ->
                             features.add(HeadphoneFeature.QUICK_ACCESS)
+                        SystemInquiredType.ASSIGNABLE_SETTINGS,
+                        SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION -> {
+                            features.add(HeadphoneFeature.GESTURE_OPERATIONS)
+                            if (gestureSettingsType == null) {
+                                gestureSettingsType = function.systemInquired(profile)
+                            }
+                        }
                         else -> Unit
                     }
                 }
@@ -295,6 +306,7 @@ object SonyCapabilityProbe {
                 .ifEmpty { fallback.writableNoiseControlTypes },
             eqConfig = eqConfig,
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
+            gestureSettingsType = gestureSettingsType ?: fallback.gestureSettingsType,
         )
     }
 
@@ -421,6 +433,7 @@ object SonyCapabilityProbe {
         HeadphoneFeature.LEA_STATUS,
         HeadphoneFeature.QUICK_ACCESS,
         HeadphoneFeature.WEARING_STATUS,
+        HeadphoneFeature.GESTURE_OPERATIONS,
     )
 
     private fun SonySupportedFunction.v2Type(): SonyV2FunctionType? =
@@ -510,7 +523,9 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.CRADLE_BATTERY_LEVEL_WITH_THRESHOLD -> ProbeDomain.BATTERY
 
         SonyV2FunctionType.WEARING_STATUS_DETECTOR,
-        SonyV2FunctionType.QUICK_ACCESS -> ProbeDomain.SYSTEM
+        SonyV2FunctionType.QUICK_ACCESS,
+        SonyV2FunctionType.ASSIGNABLE_SETTING,
+        SonyV2FunctionType.ASSIGNABLE_SETTING_WITH_LIMITATION -> ProbeDomain.SYSTEM
 
         SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
         SonyV2FunctionType.HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
@@ -659,6 +674,9 @@ object SonyCapabilityProbe {
             }
         }
         return when (v2Type()) {
+            SonyV2FunctionType.ASSIGNABLE_SETTING -> SystemInquiredType.ASSIGNABLE_SETTINGS
+            SonyV2FunctionType.ASSIGNABLE_SETTING_WITH_LIMITATION ->
+                SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
             SonyV2FunctionType.WEARING_STATUS_DETECTOR -> SystemInquiredType.WEARING_STATUS_DETECTOR
             SonyV2FunctionType.QUICK_ACCESS -> SystemInquiredType.QUICK_ACCESS
             null -> if (v1Type() == SonyV1FunctionType.CONTROL_BY_WEARING) {

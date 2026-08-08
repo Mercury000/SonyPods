@@ -2,6 +2,11 @@ package dev.sonypods.ui.pages
 
 import android.bluetooth.BluetoothDevice
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -18,6 +23,7 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 @Composable
 internal fun EarphonesTabPage(
     showEarphoneDetail: Boolean,
+    showGestureOperations: Boolean,
     displayTitle: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
@@ -33,13 +39,34 @@ internal fun EarphonesTabPage(
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
     onDismissConnectError: () -> Unit,
 ) {
+    val page = when {
+        !showEarphoneDetail -> EarphonesPage.DEVICE_PICKER
+        showGestureOperations -> EarphonesPage.GESTURE_OPERATIONS
+        else -> EarphonesPage.DETAIL
+    }
     AnimatedContent(
-        targetState = showEarphoneDetail,
+        targetState = page,
         modifier = Modifier.fillMaxSize(),
+        transitionSpec = {
+            ContentTransform(
+                targetContentEnter = slideInHorizontally { it / 3 } + fadeIn(),
+                initialContentExit = slideOutHorizontally { -it / 3 } + fadeOut(),
+            )
+        },
         label = "EarphonesPageAnim",
-    ) { detailVisible ->
-        if (detailVisible) {
-            PodDetailPage(
+    ) { currentPage ->
+        when (currentPage) {
+            EarphonesPage.GESTURE_OPERATIONS -> GestureOperationsPage(
+                modifier = Modifier
+                    .overScrollVertical()
+                    .nestedScroll(nestedScrollConnection),
+                contentPadding = contentPadding,
+                bottomContentPadding = pageBottomContentPadding,
+                uiState = uiState,
+                actions = actions,
+            )
+
+            EarphonesPage.DETAIL -> PodDetailPage(
                 modifier = Modifier
                     .overScrollVertical()
                     .nestedScroll(nestedScrollConnection),
@@ -50,8 +77,8 @@ internal fun EarphonesTabPage(
                 actions = actions,
                 boxImagePath = boxImagePath,
             )
-        } else {
-            DevicePickerPage(
+
+            EarphonesPage.DEVICE_PICKER -> DevicePickerPage(
                 isConnected = uiState.connected,
                 connectedDeviceName = displayTitle,
                 connectedDeviceAddress = connectedDeviceAddress,
@@ -66,4 +93,10 @@ internal fun EarphonesTabPage(
             )
         }
     }
+}
+
+private enum class EarphonesPage {
+    DEVICE_PICKER,
+    DETAIL,
+    GESTURE_OPERATIONS,
 }

@@ -151,8 +151,129 @@ enum class LeaPairedHistory(val code: Byte) {
 }
 
 enum class SystemInquiredType(val code: Byte) {
+    ASSIGNABLE_SETTINGS(0x03),
     WEARING_STATUS_DETECTOR(0x06),
     QUICK_ACCESS(0x0D),
+    /** ASSIGNABLE_SETTINGS variant whose capability payload carries a LE Audio limitation. */
+    ASSIGNABLE_SETTINGS_WITH_LIMITATION(0x0E),
+}
+
+/** V2 Table1 ASSIGNABLE_SETTINGS key identifiers from Sound Connect. */
+enum class AssignableSettingsKey(val code: Byte) {
+    LEFT_SIDE(0x00),
+    RIGHT_SIDE(0x01),
+    CUSTOM(0x02),
+    C(0x03),
+    NC_AMB_KEY(0x04),
+    NC_AMBIENT_KEY(0x05),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class AssignableSettingsType(val code: Byte) {
+    TOUCH_SENSOR(0x00),
+    BUTTON(0x01),
+    FACE_TAP(0x02),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+/** Presets are the physical control groups exposed by Sony's assignable-settings API. */
+enum class AssignableSettingsPreset(val code: Byte) {
+    AMBIENT_SOUND_CONTROL(0x00),
+    VOLUME_CONTROL(0x10),
+    PLAYBACK_CONTROL(0x20),
+    TRACK_CONTROL(0x21),
+    PLAYBACK_CONTROL_VOICE_ASSISTANT_LIMITATION(0x22),
+    VOICE_RECOGNITION(0x30),
+    GOOGLE_ASSIST(0x31),
+    AMAZON_ALEXA(0x32),
+    TENCENT_XIAOWEI(0x33),
+    MS(0x34),
+    AMBIENT_SOUND_CONTROL_QUICK_ACCESS(0x35),
+    QUICK_ACCESS(0x36),
+    TENCENT_XIAOWEI_Q_MSC(0x37),
+    TEAMS(0x38),
+    GOOGLE_ASSISTANT_BT_CLASSIC_ONLY(0x39),
+    AMAZON_ALEXA_BT_CLASSIC_ONLY(0x40),
+    TENCENT_XIAOWEI_BT_CLASSIC_ONLY(0x41),
+    QUICK_ACCESS_BT_CLASSIC_ONLY(0x42),
+    AMBIENT_SOUND_CONTROL_QUICK_ACCESS_BT_CLASSIC_ONLY(0x43),
+    TENCENT_XIAOWEI_Q_MSC_BT_CLASSIC_ONLY(0x44),
+    AMBIENT_SOUND_CONTROL_MIC(0x45),
+    LISTENING_MODE_QUICK_ACCESS(0x46),
+    AMBIENT_SOUND_CONTROL_LISTENING_MODE(0x47),
+    CHAT_MIX(0x70),
+    CUSTOM1(0x71),
+    CUSTOM2(0x72),
+    NO_FUNCTION(0xFF.toByte()),
+    OUT_OF_RANGE(0xFE.toByte()),
+}
+
+enum class AssignableSettingsAction(val code: Byte) {
+    SINGLE_TAP(0x00),
+    DOUBLE_TAP(0x01),
+    TRIPLE_TAP(0x02),
+    REPEAT_TAP(0x03),
+    SINGLE_TAP_AND_HOLD(0x10),
+    DOUBLE_TAP_AND_HOLD(0x11),
+    LONG_PRESS_THEN_ACTIVATE(0x21),
+    LONG_PRESS_DURING_ACTIVATE(0x22),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class AssignableSettingsFunction(val code: Byte) {
+    NO_FUNCTION(0x00),
+    NC_ASM_OFF(0x01),
+    NC_ASM(0x02),
+    NC_OFF(0x03),
+    ASM_OFF(0x04),
+    QUICK_ATTENTION(0x10),
+    NC_OPTIMIZER(0x11),
+    PLAY_PAUSE(0x20),
+    NEXT_TRACK(0x21),
+    PREV_TRACK(0x22),
+    VOLUME_UP(0x23),
+    VOLUME_DOWN(0x24),
+    VOICE_RECOGNITION(0x30),
+    GET_YOUR_NOTIFICATION(0x31),
+    TALK_TO_GOOGLE_ASSISTANT(0x32),
+    STOP_GOOGLE_ASSISTANT(0x33),
+    VOICE_INPUT_CANCEL(0x34),
+    TALK_TO_TENCENT_XIAOWEI(0x35),
+    CANCEL_VOICE_RECOGNITION(0x36),
+    VOICE_INPUT_AMAZON_ALEXA(0x37),
+    CANCEL_AMAZON_ALEXA(0x38),
+    CANCEL_TENCENT_XIAOWEI(0x39),
+    NEXT_TRACK_STOP_GEMINI_LIVE(0x3A),
+    PREV_TRACK_STOP_GEMINI_LIVE(0x3B),
+    LAUNCH_MLP(0x40),
+    TALK_TO_YOUR_MLP(0x41),
+    SPTF_ONE_TOUCH(0x42),
+    QUICK_ACCESS1(0x43),
+    QUICK_ACCESS2(0x44),
+    TALK_TO_TENCENT_XIAOWEI_CANCEL(0x45),
+    Q_MSC_ONE_TOUCH(0x46),
+    TEAMS(0x47),
+    TEAMS_VOICE_SKILLS(0x48),
+    NC_NCSS_ASM_OFF(0x50),
+    NC_NCSS_ASM(0x51),
+    NC_NCSS_OFF(0x52),
+    NCSS_ASM_OFF(0x53),
+    NC_NCSS(0x54),
+    NCSS_ASM(0x55),
+    NCSS_OFF(0x56),
+    AMB_SETTING(0x57),
+    STANDARD_VOICE_SOUND(0x58),
+    LISTENING_MODE(0x59),
+    MIC_MUTE(0x70),
+    GAME_UP(0x71),
+    CHAT_UP(0x72),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class AssignableSettingsEnableDisable(val code: Byte) {
+    ENABLE(0x00),
+    DISABLE(0x01),
+    OUT_OF_RANGE(0xFF.toByte()),
 }
 
 enum class QuickAccessKey(val code: Byte) {
@@ -164,18 +285,18 @@ enum class QuickAccessKey(val code: Byte) {
 
 enum class QuickAccessFunction(val code: Byte) {
     NO_FUNCTION(0x00),
-    NC_ASM_OFF(0x01),
-    NC_ASM(0x02),
-    NC_OFF(0x03),
-    ASM_OFF(0x04),
-    PLAY_PAUSE(0x20),
-    NEXT_TRACK(0x21),
-    PREV_TRACK(0x22),
-    VOLUME_UP(0x23),
-    VOLUME_DOWN(0x24),
-    VOICE_RECOGNITION(0x30),
-    QUICK_ACCESS1(0x43),
-    QUICK_ACCESS2(0x44),
+    /** The following IDs are the SAR/Quick Access service IDs, not gesture IDs. */
+    SPTF(0x01),
+    ENDEL(0x02),
+    AMAZON_MUSIC(0x03),
+    XIAO(0x04),
+    XIMALAYA(0x05),
+    KUGOU_MUSIC(0x06),
+    Q_MSC_DIRECT(0x07),
+    EYE_NAVI(0x08),
+    NETEASE_CLOUD_MUSIC(0x09),
+    APPLE_MUSIC(0x0A),
+    YOUTUBE_MUSIC(0x0C),
     OUT_OF_RANGE(0xFF.toByte()),
 }
 
@@ -202,6 +323,18 @@ enum class NoiseControlMode {
     OFF,
     NOISE_CANCELLING,
     AMBIENT_SOUND,
+}
+
+/**
+ * Modes that Sony can combine into the function assigned to an ambient-sound
+ * gesture.  NCSS is the device-specific speech/noise-suppression variant that
+ * only appears in the capability table of newer models.
+ */
+enum class GestureNoiseControlMode {
+    NOISE_CANCELLING,
+    NOISE_CANCELLING_SPEECH,
+    AMBIENT_SOUND,
+    OFF,
 }
 
 enum class PlaybackStatus {
