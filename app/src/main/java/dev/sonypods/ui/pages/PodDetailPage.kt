@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
@@ -51,6 +52,7 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.io.File
 
 @Composable
 fun PodDetailPage(
@@ -137,13 +139,22 @@ fun PodDetailPage(
 }
 
 @Composable
-private fun rememberPodImagePainter(path: String?) = remember(path) {
-    path?.let {
-        runCatching { BitmapFactory.decodeFile(it) }
-            .getOrNull()
-            ?.let { bitmap -> BitmapPainter(bitmap.asImageBitmap()) }
+private fun rememberPodImagePainter(path: String?): Painter {
+    // The downloader intentionally reuses the per-device path. Include the
+    // file metadata so replacing that file invalidates a painter that may have
+    // already fallen back to the stock image during the download.
+    val fileKey = path?.let {
+        val file = File(it)
+        "$it:${file.lastModified()}:${file.length()}"
     }
-} ?: painterResource(R.drawable.img_box)
+    return remember(fileKey) {
+        path?.let {
+            runCatching { BitmapFactory.decodeFile(it) }
+                .getOrNull()
+                ?.let { bitmap -> BitmapPainter(bitmap.asImageBitmap()) }
+        }
+    } ?: painterResource(R.drawable.img_box)
+}
 
 private fun LazyListScope.podControlItems(
     uiState: SonyStateSnapshot,

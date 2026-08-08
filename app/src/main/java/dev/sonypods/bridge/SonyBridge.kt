@@ -62,6 +62,8 @@ object SonyBridge {
     const val CMD_OFFICIAL_APP_ACQUIRE = "official_app_acquire"
     const val CMD_OFFICIAL_APP_RELEASE = "official_app_release"
     const val CMD_REFRESH = "refresh"
+    /** The app finished writing a model image; refresh system surfaces immediately. */
+    const val CMD_IMAGE_READY = "image_ready"
     /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
     const val CMD_REPUBLISH = "republish"
 
@@ -97,6 +99,9 @@ object SonyBridge {
             )
         }
     }
+
+    fun imageReady(context: Context, address: String) =
+        sendCommand(context, CMD_IMAGE_READY) { putExtra(EXTRA_STRING, address) }
 
     fun setNoiseControl(context: Context, mode: NoiseControlMode) =
         sendCommand(context, CMD_SET_NOISE_CONTROL) { putExtra(EXTRA_STRING, mode.name) }

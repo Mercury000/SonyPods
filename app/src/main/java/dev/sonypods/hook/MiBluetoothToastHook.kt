@@ -107,10 +107,14 @@ object MiBluetoothToastHook : HookContext() {
                 val moduleContext = context.createPackageContext(
                     "com.mercury.sonypods", Context.CONTEXT_IGNORE_SECURITY
                 )
+                // The remote-preferences object captured when this hook process
+                // started can be a stale snapshot. Re-fetch it after the app has
+                // downloaded an image so the new image path is visible here.
+                val imagePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
                 // Before the user unlocks, our ContentProvider and resources are not
                 // reachable ("user not unlocked"). Post the notification anyway with a
                 // system icon rather than dropping it for the whole session.
-                val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, prefs, address) }.getOrNull()
+                val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, imagePrefs, address) }.getOrNull()
                     ?: runCatching { BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box) }.getOrNull()
                 if (headsetBitmap == null) {
                     Log.d("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
@@ -262,7 +266,12 @@ object MiBluetoothToastHook : HookContext() {
                                 when (ConfigManager.islandMode()) {
                                     // Module island: our own Focus Island (HyperOS 3+).
                                     ConfigManager.ISLAND_MODE_MODULE ->
-                                        FocusIslandUtil.showBatteryIsland(context, prefs, batteryParams, address)
+                                        FocusIslandUtil.showBatteryIsland(
+                                            context,
+                                            runCatching { prefsProvider() }.getOrElse { prefs },
+                                            batteryParams,
+                                            address,
+                                        )
                                     // Official look: the same strong toast HyperOS plays
                                     // for its own earbuds, using the stock clips.
                                     ConfigManager.ISLAND_MODE_OFFICIAL ->

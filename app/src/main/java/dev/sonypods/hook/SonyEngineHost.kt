@@ -531,7 +531,11 @@ object SonyEngineHost {
             return
         }
 
-        if (officialAppOwnsTandem && command !in setOf(SonyBridge.CMD_REPUBLISH, SonyBridge.CMD_SURFACES_READY)) {
+        if (officialAppOwnsTandem && command !in setOf(
+                SonyBridge.CMD_REPUBLISH,
+                SonyBridge.CMD_SURFACES_READY,
+                SonyBridge.CMD_IMAGE_READY,
+            )) {
             Log.d(TAG, "command=$command skipped while Sound Connect owns Tandem")
             return
         }
@@ -606,6 +610,23 @@ object SonyEngineHost {
 
             SonyBridge.CMD_REFRESH -> if (repo.state.value.deviceInfo.protocolReady) {
                 repo.refreshBasics()
+            }
+
+            SonyBridge.CMD_IMAGE_READY -> {
+                val imageAddress = intent.getStringExtra(SonyBridge.EXTRA_STRING)
+                val current = snapshot()
+                if (imageAddress.isNullOrBlank() ||
+                    current.deviceAddress?.equals(imageAddress, ignoreCase = true) != true
+                ) return
+                appContext?.let {
+                    // Both the notification and the island carry embedded bitmaps;
+                    // invalidate the render guard and replay the current state.
+                    lastRenderedAddress = null
+                    lastRenderedBattery = null
+                    lastConnectAnimationKey = null
+                    Log.d(TAG, "model image ready; re-rendering surfaces address=$imageAddress")
+                    publish(it, current)
+                }
             }
 
             SonyBridge.CMD_REPUBLISH -> appContext?.let { publish(it, snapshot()) }

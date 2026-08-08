@@ -38,7 +38,6 @@ object PodImagePrefs {
     const val AUTHORITY = "com.mercury.sonypods.podimages"
     const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
-    private const val PREF_KEY_IMAGES_MIGRATED = "pod_images_migrated"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -179,18 +178,14 @@ object PodImagePrefs {
     }
 
     /**
-     * One-time migration: copy any pod images that exist only in the module's local filesDir
-     * into the Remote Files store, so the hook process can read images saved before this
-     * refactor. Call from [dev.sonypods.SonyPodsApp.onServiceBind].
-     * Skipped if already migrated.
+     * Synchronize local pod images into the Remote Files store, so the hook process can
+     * read images saved before or while the app's Xposed service was unavailable. This
+     * is intentionally idempotent and runs on every service bind: a static state receiver
+     * can download an image before the service callback arrives.
      */
     fun migrateImagesToRemote(context: Context, service: XposedService?) {
         val s = service ?: return
         val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(PREF_KEY_IMAGES_MIGRATED, false)) {
-            Log.d(TAG, "migrateImagesToRemote: already migrated, skipping")
-            return
-        }
         var migrated = 0
         load(prefs).forEach { earphone ->
             PodImageResource.entries.forEach { res ->
@@ -201,7 +196,6 @@ object PodImagePrefs {
                 if (writeBytesToRemote(s, file.name, bytes)) migrated++
             }
         }
-        prefs.edit().putBoolean(PREF_KEY_IMAGES_MIGRATED, true).apply()
         Log.d(TAG, "migrateImagesToRemote: migrated $migrated file(s)")
     }
 
@@ -214,7 +208,15 @@ object PodImagePrefs {
     ): String {
         val dir = imageDir(context)
         val file = File(dir, imageFileName(address, resource))
-        file.writeBytes(bytes)
+        // Do not expose a partially downloaded image to Compose or a hooked
+        // system surface. The path is published only after the complete file
+        // has been atomically moved into place.
+        val temp = File(dir, "${file.name}.tmp")
+        temp.outputStream().use { it.write(bytes) }
+        if (!temp.renameTo(file)) {
+            temp.copyTo(file, overwrite = true)
+            temp.delete()
+        }
         writeImageToRemote(service, file.name, bytes)
         return file.absolutePath
     }

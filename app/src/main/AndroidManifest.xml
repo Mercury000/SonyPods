@@ -69,6 +69,15 @@
         <receiver
             android:name="dev.sonypods.config.CapabilityCacheReceiver"
             android:exported="true" />
+        <!-- Receives engine state while the app has no activity so catalog images
+             are downloaded immediately after a connection. -->
+        <receiver
+            android:name="dev.sonypods.bridge.ModelImageReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.sonypods.action.state" />
+            </intent-filter>
+        </receiver>
         <!-- Set as Xposed Module -->
         <meta-data
             android:name="xposedmodule"
