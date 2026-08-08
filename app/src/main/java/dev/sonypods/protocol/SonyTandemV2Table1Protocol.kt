@@ -580,9 +580,7 @@ object SonyTandemV2Table1Protocol {
     }
 
     private fun parseNoiseControl(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
-        val type = payload.firstOrNull()?.let { code ->
-            NcAsmInquiredType.entries.firstOrNull { it.code == code }
-        }
+        val type = payload.firstOrNull()?.let(NcAsmInquiredType::fromV2Table1Code)
         val values = payload.drop(1).map { it.unsigned }
         val isParamResponse = command == NCASM_RET_PARAM || command == NCASM_NTFY_PARAM
         if (!isParamResponse) {

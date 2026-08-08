@@ -13,7 +13,7 @@ import org.junit.Test
  * - GET builder byte-level accuracy
  * - Parser: known commands return Table2Common/Table2Generic, not Unknown
  * - Parser: unrecognized commands return Unknown
- * - Normalization: both 0x0F and 0x0E data types accepted
+ * - Normalization: Table2 uses the 0x0F DATA_MDR_NO2 marker
  * - V1 Table2: peripheral + voice guidance
  */
 class SonyTandemTable2ProtocolTest {
@@ -342,7 +342,7 @@ class SonyTandemTable2ProtocolTest {
         val bytes = SonyTandemV1Table2Protocol.buildGetPeripheralStatus(
             PeripheralInquiredTypeV1Table2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT,
         )
-        assertArrayEquals(byteArrayOf(0x0E, 0x32, 0x01), bytes)
+        assertArrayEquals(byteArrayOf(0x0F, 0x32, 0x01), bytes)
     }
 
     @Test
@@ -350,14 +350,14 @@ class SonyTandemTable2ProtocolTest {
         val bytes = SonyTandemV1Table2Protocol.buildGetVoiceGuidanceStatus(
             VoiceGuidanceInquiredTypeV1Table2.VOICE_GUIDANCE_SETTING,
         )
-        assertArrayEquals(byteArrayOf(0x0E, 0x42, 0x01), bytes)
+        assertArrayEquals(byteArrayOf(0x0F, 0x42, 0x01), bytes)
     }
 
     // ── V1 Table2: parser ───────────────────────────────────────────────────
 
     @Test
     fun v1_parse_peripheralRetStatus_returnsTable2Generic() {
-        val raw = byteArrayOf(0x0E, 0x33, 0x01, 0x02, 0x03)
+        val raw = byteArrayOf(0x0F, 0x33, 0x01, 0x02, 0x03)
         val parsed = SonyTandemV1Table2Protocol.parse(raw)
 
         assertTrue("Expected Table2Generic but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.Table2Generic)
@@ -368,7 +368,7 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v1_parse_voiceGuidanceRetStatus_returnsTable2Generic() {
-        val raw = byteArrayOf(0x0E, 0x43, 0x01, 0x00)
+        val raw = byteArrayOf(0x0F, 0x43, 0x01, 0x00)
         val parsed = SonyTandemV1Table2Protocol.parse(raw)
 
         assertTrue("Expected Table2Generic but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.Table2Generic)
@@ -378,7 +378,7 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v1_parse_unknownPeripheralInquiredType_foldsToNoUse() {
-        val raw = byteArrayOf(0x0E, 0x33, 0x7F, 0x01)
+        val raw = byteArrayOf(0x0F, 0x33, 0x7F, 0x01)
         val parsed = SonyTandemV1Table2Protocol.parse(raw)
 
         assertTrue("Expected Table2Generic but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.Table2Generic)
@@ -390,7 +390,7 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v1_parse_unknownVoiceGuidanceInquiredType_foldsToNoUse() {
-        val raw = byteArrayOf(0x0E, 0x43, 0x7F, 0x01)
+        val raw = byteArrayOf(0x0F, 0x43, 0x7F, 0x01)
         val parsed = SonyTandemV1Table2Protocol.parse(raw)
 
         assertTrue("Expected Table2Generic but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.Table2Generic)
@@ -415,4 +415,20 @@ class SonyTandemTable2ProtocolTest {
 
         assertTrue(parsed is ParsedTandemResponse.Unknown)
     }
+
+    @Test
+    fun inquiredTypeCode02_isResolvedByProtocolVersion() {
+        assertEquals(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM, NcAsmInquiredType.fromV1Table1Code(0x02))
+        assertEquals(NcAsmInquiredType.NC_ON_OFF_AND_ASM_ON_OFF, NcAsmInquiredType.fromV2Table1Code(0x02))
+    }
+
+    @Test
+    fun v2Table2_extendedInquiredTypes_areRecognized() {
+        assertEquals(
+            LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+            LeaInquiredTypeTable2.fromCode(0x04),
+        )
+        assertEquals(PartyInquiredTypeTable2.LIVE_KARAOKE, PartyInquiredTypeTable2.fromCode(0x05))
+    }
+
 }

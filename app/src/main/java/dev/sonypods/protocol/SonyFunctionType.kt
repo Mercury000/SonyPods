@@ -12,15 +12,14 @@ package dev.sonypods.protocol
  * The table is the complete SC set so that any code a model reports is
  * recognised (mirrors SC's NO_USE handling: a recognised-but-unused code is
  * carried, only genuinely unknown codes fall to [OUT_OF_RANGE] and are
- * skipped). Code/table pairs are byte-for-byte SC 13.2.1; SC's
- * BSON/Imgproc.* constant decoys (jadx artifacts for CONCIERGE/CONNECTION/
- * CODEC) are not reproduced here and those three types stay unmapped.
+ * skipped). Code/table pairs are byte-for-byte SC 13.2.1, including values
+ * represented by named BSON/OpenCV constants in the decompiled enum.
  */
 enum class SonyV2FunctionType(val code: Byte, val table: SonyTable) {
     // ── table1: CONNECT / COMMON ──
-    CONCIERGE_DATA(0x02, SonyTable.NO_1),
-    CONNECTION_STATUS(0x03, SonyTable.NO_1),
-    CODEC_INDICATOR(0x04, SonyTable.NO_1),
+    CONCIERGE_DATA(0x10, SonyTable.NO_1),
+    CONNECTION_STATUS(0x11, SonyTable.NO_1),
+    CODEC_INDICATOR(0x12, SonyTable.NO_1),
     UPSCALING_INDICATOR(0x13, SonyTable.NO_1),
     BLE_SETUP(0x14, SonyTable.NO_1),
     TUTORIAL_CONTENTS_SELECT_ON_CONCIERGE(0x15, SonyTable.NO_1),
@@ -251,6 +250,8 @@ enum class SonyV2FunctionType(val code: Byte, val table: SonyTable) {
     LIGHTING_DEFAULT_COLOR(0xFE.toByte(), SonyTable.NO_2),
     WEARING_POSITION_WITHOUT_FITTING_SUPPORTER(0xFF.toByte(), SonyTable.NO_2),
 
+    // A legal Table1 function despite sharing 0xFF with sentinels in other table contexts.
+    HEAD_GESTURE_ON_OFF_TRAINING(0xFF.toByte(), SonyTable.NO_1),
     OUT_OF_RANGE(0xFF.toByte(), SonyTable.INVALID),
     ;
 
@@ -269,13 +270,16 @@ enum class SonyV2FunctionType(val code: Byte, val table: SonyTable) {
  * AMBIENT_SOUND_MODE).
  */
 enum class SonyV1FunctionType(val code: Byte) {
-    BATTERY_LEVEL(0x02),
-    UPSCALING_INDICATOR(0x03),
+    BATTERY_LEVEL(0x11),
+    UPSCALING_INDICATOR(0x12),
     CODEC_INDICATOR(0x13),
     BLE_SETUP(0x14),
     LEFT_RIGHT_BATTERY_LEVEL(0x15),
+    LEFT_RIGHT_CONNECTION_STATUS(0x17),
     CRADLE_BATTERY_LEVEL(0x18),
     POWER_OFF(0x21),
+    CONCIERGE_DATA(0x22),
+    TANDEM_KEEP_ALIVE(0x23),
     FW_UPDATE(0x30),
     PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT(0x38),
     VOICE_GUIDANCE(0x39),
@@ -289,8 +293,10 @@ enum class SonyV1FunctionType(val code: Byte) {
     AMBIENT_SOUND_MODE(0x63),
     AUTO_NC_ASM(0x71),
     NC_OPTIMIZER(0x81.toByte()),
+    VIBRATOR_ALERT_NOTIFICATION(0x92.toByte()),
     PLAYBACK_CONTROLLER(0xA1.toByte()),
     TRAINING_MODE(0xB1.toByte()),
+    ACTION_LOG_NOTIFIER(0xC1.toByte()),
     GENERAL_SETTING1(0xD1.toByte()),
     GENERAL_SETTING2(0xD2.toByte()),
     GENERAL_SETTING3(0xD3.toByte()),

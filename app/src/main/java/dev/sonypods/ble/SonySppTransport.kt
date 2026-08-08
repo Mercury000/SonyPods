@@ -16,12 +16,14 @@ internal class SonySppTransport(
     private val output = socket.outputStream
     private val closed = AtomicBoolean(false)
     private val pendingWrites = ConcurrentLinkedQueue<SppPayloadMapping>()
+    private val rxSequenceTracker = SppRxSequenceTracker()
     private val lock = Any()
 
     private var readerThread: Thread? = null
     private var nextTxSequence: Byte = 0
     private var awaitingAck: Byte? = null
     private var awaitingFrame: ByteArray? = null
+    private var awaitingRetryPolicy: SppRetryPolicy? = null
     private var awaitingRetries: Int = 0
     private var ackGeneration: Int = 0
 
@@ -39,6 +41,10 @@ internal class SonySppTransport(
         if (!closed.getAndSet(true)) {
             pendingWrites.clear()
             awaitingAck = null
+            awaitingFrame = null
+            awaitingRetryPolicy = null
+            ackGeneration += 1
+            rxSequenceTracker.reset()
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { socket.close() }
@@ -111,7 +117,9 @@ internal class SonySppTransport(
                         nextTxSequence = sequence
                         awaitingAck = null
                         awaitingFrame = null
+                        awaitingRetryPolicy = null
                         awaitingRetries = 0
+                        ackGeneration += 1
                     } else {
                         log("SPP RX ACK unexpected seq=${sequence.u} awaiting=${awaitingAck?.u}")
                     }
@@ -121,8 +129,14 @@ internal class SonySppTransport(
             SonySppFrameType.DATA_MDR,
             SonySppFrameType.DATA_MDR_NO2,
             SonySppFrameType.LARGE_DATA_MDR -> {
+                // Retransmitted frames must still be ACKed, but the Tandem payload
+                // is dispatched only once for each consecutive RX sequence value.
                 sendAck(sequence)
-                SonySppPayloadMapper.inboundToTandemBytes(type, payload)?.let(onPayload)
+                if (rxSequenceTracker.shouldDispatch(sequence)) {
+                    SonySppPayloadMapper.inboundToTandemBytes(type, payload)?.let(onPayload)
+                } else {
+                    log("SPP RX duplicate seq=${sequence.u}; ACKed without redispatch")
+                }
             }
             SonySppFrameType.SHOT_MDR,
             SonySppFrameType.SHOT_MDR_NO2 -> {
@@ -138,11 +152,13 @@ internal class SonySppTransport(
             val outbound = pendingWrites.poll() ?: return
             val sequence = nextTxSequence
             val encoded = encodeFrame(outbound.frameType, sequence, outbound.payload)
-            val expectedAck = if (outbound.frameType.ackRequired) inverseSequence(sequence) else null
+            val retryPolicy = outbound.frameType.retryPolicy()
+            val expectedAck = retryPolicy?.let { inverseSequence(sequence) }
             awaitingAck = expectedAck
             awaitingFrame = if (expectedAck != null) encoded else null
+            awaitingRetryPolicy = retryPolicy
             awaitingRetries = 0
-            if (!outbound.frameType.ackRequired) {
+            if (retryPolicy == null) {
                 nextTxSequence = inverseSequence(sequence)
                 awaitingFrame = null
             }
@@ -154,8 +170,8 @@ internal class SonySppTransport(
             try {
                 output.write(encoded)
                 output.flush()
-                if (expectedAck != null) {
-                    scheduleAckTimeout(expectedAck, generation)
+                if (retryPolicy != null) {
+                    scheduleAckTimeout(inverseSequence(sequence), generation, retryPolicy)
                 }
             } catch (e: IOException) {
                 awaitingAck = null
@@ -164,10 +180,14 @@ internal class SonySppTransport(
         }
     }
 
-    private fun scheduleAckTimeout(expectedAck: Byte, generation: Int) {
+    private fun scheduleAckTimeout(
+        expectedAck: Byte,
+        generation: Int,
+        policy: SppRetryPolicy,
+    ) {
         Thread({
             try {
-                Thread.sleep(ACK_TIMEOUT_MS)
+                Thread.sleep(policy.timeoutMs)
             } catch (_: InterruptedException) {
                 return@Thread
             }
@@ -175,7 +195,7 @@ internal class SonySppTransport(
             synchronized(lock) {
                 if (closed.get() || ackGeneration != generation || awaitingAck != expectedAck) return@synchronized
                 val frame = awaitingFrame
-                if (frame != null && awaitingRetries < MAX_ACK_RETRIES) {
+                if (frame != null && awaitingRetryPolicy == policy && awaitingRetries < policy.maxRetries) {
                     awaitingRetries += 1
                     val retryGeneration = ++ackGeneration
                     log(
@@ -191,13 +211,14 @@ internal class SonySppTransport(
                         notifyClosed("SPP retry failed: ${e.message}")
                         return@synchronized
                     }
-                    scheduleAckTimeout(expectedAck, retryGeneration)
+                    scheduleAckTimeout(expectedAck, retryGeneration, policy)
                     retryScheduled = true
                     return@synchronized
                 }
                 log("SPP ACK timeout expected=${expectedAck.u}; closing transport")
                 awaitingAck = null
                 awaitingFrame = null
+                awaitingRetryPolicy = null
                 notifyClosed("SPP remote endpoint did not ACK seq=${inverseSequence(expectedAck).u}")
             }
             if (retryScheduled) return@Thread
@@ -220,6 +241,10 @@ internal class SonySppTransport(
         if (!closed.getAndSet(true)) {
             pendingWrites.clear()
             awaitingAck = null
+            awaitingFrame = null
+            awaitingRetryPolicy = null
+            ackGeneration += 1
+            rxSequenceTracker.reset()
             runCatching { socket.close() }
             onClosed(reason)
         }
@@ -227,8 +252,6 @@ internal class SonySppTransport(
 
     private companion object {
         const val WRITABLE_VALUE_LENGTH = 1024
-        private const val ACK_TIMEOUT_MS = 1_200L
-        private const val MAX_ACK_RETRIES = 1
         private const val HEADER_SIZE = 6
         private const val CHECKSUM_SIZE = 1
         private const val FRAME_START: Byte = 0x3E

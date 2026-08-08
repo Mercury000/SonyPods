@@ -1,6 +1,6 @@
 package dev.sonypods.protocol
 
-import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
+import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR_NO2
 
 /**
  * Sony Tandem V1 Table2 codec (MC channel).
@@ -9,12 +9,12 @@ import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
  * - PERIPHERAL (0x30-0x3D): multi-point pairing management
  * - VOICE_GUIDANCE (0x40-0x49): language, on/off settings
  *
- * The data type byte is 0x0C (DATA_MDR over SPP) or inline within GATT.
- * This codec normalizes from the SPP-escaped frame to raw Tandem payloads.
+ * Table2 uses the internal DATA_MDR_NO2 marker (0x0F). The SPP transport maps
+ * it to the DATA_MDR_NO2 outer frame type (0x0E) and restores 0x0F on receive.
  */
 object SonyTandemV1Table2Protocol {
 
-    private const val DT: Byte = DATA_MDR
+    private const val DT: Byte = DATA_MDR_NO2
 
     // ── Peripheral (0x30-0x3D) ──────────────────────────────────────────────
 

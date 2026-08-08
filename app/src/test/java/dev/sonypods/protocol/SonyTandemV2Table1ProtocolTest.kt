@@ -920,28 +920,28 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
-    fun parser_tableSet1NcAsmResponse_extractsXm4NcDual() {
-        val raw = byteArrayOf(0x0E, 0x67, 0x02, 0x01, 0x02, 0x02, 0x01, 0x00, 0x00)
+    fun parser_ncOnOffAndAsmOnOffResponse_extractsNc() {
+        val raw = byteArrayOf(0x0E, 0x67, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.NoiseControl)
         parsed as ParsedTandemResponse.NoiseControl
-        assertEquals(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM, parsed.type)
+        assertEquals(NcAsmInquiredType.NC_ON_OFF_AND_ASM_ON_OFF, parsed.type)
         assertEquals(NoiseControlMode.NOISE_CANCELLING, parsed.controlMode)
-        assertEquals(0, parsed.ambientLevel)
+        assertEquals(null, parsed.ambientLevel)
         assertEquals(AmbientSoundMode.NORMAL, parsed.ambientMode)
     }
 
     @Test
-    fun parser_tableSet1NcAsmNotification_extractsXm4Ambient() {
-        val raw = byteArrayOf(0x0E, 0x69, 0x02, 0x01, 0x02, 0x00, 0x01, 0x01, 0x14)
+    fun parser_ncOnOffAndAsmOnOffNotification_extractsAmbient() {
+        val raw = byteArrayOf(0x0E, 0x69, 0x02, 0x01, 0x01, 0x00, 0x01, 0x01)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.NoiseControl)
         parsed as ParsedTandemResponse.NoiseControl
-        assertEquals(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM, parsed.type)
+        assertEquals(NcAsmInquiredType.NC_ON_OFF_AND_ASM_ON_OFF, parsed.type)
         assertEquals(NoiseControlMode.AMBIENT_SOUND, parsed.controlMode)
-        assertEquals(20, parsed.ambientLevel)
+        assertEquals(null, parsed.ambientLevel)
         assertEquals(AmbientSoundMode.VOICE, parsed.ambientMode)
     }
 

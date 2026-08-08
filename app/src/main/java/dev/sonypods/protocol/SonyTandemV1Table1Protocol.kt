@@ -351,9 +351,7 @@ object SonyTandemV1Table1Protocol {
     }
 
     private fun parseNoiseControl(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
-        val type = payload.firstOrNull()?.let { code ->
-            NcAsmInquiredType.entries.firstOrNull { it.code == code }
-        }
+        val type = payload.firstOrNull()?.let(NcAsmInquiredType::fromV1Table1Code)
         if (type != NcAsmInquiredType.V1_TABLE_SET1_NC_ASM) {
             return ParsedTandemResponse.Unknown(
                 dataType = DATA_MDR.unsigned,

@@ -95,6 +95,17 @@ enum class NcAsmInquiredType(val code: Byte) {
     ASM_SEAMLESS(0x22),
     NC_AMB_TOGGLE(0x30),
     NC_TEST_MODE(0x40),
+    ;
+
+    companion object {
+        /** Code 0x02 has different meanings in the V1 and V2 NC/ASM tables. */
+        fun fromV1Table1Code(code: Byte): NcAsmInquiredType? =
+            if (code == V1_TABLE_SET1_NC_ASM.code) V1_TABLE_SET1_NC_ASM
+            else entries.firstOrNull { it != V1_TABLE_SET1_NC_ASM && it.code == code }
+
+        fun fromV2Table1Code(code: Byte): NcAsmInquiredType? =
+            entries.firstOrNull { it != V1_TABLE_SET1_NC_ASM && it.code == code }
+    }
 }
 
 enum class PlaybackControl(val code: Byte) {

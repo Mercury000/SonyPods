@@ -94,6 +94,32 @@ data class SppPayloadMapping(
     override fun hashCode(): Int = 31 * frameType.hashCode() + payload.contentHashCode()
 }
 
+internal data class SppRetryPolicy(val timeoutMs: Long, val maxRetries: Int)
+
+internal fun SonySppFrameType.retryPolicy(): SppRetryPolicy? = when (this) {
+    SonySppFrameType.DATA_MDR,
+    SonySppFrameType.DATA_MDR_NO2 -> SppRetryPolicy(timeoutMs = 750L, maxRetries = 10)
+    SonySppFrameType.LARGE_DATA_MDR -> SppRetryPolicy(timeoutMs = 5_000L, maxRetries = 2)
+    SonySppFrameType.ACK,
+    SonySppFrameType.SHOT_MDR,
+    SonySppFrameType.SHOT_MDR_NO2,
+    SonySppFrameType.UNKNOWN -> null
+}
+
+internal class SppRxSequenceTracker {
+    private var lastSequence: Byte? = null
+
+    fun shouldDispatch(sequence: Byte): Boolean {
+        if (lastSequence == sequence) return false
+        lastSequence = sequence
+        return true
+    }
+
+    fun reset() {
+        lastSequence = null
+    }
+}
+
 enum class SonySppFrameType(val code: Byte, val ackRequired: Boolean) {
     DATA_MDR(0x0C, true),
     DATA_MDR_NO2(0x0E, true),
