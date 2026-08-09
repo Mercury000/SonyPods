@@ -12,8 +12,7 @@
 
 </div>
 
-为小米 HyperOS 设备提供系统级 Sony 耳机控制的 Xposed 模块。协议层基于
-OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
+为小米 HyperOS 设备提供系统级 Sony 耳机控制的 Xposed 模块。
 
 ### 支持型号
 
@@ -27,6 +26,8 @@ OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 - **耳机关机** — 对支持 Sony USER_POWER_OFF 的型号发送关机命令
 - **播放控制** — 上一首 / 播放暂停 / 下一首
 - **状态读取** — LE Audio、Quick Access、佩戴检测、固件版本
+- **双设备管理** — 管理多设备连接
+- **手势操作** — 自定义手势操作、Quick Access等
 - **Tandem 调试** — 查看 TX/RX 日志、发送原始 HEX 消息
 
 ### 系统集成（HyperOS）
@@ -49,9 +50,9 @@ OpenBuds 的 Sony Tandem（BLE GATT + SPP）净室实现。
 ### 环境
 
 - HyperOS（Android 15+）
-- LSPosed（libxposed API 100+）
+- LSPosed（libxposed API 102）
 
 ### 致谢
 
 - [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
-- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Sony Tandem 协议栈来源
+- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — 早期Sony Tandem 协议栈来源

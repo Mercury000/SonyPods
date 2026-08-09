@@ -13,8 +13,6 @@
 </div>
 
 An Xposed module bringing system-level Sony headphone control to Xiaomi HyperOS.
-The protocol layer is based on OpenBuds' clean-room Sony Tandem implementation
-(BLE GATT + SPP).
 
 ### Supported models 
 
@@ -29,7 +27,8 @@ Theoretically supports all released Sony headphones
 - **Status** — LE Audio, Quick Access, wearing detection, firmware version
 - **Headphone power off** — sends Sony USER_POWER_OFF on supported models
 - **Tandem debug** — TX/RX log viewer and raw HEX sender
-
+- **Dual-device management** — Manage connections across multiple devices
+- **Gesture controls** — Customize gesture operations, Quick Access, and more
 ### HyperOS integration
 
 - **Model spoofing** — presents Sony headphones as supported Xiaomi earbuds to the system headset UI
@@ -50,9 +49,9 @@ Theoretically supports all released Sony headphones
 ### Requirements
 
 - HyperOS (Android 15+)
-- LSPosed (libxposed API 100+)
+- LSPosed (libxposed API 102)
 
 ### Credits
 
-- [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
-- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Sony Tandem 协议栈来源
+- [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — Source of the HyperOS system integration shell
+- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Origin of the early Sony Tandem protocol stack
