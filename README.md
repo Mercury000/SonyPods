@@ -55,4 +55,4 @@
 ### 致谢
 
 - [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
-- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — 早期Sony Tandem 协议栈来源
+- [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — 项目早期 Sony Tandem 协议栈来源
