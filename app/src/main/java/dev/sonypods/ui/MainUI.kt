@@ -172,6 +172,8 @@ fun MainUI(
             onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
             onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
             onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
+            onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
+            onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
             onEqPresetChange = { SonyBridge.setEqPreset(context, it.name) },
             onClearBassChange = { SonyBridge.setClearBass(context, it) },
             onCustomEqBandChange = { index, level -> SonyBridge.setEqBand(context, index, level) },

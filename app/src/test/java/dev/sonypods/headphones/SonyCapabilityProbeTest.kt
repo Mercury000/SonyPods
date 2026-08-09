@@ -172,6 +172,36 @@ class SonyCapabilityProbeTest {
     }
 
     @Test
+    fun noiseAdaptationFunction_derivesNoiseAdaptiveFeature() {
+        // FunctionType 0x6D (LinkBuds Fit et al.) is the only capability signal
+        // for the Auto Ambient Sound toggle; it maps to inquired type 0x19.
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(
+                fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT_NOISE_ADAPTATION),
+            ),
+            fallback = baseCapabilities(),
+        )
+        assertTrue(HeadphoneFeature.NOISE_ADAPTIVE in caps.features)
+        assertTrue(HeadphoneFeature.AMBIENT_LEVEL in caps.features)
+        assertTrue(HeadphoneFeature.AMBIENT_VOICE_MODE in caps.features)
+        assertEquals(
+            setOf(NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA),
+            caps.writableNoiseControlTypes,
+        )
+    }
+
+    @Test
+    fun dualNcAsmWithoutNoiseAdaptation_lacksNoiseAdaptiveFeature() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(
+                fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT),
+            ),
+            fallback = baseCapabilities(),
+        )
+        assertFalse(HeadphoneFeature.NOISE_ADAPTIVE in caps.features)
+    }
+
+    @Test
     fun eqFunction_enablesEqWithWriteType() {
         val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
             functions = listOf(fn(SonyV2FunctionType.PRESET_EQ), fn(SonyV2FunctionType.EBB, 1)),

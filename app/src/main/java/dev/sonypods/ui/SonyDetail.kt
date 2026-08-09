@@ -2,6 +2,7 @@ package dev.sonypods.ui
 
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.AssignableSettingsAction
 import dev.sonypods.protocol.AssignableSettingsFunction
@@ -16,6 +17,8 @@ data class SonyDetailActions(
     val onAncModeChange: (NoiseControlMode) -> Unit = {},
     val onAmbientLevelChange: (Int) -> Unit = {},
     val onAmbientVoiceModeChange: (Boolean) -> Unit = {},
+    val onNoiseAdaptiveChange: (Boolean) -> Unit = {},
+    val onNoiseAdaptiveSensitivityChange: (NoiseAdaptiveSensitivity) -> Unit = {},
     val onEqPresetChange: (EqPresetId) -> Unit = {},
     val onClearBassChange: (Int) -> Unit = {},
     val onCustomEqBandChange: (Int, Int) -> Unit = { _, _ -> },
@@ -55,6 +58,12 @@ fun SonyStateSnapshot.toSinglePodParams(): PodParams? =
 
 val SonyStateSnapshot.displayName: String
     get() = deviceName.orEmpty()
+
+/** Parsed noise-adaptive sensitivity carried in the snapshot, defaulting to STANDARD. */
+fun SonyStateSnapshot.noiseAdaptiveSensitivityValue(): NoiseAdaptiveSensitivity =
+    noiseAdaptiveSensitivity
+        ?.let { name -> NoiseAdaptiveSensitivity.entries.firstOrNull { it.name == name } }
+        ?: NoiseAdaptiveSensitivity.STANDARD
 
 /** Mirrors SonyBleClient.isSonyCandidate: name-based Sony audio device detection. */
 fun isLikelySonyAudioDevice(name: String?): Boolean {

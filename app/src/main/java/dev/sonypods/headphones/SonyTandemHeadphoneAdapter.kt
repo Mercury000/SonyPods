@@ -8,6 +8,7 @@ import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.LeaInquiredType
 import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
@@ -234,7 +235,8 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         when (feature) {
             HeadphoneFeature.NOISE_CONTROL,
             HeadphoneFeature.AMBIENT_LEVEL,
-            HeadphoneFeature.AMBIENT_VOICE_MODE ->
+            HeadphoneFeature.AMBIENT_VOICE_MODE,
+            HeadphoneFeature.NOISE_ADAPTIVE ->
                 profile.supports(feature) && profile.capabilities.writableNoiseControlTypes.isNotEmpty()
             // EQ/Clear Bass/playback writes are gated purely by the probed
             // capability set; no static-profile evidence is required.
@@ -246,17 +248,21 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
     ): List<HeadphoneCommand> {
         val level = ambientLevel.coerceIn(1, 20)
         val codec = codecFor(profile, HeadphoneFeature.NOISE_CONTROL)
 
         profile.capabilities.writableNoiseControlTypes.forEach { type ->
-            val bytes = codec.buildSetNoiseControlMode(type, mode, level, ambientMode) ?: return@forEach
+            val bytes = codec.buildSetNoiseControlMode(
+                type, mode, level, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity,
+            ) ?: return@forEach
             return listOf(
                 command(
                     profile,
                     HeadphoneFeature.NOISE_CONTROL,
-                    noiseControlWriteLabel(type, mode, level, ambientMode),
+                    noiseControlWriteLabel(type, mode, level, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity),
                     bytes,
                 )
             )
@@ -296,6 +302,8 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         mode: NoiseControlMode,
         level: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): String {
         val voice = ambientMode == AmbientSoundMode.VOICE
         return when (type) {
@@ -303,6 +311,8 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 "SET NC/ASM V1 table1 mode $mode level=$level voice=$voice"
             NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                 "SET NC/ASM 0x14 mode $mode level=$level voice=$voice"
+            NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA ->
+                "SET NC/ASM 0x19 mode $mode level=$level voice=$voice na=$noiseAdaptive/$noiseAdaptiveSensitivity"
             else -> "SET NC/ASM mode $mode level=$level voice=$voice"
         }
     }

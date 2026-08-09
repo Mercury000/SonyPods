@@ -6,6 +6,7 @@ import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackStatus
@@ -485,6 +486,53 @@ class SonyTandemHeadphoneAdapterTest {
         assertEquals(1, commands.size)
         assertArrayEquals(
             byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x01, 0x0A, 0x00, 0x00),
+            commands.single().bytes,
+        )
+    }
+
+    @Test
+    fun probe_linkBudsFit_derivesNoiseAdaptiveFeature() {
+        val profile = probed(
+            DiscoveredSonyDevice(
+                name = "LinkBuds Fit",
+                address = "80:99:E7:DC:79:6E",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            ),
+            v2NcAsm19(), v2Eq(), v2TwsBattery(), v2Play(),
+        )
+        assertTrue(profile.supports(HeadphoneFeature.NOISE_ADAPTIVE))
+        assertTrue(SonyTandemHeadphoneAdapter.canWrite(profile, HeadphoneFeature.NOISE_ADAPTIVE))
+    }
+
+    @Test
+    fun probe_linkBudsFit_modeSwitchPreservesNoiseAdaptiveState() {
+        // Regression: every NC/ASM write restates the full 0x19 frame, so a
+        // plain mode toggle must carry the caller's current noise-adaptive
+        // state instead of silently clearing idx[7]/idx[8].
+        val profile = probed(
+            DiscoveredSonyDevice(
+                name = "LinkBuds Fit",
+                address = "80:99:E7:DC:79:6E",
+                rssi = 0,
+                source = "bonded",
+                isLikelyControlEndpoint = true,
+            ),
+            v2NcAsm19(), v2Eq(), v2TwsBattery(), v2Play(),
+        )
+        val commands = SonyTandemHeadphoneAdapter.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.NOISE_CANCELLING,
+            ambientLevel = 10,
+            ambientMode = AmbientSoundMode.NORMAL,
+            noiseAdaptive = true,
+            noiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.HIGH,
+        )
+
+        assertEquals(1, commands.size)
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x00, 0x00, 0x0A, 0x01, 0x01),
             commands.single().bytes,
         )
     }

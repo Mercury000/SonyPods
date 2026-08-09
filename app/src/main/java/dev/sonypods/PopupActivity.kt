@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import kotlinx.coroutines.delay
 import dev.sonypods.config.ConfigManager
@@ -42,6 +43,7 @@ import dev.sonypods.ui.AppTheme
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.displayName
+import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
 import top.yukonga.miuix.kmp.basic.Card
@@ -190,6 +192,8 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                     onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
                     onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
                     onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
+                    onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
+                    onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
                     onMore = onMore,
                     onDone = { showDialog.value = false },
                 )
@@ -199,6 +203,8 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                     onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
                     onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
                     onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
+                    onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
+                    onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
                     onMore = onMore,
                     onDone = { showDialog.value = false },
                 )
@@ -213,6 +219,8 @@ private fun PortraitPopupBody(
     onAncModeChange: (NoiseControlMode) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
     onAmbientVoiceModeChange: (Boolean) -> Unit,
+    onNoiseAdaptiveChange: (Boolean) -> Unit,
+    onNoiseAdaptiveSensitivityChange: (NoiseAdaptiveSensitivity) -> Unit,
     onMore: () -> Unit,
     onDone: () -> Unit,
 ) {
@@ -233,6 +241,11 @@ private fun PortraitPopupBody(
                 onAmbientLevelChange = onAmbientLevelChange,
                 ambientVoiceMode = sonyState.ambientVoiceMode,
                 onAmbientVoiceModeChange = onAmbientVoiceModeChange,
+                noiseAdaptiveSupported = sonyState.supportsNoiseAdaptive,
+                noiseAdaptiveEnabled = sonyState.noiseAdaptiveEnabled,
+                onNoiseAdaptiveChange = onNoiseAdaptiveChange,
+                noiseAdaptiveSensitivity = sonyState.noiseAdaptiveSensitivityValue(),
+                onNoiseAdaptiveSensitivityChange = onNoiseAdaptiveSensitivityChange,
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -260,6 +273,8 @@ private fun LandscapePopupBody(
     onAncModeChange: (NoiseControlMode) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
     onAmbientVoiceModeChange: (Boolean) -> Unit,
+    onNoiseAdaptiveChange: (Boolean) -> Unit,
+    onNoiseAdaptiveSensitivityChange: (NoiseAdaptiveSensitivity) -> Unit,
     onMore: () -> Unit,
     onDone: () -> Unit,
 ) {
@@ -293,6 +308,11 @@ private fun LandscapePopupBody(
                     onAmbientLevelChange = onAmbientLevelChange,
                     ambientVoiceMode = sonyState.ambientVoiceMode,
                     onAmbientVoiceModeChange = onAmbientVoiceModeChange,
+                    noiseAdaptiveSupported = sonyState.supportsNoiseAdaptive,
+                    noiseAdaptiveEnabled = sonyState.noiseAdaptiveEnabled,
+                    onNoiseAdaptiveChange = onNoiseAdaptiveChange,
+                    noiseAdaptiveSensitivity = sonyState.noiseAdaptiveSensitivityValue(),
+                    onNoiseAdaptiveSensitivityChange = onNoiseAdaptiveSensitivityChange,
                     compact = true,
                 )
             }

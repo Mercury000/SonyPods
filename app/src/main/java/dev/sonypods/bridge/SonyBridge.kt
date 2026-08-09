@@ -56,6 +56,8 @@ object SonyBridge {
     const val CMD_CYCLE_NOISE_CONTROL = "cycle_noise_control"
     const val CMD_SET_AMBIENT_LEVEL = "set_ambient_level"
     const val CMD_SET_AMBIENT_VOICE = "set_ambient_voice"
+    const val CMD_SET_NOISE_ADAPTIVE = "set_noise_adaptive"
+    const val CMD_SET_NOISE_ADAPTIVE_SENSITIVITY = "set_noise_adaptive_sensitivity"
     const val CMD_SET_EQ_PRESET = "set_eq_preset"
     const val CMD_SET_CLEAR_BASS = "set_clear_bass"
     const val CMD_POWER_OFF = "power_off"
@@ -128,6 +130,13 @@ object SonyBridge {
 
     fun setAmbientVoice(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_AMBIENT_VOICE) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setNoiseAdaptive(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_NOISE_ADAPTIVE) { putExtra(EXTRA_BOOL, enabled) }
+
+    /** [sensitivityName] is a [dev.sonypods.protocol.NoiseAdaptiveSensitivity] name. */
+    fun setNoiseAdaptiveSensitivity(context: Context, sensitivityName: String) =
+        sendCommand(context, CMD_SET_NOISE_ADAPTIVE_SENSITIVITY) { putExtra(EXTRA_STRING, sensitivityName) }
 
     fun setEqPreset(context: Context, presetName: String) =
         sendCommand(context, CMD_SET_EQ_PRESET) { putExtra(EXTRA_STRING, presetName) }

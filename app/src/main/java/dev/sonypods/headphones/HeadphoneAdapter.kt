@@ -5,6 +5,7 @@ import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
@@ -35,6 +36,7 @@ enum class HeadphoneFeature {
     NOISE_CONTROL,
     AMBIENT_LEVEL,
     AMBIENT_VOICE_MODE,
+    NOISE_ADAPTIVE,
     PLAYBACK_CONTROL,
     EQ,
     CLEAR_BASS,
@@ -264,7 +266,8 @@ private fun queryTypesForFeature(
     HeadphoneFeature.BATTERY -> capabilities.batteryQueries
     HeadphoneFeature.NOISE_CONTROL,
     HeadphoneFeature.AMBIENT_LEVEL,
-    HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.noiseControlQueryTypes
+    HeadphoneFeature.AMBIENT_VOICE_MODE,
+    HeadphoneFeature.NOISE_ADAPTIVE -> capabilities.noiseControlQueryTypes
     HeadphoneFeature.EQ,
     HeadphoneFeature.CLEAR_BASS -> capabilities.eqConfig.statusQueryTypes + capabilities.eqConfig.paramQueryTypes
     HeadphoneFeature.PLAYBACK_CONTROL -> listOf(capabilities.playbackControlType)
@@ -277,7 +280,8 @@ private fun writableTypesForFeature(
 ): Set<Any> = when (feature) {
     HeadphoneFeature.NOISE_CONTROL,
     HeadphoneFeature.AMBIENT_LEVEL,
-    HeadphoneFeature.AMBIENT_VOICE_MODE -> capabilities.writableNoiseControlTypes
+    HeadphoneFeature.AMBIENT_VOICE_MODE,
+    HeadphoneFeature.NOISE_ADAPTIVE -> capabilities.writableNoiseControlTypes
     HeadphoneFeature.PLAYBACK_CONTROL -> setOf(capabilities.playbackControlType)
     else -> emptySet()
 }
@@ -310,6 +314,8 @@ interface HeadphoneAdapter {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): List<HeadphoneCommand> = emptyList()
 
     fun buildSetEqPresetCommands(
@@ -424,8 +430,12 @@ object HeadphoneAdapterRegistry {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): List<HeadphoneCommand> =
-        adapterFor(profile).buildSetNoiseControlModeCommands(profile, mode, ambientLevel, ambientMode)
+        adapterFor(profile).buildSetNoiseControlModeCommands(
+            profile, mode, ambientLevel, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity,
+        )
 
     fun buildSetEqPresetCommands(
         profile: ConnectedHeadphoneProfile,

@@ -17,6 +17,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
@@ -579,6 +580,16 @@ object SonyEngineHost {
 
             SonyBridge.CMD_SET_AMBIENT_VOICE ->
                 repo.setAmbientVoiceMode(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
+            SonyBridge.CMD_SET_NOISE_ADAPTIVE ->
+                repo.setNoiseAdaptive(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
+            SonyBridge.CMD_SET_NOISE_ADAPTIVE_SENSITIVITY -> {
+                val sensitivity = intent.getStringExtra(SonyBridge.EXTRA_STRING)
+                    ?.let { name -> NoiseAdaptiveSensitivity.entries.firstOrNull { it.name == name } }
+                    ?: return
+                repo.setNoiseAdaptiveSensitivity(sensitivity)
+            }
 
             SonyBridge.CMD_SET_EQ_PRESET -> {
                 val preset = intent.getStringExtra(SonyBridge.EXTRA_STRING)

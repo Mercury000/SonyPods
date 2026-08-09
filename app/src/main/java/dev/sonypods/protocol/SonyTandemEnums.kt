@@ -319,6 +319,21 @@ enum class AmbientSoundMode(val code: Byte) {
     VOICE(0x01),
 }
 
+/**
+ * Noise Detection Sensitivity for the noise-adaptive (Auto Ambient Sound)
+ * feature carried by [NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA].
+ * Wire order is STANDARD/HIGH/LOW — not monotonic, so UI ordering must map explicitly.
+ */
+enum class NoiseAdaptiveSensitivity(val code: Byte) {
+    STANDARD(0x00),
+    HIGH(0x01),
+    LOW(0x02);
+
+    companion object {
+        fun fromCode(code: Byte): NoiseAdaptiveSensitivity? = entries.firstOrNull { it.code == code }
+    }
+}
+
 enum class NoiseControlMode {
     OFF,
     NOISE_CANCELLING,

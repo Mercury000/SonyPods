@@ -42,6 +42,7 @@ import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
@@ -145,6 +146,8 @@ data class NoiseControlState(
     val ambientSoundEnabled: Boolean? = null,
     val ambientLevel: Int? = null,
     val ambientVoiceMode: Boolean = false,
+    val noiseAdaptiveEnabled: Boolean = false,
+    val noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     val raw: List<Int> = emptyList(),
 )
 
@@ -658,8 +661,14 @@ class SonyHeadphoneRepository private constructor(
             it.copy(noiseControlState = it.noiseControlState.forMode(mode).copy(ambientLevel = level))
         }
         val profile = ensureConnectedProfile()
-        HeadphoneAdapterRegistry.buildSetNoiseControlModeCommands(profile, mode, level, ambientMode)
-            .forEach(::sendCommand)
+        HeadphoneAdapterRegistry.buildSetNoiseControlModeCommands(
+            profile,
+            mode,
+            level,
+            ambientMode,
+            current.noiseAdaptiveEnabled,
+            current.noiseAdaptiveSensitivity,
+        ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
 
@@ -690,6 +699,8 @@ class SonyHeadphoneRepository private constructor(
             NoiseControlMode.AMBIENT_SOUND,
             clamped,
             mode,
+            current.noiseAdaptiveEnabled,
+            current.noiseAdaptiveSensitivity,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -720,6 +731,75 @@ class SonyHeadphoneRepository private constructor(
             NoiseControlMode.AMBIENT_SOUND,
             level,
             ambientMode,
+            current.noiseAdaptiveEnabled,
+            current.noiseAdaptiveSensitivity,
+        ).forEach(::sendCommand)
+        refreshNoiseControlStateAfterWrite(profile)
+    }
+
+    fun setNoiseAdaptive(enabled: Boolean) {
+        if (!canWrite(HeadphoneFeature.NOISE_ADAPTIVE)) {
+            appendLog("Noise adaptive write is disabled for current profile")
+            return
+        }
+        if (!_state.value.deviceInfo.protocolReady) {
+            _state.update {
+                it.copy(noiseControlState = it.noiseControlState.copy(noiseAdaptiveEnabled = enabled))
+            }
+            return
+        }
+        val current = _state.value.noiseControlState
+        val level = current.ambientLevel?.takeIf { it > 0 }?.coerceIn(1, 20) ?: 10
+        val ambientMode = if (current.ambientVoiceMode) AmbientSoundMode.VOICE else AmbientSoundMode.NORMAL
+        _state.update {
+            it.copy(noiseControlState = it.noiseControlState.forMode(NoiseControlMode.AMBIENT_SOUND).copy(
+                ambientLevel = level,
+                noiseAdaptiveEnabled = enabled,
+            ))
+        }
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.AMBIENT_SOUND,
+            level,
+            ambientMode,
+            enabled,
+            current.noiseAdaptiveSensitivity,
+        ).forEach(::sendCommand)
+        refreshNoiseControlStateAfterWrite(profile)
+    }
+
+    fun setNoiseAdaptiveSensitivity(sensitivity: NoiseAdaptiveSensitivity) {
+        if (!canWrite(HeadphoneFeature.NOISE_ADAPTIVE)) {
+            appendLog("Noise adaptive sensitivity write is disabled for current profile")
+            return
+        }
+        if (!_state.value.deviceInfo.protocolReady) {
+            _state.update {
+                it.copy(noiseControlState = it.noiseControlState.copy(noiseAdaptiveSensitivity = sensitivity))
+            }
+            return
+        }
+        val current = _state.value.noiseControlState
+        val level = current.ambientLevel?.takeIf { it > 0 }?.coerceIn(1, 20) ?: 10
+        val ambientMode = if (current.ambientVoiceMode) AmbientSoundMode.VOICE else AmbientSoundMode.NORMAL
+        _state.update {
+            it.copy(noiseControlState = it.noiseControlState.forMode(NoiseControlMode.AMBIENT_SOUND).copy(
+                ambientLevel = level,
+                // Sound Connect forces the NA toggle ON in the frame that
+                // changes sensitivity; mirror that so the write is consistent.
+                noiseAdaptiveEnabled = true,
+                noiseAdaptiveSensitivity = sensitivity,
+            ))
+        }
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.AMBIENT_SOUND,
+            level,
+            ambientMode,
+            true,
+            sensitivity,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -1780,6 +1860,10 @@ class SonyHeadphoneRepository private constructor(
                     },
                     controlMode = response.controlMode
                         ?: current.noiseControlState.controlMode,
+                    noiseAdaptiveEnabled = response.noiseAdaptiveEnabled
+                        ?: current.noiseControlState.noiseAdaptiveEnabled,
+                    noiseAdaptiveSensitivity = response.noiseAdaptiveSensitivity
+                        ?: current.noiseControlState.noiseAdaptiveSensitivity,
                     raw = response.values,
                 )
             )

@@ -268,6 +268,11 @@ object SonyCapabilityProbe {
                 if (noiseQueries.any { it in AMBIENT_VOICE_TYPES }) {
                     features.add(HeadphoneFeature.AMBIENT_VOICE_MODE)
                 }
+                // The _NA layout (0x19, FunctionType 0x6D) is the only carrier of
+                // the noise-adaptive (Auto Ambient Sound) toggle + sensitivity.
+                if (noiseQueries.any { it in NOISE_ADAPTIVE_TYPES }) {
+                    features.add(HeadphoneFeature.NOISE_ADAPTIVE)
+                }
             }
         }
 
@@ -405,6 +410,11 @@ object SonyCapabilityProbe {
         NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
     )
 
+    /** Inquired types whose SET_PARAM layout carries the noise-adaptive pair. */
+    private val NOISE_ADAPTIVE_TYPES = setOf(
+        NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
+    )
+
     /**
      * Prefer the DUAL (MODE_NC_ASM_DUAL_...) seamless write type over the AUTO
      * one when a device advertises both. Devices like LinkBuds S / WF-1000XM5
@@ -425,6 +435,7 @@ object SonyCapabilityProbe {
         HeadphoneFeature.NOISE_CONTROL,
         HeadphoneFeature.AMBIENT_LEVEL,
         HeadphoneFeature.AMBIENT_VOICE_MODE,
+        HeadphoneFeature.NOISE_ADAPTIVE,
         HeadphoneFeature.EQ,
         HeadphoneFeature.CLEAR_BASS,
         HeadphoneFeature.PLAYBACK_CONTROL,

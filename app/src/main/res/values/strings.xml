@@ -99,6 +99,11 @@
     <string name="ambient_normal">Normal</string>
     <string name="ambient_voice_focus">Voice</string>
     <string name="ambient_level">Ambient sound level</string>
+    <string name="noise_adaptive_title">Auto Ambient Sound</string>
+    <string name="noise_adaptive_sensitivity_title">Noise Detection Sensitivity</string>
+    <string name="noise_adaptive_sensitivity_standard">Standard</string>
+    <string name="noise_adaptive_sensitivity_high">High</string>
+    <string name="noise_adaptive_sensitivity_low">Low</string>
     <string name="batt_single">Battery</string>
     <string name="sony_eq_title">Equalizer</string>
     <string name="eq_unknown">Unknown</string>

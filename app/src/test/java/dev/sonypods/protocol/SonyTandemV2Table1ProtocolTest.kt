@@ -481,6 +481,82 @@ class SonyTandemV2Table1ProtocolTest {
         }
     }
 
+    // ── 0x19 noise-adaptive (Auto Ambient Sound) trailing pair: idx[6]=toggle
+    // (NcAsmOnOffValue OFF=0/ON=1), idx[7]=NoiseAdaptiveSensitivity
+    // (STANDARD=0/HIGH=1/LOW=2). SC reference frame: `68 19 01 01 01 00 0A 01 01`
+    // (rf0/g writer; pf0/d1 builder). ──
+
+    @Test
+    fun ncAsmSetParam_noiseAdaptiveOn_encodesToggleAndSensitivity() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x01, 0x01),
+            SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 10,
+                type = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
+                noiseAdaptive = true,
+                noiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.HIGH,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_noiseAdaptiveOn_lowSensitivity_encodesLowByte() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x01, 0x02),
+            SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+                NoiseControlMode.AMBIENT_SOUND,
+                ambientLevel = 10,
+                type = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
+                noiseAdaptive = true,
+                noiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.LOW,
+            ),
+        )
+    }
+
+    @Test
+    fun ncAsmSetParam_noiseAdaptivePreserved_whenModeSwitchesToNoiseCancelling() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x68, 0x19, 0x01, 0x01, 0x00, 0x00, 0x0A, 0x01, 0x00),
+            SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+                NoiseControlMode.NOISE_CANCELLING,
+                ambientLevel = 10,
+                type = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA,
+                noiseAdaptive = true,
+            ),
+        )
+    }
+
+    @Test
+    fun parser_naNotify_readsNoiseAdaptiveToggleAndSensitivity() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x01, 0x01)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(true, parsed.noiseAdaptiveEnabled)
+        assertEquals(NoiseAdaptiveSensitivity.HIGH, parsed.noiseAdaptiveSensitivity)
+    }
+
+    @Test
+    fun parser_naRetParam_readsNoiseAdaptiveOffStandard() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x67, 0x19, 0x01, 0x01, 0x01, 0x00, 0x0A, 0x00, 0x00)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(false, parsed.noiseAdaptiveEnabled)
+        assertEquals(NoiseAdaptiveSensitivity.STANDARD, parsed.noiseAdaptiveSensitivity)
+    }
+
+    @Test
+    fun parser_nonNaType_leavesNoiseAdaptiveNull() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x17, 0x01, 0x01, 0x01, 0x00, 0x0A)
+        ) as ParsedTandemResponse.NoiseControl
+
+        assertEquals(null, parsed.noiseAdaptiveEnabled)
+        assertEquals(null, parsed.noiseAdaptiveSensitivity)
+    }
+
     // ── NC_AMB_TOGGLE (rf0/j) — 3-byte frame, no ValueChangeStatus/totalEffect ──
     // Function codes: NC_ASM_OFF=0x01 / NC_ASM=0x02 / NC_OFF=0x03 / ASM_OFF=0x04.
     @Test

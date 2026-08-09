@@ -39,9 +39,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import com.mercury.sonypods.R
 import top.yukonga.miuix.kmp.basic.Slider
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -54,8 +56,10 @@ const val AMBIENT_LEVEL_MAX = 20
 
 /**
  * Sony noise-control switch: Off / Noise Cancelling / Ambient Sound.
- * When Ambient Sound is active, exposes the ambient level (1..20) and
- * the voice-focus sub mode.
+ * When Ambient Sound is active, exposes the ambient level (1..20), the
+ * voice-focus sub mode, and — on devices with the noise-adaptive layout —
+ * the Auto Ambient Sound toggle with its sensitivity levels. While that
+ * toggle is on, the firmware owns the ambient level, so the slider greys out.
  */
 @Composable
 fun AncSwitch(
@@ -65,6 +69,11 @@ fun AncSwitch(
     onAmbientLevelChange: ((Int) -> Unit)? = null,
     ambientVoiceMode: Boolean = false,
     onAmbientVoiceModeChange: ((Boolean) -> Unit)? = null,
+    noiseAdaptiveSupported: Boolean = false,
+    noiseAdaptiveEnabled: Boolean = false,
+    onNoiseAdaptiveChange: ((Boolean) -> Unit)? = null,
+    noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+    onNoiseAdaptiveSensitivityChange: ((NoiseAdaptiveSensitivity) -> Unit)? = null,
     compact: Boolean = false,
 ) {
     val verticalPadding = if (compact) 8.dp else 16.dp
@@ -112,6 +121,7 @@ fun AncSwitch(
         }
 
         if (ancStatus == NoiseControlMode.AMBIENT_SOUND) {
+            val noiseAdaptiveActive = noiseAdaptiveSupported && noiseAdaptiveEnabled
             if (onAmbientVoiceModeChange != null) {
                 val tabs = listOf(
                     stringResource(R.string.ambient_normal),
@@ -129,10 +139,65 @@ fun AncSwitch(
                     outerPadding = tabOuterPadding
                 )
             }
+            if (noiseAdaptiveSupported && onNoiseAdaptiveChange != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (compact) 8.dp else 16.dp)
+                        .padding(horizontal = tabOuterPadding),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.noise_adaptive_title),
+                        fontSize = if (compact) 12.sp else 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = noiseAdaptiveEnabled,
+                        onCheckedChange = onNoiseAdaptiveChange,
+                    )
+                }
+                if (noiseAdaptiveEnabled && onNoiseAdaptiveSensitivityChange != null) {
+                    // Display order standard/high/low mirrors the wire codes
+                    // (STANDARD=0, HIGH=1, LOW=2) — do not reorder without a map.
+                    val sensitivities = listOf(
+                        NoiseAdaptiveSensitivity.STANDARD,
+                        NoiseAdaptiveSensitivity.HIGH,
+                        NoiseAdaptiveSensitivity.LOW,
+                    )
+                    Text(
+                        text = stringResource(R.string.noise_adaptive_sensitivity_title),
+                        fontSize = if (compact) 11.sp else 13.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier
+                            .padding(top = if (compact) 6.dp else 10.dp)
+                            .padding(horizontal = tabOuterPadding),
+                    )
+                    ResponsiveAncTabRow(
+                        tabs = listOf(
+                            stringResource(R.string.noise_adaptive_sensitivity_standard),
+                            stringResource(R.string.noise_adaptive_sensitivity_high),
+                            stringResource(R.string.noise_adaptive_sensitivity_low),
+                        ),
+                        selectedTabIndex = sensitivities.indexOf(noiseAdaptiveSensitivity).coerceAtLeast(0),
+                        onTabSelected = { onNoiseAdaptiveSensitivityChange(sensitivities[it]) },
+                        compact = compact,
+                        minWidth = tabMinWidth,
+                        tabMaxWidth = tabMaxWidth,
+                        height = tabHeight,
+                        itemSpacing = tabSpacing,
+                        outerPadding = tabOuterPadding,
+                        topPadding = if (compact) 4.dp else 8.dp,
+                    )
+                }
+            }
             if (onAmbientLevelChange != null) {
                 AmbientLevelSlider(
                     level = ambientLevel,
                     onLevelChange = onAmbientLevelChange,
+                    // The firmware owns the level while Auto Ambient Sound is on.
+                    enabled = !noiseAdaptiveActive,
                     compact = compact,
                     outerPadding = tabOuterPadding,
                 )
@@ -145,6 +210,7 @@ fun AncSwitch(
 private fun AmbientLevelSlider(
     level: Int?,
     onLevelChange: (Int) -> Unit,
+    enabled: Boolean,
     compact: Boolean,
     outerPadding: Dp,
 ) {
@@ -153,8 +219,8 @@ private fun AmbientLevelSlider(
     var draggingValue by remember { mutableFloatStateOf(effectiveLevel.toFloat()) }
     // Follow device-reported level unless the user is mid-drag; the actual
     // Tandem write happens once on drag end to avoid flooding the transport.
-    LaunchedEffect(effectiveLevel) {
-        if (!dragging) draggingValue = effectiveLevel.toFloat()
+    LaunchedEffect(effectiveLevel, enabled) {
+        if (!dragging || !enabled) draggingValue = effectiveLevel.toFloat()
     }
     Column(
         modifier = Modifier
@@ -170,12 +236,21 @@ private fun AmbientLevelSlider(
                 text = stringResource(R.string.ambient_level),
                 fontSize = if (compact) 12.sp else 14.sp,
                 fontWeight = FontWeight.Medium,
+                color = if (enabled) {
+                    MiuixTheme.colorScheme.onBackground
+                } else {
+                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                },
                 modifier = Modifier.weight(1f),
             )
             Text(
                 text = draggingValue.toInt().toString(),
                 fontSize = if (compact) 12.sp else 14.sp,
-                color = MiuixTheme.colorScheme.primary,
+                color = if (enabled) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                },
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -192,6 +267,7 @@ private fun AmbientLevelSlider(
                     onLevelChange(rounded)
                 }
             },
+            enabled = enabled,
             valueRange = AMBIENT_LEVEL_MIN.toFloat()..AMBIENT_LEVEL_MAX.toFloat(),
             modifier = Modifier
                 .fillMaxWidth()

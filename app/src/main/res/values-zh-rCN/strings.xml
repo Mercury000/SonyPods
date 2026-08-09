@@ -100,6 +100,11 @@
     <string name="ambient_normal">普通</string>
     <string name="ambient_voice_focus">人声</string>
     <string name="ambient_level">环境声等级</string>
+    <string name="noise_adaptive_title">自动环境声音</string>
+    <string name="noise_adaptive_sensitivity_title">噪声检测灵敏度</string>
+    <string name="noise_adaptive_sensitivity_standard">标准</string>
+    <string name="noise_adaptive_sensitivity_high">高</string>
+    <string name="noise_adaptive_sensitivity_low">低</string>
     <string name="batt_single">电量</string>
     <string name="sony_eq_title">均衡器</string>
     <string name="eq_unknown">未知</string>

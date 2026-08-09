@@ -85,8 +85,6 @@ object SonyTandemV2Table1Protocol {
     private const val NC_VALUE_OFF: Byte = 0x00
     private const val NC_VALUE_ON_SINGLE: Byte = 0x01
     private const val NC_VALUE_ON_DUAL: Byte = 0x02
-    // NoiseAdaptiveSensitivity: STANDARD=0, HIGH=1, LOW=2.
-    private const val NA_SENSITIVITY_STANDARD: Byte = 0x00
 
     // ── NC_AMB_TOGGLE Function byte codes (rf0/j, `system/param/Function`) ──
     // Mapping is semantic: NC_ASM_OFF turns everything off, NC_OFF turns noise
@@ -256,6 +254,8 @@ object SonyTandemV2Table1Protocol {
         ambientLevel: Int = 10,
         ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
         type: NcAsmInquiredType = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): ByteArray {
         val effect = if (controlMode == NoiseControlMode.OFF) NCASM_OFF else NCASM_ON
         val mode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
@@ -302,10 +302,17 @@ object SonyTandemV2Table1Protocol {
             NcAsmInquiredType.MODE_NC_NCSS_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                 byteArrayOf(mode, ambientMode.code, level)
             // rf0/g: [NcAsmMode][AmbientSoundMode][level][NcAsmOnOffValue][NoiseAdaptiveSensitivity].
-            // Noise-adaptive NC is not exposed by this engine, so the NA toggle
-            // stays OFF (0x00, matching the LinkBuds Fit capture) with STANDARD.
+            // The trailing pair is the noise-adaptive (Auto Ambient Sound) toggle
+            // and its sensitivity; the firmware owns the ambient level while the
+            // toggle is ON and reports adjustments via NCASM_NTFY_PARAM.
             NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA ->
-                byteArrayOf(mode, ambientMode.code, level, NCASM_OFF, NA_SENSITIVITY_STANDARD)
+                byteArrayOf(
+                    mode,
+                    ambientMode.code,
+                    level,
+                    if (noiseAdaptive) NCASM_ON else NCASM_OFF,
+                    noiseAdaptiveSensitivity.code,
+                )
             // rf0/d: [AmbientSoundMode][NcAsmOnOffValue]
             NcAsmInquiredType.ASM_ON_OFF -> byteArrayOf(ambientMode.code, asmOn)
             // rf0/e: [AmbientSoundMode][level]
@@ -326,8 +333,12 @@ object SonyTandemV2Table1Protocol {
         ambientLevel: Int = 10,
         ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
         type: NcAsmInquiredType = NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): ByteArray =
-        buildSetNoiseControlMode(controlMode, ambientLevel, ambientMode, type)
+        buildSetNoiseControlMode(
+            controlMode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity,
+        )
 
     fun buildGetPlaybackStatus(
         type: PlayInquiredType = PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT,
@@ -850,6 +861,17 @@ object SonyTandemV2Table1Protocol {
             },
             ambientMode = ambientMode,
             controlMode = combinedControlMode,
+            // rf0/g trailing pair: [6]=NcAsmOnOffValue NA toggle, [7]=sensitivity.
+            noiseAdaptiveEnabled = if (type == NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA) {
+                payload.getOrNull(6)?.let { it == NCASM_ON }
+            } else {
+                null
+            },
+            noiseAdaptiveSensitivity = if (type == NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA) {
+                payload.getOrNull(7)?.let(NoiseAdaptiveSensitivity::fromCode)
+            } else {
+                null
+            },
             raw = raw,
         )
     }

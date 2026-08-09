@@ -44,6 +44,7 @@ import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.localizedName
+import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
@@ -190,6 +191,11 @@ private fun LazyListScope.podControlItems(
                 onAmbientLevelChange = actions.onAmbientLevelChange,
                 ambientVoiceMode = uiState.ambientVoiceMode,
                 onAmbientVoiceModeChange = actions.onAmbientVoiceModeChange,
+                noiseAdaptiveSupported = uiState.supportsNoiseAdaptive,
+                noiseAdaptiveEnabled = uiState.noiseAdaptiveEnabled,
+                onNoiseAdaptiveChange = actions.onNoiseAdaptiveChange,
+                noiseAdaptiveSensitivity = uiState.noiseAdaptiveSensitivityValue(),
+                onNoiseAdaptiveSensitivityChange = actions.onNoiseAdaptiveSensitivityChange,
             )
         }
     }

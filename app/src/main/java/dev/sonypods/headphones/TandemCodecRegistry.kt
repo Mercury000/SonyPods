@@ -6,6 +6,7 @@ import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.LeaInquiredType
 import dev.sonypods.protocol.NcAsmInquiredType
+import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
@@ -55,6 +56,8 @@ interface TandemCodec {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean = false,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     ): ByteArray? = null
     fun buildSetNcOnOff(enabled: Boolean): ByteArray? = null
     fun buildSetAmbientSound(enabled: Boolean, mode: AmbientSoundMode): ByteArray? = null
@@ -184,8 +187,11 @@ object SonyTandemV1Table1Codec : TandemCodec {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
     ): ByteArray? =
         if (type == NcAsmInquiredType.V1_TABLE_SET1_NC_ASM) {
+            // V1 has no noise-adaptive concept; the extra params are ignored.
             SonyTandemV1Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode)
         } else {
             null
@@ -334,13 +340,17 @@ object SonyTandemV2Table1Codec : TandemCodec {
         mode: NoiseControlMode,
         ambientLevel: Int,
         ambientMode: AmbientSoundMode,
+        noiseAdaptive: Boolean,
+        noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
     ): ByteArray? =
         when (type) {
             // All V2 NCASM types share the same official-layout dispatcher; V1
             // and the test-mode type have no V2 SET_PARAM and stay unsupported.
             NcAsmInquiredType.V1_TABLE_SET1_NC_ASM,
             NcAsmInquiredType.NC_TEST_MODE -> null
-            else -> SonyTandemV2Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, type)
+            else -> SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+                mode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity,
+            )
         }
 
     override fun buildSetNcOnOff(enabled: Boolean): ByteArray =

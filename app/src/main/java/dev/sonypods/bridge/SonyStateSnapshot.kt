@@ -56,6 +56,10 @@ data class SonyStateSnapshot(
     val noiseControlMode: NoiseControlMode? = null,
     val ambientLevel: Int? = null,
     val ambientVoiceMode: Boolean = false,
+    val supportsNoiseAdaptive: Boolean = false,
+    val noiseAdaptiveEnabled: Boolean = false,
+    /** [dev.sonypods.protocol.NoiseAdaptiveSensitivity] name, null when unknown. */
+    val noiseAdaptiveSensitivity: String? = null,
 
     val eqPreset: EqPresetId? = null,
     val eqAvailablePresets: List<EqPresetId> = emptyList(),
@@ -110,6 +114,9 @@ data class SonyStateSnapshot(
         noiseControlMode?.let { putString(KEY_NC_MODE, it.name) }
         ambientLevel?.let { putInt(KEY_AMBIENT_LEVEL, it) }
         putBoolean(KEY_AMBIENT_VOICE, ambientVoiceMode)
+        putBoolean(KEY_SUPPORTS_NOISE_ADAPTIVE, supportsNoiseAdaptive)
+        putBoolean(KEY_NOISE_ADAPTIVE, noiseAdaptiveEnabled)
+        noiseAdaptiveSensitivity?.let { putString(KEY_NOISE_ADAPTIVE_SENSITIVITY, it) }
 
         eqPreset?.let { putString(KEY_EQ_PRESET, it.name) }
         putStringArray(KEY_EQ_PRESETS, eqAvailablePresets.map { it.name }.toTypedArray())
@@ -172,6 +179,9 @@ data class SonyStateSnapshot(
         private const val KEY_NC_MODE = "nc_mode"
         private const val KEY_AMBIENT_LEVEL = "ambient_level"
         private const val KEY_AMBIENT_VOICE = "ambient_voice"
+        private const val KEY_SUPPORTS_NOISE_ADAPTIVE = "supports_noise_adaptive"
+        private const val KEY_NOISE_ADAPTIVE = "noise_adaptive"
+        private const val KEY_NOISE_ADAPTIVE_SENSITIVITY = "noise_adaptive_sensitivity"
         private const val KEY_EQ_PRESET = "eq_preset"
         private const val KEY_EQ_PRESETS = "eq_presets"
         private const val KEY_EQ_CLEAR_BASS = "eq_clear_bass"
@@ -221,6 +231,9 @@ data class SonyStateSnapshot(
             },
             ambientLevel = bundle.optInt(KEY_AMBIENT_LEVEL),
             ambientVoiceMode = bundle.getBoolean(KEY_AMBIENT_VOICE, false),
+            supportsNoiseAdaptive = bundle.getBoolean(KEY_SUPPORTS_NOISE_ADAPTIVE, false),
+            noiseAdaptiveEnabled = bundle.getBoolean(KEY_NOISE_ADAPTIVE, false),
+            noiseAdaptiveSensitivity = bundle.getString(KEY_NOISE_ADAPTIVE_SENSITIVITY),
             eqPreset = bundle.getString(KEY_EQ_PRESET)?.let { name ->
                 EqPresetId.entries.firstOrNull { it.name == name }
             },
@@ -276,6 +289,9 @@ data class SonyStateSnapshot(
                 noiseControlMode = state.noiseControlState.controlMode,
                 ambientLevel = state.noiseControlState.ambientLevel,
                 ambientVoiceMode = state.noiseControlState.ambientVoiceMode,
+                supportsNoiseAdaptive = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.NOISE_ADAPTIVE) == true,
+                noiseAdaptiveEnabled = state.noiseControlState.noiseAdaptiveEnabled,
+                noiseAdaptiveSensitivity = state.noiseControlState.noiseAdaptiveSensitivity.name,
                 eqPreset = state.eqState.preset,
                 eqAvailablePresets = capability?.availablePresets.orEmpty(),
                 eqClearBass = state.eqState.clearBass,
