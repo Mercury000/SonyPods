@@ -152,8 +152,17 @@ internal fun MainTabsScaffold(
         }
     }
 
-    BackHandler(enabled = selectedTab == MainTab.Earphones && (showGestureOperations || showMultipointSettings)) {
-        closeSubPages()
+    // 手势返回按层级回退：三级子页 → 详细页 → 蓝牙设备列表，
+    // 与顶栏返回箭头保持一致，而不是直接退出应用。
+    BackHandler(
+        enabled = selectedTab == MainTab.Earphones &&
+            (showGestureOperations || showMultipointSettings || showEarphoneDetail)
+    ) {
+        if (showGestureOperations || showMultipointSettings) {
+            closeSubPages()
+        } else {
+            onBackToDevicePicker()
+        }
     }
 
     LaunchedEffect(selectedTab) {
