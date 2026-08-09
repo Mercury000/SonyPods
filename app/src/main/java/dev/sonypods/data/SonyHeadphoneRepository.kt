@@ -456,6 +456,16 @@ class SonyHeadphoneRepository private constructor(
         client.disconnect()
     }
 
+    /** Releases all Bluetooth and Handler resources owned by this generation. */
+    fun close() {
+        mainHandler.removeCallbacksAndMessages(null)
+        client.close()
+        pendingPlaybackStatus = null
+        pendingQuickAccessFunctionCodes = null
+        prefsProvider = null
+        cacheSink = null
+    }
+
     /**
      * Wire the framework-backed remote-preference provider (hook-side read-only
      * store). Called by the host once the LSPosed remote-prefs bridge is up.

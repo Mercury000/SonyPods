@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothSocket
 import dev.sonypods.protocol.hexString
 import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class SonySppTransport(
@@ -20,6 +21,7 @@ internal class SonySppTransport(
     private val lock = Any()
 
     private var readerThread: Thread? = null
+    private val ackThreads = ConcurrentHashMap.newKeySet<Thread>()
     private var nextTxSequence: Byte = 0
     private var awaitingAck: Byte? = null
     private var awaitingFrame: ByteArray? = null
@@ -48,7 +50,19 @@ internal class SonySppTransport(
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { socket.close() }
+            val current = Thread.currentThread()
+            ackThreads.toList().forEach { thread ->
+                if (thread !== current) thread.interrupt()
+            }
+            readerThread?.let { thread ->
+                if (thread !== current) {
+                    thread.interrupt()
+                    runCatching { thread.join(1_000L) }
+                }
+            }
         }
+        readerThread = null
+        ackThreads.clear()
     }
 
     private fun readLoop() {
@@ -185,44 +199,50 @@ internal class SonySppTransport(
         generation: Int,
         policy: SppRetryPolicy,
     ) {
-        Thread({
+        val timeoutThread = Thread({
             try {
-                Thread.sleep(policy.timeoutMs)
-            } catch (_: InterruptedException) {
-                return@Thread
-            }
-            var retryScheduled = false
-            synchronized(lock) {
-                if (closed.get() || ackGeneration != generation || awaitingAck != expectedAck) return@synchronized
-                val frame = awaitingFrame
-                if (frame != null && awaitingRetryPolicy == policy && awaitingRetries < policy.maxRetries) {
-                    awaitingRetries += 1
-                    val retryGeneration = ++ackGeneration
-                    log(
-                        "SPP ACK timeout expected=${expectedAck.u}; " +
-                            "resending frame retry=$awaitingRetries"
-                    )
-                    try {
-                        output.write(frame)
-                        output.flush()
-                    } catch (e: IOException) {
-                        awaitingAck = null
-                        awaitingFrame = null
-                        notifyClosed("SPP retry failed: ${e.message}")
+                try {
+                    Thread.sleep(policy.timeoutMs)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                var retryScheduled = false
+                synchronized(lock) {
+                    if (closed.get() || ackGeneration != generation || awaitingAck != expectedAck) return@synchronized
+                    val frame = awaitingFrame
+                    if (frame != null && awaitingRetryPolicy == policy && awaitingRetries < policy.maxRetries) {
+                        awaitingRetries += 1
+                        val retryGeneration = ++ackGeneration
+                        log(
+                            "SPP ACK timeout expected=${expectedAck.u}; " +
+                                "resending frame retry=$awaitingRetries"
+                        )
+                        try {
+                            output.write(frame)
+                            output.flush()
+                        } catch (e: IOException) {
+                            awaitingAck = null
+                            awaitingFrame = null
+                            notifyClosed("SPP retry failed: ${e.message}")
+                            return@synchronized
+                        }
+                        scheduleAckTimeout(expectedAck, retryGeneration, policy)
+                        retryScheduled = true
                         return@synchronized
                     }
-                    scheduleAckTimeout(expectedAck, retryGeneration, policy)
-                    retryScheduled = true
-                    return@synchronized
+                    log("SPP ACK timeout expected=${expectedAck.u}; closing transport")
+                    awaitingAck = null
+                    awaitingFrame = null
+                    awaitingRetryPolicy = null
+                    notifyClosed("SPP remote endpoint did not ACK seq=${inverseSequence(expectedAck).u}")
                 }
-                log("SPP ACK timeout expected=${expectedAck.u}; closing transport")
-                awaitingAck = null
-                awaitingFrame = null
-                awaitingRetryPolicy = null
-                notifyClosed("SPP remote endpoint did not ACK seq=${inverseSequence(expectedAck).u}")
+                if (retryScheduled) return@Thread
+            } finally {
+                ackThreads.remove(Thread.currentThread())
             }
-            if (retryScheduled) return@Thread
-        }, "OpenBuds-SppAckTimeout").start()
+        }, "OpenBuds-SppAckTimeout")
+        ackThreads += timeoutThread
+        timeoutThread.start()
     }
 
     private fun sendAck(sequence: Byte) {

@@ -1,12 +1,17 @@
 package dev.sonypods.hook
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import dev.sonypods.bridge.SonyStateSnapshot
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.hook.reload.GenerationRuntime
+import dev.sonypods.hook.reload.ResourceRegistry
 
 abstract class HookContext {
     lateinit var module: XposedModule
@@ -22,8 +27,50 @@ abstract class HookContext {
      */
     lateinit var prefsProvider: () -> SharedPreferences
     lateinit var packageName: String
+    lateinit var runtime: GenerationRuntime
+        private set
+    lateinit var hookRegistry: dev.sonypods.hook.reload.HookRegistry
+        private set
+    lateinit var resources: ResourceRegistry
+        private set
 
     abstract fun onHook()
+
+    /** Called in the old generation before libxposed captures old hook handles. */
+    internal open fun onBeforeReload() = Unit
+
+    /**
+     * Re-activates the old generation when onBeforeReload rejected a reload.
+     * API 102 cancellation must leave the old generation usable; this callback
+     * restores resources that were intentionally quiesced during preparation.
+     */
+    internal open fun onReloadRejected(snapshot: SonyStateSnapshot) = Unit
+
+    /** Unregisters a receiver while treating an already-unregistered receiver as idempotent. */
+    internal fun unregisterReceiverForReload(context: Context?, receiver: BroadcastReceiver?) {
+        if (context == null || receiver == null) return
+        try {
+            context.unregisterReceiver(receiver)
+        } catch (_: IllegalArgumentException) {
+            // The receiver was already unregistered; teardown remains idempotent.
+        }
+    }
+
+    internal fun attachRuntime(runtime: GenerationRuntime) {
+        this.runtime = runtime
+        hookRegistry = runtime.hooks
+        resources = runtime.resources
+    }
+
+    internal fun registerResource(key: String, disposer: () -> Unit) {
+        resources.register("${javaClass.name}:$key", disposer)
+    }
+
+    internal fun registerDynamicTarget(className: String) {
+        hookRegistry.registerDynamicTarget(className)
+    }
+
+    internal fun dynamicTargetClasses(): List<String> = hookRegistry.dynamicTargets()
 
     open fun fakeDeviceId(): String = ConfigManager.fakeDeviceId()
 
@@ -58,29 +105,40 @@ abstract class HookContext {
         findClass(className).getDeclaredConstructor(*parameterTypes).apply { isAccessible = true }
 
     fun findMethodByParamCount(className: String, methodName: String, paramCount: Int): Method =
-        findClass(className).declaredMethods.first { it.name == methodName && it.parameterTypes.size == paramCount }
-            .apply { isAccessible = true }
+        findClass(className).declaredMethods
+            .filter { it.name == methodName && it.parameterTypes.size == paramCount }
+            .sortedBy { it.parameterTypes.joinToString(",") { type -> type.name } + ":" + it.returnType.name }
+            .firstOrNull()
+            ?.apply { isAccessible = true }
+            ?: throw NoSuchMethodException("$className.$methodName/$paramCount")
 
     fun findConstructorByParamCount(className: String, paramCount: Int): Constructor<*> =
-        findClass(className).declaredConstructors.first { it.parameterTypes.size == paramCount }
-            .apply { isAccessible = true }
+        findClass(className).declaredConstructors
+            .filter { it.parameterTypes.size == paramCount }
+            .sortedBy { it.parameterTypes.joinToString(",") { type -> type.name } }
+            .firstOrNull()
+            ?.apply { isAccessible = true }
+            ?: throw NoSuchMethodException("$className constructor/$paramCount")
 
-    fun hookAfter(method: Method, block: HookParam.() -> Unit) {
-        module.hook(method).intercept { chain ->
+    fun hookAfter(method: Method, logicalRole: String? = null, required: Boolean = false, block: HookParam.() -> Unit) {
+        hookRegistry.install(method, "after", logicalRole, required) { chain ->
+            if (!runtime.acceptingEvents) return@install chain.proceed()
             val result = chain.proceed()
             HookParam(chain, result).apply(block).result
         }
     }
 
-    fun hookBefore(method: Method, block: HookParam.() -> Unit) {
-        module.hook(method).intercept { chain ->
+    fun hookBefore(method: Method, logicalRole: String? = null, required: Boolean = false, block: HookParam.() -> Unit) {
+        hookRegistry.install(method, "before", logicalRole, required) { chain ->
+            if (!runtime.acceptingEvents) return@install chain.proceed()
             val param = HookParam(chain, null).apply(block)
             if (param.hasResult) param.result else chain.proceed()
         }
     }
 
-    fun hookConstructorAfter(constructor: Constructor<*>, block: HookParam.() -> Unit) {
-        module.hook(constructor).intercept { chain ->
+    fun hookConstructorAfter(constructor: Constructor<*>, logicalRole: String? = null, required: Boolean = false, block: HookParam.() -> Unit) {
+        hookRegistry.install(constructor, "constructor-after", logicalRole, required) { chain ->
+            if (!runtime.acceptingEvents) return@install chain.proceed()
             chain.proceed().also { HookParam(chain, it).apply(block) }
         }
     }

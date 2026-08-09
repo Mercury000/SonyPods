@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyStateSnapshot
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.UUID
@@ -36,6 +37,28 @@ object SoundConnectHandoverHook : HookContext() {
 
     @Volatile
     private var installed = false
+    private var leaseCoordinator: LeaseCoordinator? = null
+    private var engineReadyReceiver: BroadcastReceiver? = null
+    private var installedApplication: Application? = null
+
+    override fun onBeforeReload() {
+        leaseCoordinator?.close()
+        val app = installedApplication
+        engineReadyReceiver?.let { receiver ->
+            unregisterReceiverForReload(app, receiver)
+        }
+        leaseCoordinator = null
+        engineReadyReceiver = null
+        installed = false
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        installedApplication?.let { startAfterReload(it) }
+    }
+
+    internal fun startAfterReload(application: Application) {
+        install(application)
+    }
 
     override fun onHook() {
         runCatching {
@@ -64,19 +87,23 @@ object SoundConnectHandoverHook : HookContext() {
 
         val coordinator = LeaseCoordinator(application)
         application.registerActivityLifecycleCallbacks(coordinator)
-        application.registerReceiver(
-            object : BroadcastReceiver() {
+        val engineReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action == SonyBridge.ACTION_ENGINE_READY) {
                         coordinator.onEngineReady("bluetooth-engine-ready")
                     }
                 }
-            },
+            }
+        application.registerReceiver(
+            engineReadyReceiver,
             IntentFilter(SonyBridge.ACTION_ENGINE_READY),
             Context.RECEIVER_EXPORTED,
         )
         installKeepConnectionServiceHooks(coordinator)
         installMdrSessionHooks(coordinator)
+        leaseCoordinator = coordinator
+        this.engineReadyReceiver = engineReadyReceiver
+        installedApplication = application
         installed = true
         Log.d(TAG, "handover hooks registered process=$processName")
     }
@@ -156,6 +183,19 @@ object SoundConnectHandoverHook : HookContext() {
         private var pendingRelease: Runnable? = null
         private var leaseId: String? = null
         private var leaseToken: IBinder? = null
+
+        fun close() {
+            synchronized(this) {
+                handler.removeCallbacksAndMessages(null)
+                pendingRelease = null
+                creatingActivities.clear()
+                startedActivities.clear()
+                activeKeepConnectionServices.clear()
+                activeMdrControllers.clear()
+                releaseLocked("generation-teardown")
+            }
+            application.unregisterActivityLifecycleCallbacks(this)
+        }
 
         /** Acquire before Activity.onCreate so Sound Connect cannot race our UI lifecycle. */
         override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) {

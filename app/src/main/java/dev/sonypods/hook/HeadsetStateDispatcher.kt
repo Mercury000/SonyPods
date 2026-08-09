@@ -14,6 +14,7 @@ import android.os.Handler
 import com.mercury.sonypods.BuildConfig
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
+import dev.sonypods.bridge.SonyStateSnapshot
 
 /**
  * Bluetooth-process entry point. Boots [SonyEngineHost] — which owns the Sony Tandem
@@ -21,6 +22,38 @@ import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
  */
 object HeadsetStateDispatcher : HookContext() {
     private var appRequestReceiverRegistered = false
+    private var appRequestReceiver: BroadcastReceiver? = null
+    private var aclReceiver: BroadcastReceiver? = null
+    private var receiverContext: Context? = null
+
+    override fun onBeforeReload() {
+        SonyEngineHost.shutdown()
+        listOf(appRequestReceiver, aclReceiver).filterNotNull().forEach { receiver ->
+            unregisterReceiverForReload(receiverContext, receiver)
+        }
+        appRequestReceiver = null
+        aclReceiver = null
+        appRequestReceiverRegistered = false
+        aclReceiverRegistered = false
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        receiverContext?.let { startAfterReload(it, snapshot.deviceAddress, snapshot.deviceName) }
+    }
+
+    @SuppressLint("MissingPermission")
+    internal fun startAfterReload(context: Context, address: String?, name: String?) {
+        SonyEngineHost.start(context, null, prefsProvider)
+        registerAppRequestReceiver(context)
+        registerAclReceiver(context)
+        if (!address.isNullOrBlank()) {
+            runCatching {
+                context.getSystemService(android.bluetooth.BluetoothManager::class.java)
+                    ?.adapter?.getRemoteDevice(address)
+                    ?.let { SonyEngineHost.connectDevice(it, force = true) }
+            }.onFailure { Log.w("SonyPods", "saved-address reconnect failed address=$address", it) }
+        }
+    }
 
     override fun onHook() {
         runCatching {
@@ -78,7 +111,7 @@ object HeadsetStateDispatcher : HookContext() {
     private fun registerAclReceiver(context: Context?) {
         if (context == null || aclReceiverRegistered) return
         aclReceiverRegistered = true
-        context.registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 val action = intent?.action ?: return
                 if (action != BluetoothDevice.ACTION_ACL_CONNECTED && action != BluetoothDevice.ACTION_ACL_DISCONNECTED) return
@@ -90,15 +123,18 @@ object HeadsetStateDispatcher : HookContext() {
                 Log.d("SonyPods", "ACL ${if (action == BluetoothDevice.ACTION_ACL_CONNECTED) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
                 SonyEngineHost.refreshNow("bud-acl")
             }
-        }, IntentFilter().apply {
+        }
+        context.registerReceiver(receiver, IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }, Context.RECEIVER_EXPORTED)
+        aclReceiver = receiver
+        receiverContext = context
     }
 
     private fun registerAppRequestReceiver(context: Context?) {
         if (context == null || appRequestReceiverRegistered) return
-        context.registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (context == null) return
                 when (intent?.action) {
@@ -110,9 +146,12 @@ object HeadsetStateDispatcher : HookContext() {
                     }
                 }
             }
-        }, IntentFilter().apply {
+        }
+        context.registerReceiver(receiver, IntentFilter().apply {
             addAction(SonyPodsAction.ACTION_PODS_UI_INIT)
         }, Context.RECEIVER_EXPORTED)
+        appRequestReceiver = receiver
+        receiverContext = context
         appRequestReceiverRegistered = true
     }
 

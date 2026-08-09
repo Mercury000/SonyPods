@@ -93,6 +93,7 @@
     <string name="notification_btn_disconnect">Disconnect</string>
     <string name="restart_scope_title">Restart Scope</string>
     <string name="restart_scope_summary">Select apps to restart with root.</string>
+    <string name="restart_scope_confirm">Restart</string>
     <string name="restart_scope_success">Scope restarted</string>
     <string name="restart_scope_failed">Root restart failed</string>
     <string name="ambient_sound_title">Ambient</string>

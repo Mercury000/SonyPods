@@ -29,14 +29,15 @@ class HookStateMirror(private val onChanged: (SonyStateSnapshot) -> Unit = {}) {
     private var received = false
 
     private var registered = false
+    private var registeredContext: Context? = null
+    private var receiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
 
     fun register(context: Context?) {
         if (context == null || registered) return
         val appContext = context.applicationContext ?: context
         runCatching {
-            appContext.registerReceiver(
-                object : BroadcastReceiver() {
+            val stateReceiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         if (intent?.action != SonyBridge.ACTION_STATE) return
                         val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
@@ -44,13 +45,35 @@ class HookStateMirror(private val onChanged: (SonyStateSnapshot) -> Unit = {}) {
                         snapshot = SonyStateSnapshot.fromBundle(bundle)
                         onChanged(snapshot)
                     }
-                },
+                }
+            appContext.registerReceiver(
+                stateReceiver,
                 IntentFilter(SonyBridge.ACTION_STATE),
                 Context.RECEIVER_EXPORTED,
             )
+            receiver = stateReceiver
+            registeredContext = appContext
             registered = true
             requestReplay(appContext, attempt = 0)
         }
+    }
+
+    fun close() {
+        handler.removeCallbacksAndMessages(null)
+        val ctx = registeredContext
+        val stateReceiver = receiver
+        if (ctx != null && stateReceiver != null) {
+            try {
+                ctx.unregisterReceiver(stateReceiver)
+            } catch (_: IllegalArgumentException) {
+                // The receiver was already unregistered; close remains idempotent.
+            }
+        }
+        receiver = null
+        registeredContext = null
+        registered = false
+        received = false
+        snapshot = SonyStateSnapshot()
     }
 
     private fun requestReplay(context: Context, attempt: Int) {

@@ -26,9 +26,11 @@ import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 /**
  * Hosts the Sony Tandem engine inside the `com.android.bluetooth` process.
@@ -51,7 +53,8 @@ object SonyEngineHost {
     private const val RECONCILE_INTERVAL_MS = 15_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var scope = newGenerationScope()
 
     @Volatile
     private var repository: SonyHeadphoneRepository? = null
@@ -94,9 +97,18 @@ object SonyEngineHost {
     /** Address + which sides report; the connect animation replays when this changes. */
     private var lastConnectAnimationKey: String? = null
 
+    private var commandReceiver: BroadcastReceiver? = null
+    private var configReceiver: BroadcastReceiver? = null
+    private var capabilityCacheReceiver: BroadcastReceiver? = null
+    private var unlockReceiver: BroadcastReceiver? = null
+    private var remotePreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var a2dpContext: Context? = null
+    private var a2dpListener: BluetoothProfile.ServiceListener? = null
+
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
 
+    @Synchronized
     fun start(context: Context, adapterService: Any?, prefsProvider: (() -> SharedPreferences)? = null) {
         adapterService?.let { this.adapterService = it }
         prefsProvider?.let { this.prefsProvider = it }
@@ -104,6 +116,7 @@ object SonyEngineHost {
         // re-fetching; the cycle command and the deferred re-read prefer currentPrefs().
         this.prefs = prefsProvider?.invoke()
         if (started) return
+        if (scope.coroutineContext[Job]?.isActive != true) scope = newGenerationScope()
         val ctx = context.applicationContext ?: context
         appContext = ctx
         started = true
@@ -189,6 +202,59 @@ object SonyEngineHost {
         Log.d(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
     }
 
+    /** Idempotent generation teardown. Bluetooth transports never cross a hot reload. */
+    @Synchronized
+    fun shutdown() {
+        if (!started && repository == null && commandReceiver == null) return
+        started = false
+        val oldScope = scope
+        scope = newGenerationScope()
+        oldScope.cancel()
+        val ctx = appContext
+        listOf(commandReceiver, configReceiver, capabilityCacheReceiver, unlockReceiver)
+            .filterNotNull()
+            .forEach { receiver -> ctx?.let { runCatching { it.unregisterReceiver(receiver) } } }
+        commandReceiver = null
+        configReceiver = null
+        capabilityCacheReceiver = null
+        unlockReceiver = null
+
+        val prefsStore = currentPrefs()
+        remotePreferenceListener?.let { listener ->
+            prefsStore?.let { runCatching { it.unregisterOnSharedPreferenceChangeListener(listener) } }
+        }
+        remotePreferenceListener = null
+        remoteConfigListenerRegistered = false
+        configReceiverRegistered = false
+        capabilityCacheReceiverRegistered = false
+
+        val repo = repository
+        repository = null
+        runCatching { repo?.close() }
+
+        val proxy = a2dpProxy
+        a2dpProxy = null
+        val adapter = a2dpContext?.getSystemService(BluetoothManager::class.java)?.adapter
+        if (proxy != null && adapter != null) runCatching { adapter.closeProfileProxy(BluetoothProfile.A2DP, proxy) }
+        a2dpContext = null
+        a2dpListener = null
+
+        officialAppDeathRecipient?.let { recipient -> officialAppLeaseToken?.let { token -> runCatching { token.unlinkToDeath(recipient, 0) } } }
+        officialAppDeathRecipient = null
+        officialAppLeaseToken = null
+        officialAppLeaseId = null
+        officialAppOwnsTandem = false
+        appContext = null
+        adapterService = null
+        prefs = null
+        prefsProvider = null
+        lastSnapshot = null
+        lastRenderedBattery = null
+        lastRenderedAddress = null
+        lastConnectAnimationKey = null
+        Log.d(TAG, "engine generation shut down")
+    }
+
     @Volatile
     private var remoteConfigListenerRegistered = false
 
@@ -196,13 +262,15 @@ object SonyEngineHost {
         if (remoteConfigListenerRegistered) return
         val p = currentPrefs() ?: return
         remoteConfigListenerRegistered = true
-        p.registerOnSharedPreferenceChangeListener { _, _ ->
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             runCatching {
                 currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
                 repository?.refreshCapabilityCacheFromPrefs()
                 Log.d(TAG, "remote config changed; refreshed; ancCycleModes=${ConfigManager.ancCycleModes()}")
             }.onFailure { Log.w(TAG, "remote config change refresh failed", it) }
         }
+        remotePreferenceListener = listener
+        p.registerOnSharedPreferenceChangeListener(listener)
         Log.d(TAG, "remote config change listener registered")
     }
 
@@ -359,30 +427,30 @@ object SonyEngineHost {
      */
     private fun registerUnlockReceiver(context: Context) {
         runCatching {
-            context.registerReceiver(
-                object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         Log.d(TAG, "user unlocked (${intent?.action}); republishing state")
                         lastRenderedAddress = null
                         lastRenderedBattery = null
                         publish(context, snapshot())
                     }
-                },
+                }
+            context.registerReceiver(
+                receiver,
                 IntentFilter().apply {
                     addAction(Intent.ACTION_USER_UNLOCKED)
                     addAction(Intent.ACTION_USER_PRESENT)
                 },
                 Context.RECEIVER_EXPORTED,
             )
+            unlockReceiver = receiver
         }.onFailure { Log.w(TAG, "unlock receiver registration failed", it) }
     }
 
     private fun bindA2dpProxy(context: Context) {
         runCatching {
             val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return
-            adapter.getProfileProxy(
-                context,
-                object : BluetoothProfile.ServiceListener {
+            val listener = object : BluetoothProfile.ServiceListener {
                     override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                         if (profile == BluetoothProfile.A2DP) {
                             a2dpProxy = proxy
@@ -394,7 +462,12 @@ object SonyEngineHost {
                     override fun onServiceDisconnected(profile: Int) {
                         if (profile == BluetoothProfile.A2DP) a2dpProxy = null
                     }
-                },
+                }
+            a2dpContext = context
+            a2dpListener = listener
+            adapter.getProfileProxy(
+                context,
+                listener,
                 BluetoothProfile.A2DP,
             )
         }.onFailure { Log.w(TAG, "A2DP proxy bind failed", it) }
@@ -427,17 +500,17 @@ object SonyEngineHost {
 
     private fun registerCommandReceiver(context: Context) {
         runCatching {
-            context.registerReceiver(
-                object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
-                        handleCommand(
-                            intent ?: return,
-                        )
+                        handleCommand(intent ?: return)
                     }
-                },
+                }
+            context.registerReceiver(
+                receiver,
                 IntentFilter(SonyBridge.ACTION_COMMAND),
                 Context.RECEIVER_EXPORTED,
             )
+            commandReceiver = receiver
             Log.d(TAG, "command receiver registered")
         }.onFailure { Log.w(TAG, "command receiver registration failed", it) }
     }
@@ -474,17 +547,19 @@ object SonyEngineHost {
         if (configReceiverRegistered) return
         configReceiverRegistered = true
         runCatching {
-            context.registerReceiver(
-                object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
                         val json = intent.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON) ?: return
                         ConfigManager.applyConfigJson(json)
                     }
-                },
+                }
+            context.registerReceiver(
+                receiver,
                 IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED),
                 Context.RECEIVER_EXPORTED,
             )
+            configReceiver = receiver
             Log.d(TAG, "config push receiver registered")
         }.onFailure { Log.w(TAG, "config push receiver registration failed", it) }
     }
@@ -500,17 +575,19 @@ object SonyEngineHost {
         if (capabilityCacheReceiverRegistered) return
         capabilityCacheReceiverRegistered = true
         runCatching {
-            context.registerReceiver(
-                object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         if (intent?.action != SonyBridge.ACTION_CAPABILITY_CACHE) return
                         val json = intent.getStringExtra(SonyBridge.EXTRA_CAPABILITY_JSON) ?: return
                         repository?.installCapabilityCache(json)
                     }
-                },
+                }
+            context.registerReceiver(
+                receiver,
                 IntentFilter(SonyBridge.ACTION_CAPABILITY_CACHE),
                 Context.RECEIVER_EXPORTED,
             )
+            capabilityCacheReceiver = receiver
             Log.d(TAG, "capability cache push receiver registered")
         }.onFailure { Log.w(TAG, "capability cache push receiver registration failed", it) }
     }

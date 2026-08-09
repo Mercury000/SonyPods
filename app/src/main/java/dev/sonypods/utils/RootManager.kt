@@ -5,9 +5,16 @@ import android.util.Log
 object RootManager {
     private const val TAG = "SonyPods-Root"
     private val packageNameRegex = Regex("^[A-Za-z0-9_.]+$")
+    private val allowedScopes = setOf(
+        "com.android.bluetooth",
+        "com.android.settings",
+        "com.milink.service",
+        "com.xiaomi.bluetooth",
+        "com.sony.songpal.mdr",
+    )
 
     fun restartPackages(packages: Collection<String>): Boolean {
-        val targets = packages.distinct().filter { it.matches(packageNameRegex) }
+        val targets = packages.distinct().filter { it in allowedScopes && it.matches(packageNameRegex) }
         if (targets.isEmpty()) return false
 
         return runCatching {

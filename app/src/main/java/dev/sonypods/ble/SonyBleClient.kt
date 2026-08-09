@@ -540,6 +540,13 @@ class SonyBleClient(
         closeGatt(notify = true)
     }
 
+    /** Generation teardown: cancel callbacks and close every transport without notifying consumers. */
+    fun close() {
+        timeoutHandler.removeCallbacksAndMessages(null)
+        stopScan()
+        closeGatt(notify = false)
+    }
+
     private fun closeGatt(notify: Boolean) {
         cancelAllTimeouts()
         closeSpp(notify = false)

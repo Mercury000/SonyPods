@@ -588,10 +588,10 @@ private fun EarphoneDetailActions(
         )
     }
 }
-
 private val restartScopeOptions = listOf(
     RestartScope("com.android.bluetooth", "Bluetooth"),
     RestartScope("com.android.settings", "Settings"),
     RestartScope("com.milink.service", "MiLink Service"),
     RestartScope("com.xiaomi.bluetooth", "Mi Bluetooth"),
+    RestartScope("com.sony.songpal.mdr", "Sony | Sound Connect"),
 )

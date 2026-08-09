@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.utils.FocusIslandUtil
 import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
 import dev.sonypods.utils.PodImageLoader
@@ -31,6 +32,26 @@ import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {
+    private var receiverContext: Context? = null
+    private var notificationReceiver: BroadcastReceiver? = null
+    private var unlockReceiver: BroadcastReceiver? = null
+    private var notificationRenderer: ((Context, BluetoothDevice?, BatteryParams, String?, Boolean) -> Unit)? = null
+    private var notificationCanceller: ((Context, BluetoothDevice) -> Unit)? = null
+    private val surfaceHandler = Handler(Looper.getMainLooper())
+
+    override fun onBeforeReload() {
+        surfaceHandler.removeCallbacksAndMessages(null)
+        listOf(notificationReceiver, unlockReceiver).filterNotNull().forEach { receiver ->
+            unregisterReceiverForReload(receiverContext, receiver)
+        }
+        notificationReceiver = null
+        unlockReceiver = null
+        PodImageLoader.remoteImageReader = null
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        receiverContext?.let { startAfterReload(it) }
+    }
 
     override fun onHook() {
 
@@ -253,56 +274,83 @@ object MiBluetoothToastHook : HookContext() {
             }
         }
 
+        notificationRenderer = { context, device, battery, sourceColor, singleBattery ->
+            createPodsNotification(device, context, battery, sourceColor, singleBattery)
+        }
+        notificationCanceller = { context, device ->
+            cancelNotification(device, context)
+        }
 
         hookConstructorAfter(findConstructorByParamCount("com.android.bluetooth.ble.app.MiuiBluetoothNotification", 2)) {
             val context = getObjectField(instance, "mContext") as Context
+            registerNotificationReceiver(context)
+            // This class is constructed well after boot, so anything the engine
+            // rendered before now was lost; ask it to render again.
+            announceSurfacesReady(context)
+            registerUnlockReceiver(context)
+        }
+    }
 
-                    val broadcastReceiver = object : BroadcastReceiver() {
-                        override fun onReceive(p0: Context?, p1: Intent?) {
-                            if (p1?.action == SonyPodsAction.ACTION_SEND_STRONG_TOAST) {
-                                val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)!!
-                                val address = p1.getStringExtra("address").orEmpty()
-                                val single = p1.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
-                                when (ConfigManager.islandMode()) {
-                                    // Module island: our own Focus Island (HyperOS 3+).
-                                    ConfigManager.ISLAND_MODE_MODULE ->
-                                        FocusIslandUtil.showBatteryIsland(
-                                            context,
-                                            runCatching { prefsProvider() }.getOrElse { prefs },
-                                            batteryParams,
-                                            address,
-                                        )
-                                    // Official look: the same strong toast HyperOS plays
-                                    // for its own earbuds, using the stock clips.
-                                    ConfigManager.ISLAND_MODE_OFFICIAL ->
-                                        MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
-                                    else ->
-                                        Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
-                                }
-                        } else if (p1?.action == SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION) {
-                            val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
-                            val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
-                            val sourceColor = p1.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
-                            val singleBattery = p1.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
-                            createPodsNotification(device, context, batteryParams!!, sourceColor, singleBattery)
-                        } else if (p1?.action == SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION) {
-                                val device = p1.getParcelableExtra("device", BluetoothDevice::class.java) as BluetoothDevice
-                                cancelNotification(device, context)
-                            }
+    /** Rebind receivers and request a surface replay when package callbacks are not replayed. */
+    internal fun startAfterReload(context: Context) {
+        registerNotificationReceiver(context)
+        announceSurfacesReady(context)
+        registerUnlockReceiver(context)
+    }
+
+    private fun registerNotificationReceiver(context: Context) {
+        if (notificationReceiver != null) return
+        val render = notificationRenderer
+            ?: throw IllegalStateException("notification renderer is not initialized")
+        val cancel = notificationCanceller
+            ?: throw IllegalStateException("notification canceller is not initialized")
+        val broadcastReceiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    SonyPodsAction.ACTION_SEND_STRONG_TOAST -> {
+                        val batteryParams = intent.getParcelableExtra("batteryParams", BatteryParams::class.java)
+                            ?: return
+                        val address = intent.getStringExtra("address").orEmpty()
+                        val single = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
+                        when (ConfigManager.islandMode()) {
+                            ConfigManager.ISLAND_MODE_MODULE ->
+                                FocusIslandUtil.showBatteryIsland(
+                                    context,
+                                    runCatching { prefsProvider() }.getOrElse { prefs },
+                                    batteryParams,
+                                    address,
+                                )
+                            ConfigManager.ISLAND_MODE_OFFICIAL ->
+                                MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                            else ->
+                                Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
                         }
                     }
-
-                    val intentFilter = IntentFilter(SonyPodsAction.ACTION_SEND_STRONG_TOAST)
-                    intentFilter.addAction(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
-                    intentFilter.addAction(SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
-                    context.registerReceiver(broadcastReceiver, intentFilter,
-                        Context.RECEIVER_EXPORTED)
-                    Log.d("SonyPods", "notification/island receiver registered")
-                    // This class is constructed well after boot, so anything the engine
-                    // rendered before now was lost; ask it to render again.
-                    announceSurfacesReady(context)
-                    registerUnlockReceiver(context)
+                    SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION -> {
+                        val batteryParams = intent.getParcelableExtra<BatteryParams>(
+                            "batteryParams",
+                            BatteryParams::class.java,
+                        ) ?: return
+                        val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
+                        val sourceColor = intent.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
+                        val singleBattery = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
+                        render(context, device, batteryParams, sourceColor, singleBattery)
+                    }
+                    SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION -> {
+                        val device = intent.getParcelableExtra("device", BluetoothDevice::class.java) ?: return
+                        cancel(context, device)
+                    }
+                }
+            }
         }
+        val intentFilter = IntentFilter(SonyPodsAction.ACTION_SEND_STRONG_TOAST).apply {
+            addAction(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
+            addAction(SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
+        }
+        context.registerReceiver(broadcastReceiver, intentFilter, Context.RECEIVER_EXPORTED)
+        notificationReceiver = broadcastReceiver
+        receiverContext = context
+        Log.d("SonyPods", "notification/island receiver registered")
     }
 
     /**
@@ -312,14 +360,16 @@ object MiBluetoothToastHook : HookContext() {
      * on change — so re-run the handshake once the device becomes usable.
      */
     private fun registerUnlockReceiver(context: Context) {
+        if (unlockReceiver != null) return
         runCatching {
-            context.registerReceiver(
-                object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
                         Log.d("SonyPods", "user unlocked (${intent?.action}); re-rendering surfaces")
                         announceSurfacesReady(context)
                     }
-                },
+                }
+            context.registerReceiver(
+                receiver,
                 IntentFilter().apply {
                     addAction(Intent.ACTION_USER_UNLOCKED)
                     addAction(Intent.ACTION_USER_PRESENT)
@@ -327,13 +377,15 @@ object MiBluetoothToastHook : HookContext() {
                 },
                 Context.RECEIVER_EXPORTED,
             )
+            unlockReceiver = receiver
+            receiverContext = context
         }.onFailure { Log.w("SonyPods", "unlock receiver registration failed", it) }
     }
 
     private fun announceSurfacesReady(context: Context) {
-        val handler = Handler(Looper.getMainLooper())
+        surfaceHandler.removeCallbacksAndMessages(null)
         repeat(SURFACES_READY_ATTEMPTS) { attempt ->
-            handler.postDelayed(
+            surfaceHandler.postDelayed(
                 { SonyBridge.sendCommand(context, SonyBridge.CMD_SURFACES_READY) },
                 attempt * SURFACES_READY_INTERVAL_MS,
             )

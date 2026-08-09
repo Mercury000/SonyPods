@@ -14,6 +14,7 @@ import android.os.Parcel
 import java.lang.reflect.Method
 import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
@@ -32,6 +33,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private var lastSonyDevice: BluetoothDevice? = null
     private var context: Context? = null
     private var receiverRegistered = false
+    private var configReceiver: BroadcastReceiver? = null
     private var currentBattery: BatteryParams? = null
     private var currentAnc = 1
     private var currentTransparencyVocalEnhancement = false
@@ -75,6 +77,30 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     override fun onHook() {
         hookHeadsetServiceBinder()
         hookNotificationBatteryUpstream()
+    }
+
+    override fun onBeforeReload() {
+        handler.removeCallbacksAndMessages(null)
+        stateMirror.close()
+        configReceiver?.let { receiver ->
+            unregisterReceiverForReload(context, receiver)
+        }
+        configReceiver = null
+        receiverRegistered = false
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        context?.let { registerStatusReceiver(it) }
+    }
+
+    internal fun restoreDynamicHookClasses(classNames: List<String>) {
+        classNames.distinct().forEach { className ->
+            findClassOrNull(className)?.let { installHeadsetBinderHooks(it) }
+        }
+    }
+
+    internal fun startAfterReload(context: Context) {
+        registerStatusReceiver(context)
     }
 
     private fun hookNotificationBatteryUpstream() {
@@ -196,13 +222,15 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         context = ctx.applicationContext ?: ctx
         stateMirror.register(context)
         runCatching {
-            context?.registerReceiver(object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
                     applyPushedConfig(intent)
                     notifyRealStatus("config-changed")
                 }
-            }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+            }
+            context?.registerReceiver(receiver, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+            configReceiver = receiver
         }
         receiverRegistered = true
         Log.d(TAG, "registered status mirror context=$context")
@@ -211,6 +239,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private fun installHeadsetBinderHooks(binderClass: Class<*>) {
         val className = binderClass.name
         if (!hookedBinderClasses.add(className)) return
+        registerDynamicTarget(className)
         Log.d(TAG, "BluetoothHeadsetService binder class=$className")
 
         runCatching {

@@ -41,6 +41,7 @@ object MiLinkServiceHook : HookContext() {
     private val knownSonyAddresses = linkedSetOf<String>()
     internal var context: Context? = null
     private var receiverRegistered = false
+    private var configReceiver: BroadcastReceiver? = null
     private var stateSeeded = false
     internal var currentAddress: String? = null
     private var currentName: String? = null
@@ -63,6 +64,25 @@ object MiLinkServiceHook : HookContext() {
         hookMxBluetoothRuntime()
         hookHeadsetRuntimeDisplay()
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
+    }
+
+    override fun onBeforeReload() {
+        stateMirror.close()
+        configReceiver?.let { receiver ->
+            unregisterReceiverForReload(context, receiver)
+        }
+        configReceiver = null
+        receiverRegistered = false
+        lastAncBatteryController = null
+        lastProfileContext = null
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        context?.let { startAfterReload(it) }
+    }
+
+    internal fun startAfterReload(context: Context) {
+        registerStatusReceiver(context)
     }
 
     /**
@@ -227,11 +247,13 @@ object MiLinkServiceHook : HookContext() {
             .onFailure { Log.d(TAG, "loadState skipped (storage locked); will seed from snapshot", it) }
         stateMirror.register(context)
         runCatching {
-            context?.registerReceiver(object : BroadcastReceiver() {
+            val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action == SonyPodsAction.ACTION_CONFIG_CHANGED) applyPushedConfig(intent)
                 }
-            }, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+            }
+            context?.registerReceiver(receiver, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
+            configReceiver = receiver
         }
         receiverRegistered = true
     }

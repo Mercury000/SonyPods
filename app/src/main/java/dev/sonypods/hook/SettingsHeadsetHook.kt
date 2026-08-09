@@ -36,10 +36,15 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
     private val batteryValuesCache = WeakHashMap<Any, String>()
     private val headsetFragments = WeakHashMap<Any, Boolean>()
     private val batteryLabelOriginals = WeakHashMap<TextView, CharSequence>()
+    private var reloadBatteryViews: WeakHashMap<Any, BluetoothDevice>? = null
+    private var reloadBatteryValuesCache: WeakHashMap<Any, String>? = null
+    private var reloadHeadsetFragments: WeakHashMap<Any, Boolean>? = null
+    private var reloadBatteryLabelOriginals: WeakHashMap<TextView, CharSequence>? = null
     private var hasLiveSnapshot = false
     private var hasAncState = false
     private var context: Context? = null
     private var receiverRegistered = false
+    private var stateReceiver: BroadcastReceiver? = null
     private var currentAddress: String? = null
     private var currentName: String? = null
     private var currentFormFactor: String? = null
@@ -71,6 +76,40 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
         hookServiceProxy()
         hookBatteryView()
         hookFragmentState()
+    }
+
+    override fun onBeforeReload() {
+        refreshHandler.removeCallbacksAndMessages(null)
+        stateReceiver?.let { receiver ->
+            unregisterReceiverForReload(context, receiver)
+        }
+        stateReceiver = null
+        receiverRegistered = false
+        refreshLoopStarted = false
+        reloadBatteryViews = WeakHashMap(batteryViews)
+        reloadBatteryValuesCache = WeakHashMap(batteryValuesCache)
+        reloadHeadsetFragments = WeakHashMap(headsetFragments)
+        reloadBatteryLabelOriginals = WeakHashMap(batteryLabelOriginals)
+        batteryViews.clear()
+        batteryValuesCache.clear()
+        headsetFragments.clear()
+        batteryLabelOriginals.clear()
+    }
+
+    override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        reloadBatteryViews?.let { batteryViews.putAll(it) }
+        reloadBatteryValuesCache?.let { batteryValuesCache.putAll(it) }
+        reloadHeadsetFragments?.let { headsetFragments.putAll(it) }
+        reloadBatteryLabelOriginals?.let { batteryLabelOriginals.putAll(it) }
+        reloadBatteryViews = null
+        reloadBatteryValuesCache = null
+        reloadHeadsetFragments = null
+        reloadBatteryLabelOriginals = null
+        context?.let { startAfterReload(it) }
+    }
+
+    internal fun startAfterReload(context: Context) {
+        registerStatusReceiver(context)
     }
 
     private fun hookActivityEntry() {
@@ -402,7 +441,7 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
             addAction(SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED)
             addAction(SonyPodsAction.ACTION_CONFIG_CHANGED)
         }
-        context?.registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     SonyBridge.ACTION_STATE -> {
@@ -474,7 +513,9 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
                 }
                 Log.d(TAG, "state action=${intent?.action} address=$currentAddress anc=$currentAnc battery=${settingsBatteryString()}")
             }
-        }, filter, Context.RECEIVER_EXPORTED)
+        }
+        context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        stateReceiver = receiver
         receiverRegistered = true
         requestBluetoothStatus("receiver-register")
         Log.d(TAG, "registered status receiver context=$context")
