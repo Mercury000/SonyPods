@@ -188,6 +188,7 @@ object SonyCapabilityProbe {
         val writableNoise = mutableSetOf<NcAsmInquiredType>()
         val eqTypes = mutableSetOf<EqEbbInquiredType>()
         val playTypes = mutableSetOf<PlayInquiredType>()
+        var playbackHasMute = false
         var gestureSettingsType: SystemInquiredType? = null
 
         for (function in functions) {
@@ -220,6 +221,9 @@ object SonyCapabilityProbe {
                 ProbeDomain.PLAY -> function.playInquired(profile)?.let {
                     playTypes.add(it)
                     features.add(HeadphoneFeature.PLAYBACK_CONTROL)
+                    if (function.v2Type() == SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT_AND_MUTE) {
+                        playbackHasMute = true
+                    }
                 }
 
                 ProbeDomain.BATTERY -> function.batteryInquired(profile)?.let {
@@ -311,6 +315,7 @@ object SonyCapabilityProbe {
                 .ifEmpty { fallback.writableNoiseControlTypes },
             eqConfig = eqConfig,
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
+            playbackVolumeHasMute = playbackHasMute,
             gestureSettingsType = gestureSettingsType ?: fallback.gestureSettingsType,
         )
     }
@@ -636,6 +641,10 @@ object SonyCapabilityProbe {
         }
         return when (v2Type()) {
             SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT ->
+                PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT
+            // The AND_MUTE variant (0xA2) shares inquiredType 0x01 for STATUS and
+            // metadata; only its volume channel differs (0x30, tracked separately).
+            SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT_AND_MUTE ->
                 PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT
             SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT_AND_FUNCTION_CHANGE ->
                 PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT_AND_FUNCTION_CHANGE

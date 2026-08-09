@@ -12,6 +12,7 @@ import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
+import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.AssignableSettingsMapping
 import dev.sonypods.protocol.AssignableSettingsPreset
@@ -628,11 +629,45 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }.orEmpty()
         }
 
-    override fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
-        codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)
-            .buildGetPlaybackStatus(profile.capabilities.playbackControlType)
-            ?.let { listOf(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "GET playback status", it)) }
-            .orEmpty()
+    override fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        if (!profile.supports(HeadphoneFeature.PLAYBACK_CONTROL)) return emptyList()
+        val codec = codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)
+        val type = profile.capabilities.playbackControlType
+        return buildList {
+            // Capability first: the volume step count lives only in this reply, and
+            // the connection-time probe is skipped entirely on a capability-cache
+            // hit — without this the volume row never appears on reconnect.
+            codec.buildGetPlayCapability(type)?.let {
+                add(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "GET playback capability", it))
+            }
+            codec.buildGetPlaybackStatus(type)?.let {
+                add(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "GET playback status", it))
+            }
+            codec.buildGetPlaybackMetadata(type).forEachIndexed { index, bytes ->
+                add(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "GET playback metadata #$index", bytes))
+            }
+            codec.buildGetPlaybackVolume(volumeType(profile))?.let {
+                add(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "GET playback volume", it))
+            }
+        }
+    }
+
+    override fun buildSetPlaybackVolumeCommands(profile: ConnectedHeadphoneProfile, volume: Int): List<HeadphoneCommand> =
+        if (!profile.supports(HeadphoneFeature.PLAYBACK_CONTROL)) {
+            emptyList()
+        } else {
+            codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)
+                .buildSetPlaybackVolume(volume, volumeType(profile))
+                ?.let { listOf(command(profile, HeadphoneFeature.PLAYBACK_CONTROL, "SET playback volume $volume", it)) }
+                .orEmpty()
+        }
+
+    private fun volumeType(profile: ConnectedHeadphoneProfile): PlayInquiredType =
+        if (profile.capabilities.playbackVolumeHasMute) {
+            PlayInquiredType.MUSIC_VOLUME_WITH_MUTE
+        } else {
+            PlayInquiredType.MUSIC_VOLUME
+        }
 
     private fun buildRefreshLeaCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         LeaInquiredType.entries.flatMap { type ->

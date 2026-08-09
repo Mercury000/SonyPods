@@ -29,6 +29,10 @@ object SonyTandemV1Table1Protocol {
     private const val PLAY_RET_STATUS: Byte = 0xA3.toByte()
     private const val PLAY_SET_STATUS: Byte = 0xA4.toByte()
     private const val PLAY_NTFY_STATUS: Byte = 0xA5.toByte()
+    private const val PLAY_GET_PARAM: Byte = 0xA6.toByte()
+    private const val PLAY_RET_PARAM: Byte = 0xA7.toByte()
+    private const val PLAY_SET_PARAM: Byte = 0xA8.toByte()
+    private const val PLAY_NTFY_PARAM: Byte = 0xA9.toByte()
     private const val PLAYBACK_CONTROLLER: Byte = 0x01
     private const val VALUE_ENABLE: Byte = 0x00
 
@@ -252,6 +256,15 @@ object SonyTandemV1Table1Protocol {
             byteArrayOf(PLAYBACK_CONTROLLER, VALUE_ENABLE, control.code),
         )
 
+    fun buildGetPlaybackParam(dataType: PlaybackDetailedDataType): ByteArray =
+        SonyTandemFrame.message(PLAY_GET_PARAM, byteArrayOf(PLAYBACK_CONTROLLER, dataType.code))
+
+    fun buildSetPlaybackVolume(volume: Int): ByteArray =
+        SonyTandemFrame.message(
+            PLAY_SET_PARAM,
+            byteArrayOf(PLAYBACK_CONTROLLER, PlaybackDetailedDataType.VOLUME.code, volume.coerceIn(0, 255).toByte()),
+        )
+
     // ── Parse ──
 
     fun parse(raw: ByteArray): ParsedTandemResponse {
@@ -279,12 +292,7 @@ object SonyTandemV1Table1Protocol {
                 values = payload.unsignedList(),
                 raw = raw,
             )
-            PLAY_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
-                domain = "PLAY",
-                inquiredTypeCode = payload.firstOrNull()?.unsigned,
-                values = payload.unsignedList(),
-                raw = raw,
-            )
+            PLAY_RET_CAPABILITY -> parsePlayCapability(payload, raw)
             SYSTEM_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
                 domain = "SYSTEM",
                 inquiredTypeCode = payload.firstOrNull()?.unsigned,
@@ -308,15 +316,19 @@ object SonyTandemV1Table1Protocol {
             PLAY_RET_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
+                enabled = payload.getOrNull(1)?.let { it.unsigned == 0 },
                 isUnsolicited = false,
                 raw = raw,
             )
             PLAY_NTFY_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
+                enabled = payload.getOrNull(1)?.let { it.unsigned == 0 },
                 isUnsolicited = true,
                 raw = raw,
             )
+            PLAY_RET_PARAM -> parsePlayRetParam(payload, raw)
+            PLAY_NTFY_PARAM -> parsePlayNtfyParam(payload, raw)
             else -> unknown(command, payload, raw)
         }
     }
@@ -400,6 +412,55 @@ object SonyTandemV1Table1Protocol {
             3 -> PlaybackStatus.STOPPED
             else -> PlaybackStatus.UNKNOWN
         }
+
+    /** [type, volumeStep, PlaybackControlType, MetaDataDisplayType]; falls back to
+     * the generic capability dump so the debug page still shows odd replies. */
+    private fun parsePlayCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.size >= 4 && payload[0].unsigned == 0x01) {
+            return ParsedTandemResponse.PlaybackCapability(
+                inquiredTypeCode = payload[0].unsigned,
+                musicVolumeStep = payload[1].unsigned,
+                supportsPlaybackButtons = payload[2].unsigned == 1,
+                supportsMetadata = payload[3].unsigned == 1,
+                raw = raw,
+            )
+        }
+        return ParsedTandemResponse.CapabilityInfo(
+            domain = "PLAY",
+            inquiredTypeCode = payload.firstOrNull()?.unsigned,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /** Names: [type, dataType, nameStatus, len, utf8…]; volume: [type, 0x20, value]. */
+    private fun parsePlayRetParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val dataType = payload.getOrNull(1)?.let { code ->
+            PlaybackDetailedDataType.entries.firstOrNull { it.code == code }
+        } ?: return unknown(PLAY_RET_PARAM, payload, raw)
+        if (dataType == PlaybackDetailedDataType.VOLUME) {
+            val volume = payload.getOrNull(2)?.unsigned ?: return unknown(PLAY_RET_PARAM, payload, raw)
+            return ParsedTandemResponse.PlaybackVolume(volume, isUnsolicited = false, raw = raw)
+        }
+        val statusCode = payload.getOrNull(2)?.unsigned ?: return unknown(PLAY_RET_PARAM, payload, raw)
+        val length = payload.getOrNull(3)?.unsigned ?: return unknown(PLAY_RET_PARAM, payload, raw)
+        val end = (4 + length).coerceAtMost(payload.size)
+        val text = if (length == 0) "" else payload.copyOfRange(4, end).decodeToString()
+        val status = if (length == 0) PlaybackNameStatus.NOTHING else PlaybackNameStatus.fromCode(statusCode)
+        return ParsedTandemResponse.PlaybackMetadataField(dataType, PlaybackName(text, status), raw)
+    }
+
+    /** SC's v1 name NTFYs carry no content; they only announce "metadata changed". */
+    private fun parsePlayNtfyParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val dataType = payload.getOrNull(1)?.let { code ->
+            PlaybackDetailedDataType.entries.firstOrNull { it.code == code }
+        } ?: return unknown(PLAY_NTFY_PARAM, payload, raw)
+        return when {
+            dataType == PlaybackDetailedDataType.VOLUME && payload.size >= 3 ->
+                ParsedTandemResponse.PlaybackVolume(payload[2].unsigned, isUnsolicited = true, raw = raw)
+            else -> ParsedTandemResponse.PlaybackMetadataInvalidated(dataType, raw)
+        }
+    }
 
     private fun parseLengthPrefixedString(payload: ByteArray, offset: Int): String? {
         val length = payload.getOrNull(offset)?.unsigned ?: return fallbackDeviceInfoString(payload)

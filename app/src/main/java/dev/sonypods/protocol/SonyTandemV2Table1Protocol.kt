@@ -67,6 +67,10 @@ object SonyTandemV2Table1Protocol {
     private const val PLAY_RET_STATUS: Byte = 0xA3.toByte()
     private const val PLAY_SET_STATUS: Byte = 0xA4.toByte()
     private const val PLAY_NTFY_STATUS: Byte = 0xA5.toByte()
+    private const val PLAY_GET_PARAM: Byte = 0xA6.toByte()
+    private const val PLAY_RET_PARAM: Byte = 0xA7.toByte()
+    private const val PLAY_SET_PARAM: Byte = 0xA8.toByte()
+    private const val PLAY_NTFY_PARAM: Byte = 0xA9.toByte()
     private const val PLAY_GET_CAPABILITY: Byte = 0xA0.toByte()
     private const val PLAY_RET_CAPABILITY: Byte = 0xA1.toByte()
     private const val VALUE_ENABLE: Byte = 0x00
@@ -520,6 +524,15 @@ object SonyTandemV2Table1Protocol {
             byteArrayOf(type.code, VALUE_ENABLE, control.code),
         )
 
+    fun buildGetPlaybackParam(type: PlayInquiredType): ByteArray =
+        SonyTandemFrame.message(PLAY_GET_PARAM, byteArrayOf(type.code))
+
+    fun buildSetPlaybackVolume(
+        volume: Int,
+        type: PlayInquiredType = PlayInquiredType.MUSIC_VOLUME,
+    ): ByteArray =
+        SonyTandemFrame.message(PLAY_SET_PARAM, byteArrayOf(type.code, volume.coerceIn(0, 255).toByte()))
+
     fun parse(raw: ByteArray): ParsedTandemResponse {
         val normalized = if (raw.firstOrNull() == DATA_MDR) raw else byteArrayOf(DATA_MDR) + raw
         if (normalized.size < 2) {
@@ -553,12 +566,7 @@ object SonyTandemV2Table1Protocol {
                 values = payload.unsignedList(),
                 raw = raw,
             )
-            PLAY_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
-                domain = "PLAY",
-                inquiredTypeCode = payload.firstOrNull()?.unsigned,
-                values = payload.unsignedList(),
-                raw = raw,
-            )
+            PLAY_RET_CAPABILITY -> parsePlayCapability(payload, raw)
             CONNECT_RET_DEVICE_INFO -> parseDeviceInfo(payload, raw)
             SYSTEM_RET_CAPABILITY -> parseSystemRetCapability(payload, raw)
             SYSTEM_RET_STATUS, SYSTEM_NTFY_STATUS -> parseSystemStatus(payload, raw)
@@ -572,15 +580,19 @@ object SonyTandemV2Table1Protocol {
             PLAY_RET_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
+                enabled = playStatusEnabled(payload),
                 isUnsolicited = false,
                 raw = raw,
             )
             PLAY_NTFY_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
+                enabled = playStatusEnabled(payload),
                 isUnsolicited = true,
                 raw = raw,
             )
+            PLAY_RET_PARAM -> parsePlayParam(payload, raw, isUnsolicited = false)
+            PLAY_NTFY_PARAM -> parsePlayParam(payload, raw, isUnsolicited = true)
             LEA_RET_STATUS, LEA_NTFY_STATUS -> parseLeaStatus(payload, raw)
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaParam(payload, raw)
             SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
@@ -883,6 +895,83 @@ object SonyTandemV2Table1Protocol {
             3 -> PlaybackStatus.STOPPED
             else -> PlaybackStatus.UNKNOWN
         }
+
+    /** STATUS enable bit; only for the playback types — 0x40 PLAY_MODE has its own
+     * enable at the same offset and must not leak into the playback card state. */
+    private fun playStatusEnabled(payload: ByteArray): Boolean? =
+        payload.getOrNull(1)
+            ?.takeIf { payload.firstOrNull()?.unsigned in 1..3 }
+            ?.let { it.unsigned == 0 }
+
+    /** Type 0x01/0x02 → [type, musicStep, callStep]; 0x03 → [type, musicStep].
+     * The v2 wire format has no button/metadata support bits: SC hardcodes both
+     * as supported for v2 devices, and so do we. */
+    private fun parsePlayCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.firstOrNull()?.unsigned
+        val musicStep = when (type) {
+            0x01, 0x02 -> if (payload.size >= 3) payload[1].unsigned else null
+            0x03 -> if (payload.size >= 2) payload[1].unsigned else null
+            else -> null
+        }
+        if (type != null && musicStep != null) {
+            return ParsedTandemResponse.PlaybackCapability(
+                inquiredTypeCode = type,
+                musicVolumeStep = musicStep,
+                supportsPlaybackButtons = true,
+                supportsMetadata = true,
+                raw = raw,
+            )
+        }
+        return ParsedTandemResponse.CapabilityInfo(
+            domain = "PLAY",
+            inquiredTypeCode = type,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    private fun parsePlayParam(payload: ByteArray, raw: ByteArray, isUnsolicited: Boolean): ParsedTandemResponse =
+        when (payload.firstOrNull()?.unsigned) {
+            0x01, 0x02, 0x03 -> parsePlayMetadata(payload, raw, isUnsolicited)
+            // 0x20/0x21 = music/call volume; 0x30/0x31 append a mute byte we ignore.
+            0x20, 0x21, 0x30, 0x31 -> payload.getOrNull(1)?.let {
+                ParsedTandemResponse.PlaybackVolume(it.unsigned, isUnsolicited, raw)
+            } ?: unknownPlayParam(payload, raw)
+            else -> unknownPlayParam(payload, raw)
+        }
+
+    /** payload[0]=type, then exactly four [nameStatus, len, utf8…] elements in the
+     * fixed order track/album/artist/genre. Partial payloads are rejected whole —
+     * SC's parser does the same, and partial application would tear the card. */
+    private fun parsePlayMetadata(payload: ByteArray, raw: ByteArray, isUnsolicited: Boolean): ParsedTandemResponse {
+        val names = ArrayList<PlaybackName>(4)
+        var index = 1
+        repeat(4) {
+            val statusCode = payload.getOrNull(index)?.unsigned ?: return unknownPlayParam(payload, raw)
+            val length = payload.getOrNull(index + 1)?.unsigned ?: return unknownPlayParam(payload, raw)
+            val start = index + 2
+            if (start + length > payload.size) return unknownPlayParam(payload, raw)
+            val text = if (length == 0) "" else payload.copyOfRange(start, start + length).decodeToString()
+            val status = if (length == 0 && statusCode == PlaybackNameStatus.SETTLED.code) {
+                PlaybackNameStatus.NOTHING
+            } else {
+                PlaybackNameStatus.fromCode(statusCode)
+            }
+            names += PlaybackName(text, status)
+            index = start + length
+        }
+        return ParsedTandemResponse.PlaybackMetadata(
+            track = names[0],
+            album = names[1],
+            artist = names[2],
+            genre = names[3],
+            isUnsolicited = isUnsolicited,
+            raw = raw,
+        )
+    }
+
+    private fun unknownPlayParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
+        ParsedTandemResponse.Unknown(DATA_MDR.unsigned, PLAY_RET_PARAM.unsigned, payload, raw)
 
     private fun parseLeaStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val typeCode = payload.firstOrNull()

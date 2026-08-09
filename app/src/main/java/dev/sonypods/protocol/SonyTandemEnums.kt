@@ -120,7 +120,31 @@ enum class PlayInquiredType(val code: Byte) {
     PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT(0x01),
     PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT_AND_FUNCTION_CHANGE(0x02),
     PLAYBACK_CONTROL_WITH_FUNCTION_CHANGE(0x03),
+    MUSIC_VOLUME(0x20),
+    CALL_VOLUME(0x21),
+    MUSIC_VOLUME_WITH_MUTE(0x30),
+    CALL_VOLUME_WITH_MUTE(0x31),
     PLAY_MODE(0x40),
+}
+
+enum class PlaybackNameStatus(val code: Int) {
+    UNSETTLED(0),
+    NOTHING(1),
+    SETTLED(2);
+
+    companion object {
+        fun fromCode(code: Int): PlaybackNameStatus = entries.firstOrNull { it.code == code } ?: UNSETTLED
+    }
+}
+
+/** V1 Table1 PLAY_GET/RET/NTFY_PARAM field-selector byte. */
+enum class PlaybackDetailedDataType(val code: Byte) {
+    TRACK_NAME(0x00),
+    ALBUM_NAME(0x01),
+    ARTIST_NAME(0x02),
+    GENRE_NAME(0x03),
+    PLAYER_NAME(0x10),
+    VOLUME(0x20),
 }
 
 enum class LeaInquiredType(val code: Byte) {

@@ -10,6 +10,7 @@ import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
+import dev.sonypods.protocol.PlaybackDetailedDataType
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table1Protocol
@@ -69,6 +70,11 @@ interface TandemCodec {
         control: PlaybackControl,
         type: PlayInquiredType = PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT,
     ): ByteArray? = null
+    /** Fetch track metadata; v1 needs four single-field GETs, v2 one bulk GET. */
+    fun buildGetPlaybackMetadata(type: PlayInquiredType): List<ByteArray> = emptyList()
+    /** volumeType is only meaningful on v2 (0x20 plain / 0x30 AND_MUTE variant). */
+    fun buildGetPlaybackVolume(volumeType: PlayInquiredType): ByteArray? = null
+    fun buildSetPlaybackVolume(volume: Int, volumeType: PlayInquiredType): ByteArray? = null
     fun buildGetLeaStatus(type: LeaInquiredType): ByteArray? = null
     fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray? = null
     fun buildGetQuickAccess(): ByteArray? = null
@@ -235,6 +241,19 @@ object SonyTandemV1Table1Codec : TandemCodec {
     override fun buildPlayback(control: PlaybackControl, type: PlayInquiredType): ByteArray =
         SonyTandemV1Table1Protocol.buildPlayback(control)
 
+    override fun buildGetPlaybackMetadata(type: PlayInquiredType): List<ByteArray> = listOf(
+        PlaybackDetailedDataType.TRACK_NAME,
+        PlaybackDetailedDataType.ALBUM_NAME,
+        PlaybackDetailedDataType.ARTIST_NAME,
+        PlaybackDetailedDataType.GENRE_NAME,
+    ).map(SonyTandemV1Table1Protocol::buildGetPlaybackParam)
+
+    override fun buildGetPlaybackVolume(volumeType: PlayInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetPlaybackParam(PlaybackDetailedDataType.VOLUME)
+
+    override fun buildSetPlaybackVolume(volume: Int, volumeType: PlayInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildSetPlaybackVolume(volume)
+
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV1Table1Protocol.parse(raw)
 }
@@ -367,6 +386,15 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildPlayback(control: PlaybackControl, type: PlayInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildPlayback(control, type)
+
+    override fun buildGetPlaybackMetadata(type: PlayInquiredType): List<ByteArray> =
+        listOf(SonyTandemV2Table1Protocol.buildGetPlaybackParam(type))
+
+    override fun buildGetPlaybackVolume(volumeType: PlayInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetPlaybackParam(volumeType)
+
+    override fun buildSetPlaybackVolume(volume: Int, volumeType: PlayInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetPlaybackVolume(volume, volumeType)
 
     override fun buildGetLeaStatus(type: LeaInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetLeaStatus(type)

@@ -152,7 +152,49 @@ sealed interface ParsedTandemResponse {
     data class PlaybackAck(
         val values: List<Int>,
         val status: PlaybackStatus = PlaybackStatus.UNKNOWN,
+        /** STATUS payload[1]: 0x00=ENABLE. null = payload too short. */
+        val enabled: Boolean? = null,
         val isUnsolicited: Boolean = false,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** V2: RET/NTFY_PARAM carries all four names in one message. */
+    data class PlaybackMetadata(
+        val track: PlaybackName,
+        val album: PlaybackName,
+        val artist: PlaybackName,
+        val genre: PlaybackName,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** V1: RET_PARAM single-field reply. */
+    data class PlaybackMetadataField(
+        val dataType: PlaybackDetailedDataType,
+        val name: PlaybackName,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** V1: NTFY_PARAM content-less trigger; re-GET every name field on receipt. */
+    data class PlaybackMetadataInvalidated(
+        val dataType: PlaybackDetailedDataType,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class PlaybackVolume(
+        val volume: Int,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** Structured PLAY_RET_CAPABILITY (v1 and v2). */
+    data class PlaybackCapability(
+        val inquiredTypeCode: Int,
+        /** Volume step count; 0 = no volume control on this device. */
+        val musicVolumeStep: Int,
+        /** v1 reports these; v2 wire format omits them and SC hardcodes true. */
+        val supportsPlaybackButtons: Boolean,
+        val supportsMetadata: Boolean,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
@@ -478,6 +520,12 @@ data class MultipointDevice(
 ) {
     val connected: Boolean get() = connectedStatus > 0
 }
+
+/** One playback name field (track/album/artist/genre). */
+data class PlaybackName(
+    val text: String,
+    val status: PlaybackNameStatus,
+)
 
 val Byte.unsigned: Int
     get() = toInt() and 0xFF

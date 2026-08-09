@@ -24,6 +24,11 @@ data class CapabilityCacheEntry(
     val transport: String = "",
     /** Ordered FunctionType (code, order) list from RET_SUPPORT_FUNCTION. */
     val functions: List<FunctionCode> = emptyList(),
+    /** PLAY_RET_CAPABILITY volume step count, mirroring the official capability
+     * DB: -1 = never learned, 0 = device has no volume control, >0 = step count.
+     * Restored on a cache hit so the volume row appears without waiting for the
+     * capability round-trip. */
+    val playVolumeStep: Int = -1,
     val savedAtMs: Long = 0L,
 )
 

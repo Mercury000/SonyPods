@@ -731,6 +731,8 @@ object SonyEngineHost {
             SonyBridge.CMD_PLAYBACK_PREVIOUS -> repo.playbackPrevious()
             SonyBridge.CMD_PLAYBACK_PLAY_PAUSE -> repo.playbackPlayPause()
             SonyBridge.CMD_PLAYBACK_NEXT -> repo.playbackNext()
+            SonyBridge.CMD_SET_PLAYBACK_VOLUME ->
+                repo.setPlaybackVolume(intent.getIntExtra(SonyBridge.EXTRA_INT, -1))
 
             SonyBridge.CMD_CONNECT -> {
                 val address = intent.getStringExtra(SonyBridge.EXTRA_STRING) ?: return

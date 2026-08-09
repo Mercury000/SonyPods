@@ -180,6 +180,7 @@ fun MainUI(
             onPlaybackPrevious = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PREVIOUS) },
             onPlaybackPlayPause = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_PLAY_PAUSE) },
             onPlaybackNext = { SonyBridge.sendCommand(context, SonyBridge.CMD_PLAYBACK_NEXT) },
+            onPlaybackVolumeChange = { volume -> SonyBridge.setPlaybackVolume(context, volume) },
             onPowerOff = { SonyBridge.sendCommand(context, SonyBridge.CMD_POWER_OFF) },
             onGesturePresetChange = { key, preset ->
                 SonyBridge.setGesturePreset(context, key.code.toInt() and 0xFF, preset.code.toInt() and 0xFF)

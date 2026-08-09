@@ -126,6 +126,8 @@ data class HeadphoneCapabilities(
         hasClearBass = false,
     ),
     val playbackControlType: PlayInquiredType = PlayInquiredType.PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT,
+    /** PLAY function is the AND_MUTE variant: volume rides type 0x30, not 0x20. */
+    val playbackVolumeHasMute: Boolean = false,
     /** System parameter family used by the assignable-settings feature. */
     val gestureSettingsType: SystemInquiredType = SystemInquiredType.ASSIGNABLE_SETTINGS,
     val queryProtocolInfo: Boolean = true,
@@ -394,6 +396,9 @@ interface HeadphoneAdapter {
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         emptyList()
 
+    fun buildSetPlaybackVolumeCommands(profile: ConnectedHeadphoneProfile, volume: Int): List<HeadphoneCommand> =
+        emptyList()
+
     fun parse(profile: ConnectedHeadphoneProfile, channel: TandemChannel, raw: ByteArray): ParsedTandemResponse
 
     fun parse(profile: ConnectedHeadphoneProfile, raw: ByteArray): ParsedTandemResponse =
@@ -476,6 +481,9 @@ object HeadphoneAdapterRegistry {
 
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         adapterFor(profile).buildPlaybackCommands(profile, control)
+
+    fun buildSetPlaybackVolumeCommands(profile: ConnectedHeadphoneProfile, volume: Int): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetPlaybackVolumeCommands(profile, volume)
 
     fun buildRefreshGestureOperationsCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildRefreshGestureOperationsCommands(profile)

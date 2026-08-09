@@ -46,6 +46,9 @@ import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
+import dev.sonypods.protocol.PlaybackDetailedDataType
+import dev.sonypods.protocol.PlaybackName
+import dev.sonypods.protocol.PlaybackNameStatus
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.QuickAccessKey
@@ -75,6 +78,7 @@ private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
+private const val PLAYBACK_METADATA_REFETCH_DELAY_MS = 50L
 private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
 private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
@@ -310,6 +314,20 @@ data class FeatureStatus(
     val implemented: Boolean,
 )
 
+data class PlaybackState(
+    /** RET/NTFY_STATUS enable bit; null = unknown (treated as enabled). */
+    val enabled: Boolean? = null,
+    /** null = UNSETTLED/unknown; "" = NOTHING (UI shows an "unknown" placeholder). */
+    val track: String? = null,
+    val album: String? = null,
+    val artist: String? = null,
+    /** Parsed for wire fidelity; the official card never displays genre. */
+    val genre: String? = null,
+    val musicVolume: Int? = null,
+    /** 0 = the device has no volume control (hide the volume row). */
+    val musicVolumeStep: Int = 0,
+)
+
 data class SonyHeadphoneUiState(
     val scanState: String = "Idle",
     val isScanning: Boolean = false,
@@ -330,6 +348,7 @@ data class SonyHeadphoneUiState(
     val multipointState: MultipointState = MultipointState(),
     val wearingState: WearingState = WearingState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
+    val playbackState: PlaybackState = PlaybackState(),
     val endpointDiagnostic: EndpointDiagnosticState? = null,
     val table2Diagnostic: Table2DiagnosticState? = null,
     val supportedFeatures: List<FeatureStatus> = featureStatusesFor(null),
@@ -364,6 +383,13 @@ class SonyHeadphoneRepository private constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
+    // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
+    // whole playback block; 50ms debounce coalesces notification bursts.
+    private val playbackMetadataRefetchRunnable = Runnable {
+        if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
+            refreshPlaybackState()
+        }
+    }
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
     private var pendingQuickAccessFunctionCodes: List<Int>? = null
@@ -608,6 +634,11 @@ class SonyHeadphoneRepository private constructor(
                 connectedProfile = restored,
                 eqUiCapability = restored.eqUiCapability,
                 supportedFeatures = featureStatusesFor(restored),
+                playbackState = if (entry.playVolumeStep > 0) {
+                    it.playbackState.copy(musicVolumeStep = entry.playVolumeStep)
+                } else {
+                    it.playbackState
+                },
             )
         }
         appendLog(
@@ -642,6 +673,11 @@ class SonyHeadphoneRepository private constructor(
             variant = profile.protocolName,
             transport = profile.transport.name,
             functions = functions.map { FunctionCode(it.code.toInt() and 0xFF, it.order) },
+            // The PLAY capability RET may not have arrived yet at probe-save time;
+            // keep whatever was learned before, applyPlaybackCapability updates it.
+            playVolumeStep = _state.value.playbackState.musicVolumeStep.takeIf { it > 0 }
+                ?: capabilityCache[address]?.playVolumeStep
+                ?: -1,
             savedAtMs = System.currentTimeMillis(),
         )
         capabilityCache[address] = entry
@@ -1316,6 +1352,17 @@ class SonyHeadphoneRepository private constructor(
         schedulePlaybackStateRefresh()
     }
 
+    fun setPlaybackVolume(volume: Int) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.PLAYBACK_CONTROL)) return
+        val step = _state.value.playbackState.musicVolumeStep
+        if (step <= 0) return
+        val clamped = volume.coerceIn(0, step - 1)
+        HeadphoneAdapterRegistry.buildSetPlaybackVolumeCommands(ensureConnectedProfile(), clamped)
+            .forEach(::sendCommand)
+        // Optimistic; the device's follow-up RET/NTFY corrects if needed.
+        _state.update { it.copy(playbackState = it.playbackState.copy(musicVolume = clamped)) }
+    }
+
     fun setDebugLogging(enabled: Boolean) {
         _state.update { it.copy(debugLogging = enabled) }
     }
@@ -1383,6 +1430,7 @@ class SonyHeadphoneRepository private constructor(
                 eqState = EqState(),
                 eqUiCapability = null,
                 playbackStatus = PlaybackStatus.UNKNOWN,
+                playbackState = PlaybackState(),
                 endpointDiagnostic = EndpointDiagnosticState(
                     reason = diagnostics.reason,
                     serviceLabels = diagnostics.serviceLabels,
@@ -1501,6 +1549,7 @@ class SonyHeadphoneRepository private constructor(
                 gestureOperationsState = if (connected) it.gestureOperationsState else GestureOperationsState(),
                 eqUiCapability = if (connected) profile?.eqUiCapability else null,
                 playbackStatus = if (connected) it.playbackStatus else PlaybackStatus.UNKNOWN,
+                playbackState = if (connected) it.playbackState else PlaybackState(),
                 endpointDiagnostic = if (connected) it.endpointDiagnostic else null,
                 table2Diagnostic = if (connected) it.table2Diagnostic else null,
                 permissionIssue = if (connected) it.permissionIssue else null,
@@ -1552,6 +1601,11 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.EqEbbExtendedInfo -> applyEqEbbExtendedInfo(parsed)
             is ParsedTandemResponse.NoiseControl -> applyNoise(parsed)
             is ParsedTandemResponse.PlaybackAck -> applyPlayback(parsed)
+            is ParsedTandemResponse.PlaybackCapability -> applyPlaybackCapability(parsed)
+            is ParsedTandemResponse.PlaybackMetadata -> applyPlaybackMetadata(parsed)
+            is ParsedTandemResponse.PlaybackMetadataField -> applyPlaybackMetadataField(parsed)
+            is ParsedTandemResponse.PlaybackMetadataInvalidated -> applyPlaybackMetadataInvalidated(parsed)
+            is ParsedTandemResponse.PlaybackVolume -> applyPlaybackVolume(parsed)
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
@@ -1883,11 +1937,77 @@ class SonyHeadphoneRepository private constructor(
     private fun applyPlayback(response: ParsedTandemResponse.PlaybackAck) {
         val sourceLabel = if (response.isUnsolicited) "NTFY" else "RET"
         appendLog("Playback notification [$sourceLabel] ${response.values} status=${response.status}")
+        response.enabled?.let { enabled ->
+            _state.update { it.copy(playbackState = it.playbackState.copy(enabled = enabled)) }
+        }
         if (response.status != PlaybackStatus.UNKNOWN) {
             applyPlaybackStatus(response.status, source = "Tandem", isUnsolicited = response.isUnsolicited)
         } else {
             updatePlaybackStatusFromAudioManager()
         }
+    }
+
+    private fun applyPlaybackCapability(response: ParsedTandemResponse.PlaybackCapability) {
+        appendLog(
+            "Playback capability step=${response.musicVolumeStep} " +
+                "buttons=${response.supportsPlaybackButtons} meta=${response.supportsMetadata}"
+        )
+        _state.update {
+            it.copy(playbackState = it.playbackState.copy(musicVolumeStep = response.musicVolumeStep))
+        }
+        // Mirror into the capability cache (official keeps the step in its
+        // capability DB) so a cache-hit reconnect restores the volume row
+        // without waiting for this round-trip. Entry creation stays owned by
+        // the probe path; only refresh an existing entry here.
+        val address = _state.value.connectedDevice?.address ?: return
+        val existing = capabilityCache[address] ?: return
+        if (existing.playVolumeStep != response.musicVolumeStep) {
+            capabilityCache[address] = existing.copy(playVolumeStep = response.musicVolumeStep)
+            cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+        }
+    }
+
+    private fun PlaybackName.toUiValue(): String? = when (status) {
+        PlaybackNameStatus.SETTLED -> text
+        PlaybackNameStatus.NOTHING -> ""
+        PlaybackNameStatus.UNSETTLED -> null
+    }
+
+    private fun applyPlaybackMetadata(response: ParsedTandemResponse.PlaybackMetadata) {
+        _state.update {
+            it.copy(playbackState = it.playbackState.copy(
+                track = response.track.toUiValue(),
+                album = response.album.toUiValue(),
+                artist = response.artist.toUiValue(),
+                genre = response.genre.toUiValue(),
+            ))
+        }
+    }
+
+    private fun applyPlaybackMetadataField(response: ParsedTandemResponse.PlaybackMetadataField) {
+        val value = response.name.toUiValue()
+        _state.update {
+            val playback = it.playbackState
+            it.copy(playbackState = when (response.dataType) {
+                PlaybackDetailedDataType.TRACK_NAME -> playback.copy(track = value)
+                PlaybackDetailedDataType.ALBUM_NAME -> playback.copy(album = value)
+                PlaybackDetailedDataType.ARTIST_NAME -> playback.copy(artist = value)
+                PlaybackDetailedDataType.GENRE_NAME -> playback.copy(genre = value)
+                else -> playback
+            })
+        }
+    }
+
+    private fun applyPlaybackMetadataInvalidated(response: ParsedTandemResponse.PlaybackMetadataInvalidated) {
+        // Never clear on this signal: v1 NTFYs carry no content, so clearing
+        // would flash "unknown track" on every song change. Just refetch.
+        appendLog("Playback metadata invalidated (${response.dataType}); refetching")
+        mainHandler.removeCallbacks(playbackMetadataRefetchRunnable)
+        mainHandler.postDelayed(playbackMetadataRefetchRunnable, PLAYBACK_METADATA_REFETCH_DELAY_MS)
+    }
+
+    private fun applyPlaybackVolume(response: ParsedTandemResponse.PlaybackVolume) {
+        _state.update { it.copy(playbackState = it.playbackState.copy(musicVolume = response.volume)) }
     }
 
     private fun applyLeaStatus(response: ParsedTandemResponse.LeaStatus) {

@@ -3,6 +3,7 @@ package dev.sonypods.ui.pages
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +46,7 @@ import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.components.AncSwitch
+import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.localizedName
 import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.components.PodStatus
@@ -51,9 +55,9 @@ import dev.sonypods.ui.toSinglePodParams
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -417,6 +421,15 @@ private fun LabeledLevelSlider(
 
 @Composable
 private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
+    // Tandem playback data (metadata / volume) present → official card form;
+    // otherwise the media-key fallback form: title + status text + buttons.
+    val tandemMode = uiState.playbackMusicVolumeStep > 0 ||
+        uiState.playbackTrack != null ||
+        uiState.playbackArtist != null ||
+        uiState.playbackAlbum != null
+    val controlsEnabled = uiState.playbackEnabled != false
+    val playing = uiState.playbackStatus == PlaybackStatus.PLAYING
+    val contentAlpha = if (controlsEnabled) 1f else 0.38f
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(
@@ -429,39 +442,175 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
-                    text = when (uiState.playbackStatus) {
-                        PlaybackStatus.PLAYING -> stringResource(R.string.playback_playing)
-                        PlaybackStatus.PAUSED -> stringResource(R.string.playback_paused)
-                        else -> "—"
-                    },
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
+                if (!tandemMode) {
+                    Text(
+                        text = when (uiState.playbackStatus) {
+                            PlaybackStatus.PLAYING -> stringResource(R.string.playback_playing)
+                            PlaybackStatus.PAUSED -> stringResource(R.string.playback_paused)
+                            else -> "—"
+                        },
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
             }
+
+            // Official layout row 1: song info (left) + transport buttons (right).
+            // Metadata only while PLAY/PAUSE; a Spacer keeps the buttons pinned
+            // right when it is hidden (STOP/UNSETTLED or fallback mode).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(
-                    text = stringResource(R.string.playback_previous),
-                    onClick = actions.onPlaybackPrevious,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    text = stringResource(R.string.playback_play_pause),
-                    onClick = actions.onPlaybackPlayPause,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    text = stringResource(R.string.playback_next),
-                    onClick = actions.onPlaybackNext,
-                    modifier = Modifier.weight(1f),
+                val showMetadata = tandemMode && uiState.playbackStatus in
+                    setOf(PlaybackStatus.PLAYING, PlaybackStatus.PAUSED)
+                if (showMetadata) {
+                    PlaybackMetadata(
+                        uiState = uiState,
+                        contentAlpha = contentAlpha,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                IconButton(onClick = actions.onPlaybackPrevious, enabled = controlsEnabled) {
+                    Icon(
+                        imageVector = AppIcons.SkipPrevious,
+                        contentDescription = stringResource(R.string.playback_previous),
+                        modifier = Modifier.size(24.dp).alpha(contentAlpha),
+                    )
+                }
+                IconButton(onClick = actions.onPlaybackPlayPause, enabled = controlsEnabled) {
+                    Icon(
+                        imageVector = if (playing) AppIcons.Pause else AppIcons.Play,
+                        contentDescription = stringResource(R.string.playback_play_pause),
+                        modifier = Modifier.size(28.dp).alpha(contentAlpha),
+                    )
+                }
+                IconButton(onClick = actions.onPlaybackNext, enabled = controlsEnabled) {
+                    Icon(
+                        imageVector = AppIcons.SkipNext,
+                        contentDescription = stringResource(R.string.playback_next),
+                        modifier = Modifier.size(24.dp).alpha(contentAlpha),
+                    )
+                }
+            }
+
+            // Official layout row 2: volume icon + slider.
+            if (uiState.playbackMusicVolumeStep > 0) {
+                PlaybackVolumeRow(
+                    volume = uiState.playbackMusicVolume,
+                    step = uiState.playbackMusicVolumeStep,
+                    enabled = controlsEnabled,
+                    contentAlpha = contentAlpha,
+                    onVolumeChange = actions.onPlaybackVolumeChange,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PlaybackMetadata(
+    uiState: SonyStateSnapshot,
+    contentAlpha: Float,
+    modifier: Modifier = Modifier,
+) {
+    val track = playbackName(uiState.playbackTrack, R.string.playback_unknown_track)
+    val artist = playbackName(uiState.playbackArtist, R.string.playback_unknown_artist)
+    val album = playbackName(uiState.playbackAlbum, R.string.playback_unknown_album)
+    if (track == null && artist == null && album == null) {
+        Spacer(modifier = modifier)
+        return
+    }
+    Column(modifier = modifier.alpha(contentAlpha)) {
+        track?.let {
+            Text(
+                text = it,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.basicMarquee(),
+            )
+        }
+        artist?.let {
+            Text(
+                text = it,
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        album?.let {
+            Text(
+                text = it,
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Official copy rules: SETTLED→text, NOTHING("")→"unknown" placeholder, null→row hidden. */
+@Composable
+private fun playbackName(value: String?, unknownRes: Int): String? = when {
+    value == null -> null
+    value.isEmpty() -> stringResource(unknownRes)
+    else -> value
+}
+
+@Composable
+private fun PlaybackVolumeRow(
+    volume: Int?,
+    step: Int,
+    enabled: Boolean,
+    contentAlpha: Float,
+    onVolumeChange: (Int) -> Unit,
+) {
+    val effective = (volume ?: 0).coerceIn(0, step - 1)
+    var dragging by remember { mutableStateOf(false) }
+    var draggingValue by remember { mutableFloatStateOf(effective.toFloat()) }
+    // Follow device-reported volume unless the user is mid-drag; commit once on
+    // drag end (same pattern as the ambient-level slider).
+    LaunchedEffect(effective) {
+        if (!dragging) draggingValue = effective.toFloat()
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = MiuixIcons.VolumeUp,
+            contentDescription = null,
+            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.size(20.dp).alpha(contentAlpha),
+        )
+        Slider(
+            value = draggingValue,
+            onValueChange = { newValue: Float ->
+                dragging = true
+                draggingValue = newValue
+            },
+            onValueChangeFinished = {
+                dragging = false
+                val rounded = draggingValue.toInt().coerceIn(0, step - 1)
+                if (rounded != effective) {
+                    onVolumeChange(rounded)
+                }
+            },
+            valueRange = 0f..(step - 1).toFloat(),
+            enabled = enabled,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+        )
     }
 }
 

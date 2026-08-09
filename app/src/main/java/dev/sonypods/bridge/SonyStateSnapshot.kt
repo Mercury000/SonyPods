@@ -84,6 +84,14 @@ data class SonyStateSnapshot(
     val multipoint: MultipointSnapshot = MultipointSnapshot(),
     val wearingStatus: String? = null,
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
+    /** null = unknown/UNSETTLED; "" = NOTHING (UI shows an "unknown" placeholder). */
+    val playbackTrack: String? = null,
+    val playbackArtist: String? = null,
+    val playbackAlbum: String? = null,
+    val playbackMusicVolume: Int? = null,
+    /** 0 = no volume control on this device. */
+    val playbackMusicVolumeStep: Int = 0,
+    val playbackEnabled: Boolean? = null,
     val scanState: String? = null,
 ) {
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
@@ -142,6 +150,15 @@ data class SonyStateSnapshot(
         putParcelableArrayList(KEY_QA_ACTIONS, ArrayList(quickAccessActions.map { it.toBundle() }))
         wearingStatus?.let { putString(KEY_WEARING, it) }
         putString(KEY_PLAYBACK, playbackStatus.name)
+        playbackTrack?.let { putString(KEY_PLAY_TRACK, it) }
+        playbackArtist?.let { putString(KEY_PLAY_ARTIST, it) }
+        playbackAlbum?.let { putString(KEY_PLAY_ALBUM, it) }
+        playbackMusicVolume?.let { putInt(KEY_PLAY_VOLUME, it) }
+        putInt(KEY_PLAY_VOLUME_STEP, playbackMusicVolumeStep)
+        playbackEnabled?.let {
+            putBoolean(KEY_PLAY_ENABLED_KNOWN, true)
+            putBoolean(KEY_PLAY_ENABLED, it)
+        }
         scanState?.let { putString(KEY_SCAN_STATE, it) }
     }
 
@@ -207,6 +224,13 @@ data class SonyStateSnapshot(
         private const val KEY_QA_FUNCTIONS = "qa_functions"
         private const val KEY_WEARING = "wearing"
         private const val KEY_PLAYBACK = "playback"
+        private const val KEY_PLAY_TRACK = "play_track"
+        private const val KEY_PLAY_ARTIST = "play_artist"
+        private const val KEY_PLAY_ALBUM = "play_album"
+        private const val KEY_PLAY_VOLUME = "play_volume"
+        private const val KEY_PLAY_VOLUME_STEP = "play_volume_step"
+        private const val KEY_PLAY_ENABLED_KNOWN = "play_enabled_known"
+        private const val KEY_PLAY_ENABLED = "play_enabled"
         private const val KEY_SCAN_STATE = "scan_state"
 
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
@@ -264,6 +288,16 @@ data class SonyStateSnapshot(
             playbackStatus = bundle.getString(KEY_PLAYBACK)?.let { name ->
                 PlaybackStatus.entries.firstOrNull { it.name == name }
             } ?: PlaybackStatus.UNKNOWN,
+            playbackTrack = bundle.getString(KEY_PLAY_TRACK),
+            playbackArtist = bundle.getString(KEY_PLAY_ARTIST),
+            playbackAlbum = bundle.getString(KEY_PLAY_ALBUM),
+            playbackMusicVolume = bundle.optInt(KEY_PLAY_VOLUME),
+            playbackMusicVolumeStep = bundle.getInt(KEY_PLAY_VOLUME_STEP, 0),
+            playbackEnabled = if (bundle.getBoolean(KEY_PLAY_ENABLED_KNOWN, false)) {
+                bundle.getBoolean(KEY_PLAY_ENABLED)
+            } else {
+                null
+            },
             scanState = bundle.getString(KEY_SCAN_STATE),
         )
 
@@ -334,6 +368,12 @@ data class SonyStateSnapshot(
                 ),
                 wearingStatus = state.wearingState.status,
                 playbackStatus = state.playbackStatus,
+                playbackTrack = state.playbackState.track,
+                playbackArtist = state.playbackState.artist,
+                playbackAlbum = state.playbackState.album,
+                playbackMusicVolume = state.playbackState.musicVolume,
+                playbackMusicVolumeStep = state.playbackState.musicVolumeStep,
+                playbackEnabled = state.playbackState.enabled,
                 scanState = state.scanState,
             )
         }

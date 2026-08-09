@@ -124,4 +124,72 @@ object AppIcons {
             lineTo(15f, 20f)
         }
     }.build()
+
+    val Play: ImageVector = ImageVector.Builder(
+        name = "Play",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black), stroke = SolidColor(Color.Black), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(8f, 5.5f)
+            lineTo(18.5f, 12f)
+            lineTo(8f, 18.5f)
+            close()
+        }
+    }.build()
+
+    val Pause: ImageVector = ImageVector.Builder(
+        name = "Pause",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2.5f, strokeLineCap = StrokeCap.Round) {
+            moveTo(9f, 5.5f)
+            verticalLineTo(18.5f)
+            moveTo(15f, 5.5f)
+            verticalLineTo(18.5f)
+        }
+    }.build()
+
+    val SkipPrevious: ImageVector = ImageVector.Builder(
+        name = "SkipPrevious",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black), stroke = SolidColor(Color.Black), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(17.5f, 6f)
+            lineTo(9.5f, 12f)
+            lineTo(17.5f, 18f)
+            close()
+        }
+        path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2.5f, strokeLineCap = StrokeCap.Round) {
+            moveTo(6.5f, 6f)
+            verticalLineTo(18f)
+        }
+    }.build()
+
+    val SkipNext: ImageVector = ImageVector.Builder(
+        name = "SkipNext",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black), stroke = SolidColor(Color.Black), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(6.5f, 6f)
+            lineTo(14.5f, 12f)
+            lineTo(6.5f, 18f)
+            close()
+        }
+        path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2.5f, strokeLineCap = StrokeCap.Round) {
+            moveTo(17.5f, 6f)
+            verticalLineTo(18f)
+        }
+    }.build()
 }
