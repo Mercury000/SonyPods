@@ -37,6 +37,9 @@ class HookRegistry(
         return "sonypods.v1:$scopePackage:${owner}:$kind:$role"
     }
 
+    // install() can be re-entered from hook callbacks on Binder/main threads
+    // (dynamic binder hooks), so every access to the backing maps is serialized.
+    @Synchronized
     fun install(
         executable: Executable,
         kind: String,
@@ -62,6 +65,7 @@ class HookRegistry(
     }
 
     /** Commits all preloaded hooks in deterministic order after the complete plan is known. */
+    @Synchronized
     fun commit() {
         if (committed) return
         committed = true
@@ -94,6 +98,7 @@ class HookRegistry(
     }
 
     /** Removes hooks that disappeared from the current generation. */
+    @Synchronized
     fun removeObsoleteHooks() {
         val obsolete = oldById.filterKeys { it !in specs }
         obsolete.forEach { (id, handle) ->
@@ -102,10 +107,18 @@ class HookRegistry(
         }
     }
 
+    @Synchronized
     fun abort() {
         pending.clear()
         installed.values.forEach { runCatching { it.unhook() } }
         installed.clear()
+        // Old-generation handles that were never replaced must not stay
+        // installed: their hookers belong to a quiesced generation that only
+        // passes calls through while pinning the old classloader. Failing the
+        // reload means failing to a fully unhooked process — the same outcome
+        // as the API 102 default onHotReloaded implementation.
+        oldById.values.forEach { runCatching { it.unhook() } }
+        oldById.clear()
     }
 
     /**
@@ -113,12 +126,17 @@ class HookRegistry(
      * removed. This check must happen after the obsolete set has been decided;
      * clearing the entire old-handle map before checking makes the check vacuous.
      */
+    @Synchronized
     fun unresolvedOldHookIds(): List<String> = oldById.keys.toList()
+    @Synchronized
     fun handles(): List<XposedInterface.HookHandle> = installed.values.toList()
+    @Synchronized
     fun specs(): List<HookSpec> = specs.values.toList()
+    @Synchronized
     fun registerDynamicTarget(className: String) {
         if (className.isNotBlank()) dynamicTargets += className
     }
+    @Synchronized
     fun dynamicTargets(): List<String> = dynamicTargets.toList()
 
     private data class PendingHook(

@@ -43,7 +43,15 @@ object HeadsetStateDispatcher : HookContext() {
 
     @SuppressLint("MissingPermission")
     internal fun startAfterReload(context: Context, address: String?, name: String?) {
-        SonyEngineHost.start(context, null, prefsProvider)
+        // AdapterService.onCreate will not fire again in a live bluetooth process,
+        // so the reloaded generation must re-resolve the running instance itself.
+        val adapterService = runCatching {
+            context.classLoader.loadClass("com.android.bluetooth.btservice.AdapterService")
+                .getDeclaredMethod("getAdapterService")
+                .apply { isAccessible = true }
+                .invoke(null)
+        }.getOrNull()
+        SonyEngineHost.start(context, adapterService, prefsProvider)
         registerAppRequestReceiver(context)
         registerAclReceiver(context)
         if (!address.isNullOrBlank()) {

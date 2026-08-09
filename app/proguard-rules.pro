@@ -22,7 +22,6 @@
 
 # Keep all hooker classes (referenced by name in Xposed framework)
 -keep class dev.sonypods.hook.** { *; }
--keep class dev.sonypods.reload.** { *; }
 
 # Keep Parcelable data classes (used in broadcast extras)
 -keep class dev.sonypods.utils.miuiStrongToast.data.** { *; }

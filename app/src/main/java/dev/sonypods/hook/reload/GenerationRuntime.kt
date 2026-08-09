@@ -42,7 +42,11 @@ class GenerationRuntime(
         )
     }
 
-    val generationId: Long = nextGeneration.getAndIncrement()
+    // Each hot reload runs in a fresh classloader, so the static counter alone
+    // would restart at 1; continue from the old generation carried in savedState.
+    val generationId: Long = savedState?.getLong(KEY_OLD_GENERATION, 0L)
+        ?.takeIf { it > 0L }?.plus(1L)
+        ?: nextGeneration.getAndIncrement()
     val resources = ResourceRegistry()
     val hooks = HookRegistry(module, scopePackage, oldHandles)
     @Volatile

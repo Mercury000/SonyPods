@@ -87,6 +87,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }
         configReceiver = null
         receiverRegistered = false
+        callbacks.clear()
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
