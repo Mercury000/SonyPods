@@ -164,6 +164,54 @@ object SonyTandemV2Table2Protocol {
     fun buildGetPeripheralParam(type: PeripheralInquiredTypeTable2): ByteArray =
         TandemMessage(DT, PERI_GET_PARAM, byteArrayOf(type.code)).toByteArray()
 
+    fun buildGetPeripheralCapability(type: PeripheralInquiredTypeTable2): ByteArray =
+        TandemMessage(DT, PERI_GET_CAPABILITY, byteArrayOf(type.code)).toByteArray()
+
+    /** SC `lg0.e0.b.h`: [type, PeripheralBluetoothMode, EnableDisable]. The
+     * official sender (`x30/b.java`) always writes ENABLE (0x00); the mode byte
+     * alone selects entering (INQUIRY_SCAN) or leaving (NORMAL) pairing. */
+    fun buildSetPeripheralPairingMode(
+        type: PeripheralInquiredTypeTable2,
+        mode: PeripheralBluetoothModeTable2,
+    ): ByteArray = TandemMessage(
+        DT,
+        PERI_SET_STATUS,
+        byteArrayOf(type.code, mode.code, 0x00),
+    ).toByteArray()
+
+    /** OnOffSettingValue: ON=0x00, OFF=0x01 (SC `lg0.c0.b.h`). */
+    private fun onOffValue(on: Boolean): Byte = if (on) 0x00 else 0x01
+
+    fun buildSetPeripheralSourceSwitch(enabled: Boolean): ByteArray = TandemMessage(
+        DT,
+        PERI_SET_PARAM,
+        byteArrayOf(PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL.code, onOffValue(enabled)),
+    ).toByteArray()
+
+    fun buildSetPeripheralFixedSource(address: String): ByteArray = TandemMessage(
+        DT,
+        PERI_SET_EXTENDED_PARAM,
+        byteArrayOf(PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL.code) + address.toByteArray(Charsets.US_ASCII),
+    ).toByteArray()
+
+    /** SC `lg0.b0.b.h(z)`: writes OnOffSettingValue.from(z). The UI-level
+     * inversion lives in the repository (official `x30/d.a`: `h(!z11)`). */
+    fun buildSetPeripheralMusicHandOver(on: Boolean): ByteArray = TandemMessage(
+        DT,
+        PERI_SET_PARAM,
+        byteArrayOf(PeripheralInquiredTypeTable2.MUSIC_HAND_OVER_SETTING.code, onOffValue(on)),
+    ).toByteArray()
+
+    fun buildSetPeripheralConnectivity(
+        type: PeripheralInquiredTypeTable2,
+        action: ConnectivityActionTypeTable2,
+        address: String,
+    ): ByteArray = TandemMessage(
+        DT,
+        PERI_SET_EXTENDED_PARAM,
+        byteArrayOf(type.code, action.code) + address.toByteArray(Charsets.US_ASCII),
+    ).toByteArray()
+
     fun buildGetVoiceGuidanceStatus(type: VoiceGuidanceInquiredTypeTable2): ByteArray =
         TandemMessage(DT, VG_GET_STATUS, byteArrayOf(type.code)).toByteArray()
 
@@ -220,8 +268,10 @@ object SonyTandemV2Table2Protocol {
             )
             POWER_RET_CAPABILITY, POWER_RET_STATUS, POWER_NTFY_STATUS,
             POWER_RET_PARAM, POWER_NTFY_PARAM -> parsePower(payload, raw)
-            PERI_RET_CAPABILITY, PERI_RET_STATUS, PERI_NTFY_STATUS,
-            PERI_RET_PARAM, PERI_NTFY_PARAM -> parsePeripheral(payload, raw)
+            PERI_RET_CAPABILITY -> parsePeripheralCapability(payload, raw)
+            PERI_RET_STATUS, PERI_NTFY_STATUS -> parsePeripheralStatus(payload, raw)
+            PERI_RET_PARAM, PERI_NTFY_PARAM -> parsePeripheralParam(payload, raw)
+            PERI_NTFY_EXTENDED_PARAM -> parsePeripheralExtendedParam(payload, raw)
             VG_RET_CAPABILITY, VG_RET_STATUS, VG_NTFY_STATUS,
             VG_RET_PARAM, VG_NTFY_PARAM -> parseVoiceGuidance(payload, raw)
             SL_RET_CAPABILITY, SL_RET_STATUS, SL_NTFY_STATUS,
@@ -279,6 +329,109 @@ object SonyTandemV2Table2Protocol {
             raw = raw,
         )
     }
+
+    /** SC `lg0.p`: full frame is [cmd, type, maxPaired, maxConnected,
+     * fileTransfer] (length 5); our payload excludes the command byte. */
+    private fun parsePeripheralCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.size >= 4 && isMultipointType(payload[0])) {
+            return ParsedTandemResponse.MultipointCapability(
+                inquiredType = payload[0].unsigned,
+                maxPairedDevices = payload[1].unsigned,
+                maxConnectedDevices = payload[2].unsigned,
+                fileTransferInMultiConnection = payload[3].unsigned,
+                raw = raw,
+            )
+        }
+        return parsePeripheral(payload, raw)
+    }
+
+    private fun parsePeripheralStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.size >= 3 && isMultipointType(payload[0])) {
+            return ParsedTandemResponse.MultipointStatus(
+                inquiredType = payload[0].unsigned,
+                bluetoothMode = payload[1].unsigned,
+                // EnableDisable: ENABLE=0x00, DISABLE=0x01 (SC `lg0.w`).
+                enabled = payload[2].unsigned == 0,
+                raw = raw,
+            )
+        }
+        return parsePeripheral(payload, raw)
+    }
+
+    private fun parsePeripheralDevices(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.firstOrNull()?.unsigned ?: return parsePeripheral(payload, raw)
+        if (!isMultipointType(payload[0])) return parsePeripheral(payload, raw)
+        val count = payload.getOrNull(1)?.unsigned ?: return parsePeripheral(payload, raw)
+        val withClassOfDevice = type == PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE.code.unsigned
+        val devices = ArrayList<MultipointDevice>(count)
+        var index = 2
+        repeat(count) {
+            // SC `lg0.s` / `mg0.b`: address[17], connectedStatus[1], optional
+            // class-of-device[3], nameLength[1], name[n]. connectedStatus is a
+            // 1-based connection order, not a boolean; 0 means history/paired.
+            val nameLengthOffset = index + if (withClassOfDevice) 21 else 18
+            if (nameLengthOffset >= payload.size) return@repeat
+            val address = payload.copyOfRange(index, index + 17).decodeToString().trimEnd('\u0000')
+            val connectedStatus = payload[index + 17].unsigned
+            val nameLength = payload[nameLengthOffset].unsigned
+            val nameStart = nameLengthOffset + 1
+            if (nameStart + nameLength > payload.size) return@repeat
+            val name = payload.copyOfRange(nameStart, nameStart + nameLength).decodeToString()
+            val deviceClass = if (withClassOfDevice) {
+                (payload[index + 18].unsigned shl 16) or
+                    (payload[index + 19].unsigned shl 8) or
+                    payload[index + 20].unsigned
+            } else 0xFFFFFF
+            devices += MultipointDevice(address, connectedStatus, name, deviceClass)
+            index = nameStart + nameLength
+        }
+        // Trailing byte (SC `lg0.s.h`): the connectedStatus value of the device
+        // currently holding the playback right, 0 when nobody does.
+        val playbackRight = payload.getOrNull(index)?.unsigned ?: 0
+        return ParsedTandemResponse.MultipointDevices(type, devices, playbackRight, raw)
+    }
+
+    private fun parsePeripheralParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        when (payload.firstOrNull()?.unsigned) {
+            PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL.code.unsigned -> {
+                // RET `lg0.u`: [type, onOff]; NTFY `lg0.l` appends a result byte.
+                if (payload.size >= 2) return ParsedTandemResponse.SourceSwitchStatus(payload[1].unsigned == 0, raw)
+            }
+            PeripheralInquiredTypeTable2.MUSIC_HAND_OVER_SETTING.code.unsigned -> {
+                // OnOffSettingValue: ON=0x00 (SC `mg0.a.a` returns isOn()).
+                if (payload.size >= 2) return ParsedTandemResponse.MusicHandOverStatus(payload[1].unsigned == 0, raw)
+            }
+        }
+        return parsePeripheralDevices(payload, raw)
+    }
+
+    private fun parsePeripheralActionResult(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.size >= 20 && isMultipointType(payload[0])) {
+            return ParsedTandemResponse.MultipointActionResult(
+                inquiredType = payload[0].unsigned,
+                action = payload[1].unsigned,
+                result = payload[2].unsigned,
+                address = payload.copyOfRange(3, 20).decodeToString().trimEnd('\u0000'),
+                raw = raw,
+            )
+        }
+        return parsePeripheral(payload, raw)
+    }
+
+    private fun parsePeripheralExtendedParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.size >= 19 && payload[0].unsigned == PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL.code.unsigned) {
+            return ParsedTandemResponse.SourceSwitchResult(
+                result = payload[1].unsigned,
+                address = payload.copyOfRange(2, 19).decodeToString().trimEnd('\u0000'),
+                raw = raw,
+            )
+        }
+        return parsePeripheralActionResult(payload, raw)
+    }
+
+    private fun isMultipointType(type: Byte): Boolean =
+        type == PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT.code ||
+            type == PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE.code
 
     private fun parseVoiceGuidance(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val type = payload.firstOrNull()?.let { VoiceGuidanceInquiredTypeTable2.fromCode(it) }
@@ -356,6 +509,19 @@ enum class PeripheralInquiredTypeTable2(val code: Byte) {
         fun fromCode(b: Byte): PeripheralInquiredTypeTable2 =
             entries.firstOrNull { it.code == b } ?: OUT_OF_RANGE
     }
+}
+
+enum class PeripheralBluetoothModeTable2(val code: Byte) {
+    NORMAL_MODE(0x00),
+    INQUIRY_SCAN_MODE(0x01),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class ConnectivityActionTypeTable2(val code: Byte) {
+    DISCONNECT(0x00),
+    CONNECT(0x01),
+    UNPAIR(0x02),
+    OUT_OF_RANGE(0xFF.toByte()),
 }
 
 enum class VoiceGuidanceInquiredTypeTable2(val code: Byte) {

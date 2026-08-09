@@ -411,6 +411,53 @@ sealed interface ParsedTandemResponse {
             return result
         }
     }
+
+    data class MultipointCapability(
+        val inquiredType: Int,
+        val maxPairedDevices: Int,
+        val maxConnectedDevices: Int,
+        val fileTransferInMultiConnection: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class MultipointStatus(
+        val inquiredType: Int,
+        val bluetoothMode: Int,
+        val enabled: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class MultipointDevices(
+        val inquiredType: Int,
+        val devices: List<MultipointDevice>,
+        /** connectedStatus value of the playback-right holder, 0 = none. */
+        val playbackRight: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class MultipointActionResult(
+        val inquiredType: Int,
+        val action: Int,
+        val result: Int,
+        val address: String,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class SourceSwitchStatus(
+        val enabled: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class SourceSwitchResult(
+        val result: Int,
+        val address: String,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class MusicHandOverStatus(
+        val enabled: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
 }
 
 typealias AssignableSettingsActionCapability = ParsedTandemResponse.AssignableSettingsActionCapability
@@ -418,6 +465,17 @@ typealias AssignableSettingsKeyCapability = ParsedTandemResponse.AssignableSetti
 typealias AssignableSettingsCapability = ParsedTandemResponse.AssignableSettingsCapability
 typealias AssignableSettingsMapping = ParsedTandemResponse.AssignableSettingsMapping
 typealias AssignableSettingsActionFunction = ParsedTandemResponse.AssignableSettingsActionFunction
+
+data class MultipointDevice(
+    val address: String,
+    /** SC `lg0.a.d()`: 1-based connection order; 0 = paired but not connected. */
+    val connectedStatus: Int,
+    val name: String,
+    /** Bluetooth Class of Device; 0xFFFFFF when the type does not carry it. */
+    val deviceClass: Int = 0xFFFFFF,
+) {
+    val connected: Boolean get() = connectedStatus > 0
+}
 
 val Byte.unsigned: Int
     get() = toInt() and 0xFF

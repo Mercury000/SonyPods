@@ -47,6 +47,7 @@ data class SonyStateSnapshot(
     val modelImageSourceColor: String? = null,
     val supportsPowerOff: Boolean = false,
     val supportsGestureOperations: Boolean = false,
+    val supportsMultipoint: Boolean = false,
     val batterySingle: Int? = null,
     val batteryLeft: Int? = null,
     val batteryRight: Int? = null,
@@ -76,6 +77,7 @@ data class SonyStateSnapshot(
     val quickAccessFunctionCodes: List<Int> = emptyList(),
     val quickAccessActions: List<QuickAccessActionSnapshot> = emptyList(),
     val gestureOperationKeys: List<GestureOperationKey> = emptyList(),
+    val multipoint: MultipointSnapshot = MultipointSnapshot(),
     val wearingStatus: String? = null,
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val scanState: String? = null,
@@ -96,7 +98,9 @@ data class SonyStateSnapshot(
         modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
         putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
         putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
+        putBoolean(KEY_SUPPORTS_MULTIPOINT, supportsMultipoint)
         putParcelableArrayList(KEY_GESTURES, ArrayList(gestureOperationKeys.map { it.toBundle() }))
+        putBundle(KEY_MULTIPOINT, multipoint.toBundle())
 
         batterySingle?.let { putInt(KEY_BATTERY_SINGLE, it) }
         batteryLeft?.let { putInt(KEY_BATTERY_LEFT, it) }
@@ -148,7 +152,9 @@ data class SonyStateSnapshot(
         private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
         private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
         private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
+        private const val KEY_SUPPORTS_MULTIPOINT = "supports_multipoint"
         private const val KEY_GESTURES = "gesture_operations"
+        private const val KEY_MULTIPOINT = "multipoint"
         private const val KEY_ACTIONS = "actions"
         private const val KEY_KEY = "key"
         private const val KEY_TYPE = "type"
@@ -205,6 +211,7 @@ data class SonyStateSnapshot(
             modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
             supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
             supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
+            supportsMultipoint = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT, false),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
             batteryLeft = bundle.optInt(KEY_BATTERY_LEFT),
             batteryRight = bundle.optInt(KEY_BATTERY_RIGHT),
@@ -239,6 +246,7 @@ data class SonyStateSnapshot(
             quickAccessFunctionCodes = bundle.getIntArray(KEY_QA_FUNCTION_CODES)?.toList().orEmpty(),
             quickAccessActions = bundle.quickAccessActions(),
             gestureOperationKeys = bundle.gestureKeys(),
+            multipoint = bundle.getBundle(KEY_MULTIPOINT)?.multipointSnapshot() ?: MultipointSnapshot(),
             wearingStatus = bundle.getString(KEY_WEARING),
             playbackStatus = bundle.getString(KEY_PLAYBACK)?.let { name ->
                 PlaybackStatus.entries.firstOrNull { it.name == name }
@@ -260,6 +268,7 @@ data class SonyStateSnapshot(
                 modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
                 supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
                 supportsGestureOperations = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.GESTURE_OPERATIONS) == true,
+                supportsMultipoint = state.multipointState.supported,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
                 batteryRight = state.batteryState.right,
@@ -286,6 +295,27 @@ data class SonyStateSnapshot(
                 quickAccessFunctionCodes = state.quickAccessState.functionCodes,
                 quickAccessActions = state.quickAccessState.actions.map { it.toSnapshot() },
                 gestureOperationKeys = state.gestureOperationsState.uiKeys(),
+                multipoint = MultipointSnapshot(
+                    enabled = state.multipointState.enabled,
+                    pairingMode = state.multipointState.pairingMode,
+                    maxPairedDevices = state.multipointState.maxPairedDevices,
+                    maxConnectedDevices = state.multipointState.maxConnectedDevices,
+                    supportsFileTransfer = state.multipointState.supportsFileTransfer,
+                    playbackRight = state.multipointState.playbackRight,
+                    activeSourceAddress = state.multipointState.activeSourceAddress,
+                    result = state.multipointState.result,
+                    resultAddress = state.multipointState.resultAddress,
+                    connectedDevices = state.multipointState.connectedDevices.map { device ->
+                        MultipointDeviceSnapshot(device.address, device.name, device.deviceClass, device.connectedStatus)
+                    },
+                    historyDevices = state.multipointState.historyDevices.map { device ->
+                        MultipointDeviceSnapshot(device.address, device.name, device.deviceClass, device.connectedStatus)
+                    },
+                    sourceSwitchEnabled = state.multipointState.sourceSwitchEnabled,
+                    fixedSourceAddress = state.multipointState.fixedSourceAddress,
+                    sourceSwitchResult = state.multipointState.sourceSwitchResult,
+                    musicHandOverEnabled = state.multipointState.musicHandOverEnabled,
+                ),
                 wearingStatus = state.wearingState.status,
                 playbackStatus = state.playbackStatus,
                 scanState = state.scanState,
@@ -381,6 +411,76 @@ data class SonyStateSnapshot(
             putIntArray(KEY_QA_FUNCTIONS, availableFunctionCodes.toIntArray())
         }
 
+        @Suppress("DEPRECATION")
+        private fun Bundle.multipointSnapshot(): MultipointSnapshot = MultipointSnapshot(
+            enabled = if (getBoolean("enabled_known", false)) getBoolean("enabled") else null,
+            pairingMode = getBoolean("pairing_mode", false),
+            maxPairedDevices = getInt("max_paired", 0),
+            maxConnectedDevices = getInt("max_connected", 0),
+            supportsFileTransfer = if (getBoolean("file_transfer_known", false)) getBoolean("file_transfer") else null,
+            playbackRight = getInt("playback_right", 0),
+            activeSourceAddress = getString("active_source_address"),
+            result = getString("result"),
+            resultAddress = getString("result_address"),
+            connectedDevices = getParcelableArrayList<Bundle>("connected_devices").orEmpty().map { device ->
+                MultipointDeviceSnapshot(
+                    address = device.getString("address").orEmpty(),
+                    name = device.getString("name").orEmpty(),
+                    deviceClass = device.getInt("class", 0),
+                    connectedStatus = device.getInt("status", 0),
+                )
+            },
+            historyDevices = getParcelableArrayList<Bundle>("history_devices").orEmpty().map { device ->
+                MultipointDeviceSnapshot(
+                    address = device.getString("address").orEmpty(),
+                    name = device.getString("name").orEmpty(),
+                    deviceClass = device.getInt("class", 0),
+                    connectedStatus = device.getInt("status", 0),
+                )
+            },
+            sourceSwitchEnabled = if (getBoolean("source_switch_known", false)) getBoolean("source_switch_enabled") else null,
+            fixedSourceAddress = getString("fixed_source_address"),
+            sourceSwitchResult = getString("source_switch_result"),
+            musicHandOverEnabled = if (getBoolean("music_hand_over_known", false)) getBoolean("music_hand_over_enabled") else null,
+        )
+
+        private fun MultipointSnapshot.toBundle(): Bundle = Bundle().apply {
+            enabled?.let {
+                putBoolean("enabled_known", true)
+                putBoolean("enabled", it)
+            }
+            putBoolean("pairing_mode", pairingMode)
+            putInt("max_paired", maxPairedDevices)
+            putInt("max_connected", maxConnectedDevices)
+            supportsFileTransfer?.let {
+                putBoolean("file_transfer_known", true)
+                putBoolean("file_transfer", it)
+            }
+            putInt("playback_right", playbackRight)
+            activeSourceAddress?.let { putString("active_source_address", it) }
+            result?.let { putString("result", it) }
+            resultAddress?.let { putString("result_address", it) }
+            putParcelableArrayList("connected_devices", ArrayList(connectedDevices.map { it.toBundle() }))
+            putParcelableArrayList("history_devices", ArrayList(historyDevices.map { it.toBundle() }))
+            sourceSwitchEnabled?.let {
+                putBoolean("source_switch_known", true)
+                putBoolean("source_switch_enabled", it)
+            }
+            fixedSourceAddress?.let { putString("fixed_source_address", it) }
+            sourceSwitchResult?.let { putString("source_switch_result", it) }
+            musicHandOverEnabled?.let {
+                putBoolean("music_hand_over_known", true)
+                putBoolean("music_hand_over_enabled", it)
+            }
+        }
+
+        private fun MultipointDeviceSnapshot.toBundle(): Bundle = Bundle().apply {
+            putString("address", address)
+            putString("name", name)
+            putInt("class", deviceClass)
+            putInt("status", connectedStatus)
+        }
+
         private fun Bundle.optInt(key: String): Int? = if (containsKey(key)) getInt(key) else null
     }
 }
@@ -391,4 +491,31 @@ data class QuickAccessActionSnapshot(
     val currentFunctionCode: Int?,
     val defaultFunctionCode: Int,
     val availableFunctionCodes: List<Int>,
+)
+
+data class MultipointSnapshot(
+    val enabled: Boolean? = null,
+    val pairingMode: Boolean = false,
+    val maxPairedDevices: Int = 0,
+    val maxConnectedDevices: Int = 0,
+    val supportsFileTransfer: Boolean? = null,
+    /** connectedStatus value of the playback-right holder, 0 = none. */
+    val playbackRight: Int = 0,
+    val activeSourceAddress: String? = null,
+    val result: String? = null,
+    val resultAddress: String? = null,
+    val connectedDevices: List<MultipointDeviceSnapshot> = emptyList(),
+    val historyDevices: List<MultipointDeviceSnapshot> = emptyList(),
+    val sourceSwitchEnabled: Boolean? = null,
+    val fixedSourceAddress: String? = null,
+    val sourceSwitchResult: String? = null,
+    val musicHandOverEnabled: Boolean? = null,
+)
+
+data class MultipointDeviceSnapshot(
+    val address: String,
+    val name: String,
+    val deviceClass: Int,
+    /** SC connectedStatus: 1-based slot number, 0 = paired but not connected. */
+    val connectedStatus: Int = 0,
 )

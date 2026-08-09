@@ -196,6 +196,13 @@ fun MainUI(
             onGestureAmbientModesChange = { modes ->
                 SonyBridge.setGestureAmbientModes(context, modes.map { it.ordinal }.toIntArray())
             },
+            onMultipointPairingModeChange = { enabled -> SonyBridge.setMultipointPairingMode(context, enabled) },
+            onMultipointConnect = { address -> SonyBridge.connectMultipointDevice(context, address) },
+            onMultipointDisconnect = { address -> SonyBridge.disconnectMultipointDevice(context, address) },
+            onMultipointUnpair = { address -> SonyBridge.unpairMultipointDevice(context, address) },
+            onSourceSwitchEnabledChange = { enabled -> SonyBridge.setSourceSwitchEnabled(context, enabled) },
+            onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
+            onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },
             onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
         )
     }

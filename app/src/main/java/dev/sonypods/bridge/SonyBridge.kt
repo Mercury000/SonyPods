@@ -64,6 +64,13 @@ object SonyBridge {
     const val CMD_SET_GESTURE_FUNCTION = "set_gesture_function"
     const val CMD_SET_QUICK_ACCESS_FUNCTION = "set_quick_access_function"
     const val CMD_SET_GESTURE_AMBIENT_MODES = "set_gesture_ambient_modes"
+    const val CMD_SET_MULTIPOINT_PAIRING_MODE = "set_multipoint_pairing_mode"
+    const val CMD_CONNECT_MULTIPOINT_DEVICE = "connect_multipoint_device"
+    const val CMD_DISCONNECT_MULTIPOINT_DEVICE = "disconnect_multipoint_device"
+    const val CMD_UNPAIR_MULTIPOINT_DEVICE = "unpair_multipoint_device"
+    const val CMD_SET_SOURCE_SWITCH_ENABLED = "set_source_switch_enabled"
+    const val CMD_SET_FIXED_SOURCE = "set_fixed_source"
+    const val CMD_SET_MUSIC_HAND_OVER = "set_music_hand_over"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
     const val CMD_PLAYBACK_PLAY_PAUSE = "playback_play_pause"
     const val CMD_PLAYBACK_NEXT = "playback_next"
@@ -157,6 +164,27 @@ object SonyBridge {
         sendCommand(context, CMD_SET_GESTURE_AMBIENT_MODES) {
             putExtra(EXTRA_FUNCTION_CODE, modeCodes)
         }
+
+    fun setMultipointPairingMode(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_MULTIPOINT_PAIRING_MODE) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun connectMultipointDevice(context: Context, address: String) =
+        sendCommand(context, CMD_CONNECT_MULTIPOINT_DEVICE) { putExtra(EXTRA_STRING, address) }
+
+    fun disconnectMultipointDevice(context: Context, address: String) =
+        sendCommand(context, CMD_DISCONNECT_MULTIPOINT_DEVICE) { putExtra(EXTRA_STRING, address) }
+
+    fun unpairMultipointDevice(context: Context, address: String) =
+        sendCommand(context, CMD_UNPAIR_MULTIPOINT_DEVICE) { putExtra(EXTRA_STRING, address) }
+
+    fun setSourceSwitchEnabled(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_SOURCE_SWITCH_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setFixedSource(context: Context, address: String) =
+        sendCommand(context, CMD_SET_FIXED_SOURCE) { putExtra(EXTRA_STRING, address) }
+
+    fun setMusicHandOver(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_MUSIC_HAND_OVER) { putExtra(EXTRA_BOOL, enabled) }
 
     fun connect(context: Context, address: String, name: String) =
         sendCommand(context, CMD_CONNECT) {

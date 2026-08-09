@@ -27,6 +27,8 @@ import dev.sonypods.headphones.HeadphoneFeature
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.headphones.HeadphoneTransport
 import dev.sonypods.headphones.PlaybackDispatchStrategy
+import dev.sonypods.headphones.MultipointDeviceAction
+import dev.sonypods.headphones.buildFeatureBindings
 import dev.sonypods.headphones.SonyCapabilityProbe
 import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
@@ -57,7 +59,9 @@ import dev.sonypods.protocol.AssignableSettingsKeyCapability
 import dev.sonypods.protocol.AssignableSettingsActionFunction
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTandemConstants
+import dev.sonypods.protocol.MultipointDevice
 import dev.sonypods.protocol.hexString
+import dev.sonypods.protocol.unsignedList
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -75,6 +79,37 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
+private val MULTIPOINT_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
+
+/** SC `SourceSwitchControlResult`: SUCCESS 0x00 … FAIL_GIVE_PRIORITY_TO_VOICE_ASSISTANT 0x04. */
+private fun sourceSwitchResultLabel(code: Int): String = when (code) {
+    0x00 -> "切换成功"
+    0x01 -> "切换失败"
+    0x02 -> "通话中，暂时无法切换"
+    0x03 -> "目标设备未连接音频（A2DP）"
+    0x04 -> "语音助手使用中，暂时无法切换"
+    else -> "未知结果（0x%02X）".format(code)
+}
+
+private fun multipointResultLabel(code: Int): String = when (code) {
+    0x00 -> "断开成功"
+    0x01 -> "断开失败"
+    0x02 -> "正在断开"
+    0x03 -> "断开忙"
+    0x10 -> "连接成功"
+    0x11 -> "连接失败"
+    0x12 -> "正在连接"
+    0x13 -> "连接忙"
+    0x20 -> "取消注册成功"
+    0x21 -> "取消注册失败"
+    0x22 -> "正在取消注册"
+    0x23 -> "取消注册忙"
+    0x30 -> "配对成功"
+    0x31 -> "配对失败"
+    0x32 -> "正在配对"
+    0x33 -> "配对忙"
+    else -> "未知结果（0x%02X）".format(code)
+}
 
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
@@ -202,6 +237,31 @@ data class GestureOperationsState(
     }
 }
 
+data class MultipointState(
+    val supported: Boolean = false,
+    val inquiredType: Int? = null,
+    val maxPairedDevices: Int = 0,
+    val maxConnectedDevices: Int = 0,
+    val supportsFileTransfer: Boolean? = null,
+    val enabled: Boolean? = null,
+    val pairingMode: Boolean = false,
+    /** Connected devices sorted by connectedStatus ascending (SC `lg0.s.e`). */
+    val connectedDevices: List<MultipointDevice> = emptyList(),
+    /** Paired-but-not-connected history (connectedStatus == 0). */
+    val historyDevices: List<MultipointDevice> = emptyList(),
+    /** connectedStatus value of the playback-right holder, 0 = none. */
+    val playbackRight: Int = 0,
+    /** Address of the device holding the playback right, if any. */
+    val activeSourceAddress: String? = null,
+    val result: String? = null,
+    val resultAddress: String? = null,
+    val sourceSwitchEnabled: Boolean? = null,
+    val fixedSourceAddress: String? = null,
+    val sourceSwitchResult: String? = null,
+    val musicHandOverEnabled: Boolean? = null,
+    val raw: List<Int> = emptyList(),
+)
+
 data class GestureOperationKey(
     val key: AssignableSettingsKey,
     val type: dev.sonypods.protocol.AssignableSettingsType,
@@ -264,6 +324,7 @@ data class SonyHeadphoneUiState(
     val leaState: LeaState = LeaState(),
     val quickAccessState: QuickAccessState = QuickAccessState(),
     val gestureOperationsState: GestureOperationsState = GestureOperationsState(),
+    val multipointState: MultipointState = MultipointState(),
     val wearingState: WearingState = WearingState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val endpointDiagnostic: EndpointDiagnosticState? = null,
@@ -661,6 +722,72 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
+    }
+
+    fun setMultipointPairingMode(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetMultipointPairingModeCommands(profile, enabled).forEach(::sendCommand)
+        _state.update { it.copy(multipointState = it.multipointState.copy(pairingMode = enabled)) }
+        scheduleMultipointRefresh()
+    }
+
+    fun setSourceSwitchEnabled(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        HeadphoneAdapterRegistry.buildSetSourceSwitchCommands(ensureConnectedProfile(), enabled).forEach(::sendCommand)
+        _state.update { it.copy(multipointState = it.multipointState.copy(sourceSwitchEnabled = enabled)) }
+        scheduleMultipointRefresh()
+    }
+
+    fun setFixedSource(address: String) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        HeadphoneAdapterRegistry.buildSetFixedSourceCommand(ensureConnectedProfile(), address).forEach(::sendCommand)
+        _state.update { it.copy(multipointState = it.multipointState.copy(fixedSourceAddress = address)) }
+        scheduleMultipointRefresh()
+    }
+
+    fun setMusicHandOverEnabled(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        HeadphoneAdapterRegistry.buildSetMusicHandOverCommands(ensureConnectedProfile(), enabled).forEach(::sendCommand)
+        _state.update { it.copy(multipointState = it.multipointState.copy(musicHandOverEnabled = enabled)) }
+        scheduleMultipointRefresh()
+    }
+
+    fun connectMultipointDevice(address: String) =
+        sendMultipointDeviceAction(address, MultipointDeviceAction.CONNECT)
+
+    fun disconnectMultipointDevice(address: String) =
+        sendMultipointDeviceAction(address, MultipointDeviceAction.DISCONNECT)
+
+    fun unpairMultipointDevice(address: String) =
+        sendMultipointDeviceAction(address, MultipointDeviceAction.UNPAIR)
+
+    private fun sendMultipointDeviceAction(address: String, action: MultipointDeviceAction) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot manage dual-device connections.")
+            return
+        }
+        val multipoint = _state.value.multipointState
+        if (!multipoint.supported || !canWrite(HeadphoneFeature.MULTIPOINT)) {
+            appendLog("Dual-device management is unavailable for current profile")
+            return
+        }
+        if (!MULTIPOINT_ADDRESS.matches(address)) {
+            appendLog("Ignoring multipoint ${action.name}: invalid address=$address")
+            return
+        }
+        HeadphoneAdapterRegistry.buildSetMultipointDeviceCommand(
+            ensureConnectedProfile(),
+            address,
+            action,
+        ).forEach(::sendCommand)
+        scheduleMultipointRefresh()
+    }
+
+    private fun scheduleMultipointRefresh() {
+        mainHandler.postDelayed({
+            if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) refreshBasics()
+        }, GESTURE_REFRESH_AFTER_WRITE_MS)
     }
 
     /** Send the Sony Tandem USER_POWER_OFF command and let the headset close the
@@ -1345,6 +1472,13 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.AssignableSettingsStatus -> applyAssignableSettingsStatus(parsed)
             is ParsedTandemResponse.AssignableSettingsExtendedParam -> applyAssignableSettingsExtendedParam(parsed)
             is ParsedTandemResponse.WearingStatus -> applyWearingStatus(parsed)
+            is ParsedTandemResponse.MultipointCapability -> applyMultipointCapability(parsed)
+            is ParsedTandemResponse.MultipointStatus -> applyMultipointStatus(parsed)
+            is ParsedTandemResponse.MultipointDevices -> applyMultipointDevices(parsed)
+            is ParsedTandemResponse.MultipointActionResult -> applyMultipointActionResult(parsed)
+            is ParsedTandemResponse.SourceSwitchStatus -> applySourceSwitchStatus(parsed)
+            is ParsedTandemResponse.SourceSwitchResult -> applySourceSwitchResult(parsed)
+            is ParsedTandemResponse.MusicHandOverStatus -> applyMusicHandOverStatus(parsed)
             is ParsedTandemResponse.Unknown -> applyKnownOrUnknown(parsed)
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.Table2Generic -> applyTable2Diagnostic(channel, parsed)
@@ -1814,6 +1948,133 @@ class SonyHeadphoneRepository private constructor(
         }
     }
 
+    private fun applyMultipointCapability(response: ParsedTandemResponse.MultipointCapability) {
+        if (response.maxConnectedDevices <= 0 || response.maxPairedDevices <= 0) return
+        _state.update {
+            if (it.multipointState.inquiredType == 2 && response.inquiredType == 0) {
+                return@update it
+            }
+            val profile = it.connectedProfile?.let { currentProfile ->
+                val capabilities = currentProfile.capabilities.copy(
+                    features = currentProfile.capabilities.features + HeadphoneFeature.MULTIPOINT,
+                )
+                currentProfile.copy(
+                    multipointTypeCode = response.inquiredType,
+                    capabilities = capabilities,
+                    featureBindings = buildFeatureBindings(currentProfile.featureProtocolMap, capabilities),
+                )
+            }
+            it.copy(
+                connectedProfile = profile,
+                multipointState = it.multipointState.copy(
+                    supported = true,
+                    inquiredType = response.inquiredType,
+                    maxPairedDevices = response.maxPairedDevices,
+                    maxConnectedDevices = response.maxConnectedDevices,
+                    supportsFileTransfer = response.fileTransferInMultiConnection == 0,
+                    raw = response.raw.unsignedList(),
+                ),
+            )
+        }
+    }
+
+    private fun applyMultipointStatus(response: ParsedTandemResponse.MultipointStatus) {
+        _state.update {
+            val current = it.multipointState
+            if (current.inquiredType != null &&
+                current.inquiredType != response.inquiredType &&
+                !(current.inquiredType == 0 && response.inquiredType == 2)
+            ) it else it.copy(
+                multipointState = current.copy(
+                    // A well-formed RET/NTFY_STATUS for a pairing-management
+                    // type is itself proof the function exists on this model.
+                    supported = true,
+                    inquiredType = response.inquiredType,
+                    enabled = response.enabled,
+                    pairingMode = response.bluetoothMode == 1,
+                    raw = response.raw.unsignedList(),
+                ),
+            )
+        }
+    }
+
+    private fun applyMultipointDevices(response: ParsedTandemResponse.MultipointDevices) {
+        _state.update {
+            val current = it.multipointState
+            if (current.inquiredType != null &&
+                current.inquiredType != response.inquiredType &&
+                !(current.inquiredType == 0 && response.inquiredType == 2)
+            ) it else {
+                // SC `lg0.s`: e() = connectedStatus > 0 sorted ascending,
+                // g() = connectedStatus == 0 (history). The playback right is
+                // matched against connectedStatus, not a list index.
+                val connected = response.devices
+                    .filter { device -> device.connected }
+                    .sortedBy { device -> device.connectedStatus }
+                val history = response.devices.filterNot { device -> device.connected }
+                val activeSourceAddress = connected
+                    .firstOrNull { device -> response.playbackRight > 0 && device.connectedStatus == response.playbackRight }
+                    ?.address
+                val profile = it.connectedProfile?.let { currentProfile ->
+                    val capabilities = currentProfile.capabilities.copy(
+                        features = currentProfile.capabilities.features + HeadphoneFeature.MULTIPOINT,
+                    )
+                    currentProfile.copy(
+                        multipointTypeCode = response.inquiredType,
+                        capabilities = capabilities,
+                        featureBindings = buildFeatureBindings(currentProfile.featureProtocolMap, capabilities),
+                    )
+                }
+                it.copy(
+                    connectedProfile = profile,
+                    multipointState = current.copy(
+                        supported = true,
+                        inquiredType = response.inquiredType,
+                        connectedDevices = connected,
+                        historyDevices = history,
+                        playbackRight = response.playbackRight,
+                        activeSourceAddress = activeSourceAddress,
+                        raw = response.raw.unsignedList(),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun applyMultipointActionResult(response: ParsedTandemResponse.MultipointActionResult) {
+        _state.update {
+            val current = it.multipointState
+            if (current.inquiredType != null && current.inquiredType != response.inquiredType) it else it.copy(
+                multipointState = current.copy(
+                    result = multipointResultLabel(response.result),
+                    resultAddress = response.address,
+                    raw = response.raw.unsignedList(),
+                ),
+            )
+        }
+        scheduleMultipointRefresh()
+    }
+
+    private fun applySourceSwitchStatus(response: ParsedTandemResponse.SourceSwitchStatus) {
+        _state.update { it.copy(multipointState = it.multipointState.copy(sourceSwitchEnabled = response.enabled, raw = response.raw.unsignedList())) }
+    }
+
+    private fun applySourceSwitchResult(response: ParsedTandemResponse.SourceSwitchResult) {
+        _state.update {
+            it.copy(multipointState = it.multipointState.copy(
+                fixedSourceAddress = response.address,
+                sourceSwitchResult = sourceSwitchResultLabel(response.result),
+                raw = response.raw.unsignedList(),
+            ))
+        }
+    }
+
+    private fun applyMusicHandOverStatus(response: ParsedTandemResponse.MusicHandOverStatus) {
+        // SC `x30/c.java` builds the UI value as the inverse of the wire OnOff:
+        // `new v30.e(!rVar.c())`. Our parser reports isOn, so invert here.
+        _state.update { it.copy(multipointState = it.multipointState.copy(musicHandOverEnabled = !response.enabled, raw = response.raw.unsignedList())) }
+    }
+
     private fun applyTable2Diagnostic(channel: TandemChannel, response: ParsedTandemResponse) {
         appendLog("Table2 ${response::class.simpleName} channel=$channel raw=${response.raw.hexString()}")
         val diagnostic = table2DiagnosticStateFor(channel, response) ?: return
@@ -2181,6 +2442,7 @@ fun featureStatusesFor(profile: ConnectedHeadphoneProfile?): List<FeatureStatus>
     FeatureStatus("LE Audio 状态", "Connection type, streaming status, paired history", profile.supports(HeadphoneFeature.LEA_STATUS)),
     FeatureStatus("Quick Access", "Customizable button actions L/R and NC/AMB keys", profile.supports(HeadphoneFeature.QUICK_ACCESS)),
     FeatureStatus("手势操作", "Touch, button and face-tap action assignments", profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)),
+    FeatureStatus("双设备管理", "Connect, disconnect and unpair multipoint devices", profile.supports(HeadphoneFeature.MULTIPOINT)),
     FeatureStatus("佩戴检测", "Earpiece fitting and wearing detection status", profile.supports(HeadphoneFeature.WEARING_STATUS)),
-    FeatureStatus("Sense / AutoPlay / Multipoint / FOTA", "Advanced modules reserved", false),
+    FeatureStatus("Sense / AutoPlay / FOTA", "Advanced modules reserved", false),
 )

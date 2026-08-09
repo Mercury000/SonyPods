@@ -14,6 +14,10 @@ import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.AssignableSettingsMapping
 import dev.sonypods.protocol.AssignableSettingsPreset
+import dev.sonypods.protocol.ConnectivityActionTypeTable2
+import dev.sonypods.protocol.PeripheralBluetoothModeTable2
+import dev.sonypods.protocol.PeripheralInquiredTypeTable2
+import dev.sonypods.protocol.SonyTandemV2Table2Protocol
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR_NO2
 
@@ -83,7 +87,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             modelName = deviceName.removePrefix("LE_").takeIf { it.isNotBlank() } ?: "Sony audio device",
             series = null,
             capabilities = HeadphoneCapabilities(
-                features = setOf(HeadphoneFeature.DEVICE_INFO, HeadphoneFeature.BATTERY),
+                features = setOf(
+                    HeadphoneFeature.DEVICE_INFO,
+                    HeadphoneFeature.BATTERY,
+                ),
                 formFactor = HeadphoneFormFactor.UNKNOWN,
                 batteryQueries = listOf(PowerInquiredType.BATTERY),
                 noiseControlQueryTypes = emptyList(),
@@ -206,6 +213,15 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
             if (profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
                 addAll(buildRefreshGestureOperationsCommands(profile))
+            }
+            // Query PERIPHERAL before capability probing adds MULTIPOINT to
+            // the neutral profile. V2 Table2 exposes it on the MC endpoint.
+            if (profile.protocolFor(HeadphoneFeature.MULTIPOINT) in setOf(
+                    HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+                    HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2,
+                )
+            ) {
+                addAll(buildRefreshMultipointCommands(profile))
             }
             if (profile.supports(HeadphoneFeature.WEARING_STATUS)) {
                 codecFor(profile, HeadphoneFeature.WEARING_STATUS).buildGetWearingStatus()?.let {
@@ -486,6 +502,112 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
             .orEmpty()
     }
+
+    override fun buildSetMultipointPairingModeCommands(
+        profile: ConnectedHeadphoneProfile,
+        inquiry: Boolean,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.MULTIPOINT)) {
+        emptyList()
+    } else {
+        // SC `x30/b.java` e()/c(): the mode byte alone toggles pairing; the
+        // trailing EnableDisable is always ENABLE.
+        val mode = if (inquiry) PeripheralBluetoothModeTable2.INQUIRY_SCAN_MODE else PeripheralBluetoothModeTable2.NORMAL_MODE
+        listOf(
+            command(
+                profile,
+                HeadphoneFeature.MULTIPOINT,
+                if (inquiry) "START multipoint pairing mode" else "STOP multipoint pairing mode",
+                SonyTandemV2Table2Protocol.buildSetPeripheralPairingMode(multipointType(profile), mode),
+            )
+        )
+    }
+
+    override fun buildSetSourceSwitchCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.MULTIPOINT)) emptyList() else listOf(
+        multipointCommand(profile, if (enabled) "ENABLE source switch" else "DISABLE source switch", SonyTandemV2Table2Protocol.buildSetPeripheralSourceSwitch(enabled))
+    )
+
+    override fun buildSetFixedSourceCommand(
+        profile: ConnectedHeadphoneProfile,
+        address: String,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.MULTIPOINT) || address.length != 17) emptyList() else listOf(
+        multipointCommand(profile, "FIX source $address", SonyTandemV2Table2Protocol.buildSetPeripheralFixedSource(address))
+    )
+
+    override fun buildSetMusicHandOverCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.MULTIPOINT)) emptyList() else listOf(
+        multipointCommand(profile, if (enabled) "ENABLE music hand-over" else "DISABLE music hand-over", SonyTandemV2Table2Protocol.buildSetPeripheralMusicHandOver(!enabled))
+    )
+
+    override fun buildSetMultipointDeviceCommand(
+        profile: ConnectedHeadphoneProfile,
+        address: String,
+        action: MultipointDeviceAction,
+    ): List<HeadphoneCommand> = if (!profile.supports(HeadphoneFeature.MULTIPOINT)) {
+        emptyList()
+    } else {
+        val actionType = when (action) {
+            MultipointDeviceAction.CONNECT -> ConnectivityActionTypeTable2.CONNECT
+            MultipointDeviceAction.DISCONNECT -> ConnectivityActionTypeTable2.DISCONNECT
+            MultipointDeviceAction.UNPAIR -> ConnectivityActionTypeTable2.UNPAIR
+        }
+        listOf(
+            command(
+                profile,
+                HeadphoneFeature.MULTIPOINT,
+                "${action.name} multipoint device $address",
+                SonyTandemV2Table2Protocol.buildSetPeripheralConnectivity(multipointType(profile), actionType, address),
+            )
+        )
+    }
+
+    private fun buildRefreshMultipointCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.MULTIPOINT) !in setOf(
+                HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+                HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2,
+            )
+        ) return emptyList()
+        // SC queries only the type from the capability table (`x30/a.a()`); we
+        // learn the type from the first valid reply, so probe both until the
+        // headset has answered once, then stick to its type.
+        val types = profile.multipointTypeCode
+            ?.let { code -> PeripheralInquiredTypeTable2.fromCode(code.toByte()) }
+            ?.takeIf { it != PeripheralInquiredTypeTable2.OUT_OF_RANGE }
+            ?.let { listOf(it) }
+            ?: listOf(
+                PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT,
+                PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE,
+            )
+        return types.flatMap { type ->
+            listOf(
+                multipointCommand(profile, "GET multipoint capability $type", SonyTandemV2Table2Protocol.buildGetPeripheralCapability(type)),
+                multipointCommand(profile, "GET multipoint status $type", SonyTandemV2Table2Protocol.buildGetPeripheralStatus(type)),
+                multipointCommand(profile, "GET multipoint devices $type", SonyTandemV2Table2Protocol.buildGetPeripheralParam(type)),
+            )
+        } + listOf(
+            multipointCommand(profile, "GET source switch status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL)),
+            multipointCommand(profile, "GET music hand-over status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.MUSIC_HAND_OVER_SETTING)),
+        )
+    }
+
+    private fun multipointCommand(
+        profile: ConnectedHeadphoneProfile,
+        label: String,
+        bytes: ByteArray,
+    ): HeadphoneCommand = HeadphoneCommand(label, bytes, TandemChannel.GATT_V2_MC)
+
+    private fun multipointType(profile: ConnectedHeadphoneProfile): PeripheralInquiredTypeTable2 =
+        profile.multipointTypeCode
+            ?.let { code -> PeripheralInquiredTypeTable2.fromCode(code.toByte()) }
+            ?.takeIf {
+                it == PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT ||
+                    it == PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE
+            }
+            ?: PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT
 
     override fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         if (!profile.supports(HeadphoneFeature.POWER_OFF)) {

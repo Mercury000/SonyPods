@@ -124,21 +124,36 @@ internal fun MainTabsScaffold(
         MainTabsPagerState(pagerState, coroutineScope)
     }
     var showGestureOperations by remember { mutableStateOf(false) }
+    var showMultipointSettings by remember { mutableStateOf(false) }
     val isLandscapeDetail = selectedTab == MainTab.Earphones &&
             showEarphoneDetail &&
             !showGestureOperations &&
+            !showMultipointSettings &&
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val currentEarphonePref = earphonePrefs.firstOrNull {
         it.address.equals(connectedDeviceAddress, ignoreCase = true)
     }
     var showPowerOffDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(showEarphoneDetail) {
-        if (!showEarphoneDetail) showGestureOperations = false
+    // Official behaviour: leaving the add-device flow drops the headset back
+    // to NORMAL_MODE (SC sends the cancel when the waiting screen closes).
+    fun closeSubPages() {
+        if (showMultipointSettings && sonyState.multipoint.pairingMode) {
+            sonyActions.onMultipointPairingModeChange(false)
+        }
+        showGestureOperations = false
+        showMultipointSettings = false
     }
 
-    BackHandler(enabled = selectedTab == MainTab.Earphones && showGestureOperations) {
-        showGestureOperations = false
+    LaunchedEffect(showEarphoneDetail) {
+        if (!showEarphoneDetail) {
+            showGestureOperations = false
+            showMultipointSettings = false
+        }
+    }
+
+    BackHandler(enabled = selectedTab == MainTab.Earphones && (showGestureOperations || showMultipointSettings)) {
+        closeSubPages()
     }
 
     LaunchedEffect(selectedTab) {
@@ -206,8 +221,10 @@ internal fun MainTabsScaffold(
                         isLandscapeDetail = isLandscapeDetail,
                         showEarphoneDetail = showEarphoneDetail,
                         showGestureOperations = showGestureOperations,
+                        showMultipointSettings = showMultipointSettings,
                         onOpenGestureOperations = { showGestureOperations = true },
-                        onBackFromGestureOperations = { showGestureOperations = false },
+                        onOpenMultipointSettings = { showMultipointSettings = true },
+                        onBackFromSubPage = { closeSubPages() },
                         mainTitle = mainTitle,
                         displayTitle = displayTitle,
                         sonyState = sonyState,
@@ -340,8 +357,10 @@ private fun EarphonesTabShell(
     isLandscapeDetail: Boolean,
     showEarphoneDetail: Boolean,
     showGestureOperations: Boolean,
+    showMultipointSettings: Boolean,
     onOpenGestureOperations: () -> Unit,
-    onBackFromGestureOperations: () -> Unit,
+    onOpenMultipointSettings: () -> Unit,
+    onBackFromSubPage: () -> Unit,
     mainTitle: String,
     displayTitle: String,
     sonyState: SonyStateSnapshot,
@@ -361,16 +380,22 @@ private fun EarphonesTabShell(
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+    val onSubPage = showGestureOperations || showMultipointSettings
+    val pageTitle = when {
+        showGestureOperations -> "手势操作"
+        showMultipointSettings -> "同时连接2台设备"
+        else -> mainTitle.ifEmpty { stringResource(R.string.pod_info) }
+    }
     Scaffold(
         topBar = {
             if (!isLandscapeDetail) {
                 TopAppBar(
-                    title = if (showGestureOperations) "手势操作" else mainTitle.ifEmpty { stringResource(R.string.pod_info) },
-                    largeTitle = if (showGestureOperations) "手势操作" else mainTitle.ifEmpty { stringResource(R.string.pod_info) },
+                    title = pageTitle,
+                    largeTitle = pageTitle,
                     scrollBehavior = scrollBehavior,
                     navigationIcon = {
-                        if (showGestureOperations) {
-                            IconButton(onClick = onBackFromGestureOperations) {
+                        if (onSubPage) {
+                            IconButton(onClick = onBackFromSubPage) {
                                 Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
                             }
                         } else if (showEarphoneDetail) {
@@ -380,7 +405,7 @@ private fun EarphonesTabShell(
                         }
                     },
                     actions = {
-                        if (showEarphoneDetail && !showGestureOperations) {
+                        if (showEarphoneDetail && !onSubPage) {
                             EarphoneDetailActions(
                                 onPowerOff = onPowerOff,
                                 powerOffEnabled = powerOffEnabled,
@@ -395,9 +420,13 @@ private fun EarphonesTabShell(
         EarphonesTabPage(
             showEarphoneDetail = showEarphoneDetail,
             showGestureOperations = showGestureOperations,
+            showMultipointSettings = showMultipointSettings,
             displayTitle = displayTitle,
             uiState = sonyState,
-            actions = sonyActions.copy(onOpenGestureOperations = onOpenGestureOperations),
+            actions = sonyActions.copy(
+                onOpenGestureOperations = onOpenGestureOperations,
+                onOpenMultipointSettings = onOpenMultipointSettings,
+            ),
             boxImagePath = boxImagePath,
             connectedDeviceAddress = connectedDeviceAddress,
             connectingDeviceAddress = connectingDeviceAddress,

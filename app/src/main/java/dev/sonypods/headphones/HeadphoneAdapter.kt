@@ -42,6 +42,7 @@ enum class HeadphoneFeature {
     QUICK_ACCESS,
     WEARING_STATUS,
     GESTURE_OPERATIONS,
+    MULTIPOINT,
 }
 
 enum class HeadphoneTransport {
@@ -142,6 +143,8 @@ data class ConnectedHeadphoneProfile(
     val featureBindings: Map<HeadphoneFeature, FeatureProtocolBinding> = emptyMap(),
     val protocolEvidence: List<String> = emptyList(),
     val playbackDispatchStrategy: PlaybackDispatchStrategy = PlaybackDispatchStrategy.TANDEM_FIRST,
+    /** Peripheral pairing domain selected by the headset (0x00 or 0x02). */
+    val multipointTypeCode: Int? = null,
     /** Runtime protocol version reported by CONNECT_RET_PROTOCOL_INFO (2 bytes BE),
      * validated against [dev.sonypods.protocol.SonyTandemConstants.PROTOCOL_VERSIONS]. */
     val protocolVersion: Int? = null,
@@ -242,7 +245,13 @@ fun buildFeatureBindings(
         FeatureProtocolBinding(
             feature = feature,
             variant = variant,
-            channel = defaultChannelFor(variant),
+            // Multipoint is a V2 Table2 peripheral domain even when the
+            // main profile is negotiated as Table1 on the HPC channel.
+            channel = if (
+                feature == HeadphoneFeature.MULTIPOINT &&
+                    feature in capabilities.features &&
+                    variant == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+            ) TandemChannel.GATT_V2_MC else defaultChannelFor(variant),
             queryTypes = queryTypesForFeature(feature, capabilities),
             writableTypes = writableTypesForFeature(feature, capabilities),
         )
@@ -350,6 +359,32 @@ interface HeadphoneAdapter {
         mappings: List<AssignableSettingsMapping>,
     ): List<HeadphoneCommand> = emptyList()
 
+    fun buildSetMultipointPairingModeCommands(
+        profile: ConnectedHeadphoneProfile,
+        inquiry: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetMultipointDeviceCommand(
+        profile: ConnectedHeadphoneProfile,
+        address: String,
+        action: MultipointDeviceAction,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetSourceSwitchCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetFixedSourceCommand(
+        profile: ConnectedHeadphoneProfile,
+        address: String,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetMusicHandOverCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
     fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         emptyList()
 
@@ -360,6 +395,12 @@ interface HeadphoneAdapter {
 
     fun canWrite(profile: ConnectedHeadphoneProfile, feature: HeadphoneFeature): Boolean =
         profile.supports(feature)
+}
+
+enum class MultipointDeviceAction {
+    CONNECT,
+    DISCONNECT,
+    UNPAIR,
 }
 
 object HeadphoneAdapterRegistry {
@@ -443,6 +484,26 @@ object HeadphoneAdapterRegistry {
         profile: ConnectedHeadphoneProfile,
         mappings: List<AssignableSettingsMapping>,
     ): List<HeadphoneCommand> = adapterFor(profile).buildSetGestureMappingsCommands(profile, mappings)
+
+    fun buildSetMultipointPairingModeCommands(
+        profile: ConnectedHeadphoneProfile,
+        inquiry: Boolean,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetMultipointPairingModeCommands(profile, inquiry)
+
+    fun buildSetMultipointDeviceCommand(
+        profile: ConnectedHeadphoneProfile,
+        address: String,
+        action: MultipointDeviceAction,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetMultipointDeviceCommand(profile, address, action)
+
+    fun buildSetSourceSwitchCommands(profile: ConnectedHeadphoneProfile, enabled: Boolean): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetSourceSwitchCommands(profile, enabled)
+
+    fun buildSetFixedSourceCommand(profile: ConnectedHeadphoneProfile, address: String): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetFixedSourceCommand(profile, address)
+
+    fun buildSetMusicHandOverCommands(profile: ConnectedHeadphoneProfile, enabled: Boolean): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetMusicHandOverCommands(profile, enabled)
 
     fun parse(profile: ConnectedHeadphoneProfile, channel: TandemChannel, raw: ByteArray): ParsedTandemResponse =
         adapterFor(profile).parse(profile, channel, raw)

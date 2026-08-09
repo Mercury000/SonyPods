@@ -622,6 +622,24 @@ object SonyEngineHost {
                 repo.setGestureAmbientModes(modes)
             }
 
+            SonyBridge.CMD_SET_MULTIPOINT_PAIRING_MODE ->
+                repo.setMultipointPairingMode(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
+            SonyBridge.CMD_CONNECT_MULTIPOINT_DEVICE ->
+                intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::connectMultipointDevice)
+
+            SonyBridge.CMD_DISCONNECT_MULTIPOINT_DEVICE ->
+                intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::disconnectMultipointDevice)
+
+            SonyBridge.CMD_UNPAIR_MULTIPOINT_DEVICE ->
+                intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::unpairMultipointDevice)
+            SonyBridge.CMD_SET_SOURCE_SWITCH_ENABLED ->
+                repo.setSourceSwitchEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_FIXED_SOURCE ->
+                intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::setFixedSource)
+            SonyBridge.CMD_SET_MUSIC_HAND_OVER ->
+                repo.setMusicHandOverEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
             SonyBridge.CMD_PLAYBACK_PREVIOUS -> repo.playbackPrevious()
             SonyBridge.CMD_PLAYBACK_PLAY_PAUSE -> repo.playbackPlayPause()
             SonyBridge.CMD_PLAYBACK_NEXT -> repo.playbackNext()

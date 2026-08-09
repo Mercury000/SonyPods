@@ -24,6 +24,7 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 internal fun EarphonesTabPage(
     showEarphoneDetail: Boolean,
     showGestureOperations: Boolean,
+    showMultipointSettings: Boolean,
     displayTitle: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
@@ -42,6 +43,7 @@ internal fun EarphonesTabPage(
     val page = when {
         !showEarphoneDetail -> EarphonesPage.DEVICE_PICKER
         showGestureOperations -> EarphonesPage.GESTURE_OPERATIONS
+        showMultipointSettings -> EarphonesPage.MULTIPOINT_SETTINGS
         else -> EarphonesPage.DETAIL
     }
     AnimatedContent(
@@ -57,6 +59,16 @@ internal fun EarphonesTabPage(
     ) { currentPage ->
         when (currentPage) {
             EarphonesPage.GESTURE_OPERATIONS -> GestureOperationsPage(
+                modifier = Modifier
+                    .overScrollVertical()
+                    .nestedScroll(nestedScrollConnection),
+                contentPadding = contentPadding,
+                bottomContentPadding = pageBottomContentPadding,
+                uiState = uiState,
+                actions = actions,
+            )
+
+            EarphonesPage.MULTIPOINT_SETTINGS -> MultipointSettingsPage(
                 modifier = Modifier
                     .overScrollVertical()
                     .nestedScroll(nestedScrollConnection),
@@ -99,4 +111,5 @@ private enum class EarphonesPage {
     DEVICE_PICKER,
     DETAIL,
     GESTURE_OPERATIONS,
+    MULTIPOINT_SETTINGS,
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.bridge.MultipointSnapshot
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
@@ -47,11 +49,15 @@ import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.ArrowRight
+import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 import java.io.File
 
 @Composable
@@ -208,12 +214,93 @@ private fun LazyListScope.podControlItems(
         }
     }
 
+    if (uiState.supportsMultipoint) {
+        item {
+            MultipointEntryCard(
+                state = uiState.multipoint,
+                onOpen = actions.onOpenMultipointSettings,
+            )
+        }
+    }
+
     item {
         DeviceStatusCard(uiState = uiState)
     }
 
     item {
         Spacer(modifier = Modifier.height(bottomContentPadding))
+    }
+}
+
+@Composable
+private fun MultipointEntryCard(
+    state: MultipointSnapshot,
+    onOpen: () -> Unit,
+) {
+    // Mirrors the official dashboard card (SC `so.q` /
+    // multipoint_shortcut_layout.xml): title + disclosure chevron above a
+    // fixed slot list numbered 1..maxConnected; the playback-right holder
+    // carries the sound indicator and empty slots render greyed-out.
+    val slotCount = maxOf(state.maxConnectedDevices, 2)
+    Card(
+        modifier = Modifier.padding(horizontal = 12.dp),
+        showIndication = true,
+        onClick = onOpen,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "同时连接2台设备",
+                modifier = Modifier.weight(1f),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Icon(
+                imageVector = MiuixIcons.Basic.ArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            )
+        }
+        (1..slotCount).forEach { slot ->
+            val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
+            val holdsPlayback = device != null && state.playbackRight > 0 &&
+                device.connectedStatus == state.playbackRight
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(bottom = if (slot == slotCount) 10.dp else 0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "$slot.",
+                    modifier = Modifier.widthIn(min = 22.dp),
+                    fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                if (holdsPlayback) {
+                    Icon(
+                        imageVector = MiuixIcons.VolumeUp,
+                        contentDescription = "正在播放",
+                        modifier = Modifier.size(18.dp).padding(end = 2.dp),
+                        tint = MiuixTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.widthIn(min = 4.dp))
+                }
+                Text(
+                    text = device?.name?.ifBlank { device.address } ?: "未连接",
+                    fontSize = 14.sp,
+                    color = if (device != null) {
+                        MiuixTheme.colorScheme.onSurface
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
+                )
+            }
+        }
     }
 }
 
