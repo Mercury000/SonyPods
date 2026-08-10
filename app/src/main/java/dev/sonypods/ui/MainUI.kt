@@ -407,14 +407,6 @@ fun MainUI(
         }
     }
 
-    // Periodic status refresh while connected.
-    LaunchedEffect(sonyConnected) {
-        while (sonyConnected) {
-            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
-            delay(30_000L)
-        }
-    }
-
     fun clearPodConnectionState() {
         connectingDeviceAddress = null
         pendingAutoOpenAddress = null

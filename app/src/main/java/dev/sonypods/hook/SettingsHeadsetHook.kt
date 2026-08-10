@@ -8,8 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -28,8 +26,7 @@ import java.util.WeakHashMap
 object SettingsHeadsetHook : HookContext() {
     private const val TAG = "SonyPods-Settings"
     private const val PREFS_NAME = "sonypods_milink_state"
-    private const val SETTINGS_REFRESH_INTERVAL_MS = 3_000L
-private const val REPUBLISH_DEBOUNCE_MS = 600L
+    private const val REPUBLISH_DEBOUNCE_MS = 600L
     private const val PKG_SETTINGS = "com.android.settings"
     private val knownSonyAddresses = linkedSetOf<String>()
     private val batteryViews = WeakHashMap<Any, BluetoothDevice>()
@@ -55,20 +52,7 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
     private var proxySetCommonCommandCalls = 0
     private var proxyGetDeviceConfigCalls = 0
     private var proxyGetCommonConfigCalls = 0
-    private val refreshHandler = Handler(Looper.getMainLooper())
-    private var refreshLoopStarted = false
     private var lastRepublishAt = 0L
-    private val refreshRunnable = object : Runnable {
-        override fun run() {
-            if (headsetFragments.keys.any { isSonyFragment(it) }) {
-                requestBluetoothStatus("settings-periodic")
-                refreshHandler.postDelayed(this, SETTINGS_REFRESH_INTERVAL_MS)
-            } else {
-                refreshLoopStarted = false
-                Log.d(TAG, "settings periodic refresh stopped: no active fragment")
-            }
-        }
-    }
 
     override fun onHook() {
         hookActivityEntry()
@@ -79,13 +63,11 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
     }
 
     override fun onBeforeReload() {
-        refreshHandler.removeCallbacksAndMessages(null)
         stateReceiver?.let { receiver ->
             unregisterReceiverForReload(context, receiver)
         }
         stateReceiver = null
         receiverRegistered = false
-        refreshLoopStarted = false
         reloadBatteryViews = WeakHashMap(batteryViews)
         reloadBatteryValuesCache = WeakHashMap(batteryValuesCache)
         reloadHeadsetFragments = WeakHashMap(headsetFragments)
@@ -359,7 +341,6 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
                 if (!isSonyFragment(instance)) return@hookAfter
                 instance?.let { headsetFragments[it] = true }
                 requestBluetoothStatus("fragment-create")
-                startPeriodicRefresh()
                 injectFragmentStatus(instance)
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onCreateView skipped", it) }
@@ -370,7 +351,6 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
                 if (!isSonyFragment(instance)) return@hookAfter
                 instance?.let { headsetFragments[it] = true }
                 requestBluetoothStatus("service-connected")
-                startPeriodicRefresh()
                 injectFragmentStatus(instance)
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onServiceConnected skipped", it) }
@@ -542,14 +522,6 @@ private const val REPUBLISH_DEBOUNCE_MS = 600L
             })
         }
         Log.d(TAG, "requested bluetooth status reason=$reason")
-    }
-
-    private fun startPeriodicRefresh() {
-        if (refreshLoopStarted) return
-        refreshLoopStarted = true
-        refreshHandler.removeCallbacks(refreshRunnable)
-        refreshHandler.postDelayed(refreshRunnable, SETTINGS_REFRESH_INTERVAL_MS)
-        Log.d(TAG, "settings periodic refresh started")
     }
 
     private fun updateBatteryViews() {
