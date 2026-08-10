@@ -63,7 +63,6 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.VolumeUp
-import java.io.File
 
 @Composable
 fun PodDetailPage(
@@ -74,6 +73,8 @@ fun PodDetailPage(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions = SonyDetailActions(),
     boxImagePath: String? = null,
+    /** Changes whenever the cached image record is rewritten, even if its path is stable. */
+    boxImageRevision: Long = 0L,
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (isLandscape) {
@@ -91,7 +92,7 @@ fun PodDetailPage(
                 verticalArrangement = Arrangement.Center
             ) {
                 Image(
-                    painter = rememberPodImagePainter(boxImagePath),
+                    painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
                     contentDescription = "Earphones",
                     modifier = Modifier
                         .fillMaxWidth(0.82f)
@@ -132,7 +133,7 @@ fun PodDetailPage(
     ) {
         item {
             Image(
-                painter = rememberPodImagePainter(boxImagePath),
+                painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
                 contentDescription = "Earphones",
                 modifier = Modifier
                     .fillMaxWidth(0.7f)
@@ -150,15 +151,11 @@ fun PodDetailPage(
 }
 
 @Composable
-private fun rememberPodImagePainter(path: String?): Painter {
-    // The downloader intentionally reuses the per-device path. Include the
-    // file metadata so replacing that file invalidates a painter that may have
-    // already fallen back to the stock image during the download.
-    val fileKey = path?.let {
-        val file = File(it)
-        "$it:${file.lastModified()}:${file.length()}"
-    }
-    return remember(fileKey) {
+private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
+    // The downloader intentionally reuses the per-device path. The revision is
+    // persisted together with the image record and changes after every completed
+    // replacement, so Compose does not keep a Bitmap decoded from the old bytes.
+    return remember(path, revision) {
         path?.let {
             runCatching { BitmapFactory.decodeFile(it) }
                 .getOrNull()

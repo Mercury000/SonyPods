@@ -15,8 +15,9 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Downloads the cloud model image and stores it where the system notification and focus island
- * can serve it through the module's image cache.
+ * Downloads the cloud model image for the module detail page and publishes it to Remote File
+ * when the service is available. Notification/island rendering is owned by the Hook host and
+ * has its own temporary cache path.
  *
  * This stays in the app process: the image lives in our private files dir, which the
  * bluetooth process cannot write to. The engine only reports the URL.
@@ -98,9 +99,13 @@ object ModelImageSync {
 
                 if (stored) {
                     failedKeys.remove(key)
-                    // The notification and island embed Bitmap data at render time;
-                    // tell the engine to rebuild them after the file is complete.
-                    SonyBridge.imageReady(appContext, address)
+                    // Surface images are owned by the Hook host. Its temporary
+                    // cache downloader is the only side that sends CMD_IMAGE_READY
+                    // after it has actually produced a bitmap for notification/island
+                    // rendering. The module-side download only updates the detail-page
+                    // cache and publishes Remote File; notifying here would make opening
+                    // the module re-submit an island that Hook already displayed.
+                    Log.d(TAG, "module image cache ready; hook surfaces unchanged address=$address")
                 } else {
                     failedKeys.add(key)
                 }

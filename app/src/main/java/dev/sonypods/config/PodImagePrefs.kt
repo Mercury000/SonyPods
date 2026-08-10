@@ -25,6 +25,8 @@ data class EarphonePref(
     val lastConnectedAt: Long = System.currentTimeMillis(),
     /** Cloud catalog URL the box image was downloaded from; null = no catalog image cached. */
     val autoImageUrl: String? = null,
+    /** Monotonic UI cache key; increments whenever automatic image bytes are replaced. */
+    val imageRevision: Long = 0L,
 ) {
     fun imagePath(resource: PodImageResource): String? = when (resource) {
         PodImageResource.BOX -> boxImagePath
@@ -106,8 +108,10 @@ object PodImagePrefs {
         // automatic catalog cache.
         var updated = existing?.takeIf { it.autoImageUrl != null }
             ?: EarphonePref(address = address, name = name)
+        var imageUpdated = false
         images.forEach { (resource, bytes) ->
             if (bytes.isNotEmpty()) {
+                imageUpdated = true
                 updated = updated.withImagePath(resource, copyImage(context, service, address, resource, bytes))
             }
         }
@@ -115,6 +119,7 @@ object PodImagePrefs {
             name = name.ifBlank { updated.name },
             lastConnectedAt = System.currentTimeMillis(),
             autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
+            imageRevision = if (imageUpdated) updated.imageRevision + 1L else updated.imageRevision,
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
         return saveBoth(prefs, service, normalized)

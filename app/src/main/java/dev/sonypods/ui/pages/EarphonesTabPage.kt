@@ -29,6 +29,7 @@ internal fun EarphonesTabPage(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
     boxImagePath: String?,
+    boxImageRevision: Long,
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
     showConnectErrorDialog: Boolean,
@@ -88,6 +89,7 @@ internal fun EarphonesTabPage(
                 uiState = uiState,
                 actions = actions,
                 boxImagePath = boxImagePath,
+                boxImageRevision = boxImageRevision,
             )
 
             EarphonesPage.DEVICE_PICKER -> DevicePickerPage(

@@ -827,17 +827,23 @@ object SonyEngineHost {
                 ) return
                 appContext?.let {
                     // Both the notification and the island carry embedded bitmaps;
-                    // invalidate the render guard and replay the current state.
+                    // invalidate the render guard and refresh the current surfaces.
+                    // This is an image replacement during the same connection, not
+                    // a new connection: preserving lastConnectAnimationKey keeps
+                    // HyperOS on the in-place update path instead of remove -> add.
                     lastRenderedAddress = null
                     lastRenderedBattery = null
-                    lastConnectAnimationKey = null
                     cloudFallback?.onState(current)
                     Log.d(TAG, "model image ready; re-rendering surfaces address=$imageAddress")
                     publish(it, current)
                 }
             }
 
-            SonyBridge.CMD_REPUBLISH -> appContext?.let { publish(it, snapshot()) }
+            // State consumers request a replay when their process starts. Do not
+            // re-submit the notification/island for that request: surface owners
+            // have their own CMD_SURFACES_READY handshake, and re-rendering here
+            // races Remote File publication when the module is opened.
+            SonyBridge.CMD_REPUBLISH -> appContext?.let { publishState(it, snapshot()) }
 
             SonyBridge.CMD_SURFACES_READY -> appContext?.let {
                 // Forget what we think is on screen so the island shows again.
@@ -885,6 +891,16 @@ object SonyEngineHost {
         snapshot: SonyStateSnapshot,
         islandFirstFloat: Boolean? = null,
     ) {
+        publishState(context, snapshot)
+        injectSystemBattery(context, snapshot)
+        renderXiaomiSurfaces(context, snapshot, islandFirstFloat)
+    }
+
+    /** Broadcast state without touching the notification or Dynamic Island. */
+    private fun publishState(
+        context: Context,
+        snapshot: SonyStateSnapshot,
+    ) {
         val bundle = snapshot.toBundle()
         SonyBridge.STATE_CONSUMERS.forEach { target ->
             runCatching {
@@ -897,8 +913,6 @@ object SonyEngineHost {
                 )
             }.onFailure { Log.w(TAG, "state broadcast to $target failed", it) }
         }
-        injectSystemBattery(context, snapshot)
-        renderXiaomiSurfaces(context, snapshot, islandFirstFloat)
     }
 
     /**
