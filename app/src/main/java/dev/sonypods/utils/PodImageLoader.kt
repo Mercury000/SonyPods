@@ -81,27 +81,4 @@ object PodImageLoader {
         return loadBitmap(context, prefs, address, PodImageResource.BOX, R.drawable.img_box)
     }
 
-
-    fun loadIslandLeftBitmap(context: Context, prefs: SharedPreferences, address: String): Bitmap? {
-        return loadBitmapWithFallback(
-            context = context,
-            prefs = prefs,
-            address = address,
-            resource = PodImageResource.LEFT,
-            fallbackResource = PodImageResource.BOX,
-            fallbackResId = R.drawable.img_left,
-        )
-    }
-
-    fun loadIslandRightBitmap(context: Context, prefs: SharedPreferences, address: String): Bitmap? {
-        return loadBitmapWithFallback(
-            context = context,
-            prefs = prefs,
-            address = address,
-            resource = PodImageResource.RIGHT,
-            fallbackResource = PodImageResource.BOX,
-            fallbackResId = R.drawable.img_right,
-        )
-    }
-
 }
