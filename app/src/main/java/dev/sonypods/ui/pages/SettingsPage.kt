@@ -49,6 +49,8 @@ fun SettingsPage(
     onNotificationClickActionChange: (Int) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
     onMoreClickActionChange: (Int) -> Unit = {},
+    fusionMoreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS),
+    onFusionMoreClickActionChange: (Int) -> Unit = {},
     fakeDeviceId: MutableState<String> = mutableStateOf(ConfigManager.DEFAULT_FAKE_DEVICE_ID),
     onFakeDeviceIdChange: (String) -> Unit = {},
     onOpenTheme: () -> Unit = {},
@@ -110,6 +112,14 @@ fun SettingsPage(
         ConfigManager.MORE_CLICK_MODULE,
     )
     val moreClickActionOptions = listOf(
+        stringResource(R.string.click_action_system_settings),
+        stringResource(R.string.click_action_module),
+    )
+    val fusionMoreClickActionValues = listOf(
+        ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS,
+        ConfigManager.FUSION_MORE_CLICK_MODULE,
+    )
+    val fusionMoreClickActionOptions = listOf(
         stringResource(R.string.click_action_system_settings),
         stringResource(R.string.click_action_module),
     )
@@ -209,6 +219,13 @@ fun SettingsPage(
                         onSelectedIndexChange = { onMoreClickActionChange(moreClickActionValues[it]) }
                     )
                 }
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.fusion_more_click_action),
+                    summary = stringResource(R.string.fusion_more_click_action_summary),
+                    items = fusionMoreClickActionOptions,
+                    selectedIndex = fusionMoreClickActionValues.indexOf(fusionMoreClickAction.value).coerceAtLeast(0),
+                    onSelectedIndexChange = { onFusionMoreClickActionChange(fusionMoreClickActionValues[it]) },
+                )
                 BasicComponent(
                     title = stringResource(R.string.fake_device_id),
                     summary = stringResource(R.string.fake_device_id_summary)

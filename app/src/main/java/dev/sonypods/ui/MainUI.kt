@@ -95,6 +95,8 @@ fun MainUI(
     onBlurBottomBarChange: (Boolean) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
+    openEarphoneDetailAddress: MutableState<String?> = mutableStateOf(null),
+    onExternalDetailRequestConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -122,6 +124,7 @@ fun MainUI(
     // reconnect navigation intent separately from the address-based click
     // intent.
     var autoOpenAfterScopeRestart by remember { mutableStateOf(false) }
+    var pendingExternalDetailAddress by remember { mutableStateOf<String?>(null) }
     var showConnectErrorDialog by remember { mutableStateOf(false) }
     var lastBluetoothServiceAliveMs by remember { mutableStateOf(0L) }
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
@@ -141,6 +144,7 @@ fun MainUI(
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
+    val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
@@ -164,8 +168,14 @@ fun MainUI(
     // the picker visible; as soon as the probe completes, the pending request
     // makes the detail page the target even before the effect clears the
     // picker flag.
-    val showEarphoneDetail = canShowDetailPage &&
-        (!showDevicePicker || pendingAutoOpenAddress != null)
+    val externalDetailMatchesConnection = pendingExternalDetailAddress?.let { pending ->
+        sonyConnected && connectedDeviceAddress.equals(pending, ignoreCase = true)
+    } == true
+    val showEarphoneDetail = canShowDetailPage && if (pendingExternalDetailAddress != null) {
+        externalDetailMatchesConnection
+    } else {
+        !showDevicePicker || pendingAutoOpenAddress != null
+    }
 
     val sonyActions = remember(context) {
         SonyDetailActions(
@@ -219,6 +229,34 @@ fun MainUI(
             }
             hasAppliedDefaultTab = true
         }
+    }
+
+    // The fusion device center can enter the module while the existing MainActivity
+    // task is already alive. Keep this request separate from the normal device-picker
+    // flow and consume it only after the requested Sony session has finished probing.
+    LaunchedEffect(openEarphoneDetailAddress.value) {
+        val target = openEarphoneDetailAddress.value?.trim()?.takeIf { it.isNotEmpty() }
+        if (target != null) {
+            pendingExternalDetailAddress = target
+            pendingAutoOpenAddress = null
+            autoOpenAfterScopeRestart = false
+            selectedTab = MainTab.Earphones
+            showDevicePicker = true
+        }
+    }
+
+    LaunchedEffect(
+        pendingExternalDetailAddress,
+        sonyConnected,
+        connectedDeviceAddress,
+        sonyState.probeComplete,
+    ) {
+        val pending = pendingExternalDetailAddress ?: return@LaunchedEffect
+        if (!canShowDetailPage || !connectedDeviceAddress.equals(pending, ignoreCase = true)) return@LaunchedEffect
+        selectedTab = MainTab.Earphones
+        showDevicePicker = false
+        pendingExternalDetailAddress = null
+        onExternalDetailRequestConsumed()
     }
 
     // Connection established: record the device so the automatic model image can be
@@ -382,7 +420,13 @@ fun MainUI(
         selectedTab = MainTab.Earphones
     }
 
+    fun clearExternalDetailRequest() {
+        pendingExternalDetailAddress = null
+        onExternalDetailRequestConsumed()
+    }
+
     fun onDeviceSelected(device: BluetoothDevice) {
+        clearExternalDetailRequest()
         connectingDeviceAddress = device.address
         pendingAutoOpenAddress = device.address
         autoOpenAfterScopeRestart = false
@@ -408,6 +452,7 @@ fun MainUI(
 
     fun onConnectedDeviceClick() {
         if (!sonyConnected) return
+        clearExternalDetailRequest()
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
         connectingDeviceAddress = null
@@ -416,6 +461,7 @@ fun MainUI(
     }
 
     fun backToDevicePicker() {
+        clearExternalDetailRequest()
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
         showDevicePicker = true
@@ -431,6 +477,7 @@ fun MainUI(
     }
 
     fun openDevicePicker() {
+        clearExternalDetailRequest()
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
         showDevicePicker = true
@@ -571,6 +618,12 @@ fun MainUI(
                 onMoreClickActionChange = {
                     moreClickAction.value = it
                     ConfigManager.updateMoreClickAction(prefs, xposedService, it)
+                },
+                fusionMoreClickAction = fusionMoreClickAction,
+                onFusionMoreClickActionChange = {
+                    fusionMoreClickAction.value = it
+                    ConfigManager.updateFusionMoreClickAction(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.milink.service")
                 },
                 onOpenTandemDebug = { backStack.add(Screen.TandemDebug) },
                 fakeDeviceId = fakeDeviceId,

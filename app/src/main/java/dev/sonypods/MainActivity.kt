@@ -2,6 +2,7 @@ package dev.sonypods
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
@@ -18,8 +19,11 @@ import androidx.core.content.ContextCompat
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.ui.App
 import dev.sonypods.ui.AppLocale
+import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 
 class MainActivity : ComponentActivity() {
+    private val openEarphoneDetailAddress = mutableStateOf<String?>(null)
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             // Permissions only gate the UI; the engine runs in the bluetooth process.
@@ -33,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleNavigationIntent(intent)
 
         val requiredPermissions = arrayOf(
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -97,7 +102,20 @@ class MainActivity : ComponentActivity() {
                     appLanguage.value = it
                     prefs.edit().putInt("app_language", it).apply()
                 },
+                openEarphoneDetailAddress = openEarphoneDetailAddress,
+                onExternalDetailRequestConsumed = { openEarphoneDetailAddress.value = null },
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNavigationIntent(intent)
+    }
+
+    private fun handleNavigationIntent(intent: Intent?) {
+        if (intent?.action != SonyPodsAction.ACTION_OPEN_EARPHONE_DETAIL) return
+        openEarphoneDetailAddress.value = intent.getStringExtra(SonyPodsAction.EXTRA_TARGET_DEVICE_ADDRESS)
     }
 }

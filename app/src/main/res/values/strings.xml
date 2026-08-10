@@ -12,6 +12,8 @@
     <string name="notification_click_action_summary">Choose where tapping the headset notification opens</string>
     <string name="more_click_action">\"More\" button behavior</string>
     <string name="more_click_action_summary">Choose where tapping \"More\" in the module popup opens</string>
+    <string name="fusion_more_click_action">Fusion device center \"More settings\" behavior</string>
+    <string name="fusion_more_click_action_summary">Choose where Sony headset \"More settings\" opens</string>
     <string name="notification_click_module_popup">Module popup</string>
     <string name="click_action_system_settings">System Settings</string>
     <string name="click_action_module">Module</string>

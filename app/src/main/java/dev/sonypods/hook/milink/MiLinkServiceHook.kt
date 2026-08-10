@@ -62,6 +62,7 @@ object MiLinkServiceHook : HookContext() {
     override fun onHook() {
         hookContextEntry()
         hookMxBluetoothRuntime()
+        hookFusionMoreSettings()
         hookHeadsetRuntimeDisplay()
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
     }
@@ -137,6 +138,59 @@ object MiLinkServiceHook : HookContext() {
             hookStringAddressResult(className, "getRingFindState") { false }
         }
         spatialAudioHook.hookMxBluetoothRuntime(classes)
+    }
+
+    /**
+     * The fusion device center eventually delegates its "More settings" action to
+     * MxBluetoothService.switchToHeadsetActivity(BluetoothDevice). Keep the official
+     * implementation as the default and only redirect Sony devices when the user has
+     * explicitly selected the module destination.
+     */
+    private fun hookFusionMoreSettings() {
+        runCatching {
+            hookBefore(
+                findMethod(
+                    "com.xiaomi.mxbluetoothsdk.service.MxBluetoothService",
+                    "switchToHeadsetActivity",
+                    BluetoothDevice::class.java,
+                ),
+                logicalRole = "fusion-more-settings",
+            ) {
+                if (ConfigManager.fusionMoreClickAction() != ConfigManager.FUSION_MORE_CLICK_MODULE) {
+                    return@hookBefore
+                }
+                val device = args[0] as? BluetoothDevice ?: return@hookBefore
+                if (!isSonyPod(device)) return@hookBefore
+
+                val launchContext = context ?: runCatching {
+                    getObjectField(instance, "mContext") as? Context
+                }.getOrNull()
+                if (launchContext == null) {
+                    Log.w(TAG, "fusion more settings redirect skipped: context unavailable")
+                    return@hookBefore
+                }
+
+                val intent = Intent(SonyPodsAction.ACTION_OPEN_EARPHONE_DETAIL).apply {
+                    setClassName("com.mercury.sonypods", "dev.sonypods.MainActivity")
+                    putExtra(SonyPodsAction.EXTRA_TARGET_DEVICE_ADDRESS, device.address)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                runCatching {
+                    launchContext.startActivity(intent)
+                }.onSuccess {
+                    Log.i(TAG, "fusion more settings redirected to module address=${device.address}")
+                    // The official method is void. Marking a null result prevents it from
+                    // launching the system settings after the module activity was opened.
+                    this.result = null
+                }.onFailure {
+                    // A failed module launch falls through to the official system settings
+                    // action, preserving a usable destination for the user.
+                    Log.w(TAG, "fusion more settings module redirect failed; keep system action", it)
+                }
+            }
+        }.onFailure {
+            Log.d(TAG, "hook MxBluetoothService.switchToHeadsetActivity skipped", it)
+        }
     }
 
     private fun hookHeadsetRuntimeDisplay() {

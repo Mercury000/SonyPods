@@ -19,6 +19,8 @@ fun App(
     onBlurBottomBarChange: (Boolean) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
+    openEarphoneDetailAddress: MutableState<String?> = mutableStateOf(null),
+    onExternalDetailRequestConsumed: () -> Unit = {},
 ) {
     val colorSchemeMode = when (themeMode.value) {
         1 -> ColorSchemeMode.Light
@@ -41,6 +43,8 @@ fun App(
                 onBlurBottomBarChange = onBlurBottomBarChange,
                 appLanguage = appLanguage,
                 onAppLanguageChange = onAppLanguageChange,
+                openEarphoneDetailAddress = openEarphoneDetailAddress,
+                onExternalDetailRequestConsumed = onExternalDetailRequestConsumed,
             )
         }
     }
