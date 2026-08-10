@@ -12,6 +12,10 @@ import java.util.concurrent.CopyOnWriteArraySet
 class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
     override fun onCreate() {
         super.onCreate()
+        // Load the app-local configuration before the service callback can rewrite
+        // the remote store. Otherwise an early bind would publish AppConfig's
+        // in-memory defaults and overwrite the user's persisted settings.
+        ConfigManager.init(getSharedPreferences(ConfigManager.PREFS_NAME, MODE_PRIVATE))
         XposedServiceHelper.registerListener(this)
     }
 
@@ -19,9 +23,8 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         Log.d(TAG, "LSPosed service bound api=${service.apiVersion} framework=${service.frameworkName}/${service.frameworkVersionCode}")
         xposedService = service
         notifyListeners(service)
-        // Repair remote prefs if config_json is missing (e.g. was evicted by an older build
-        // that wrote only earphone_prefs_json into the same store). Must run before
-        // flushPendingRemote so the pending write always lands on a valid base.
+        // Publish the initialized local config using the current schema. Must run before
+        // flushPendingRemote so a pending write always lands on the current schema.
         ConfigManager.syncToRemote(service)
         // Flush any config that was saved while the service was unavailable, so the
         // engine's remote-prefs store is authoritative and survives a scope restart.

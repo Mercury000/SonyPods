@@ -835,6 +835,7 @@ object SonyEngineHost {
             remoteDevice(context, previous)?.let {
                 runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
             }
+            runCatching { MiuiStrongToastUtil.cancelBatteryIslandByMiuiBt(context) }
             return
         }
 
@@ -863,13 +864,12 @@ object SonyEngineHost {
         )
         if (battery == lastRenderedBattery && address == lastRenderedAddress) return
 
-        // HyperOS replays the connect animation whenever the wear composition changes —
-        // a bud going in or out — but not for plain battery drift. Keying on which sides
-        // report reproduces that, and skips the empty state before any level arrived.
-        val presence = "$address|${battery.left != null}|${battery.right != null}"
-        val playAnimation = battery.left != null || battery.right != null
-        val isNewDevice = playAnimation && presence != lastConnectAnimationKey
-        if (isNewDevice) lastConnectAnimationKey = presence
+        // Pop the island once per connection. Subsequent battery replies still go
+        // through the same bridge so the visible island can update in place, but
+        // they must not retrigger the connection animation.
+        val hasBatteryData = battery.left != null || battery.right != null || battery.case != null
+        val isNewDevice = address != lastConnectAnimationKey && hasBatteryData
+        if (isNewDevice) lastConnectAnimationKey = address
         lastRenderedBattery = battery
         lastRenderedAddress = address
 
@@ -884,18 +884,17 @@ object SonyEngineHost {
                 // reads "电量" (battery) instead of "左"+"%" for the single over-ear value.
                 singleBattery = singleBattery,
             )
-            // The island is an arrival animation: only on a fresh connection, not on
-            // every battery tick.
-            if (isNewDevice) {
-                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
-                    context = context,
-                    batteryParams = battery,
-                    device = device,
-                    // Headband models report one level; the connect animation has a
-                    // dedicated single-battery variant for them.
-                    singleBattery = singleBattery,
-                )
-            }
+            // Send every battery tick. The hook shows the island only for the first
+            // usable state of a connection and updates the existing island thereafter.
+            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
+                context = context,
+                batteryParams = battery,
+                device = device,
+                // Headband models report one level; the connect animation has a
+                // dedicated single-battery variant for them.
+                singleBattery = singleBattery,
+                showIsland = isNewDevice,
+            )
             Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice single=$singleBattery")
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }

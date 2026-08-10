@@ -196,8 +196,14 @@ class HookEntry : XposedModule() {
                 active.contexts().filterIsInstance<SettingsHeadsetHook>().forEach { it.startAfterReload(context) }
             "com.milink.service" ->
                 active.contexts().filterIsInstance<MiLinkServiceHook>().forEach { it.startAfterReload(context) }
-            "com.xiaomi.bluetooth" ->
+            "com.xiaomi.bluetooth" -> {
                 active.contexts().filterIsInstance<MiBluetoothToastHook>().forEach { it.startAfterReload(context) }
+                // Same process also hosts the upstream headset hook, whose
+                // ACTION_CONFIG_CHANGED receiver keeps the new generation's
+                // ConfigManager live — without this, config changes made after a
+                // hot reload (island mode/duration) never reach the island renderer.
+                active.contexts().filterIsInstance<BluetoothUpstreamHeadsetHook>().forEach { it.startAfterReload(context) }
+            }
             "com.sony.songpal.mdr" ->
                 active.contexts().filterIsInstance<SoundConnectHandoverHook>().forEach {
                     val application = context.applicationContext as? android.app.Application

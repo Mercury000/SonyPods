@@ -16,13 +16,16 @@ import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.ui.dialogs.AncCycleModesDialog
+import dev.sonypods.ui.dialogs.IslandDurationDialog
+import dev.sonypods.ui.dialogs.decomposeIslandDuration
+import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.DropdownEntry
-import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 fun SettingsPage(
@@ -32,10 +35,10 @@ fun SettingsPage(
     onDesktopIconHiddenChange: (Boolean) -> Unit = {},
     logLevel: MutableState<Int> = mutableStateOf(ConfigManager.LOG_LEVEL_BASIC),
     onLogLevelChange: (Int) -> Unit = {},
-    islandMode: MutableState<Int> = mutableStateOf(ConfigManager.ISLAND_MODE_OFFICIAL),
+    islandMode: MutableState<Int> = mutableStateOf(ConfigManager.ISLAND_MODE_MODULE),
     onIslandModeChange: (Int) -> Unit = {},
-    islandShowTimings: MutableState<Set<Int>> = mutableStateOf(emptySet()),
-    onIslandShowTimingsChange: (Set<Int>) -> Unit = {},
+    islandDurationSeconds: MutableState<Int> = mutableStateOf(ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS),
+    onIslandDurationSecondsChange: (Int) -> Unit = {},
     ancCycleModes: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_ANC_CYCLE_MODES),
     onAncCycleModesChange: (Set<String>) -> Unit = {},
     startupTab: MutableState<Int> = mutableStateOf(ConfigManager.STARTUP_TAB_MODULE),
@@ -68,30 +71,17 @@ fun SettingsPage(
         stringResource(R.string.island_mode_official),
         stringResource(R.string.island_mode_module),
     )
-    val islandShowTimingOptions = listOf(
-        ConfigManager.ISLAND_SHOW_TIMING_CONNECTED to stringResource(R.string.island_show_timing_connected),
-        ConfigManager.ISLAND_SHOW_TIMING_WEARING to stringResource(R.string.island_show_timing_wearing),
-        ConfigManager.ISLAND_SHOW_TIMING_REMOVED to stringResource(R.string.island_show_timing_removed),
-        ConfigManager.ISLAND_SHOW_TIMING_IN_CASE to stringResource(R.string.island_show_timing_in_case),
+    // Stored as seconds (islandTimeout is seconds on the wire); shown as the
+    // largest exact unit the user picked, e.g. "10 秒" / "5 分" / "1 时".
+    val showIslandDurationDialog = remember { mutableStateOf(false) }
+    val islandDurationParts = decomposeIslandDuration(islandDurationSeconds.value)
+    val islandDurationLabel = "${islandDurationParts.first} " + stringResource(
+        when (islandDurationParts.second) {
+            2 -> R.string.duration_unit_hour
+            1 -> R.string.duration_unit_minute
+            else -> R.string.duration_unit_second
+        }
     )
-    val islandShowTimingEntries = remember(islandShowTimings.value, islandShowTimingOptions) {
-        listOf(
-            DropdownEntry(
-                items = islandShowTimingOptions.map { (value, text) ->
-                    DropdownItem(
-                        text = text,
-                        selected = value in islandShowTimings.value,
-                        onClick = {
-                            val selected = islandShowTimings.value
-                            onIslandShowTimingsChange(
-                                if (value in selected) selected - value else selected + value
-                            )
-                        },
-                    )
-                }
-            )
-        )
-    }
     val notificationClickActionValues = listOf(
         ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
         ConfigManager.NOTIFICATION_CLICK_SYSTEM_SETTINGS,
@@ -185,11 +175,17 @@ fun SettingsPage(
                     onSelectedIndexChange = { onIslandModeChange(islandModeValues[it]) }
                 )
                 if (islandMode.value == ConfigManager.ISLAND_MODE_MODULE) {
-                    OverlayDropdownPreference(
-                        title = stringResource(R.string.island_show_timing),
-                        summary = stringResource(R.string.island_show_timing_summary),
-                        entries = islandShowTimingEntries,
-                        collapseOnSelection = false,
+                    BasicComponent(
+                        title = stringResource(R.string.island_duration_title),
+                        summary = stringResource(R.string.island_duration_summary),
+                        endActions = {
+                            Text(
+                                text = islandDurationLabel,
+                                fontSize = 14.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                            )
+                        },
+                        onClick = { showIslandDurationDialog.value = true },
                     )
                 }
                 BasicComponent(
@@ -245,6 +241,16 @@ fun SettingsPage(
         onConfirm = {
             onAncCycleModesChange(it)
             showAncCycleModesDialog.value = false
+        },
+    )
+
+    IslandDurationDialog(
+        show = showIslandDurationDialog.value,
+        currentSeconds = islandDurationSeconds.value,
+        onDismissRequest = { showIslandDurationDialog.value = false },
+        onConfirm = { seconds ->
+            showIslandDurationDialog.value = false
+            onIslandDurationSecondsChange(seconds)
         },
     )
 }

@@ -144,8 +144,8 @@ fun MainUI(
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
-    val islandMode = remember { mutableStateOf(appConfig.islandMode) }
-    val islandShowTimings = remember { mutableStateOf(appConfig.islandShowTimings) }
+    val islandMode = remember { mutableStateOf(appConfig.superIslandMode) }
+    val islandDurationSeconds = remember { mutableStateOf(appConfig.islandDurationSeconds) }
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
     val startupTab = remember { mutableStateOf(appConfig.startupTab) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
@@ -536,11 +536,14 @@ fun MainUI(
                     broadcastConfigChanged(context, "com.android.bluetooth")
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
-                islandShowTimings = islandShowTimings,
-                onIslandShowTimingsChange = {
-                    islandShowTimings.value = it
-                    ConfigManager.updateIslandShowTimings(prefs, xposedService, it)
+                islandDurationSeconds = islandDurationSeconds,
+                onIslandDurationSecondsChange = {
+                    islandDurationSeconds.value = it
+                    ConfigManager.updateIslandDurationSeconds(prefs, xposedService, it)
+                    // The island renderer lives in com.xiaomi.bluetooth; the engine
+                    // (com.android.bluetooth) reads the same config for surfaces.
                     broadcastConfigChanged(context, "com.android.bluetooth")
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
                 ancCycleModes = ancCycleModes,
                 onAncCycleModesChange = {

@@ -112,16 +112,35 @@ object MiuiStrongToastUtil {
         batteryParams: BatteryParams,
         device: BluetoothDevice? = null,
         singleBattery: Boolean = false,
+        showIsland: Boolean = true,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_SEND_STRONG_TOAST)
         intent.putExtra("batteryParams", batteryParams)
+        intent.putExtra("device", device)
         intent.putExtra("address", device?.address.orEmpty())
         intent.putExtra(EXTRA_SINGLE_BATTERY, singleBattery)
+        intent.putExtra(EXTRA_SHOW_ISLAND, showIsland)
+        if (device != null) {
+            val name = try {
+                device.name ?: device.address
+            } catch (_: SecurityException) {
+                device.address
+            }
+            intent.putExtra("deviceName", name)
+        }
+        intent.`package` = "com.xiaomi.bluetooth"
+        context.sendBroadcast(intent)
+    }
+
+    /** Tear the battery island down as soon as the headset disconnects. */
+    fun cancelBatteryIslandByMiuiBt(context: Context) {
+        val intent = Intent(SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }
 
     const val EXTRA_SINGLE_BATTERY = "single_battery"
+    const val EXTRA_SHOW_ISLAND = "show_island"
     const val EXTRA_SOURCE_COLOR = "source_color"
 
     /**

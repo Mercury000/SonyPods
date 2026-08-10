@@ -3,15 +3,20 @@ import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.bluetooth.BluetoothDevice
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.drawable.Icon
 import android.os.Handler
 import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
+import dev.sonypods.config.ConfigManager
 import dev.sonypods.hook.Log
 import dev.sonypods.utils.PodImageLoader
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
+import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import com.mercury.sonypods.R
 
 @SuppressLint("WrongConstant")
@@ -20,36 +25,150 @@ object FocusIslandUtil {
     private const val CHANNEL_ID = "sonypods_focus_island"
     private const val CHANNEL_NAME = "SonyPods Battery"
     private const val NOTIFICATION_ID = 10086
-    private const val ISLAND_TIMEOUT_SECONDS = 3
-    private const val DISMISS_DELAY_MS = 4000L
+    private const val MODULE_PACKAGE = "com.mercury.sonypods"
+    private const val IOS_CHARGING_GREEN = "#34C759"
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    // Single pending dismissal: each (re-)post reschedules it, so an earlier
+    // island's timer cannot kill a newer in-place update prematurely.
+    private var dismissRunnable: Runnable? = null
+    private var islandVisible = false
+    private var islandExpiresAtMillis = 0L
+
+    /** Immediately remove the island notification (device disconnected). */
+    fun cancelBatteryIsland(context: Context) {
+        dismissRunnable?.let(mainHandler::removeCallbacks)
+        dismissRunnable = null
+        islandVisible = false
+        islandExpiresAtMillis = 0L
+        runCatching {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+        }
+        Log.d(TAG, "Focus Island cancelled")
+    }
 
     fun showBatteryIsland(
         context: Context,
         prefs: SharedPreferences,
         batteryParams: BatteryParams,
         address: String,
+        singleBattery: Boolean = false,
+        deviceName: String? = null,
+        device: BluetoothDevice? = null,
+        durationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+    ): Boolean = renderBatteryIsland(
+        context = context,
+        prefs = prefs,
+        batteryParams = batteryParams,
+        address = address,
+        singleBattery = singleBattery,
+        deviceName = deviceName,
+        device = device,
+        durationSeconds = durationSeconds,
+        timeoutAtMillis = null,
+    )
+
+    /** Update a currently visible island without making a new connection popup. */
+    fun updateBatteryIsland(
+        context: Context,
+        prefs: SharedPreferences,
+        batteryParams: BatteryParams,
+        address: String,
+        singleBattery: Boolean = false,
+        deviceName: String? = null,
+        device: BluetoothDevice? = null,
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        val deadline = islandExpiresAtMillis
+        if (!islandVisible || deadline <= now) {
+            islandVisible = false
+            islandExpiresAtMillis = 0L
+            return false
+        }
+        return renderBatteryIsland(
+            context = context,
+            prefs = prefs,
+            batteryParams = batteryParams,
+            address = address,
+            singleBattery = singleBattery,
+            deviceName = deviceName,
+            device = device,
+            durationSeconds = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+            timeoutAtMillis = deadline,
+        )
+    }
+
+    private fun renderBatteryIsland(
+        context: Context,
+        prefs: SharedPreferences,
+        batteryParams: BatteryParams,
+        address: String,
+        singleBattery: Boolean = false,
+        deviceName: String? = null,
+        device: BluetoothDevice? = null,
+        durationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+        timeoutAtMillis: Long?,
     ): Boolean {
         try {
+            val now = System.currentTimeMillis()
+            val requestedDurationSeconds =
+                durationSeconds.coerceIn(1, ConfigManager.MAX_ISLAND_DURATION_SECONDS)
+            val deadline = timeoutAtMillis ?: (now + requestedDurationSeconds * 1000L)
+            if (deadline <= now) return false
+            val islandDurationSeconds = ((deadline - now + 999L) / 1000L)
+                .coerceIn(1L, ConfigManager.MAX_ISLAND_DURATION_SECONDS.toLong())
+                .toInt()
             val leftConnected = batteryParams.left?.isConnected == true
             val rightConnected = batteryParams.right?.isConnected == true
-
-            // Need at least one ear connected
-            if (!leftConnected && !rightConnected) return false
 
             val leftText = if (leftConnected) "${batteryParams.left!!.battery}" else "-"
             val rightText = if (rightConnected) "${batteryParams.right!!.battery}" else "-"
 
-            val leftBitmap = PodImageLoader.loadIslandLeftBitmap(context, prefs, address)
-            val rightBitmap = PodImageLoader.loadIslandRightBitmap(context, prefs, address)
-
-            if (leftBitmap == null || rightBitmap == null) {
-                Log.e(TAG, "Failed to decode earphone icon bitmaps")
+            // Expanded-state avatar + ticker: the model box image (headbands resolve
+            // their device render through the same BOX slot).
+            val caseBitmap = PodImageLoader.loadBoxBitmap(context, prefs, address)
+            if (caseBitmap == null) {
+                Log.e(TAG, "Failed to decode Focus Island icon bitmaps")
                 return false
             }
 
-            // 使用 createWithBitmap 直接嵌入图片数据，SystemUI 无需再访问模块资源
-            val leftIcon = Icon.createWithBitmap(leftBitmap)
-            val rightIcon = Icon.createWithBitmap(rightBitmap)
+            // 使用 createWithBitmap 直接嵌入图片数据，SystemUI 无需再访问模块资源；
+            // 摘要态左右图为模块内置静态 WebP（连接视频末帧），走编译期资源 ID。
+            val caseIcon = Icon.createWithBitmap(caseBitmap)
+            val moduleContext = context.createPackageContext(
+                MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY
+            )
+            val leftIcon = if (singleBattery) {
+                Icon.createWithResource(moduleContext, R.drawable.earphone_single_head)
+            } else {
+                Icon.createWithResource(moduleContext, R.drawable.earphone_left_inear)
+            }
+            val rightIcon = if (singleBattery) {
+                null
+            } else {
+                Icon.createWithResource(moduleContext, R.drawable.earphone_right_inear)
+            }
+            // 展开态进度按钮：头戴用 AirPods Max 头戴符号，TWS 用左/右耳符号。
+            val leftSvgLightIcon = Icon.createWithResource(
+                moduleContext,
+                if (singleBattery) R.drawable.ic_airpods_max_light else R.drawable.ic_airpods_left_light,
+            )
+            val leftSvgDarkIcon = Icon.createWithResource(
+                moduleContext,
+                if (singleBattery) R.drawable.ic_airpods_max_dark else R.drawable.ic_airpods_left_dark,
+            )
+            val rightSvgLightIcon = Icon.createWithResource(moduleContext, R.drawable.ic_airpods_right_light)
+            val rightSvgDarkIcon = Icon.createWithResource(moduleContext, R.drawable.ic_airpods_right_dark)
+            val caseSvgLightIcon = Icon.createWithResource(moduleContext, R.drawable.ic_airpods_case_light)
+            val caseSvgDarkIcon = Icon.createWithResource(moduleContext, R.drawable.ic_airpods_case_dark)
+
+            fun progressOf(pod: dev.sonypods.utils.miuiStrongToast.data.PodParams?): Int =
+                pod?.takeIf { it.isConnected }?.battery?.coerceIn(0, 100) ?: 0
+
+            val leftProgress = progressOf(batteryParams.left)
+            val rightProgress = progressOf(batteryParams.right)
+            val caseProgress = progressOf(batteryParams.case)
 
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
@@ -67,15 +186,33 @@ object FocusIslandUtil {
 
             val extras = FocusNotification.buildV3 {
                 val picLeft = createPicture("key_pic_left", leftIcon)
-                val picRight = createPicture("key_pic_right", rightIcon)
+                val picRight = rightIcon?.let { createPicture("key_pic_right", it) }
+                val picCase = createPicture("key_pic_case", caseIcon)
+                val picLeftActionLight = createPicture("key_pic_left_action_light", leftSvgLightIcon)
+                val picLeftActionDark = createPicture("key_pic_left_action_dark", leftSvgDarkIcon)
+                val picRightActionLight = createPicture("key_pic_right_action_light", rightSvgLightIcon)
+                val picRightActionDark = createPicture("key_pic_right_action_dark", rightSvgDarkIcon)
+                val picCaseActionLight = createPicture("key_pic_case_action_light", caseSvgLightIcon)
+                val picCaseActionDark = createPicture("key_pic_case_action_dark", caseSvgDarkIcon)
 
-                enableFloat = true
+                enableFloat = false
                 ticker = "SonyPods"
-                tickerPic = picLeft
+                tickerPic = picCase
 
                 isShowNotification = false
+                islandFirstFloat = true
+                // 展开态使用焦点通知组件；bigIslandArea 只负责摘要态。
+                // 盒/设备图是头像，应使用 chatInfo.picProfile，而不是 baseInfo.picFunction。
+                chatInfo {
+                    picProfile = picCase
+                    picProfileDark = picCase
+                    title = "已连接"
+                    content = deviceName ?: "SonyPods"
+                }
                 island {
                     islandProperty = 1
+                    islandTimeout = islandDurationSeconds
+                    // TWS：左右动态图标 + 电量文字；头戴：左侧仅设备图、右侧仅电量。
                     bigIslandArea {
                         imageTextInfoLeft {
                             type = 1
@@ -83,20 +220,30 @@ object FocusIslandUtil {
                                 type = 1
                                 pic = picLeft
                             }
-                            textInfo {
-                                title = leftText
-                                content = "%"
+                            if (!singleBattery) {
+                                textInfo {
+                                    title = leftText
+                                    content = "%"
+                                }
                             }
                         }
                         imageTextInfoRight {
                             type = 2
-                            picInfo {
-                                type = 1
-                                pic = picRight
-                            }
-                            textInfo {
-                                title = rightText
-                                content = "%"
+                            if (singleBattery) {
+                                // 头戴单电量骑乘在 left 槽位的数值上。
+                                textInfo {
+                                    title = leftText
+                                    content = "%"
+                                }
+                            } else {
+                                picInfo {
+                                    type = 1
+                                    pic = picRight!!
+                                }
+                                textInfo {
+                                    title = rightText
+                                    content = "%"
+                                }
                             }
                         }
                     }
@@ -106,27 +253,135 @@ object FocusIslandUtil {
                         shareContent = contentText
                     }
                 }
+
+                // 进度按钮属于焦点通知的 actions 数组，不能序列化为 textButton。
+                // 头戴式（单电量）上游未适配：只出一个按钮，图标沿用左耳 SVG。
+                actions {
+                    if (!singleBattery) {
+                        addActionInfo {
+                            type = 1
+                            actionIcon = picCaseActionLight
+                            actionIconDark = picCaseActionDark
+                            progressInfo {
+                                progress = caseProgress
+                                colorProgress = IOS_CHARGING_GREEN
+                            }
+                        }
+                    }
+                    addActionInfo {
+                        type = 1
+                        actionIcon = picLeftActionLight
+                        actionIconDark = picLeftActionDark
+                        progressInfo {
+                            progress = leftProgress
+                            colorProgress = IOS_CHARGING_GREEN
+                        }
+                    }
+                    if (!singleBattery) {
+                        addActionInfo {
+                            type = 1
+                            actionIcon = picRightActionLight
+                            actionIconDark = picRightActionDark
+                            progressInfo {
+                                progress = rightProgress
+                                colorProgress = IOS_CHARGING_GREEN
+                            }
+                        }
+                    }
+                }
             } ?: return false
+            // focus-api 1.4 未暴露文档中的两个进度按钮字段，补到最终 JSON，
+            // 避免系统按默认动画/颜色渲染成红色。
+            setStaticProgressOptions(extras)
 
             val notification = Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle("SonyPods")
                 .setContentText(contentText)
                 .setTicker("SonyPods")
+                .setContentIntent(podDialogPendingIntent(context, address, deviceName, device))
                 .addExtras(extras)
                 .build()
 
             nm.notify(NOTIFICATION_ID, notification)
 
-            Handler(Looper.getMainLooper()).postDelayed({
+            dismissRunnable?.let(mainHandler::removeCallbacks)
+            val dismiss = Runnable {
                 try { nm.cancel(NOTIFICATION_ID) } catch (_: Exception) {}
-            }, DISMISS_DELAY_MS)
+                if (islandExpiresAtMillis == deadline) {
+                    islandVisible = false
+                    islandExpiresAtMillis = 0L
+                }
+            }
+            dismissRunnable = dismiss
+            islandVisible = true
+            islandExpiresAtMillis = deadline
+            mainHandler.postDelayed(dismiss, (deadline - System.currentTimeMillis()).coerceAtLeast(1L))
 
-            Log.d(TAG, "Focus Island shown: L=$leftText% R=$rightText%")
+            val verb = if (timeoutAtMillis == null) "shown" else "updated"
+            Log.d(TAG, "Focus Island $verb: L=$leftText% R=$rightText% single=$singleBattery duration=${islandDurationSeconds}s")
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show Focus Island", e)
             return false
         }
+    }
+
+    private fun podDialogPendingIntent(
+        context: Context,
+        address: String,
+        deviceName: String?,
+        device: BluetoothDevice?,
+    ): PendingIntent {
+        val intent = Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
+            setClassName(MODULE_PACKAGE, "dev.sonypods.PopupActivity")
+            putExtra("bluetoothaddress", address)
+            deviceName?.let { putExtra("device_name", it) }
+            device?.let { putExtra("android.bluetooth.device.extra.DEVICE", it) }
+        }
+        return PendingIntent.getActivity(
+            context,
+            NOTIFICATION_ID,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    private fun setStaticProgressOptions(extras: android.os.Bundle) {
+        runCatching {
+            // 根据文档和系统设计，actions 数组独立序列化在 Bundle 的 miui.focus.actions 中
+            val actionsStr = extras.getString("miui.focus.actions")
+            if (actionsStr != null) {
+                val actions = org.json.JSONArray(actionsStr)
+                for (index in 0 until actions.length()) {
+                    val action = actions.optJSONObject(index) ?: continue
+                    val progressInfo = action.optJSONObject("progressInfo") ?: continue
+                    // 参考官方格式: colorProgress是进度条颜色，colorProgressEnd是进度条底色(圆环底色)
+                    progressInfo.put("colorProgress", IOS_CHARGING_GREEN)
+                    progressInfo.put("colorProgressDark", IOS_CHARGING_GREEN)
+                    progressInfo.put("colorProgressEnd", "#1A000000")       // 浅色模式底色
+                    progressInfo.put("colorProgressEndDark", "#29FFFFFF")   // 深色模式底色
+                    progressInfo.put("isCCW", true)
+                    progressInfo.put("isAutoProgress", false)
+                }
+                extras.putString("miui.focus.actions", actions.toString())
+                return
+            }
+
+            val root = org.json.JSONObject(extras.getString("miui.focus.param") ?: return)
+            val param = root.optJSONObject("param_v2") ?: return
+            val actions = param.optJSONArray("actions") ?: return
+            for (index in 0 until actions.length()) {
+                val action = actions.optJSONObject(index) ?: continue
+                val progressInfo = action.optJSONObject("progressInfo") ?: continue
+                progressInfo.put("colorProgress", IOS_CHARGING_GREEN)
+                progressInfo.put("colorProgressDark", IOS_CHARGING_GREEN)
+                progressInfo.put("colorProgressEnd", "#1A000000")
+                progressInfo.put("colorProgressEndDark", "#29FFFFFF")
+                progressInfo.put("isCCW", true)
+                progressInfo.put("isAutoProgress", false)
+            }
+            extras.putString("miui.focus.param", root.toString())
+        }.onFailure { Log.w(TAG, "Failed to configure progress button JSON", it) }
     }
 }

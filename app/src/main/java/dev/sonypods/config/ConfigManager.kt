@@ -10,8 +10,9 @@ import kotlinx.serialization.json.Json
 data class AppConfig(
     val fakeDeviceId: String = ConfigManager.DEFAULT_FAKE_DEVICE_ID,
     val logLevel: Int = ConfigManager.LOG_LEVEL_BASIC,
-    val islandMode: Int = ConfigManager.ISLAND_MODE_OFFICIAL,
-    val islandShowTimings: Set<Int> = emptySet(),
+    /** Super Island renderer: none, official system island, or module island. */
+    val superIslandMode: Int = ConfigManager.ISLAND_MODE_MODULE,
+    val islandDurationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
     val adaptiveCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
@@ -28,8 +29,11 @@ object ConfigManager {
     const val PREF_KEY_CONFIG_JSON = "config_json"
     const val PREF_KEY_FAKE_DEVICE_ID = "fake_device_id"
     const val PREF_KEY_LOG_LEVEL = "log_level"
-    const val PREF_KEY_ISLAND_MODE = "island_mode"
-    const val PREF_KEY_ISLAND_SHOW_TIMINGS = "island_show_timings"
+    // Deliberately uses a new key. The old island_mode/island_show_timings keys
+    // are not read, so an upgrade starts with the new defaults instead of
+    // carrying the previous renderer/timing selection forward.
+    const val PREF_KEY_SUPER_ISLAND_MODE = "super_island_mode"
+    const val PREF_KEY_ISLAND_DURATION_SECONDS = "island_duration_seconds"
     const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE = "adaptive_capability_override"
@@ -45,10 +49,9 @@ object ConfigManager {
     const val ISLAND_MODE_NONE = 0
     const val ISLAND_MODE_OFFICIAL = 1
     const val ISLAND_MODE_MODULE = 2
-    const val ISLAND_SHOW_TIMING_CONNECTED = 0
-    const val ISLAND_SHOW_TIMING_WEARING = 1
-    const val ISLAND_SHOW_TIMING_REMOVED = 2
-    const val ISLAND_SHOW_TIMING_IN_CASE = 3
+    const val DEFAULT_ISLAND_DURATION_SECONDS = 10
+    /** islandTimeout is specified in seconds by the system; cap at 24h. */
+    const val MAX_ISLAND_DURATION_SECONDS = 24 * 60 * 60
     const val NOTIFICATION_CLICK_MODULE_POPUP = 0
     const val NOTIFICATION_CLICK_SYSTEM_SETTINGS = 1
     const val NOTIFICATION_CLICK_HEYTAP = 2
@@ -133,9 +136,9 @@ object ConfigManager {
 
     fun logLevel(): Int = current().logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)
 
-    fun islandMode(): Int = current().islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)
+    fun islandMode(): Int = current().superIslandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)
 
-    fun islandShowTimings(): Set<Int> = current().islandShowTimings.normalizedIslandShowTimings()
+    fun islandDurationSeconds(): Int = current().islandDurationSeconds.normalizedIslandDuration()
 
     fun notificationClickAction(): Int = current().notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP)
 
@@ -171,12 +174,12 @@ object ConfigManager {
     }
 
     fun updateIslandMode(prefs: SharedPreferences, service: XposedService?, islandMode: Int) {
-        val config = current().copy(islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE))
+        val config = current().copy(superIslandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE))
         save(prefs, service, config)
     }
 
-    fun updateIslandShowTimings(prefs: SharedPreferences, service: XposedService?, timings: Set<Int>) {
-        val config = current().copy(islandShowTimings = timings.normalizedIslandShowTimings())
+    fun updateIslandDurationSeconds(prefs: SharedPreferences, service: XposedService?, seconds: Int) {
+        val config = current().copy(islandDurationSeconds = seconds.normalizedIslandDuration())
         save(prefs, service, config)
     }
 
@@ -268,25 +271,17 @@ object ConfigManager {
     }
 
     /**
-     * Unconditionally write the current [cachedConfig] to the remote-preference store.
+     * Rewrite the current config to the remote-preference store on every service bind.
      *
-     * This repairs a remote-prefs store that is stale or missing [PREF_KEY_CONFIG_JSON] —
-     * for example after an older build of the module wrote unrelated data into remote prefs,
-     * evicting config_json, leaving the engine with no config on startup.
-     * Unlike [flushPendingRemote], which only acts when there is a buffered write, this always
-     * writes and is therefore safe to call on every [onServiceBind].
+     * Besides repairing a missing/stale store, this intentionally rewrites the serialized
+     * config with the current schema so removed keys are not carried forward.
      */
     fun syncToRemote(service: XposedService?) {
         service ?: return
         runCatching {
             val remotePrefs = service.getRemotePreferences(PREFS_NAME)
-            val hasConfig = runCatching { remotePrefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)
-            if (!hasConfig) {
-                writeRemoteConfig(remotePrefs, cachedConfig)
-                Log.d(TAG, "syncToRemote: config_json was absent; wrote cachedConfig ancCycleModes=${cachedConfig.ancCycleModes}")
-            } else {
-                Log.d(TAG, "syncToRemote: config_json already present, skipping")
-            }
+            writeRemoteConfig(remotePrefs, cachedConfig)
+            Log.d(TAG, "syncToRemote: rewrote current config schema ancCycleModes=${cachedConfig.ancCycleModes}")
         }.onFailure { Log.w(TAG, "syncToRemote failed", it) }
     }
 
@@ -295,8 +290,10 @@ object ConfigManager {
             .putString(PREF_KEY_CONFIG_JSON, json.encodeToString(AppConfig.serializer(), config))
             .putString(PREF_KEY_FAKE_DEVICE_ID, config.fakeDeviceId)
             .putInt(PREF_KEY_LOG_LEVEL, config.logLevel)
-            .putInt(PREF_KEY_ISLAND_MODE, config.islandMode)
-            .putStringSet(PREF_KEY_ISLAND_SHOW_TIMINGS, config.islandShowTimings.map { it.toString() }.toSet())
+            .putInt(PREF_KEY_SUPER_ISLAND_MODE, config.superIslandMode)
+            .remove("island_mode")
+            .remove("island_show_timings")
+            .putInt(PREF_KEY_ISLAND_DURATION_SECONDS, config.islandDurationSeconds)
             .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, config.adaptiveCapabilityOverride)
@@ -327,8 +324,8 @@ object ConfigManager {
     private fun readConfig(prefs: SharedPreferences, source: String): AppConfig {
         val directFakeDeviceId = prefs.getString(PREF_KEY_FAKE_DEVICE_ID, null)
         val directLogLevel = prefs.getInt(PREF_KEY_LOG_LEVEL, Int.MIN_VALUE)
-        val directIslandMode = prefs.getInt(PREF_KEY_ISLAND_MODE, Int.MIN_VALUE)
-        val directIslandShowTimings = prefs.getStringSet(PREF_KEY_ISLAND_SHOW_TIMINGS, null)?.mapNotNull { it.toIntOrNull() }?.toSet()
+        val directSuperIslandMode = prefs.getInt(PREF_KEY_SUPER_ISLAND_MODE, Int.MIN_VALUE)
+        val directIslandDurationSeconds = prefs.getInt(PREF_KEY_ISLAND_DURATION_SECONDS, Int.MIN_VALUE)
         val directNotificationClickAction = prefs.getInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, Int.MIN_VALUE)
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directAdaptiveCapabilityOverride = prefs.getInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
@@ -347,8 +344,8 @@ object ConfigManager {
             return config.copy(
                 fakeDeviceId = directFakeDeviceId.normalizedFakeDeviceId(),
                 logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
-                islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
-                islandShowTimings = directIslandShowTimings ?: config.islandShowTimings,
+                superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
+                islandDurationSeconds = directIslandDurationSeconds.takeIf { it != Int.MIN_VALUE } ?: config.islandDurationSeconds,
                 notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -362,8 +359,7 @@ object ConfigManager {
         return config.copy(
             fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId(),
             logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
-            islandMode = directIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.islandMode,
-            islandShowTimings = directIslandShowTimings ?: config.islandShowTimings,
+            superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
             notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -378,8 +374,8 @@ object ConfigManager {
     private fun AppConfig.normalized(): AppConfig = copy(
         fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId(),
         logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG),
-        islandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
-        islandShowTimings = islandShowTimings.normalizedIslandShowTimings(),
+        superIslandMode = superIslandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
+        islandDurationSeconds = islandDurationSeconds.normalizedIslandDuration(),
         notificationClickAction = notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP),
         moreClickAction = moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE),
         adaptiveCapabilityOverride = adaptiveCapabilityOverride.normalizedCapabilityOverride(),
@@ -394,9 +390,8 @@ object ConfigManager {
 
     private fun Int.normalizedCapabilityOverride(): Int = coerceIn(CAPABILITY_OVERRIDE_AUTO, CAPABILITY_OVERRIDE_FORCE_DISABLED)
 
-    private fun Set<Int>.normalizedIslandShowTimings(): Set<Int> = filterTo(mutableSetOf()) {
-        it in ISLAND_SHOW_TIMING_CONNECTED..ISLAND_SHOW_TIMING_IN_CASE
-    }
+    private fun Int.normalizedIslandDuration(): Int =
+        takeIf { it in 1..MAX_ISLAND_DURATION_SECONDS } ?: DEFAULT_ISLAND_DURATION_SECONDS
 
     /**
      * Filters out any values that are not valid [ANC_CYCLE_MODE_ORDER] names.
@@ -438,11 +433,11 @@ object ConfigManager {
             if (oldConfig.logLevel != newConfig.logLevel) {
                 add("logLevel=${oldConfig.logLevel}->${newConfig.logLevel}")
             }
-            if (oldConfig.islandMode != newConfig.islandMode) {
-                add("islandMode=${oldConfig.islandMode}->${newConfig.islandMode}")
+            if (oldConfig.superIslandMode != newConfig.superIslandMode) {
+                add("superIslandMode=${oldConfig.superIslandMode}->${newConfig.superIslandMode}")
             }
-            if (oldConfig.islandShowTimings != newConfig.islandShowTimings) {
-                add("islandShowTimings=${oldConfig.islandShowTimings}->${newConfig.islandShowTimings}")
+            if (oldConfig.islandDurationSeconds != newConfig.islandDurationSeconds) {
+                add("islandDurationSeconds=${oldConfig.islandDurationSeconds}->${newConfig.islandDurationSeconds}")
             }
             if (oldConfig.notificationClickAction != newConfig.notificationClickAction) {
                 add("notificationClickAction=${oldConfig.notificationClickAction}->${newConfig.notificationClickAction}")

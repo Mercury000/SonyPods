@@ -311,19 +311,44 @@ object MiBluetoothToastHook : HookContext() {
                         val batteryParams = intent.getParcelableExtra("batteryParams", BatteryParams::class.java)
                             ?: return
                         val address = intent.getStringExtra("address").orEmpty()
+                        val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
                         val single = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
-                        when (ConfigManager.islandMode()) {
-                            ConfigManager.ISLAND_MODE_MODULE ->
-                                FocusIslandUtil.showBatteryIsland(
-                                    context,
-                                    runCatching { prefsProvider() }.getOrElse { prefs },
-                                    batteryParams,
-                                    address,
-                                )
-                            ConfigManager.ISLAND_MODE_OFFICIAL ->
-                                MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
-                            else ->
-                                Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
+                        val showIsland = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SHOW_ISLAND, true)
+                        val deviceName = intent.getStringExtra("deviceName")
+                        // Pull the freshest config at render time. The app persists the
+                        // full config into remote prefs on every change; re-reading here
+                        // keeps island mode/duration current even if a config push
+                        // broadcast was missed (e.g. receiver lost across a hot reload).
+                        val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
+                        runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
+                        if (showIsland) {
+                            when (ConfigManager.islandMode()) {
+                                ConfigManager.ISLAND_MODE_MODULE ->
+                                    FocusIslandUtil.showBatteryIsland(
+                                        context,
+                                        livePrefs,
+                                        batteryParams,
+                                        address,
+                                        singleBattery = single,
+                                        deviceName = deviceName,
+                                        device = device,
+                                        durationSeconds = ConfigManager.islandDurationSeconds(),
+                                    )
+                                ConfigManager.ISLAND_MODE_OFFICIAL ->
+                                    MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                                else ->
+                                    Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
+                            }
+                        } else if (ConfigManager.islandMode() == ConfigManager.ISLAND_MODE_MODULE) {
+                            FocusIslandUtil.updateBatteryIsland(
+                                context,
+                                livePrefs,
+                                batteryParams,
+                                address,
+                                singleBattery = single,
+                                deviceName = deviceName,
+                                device = device,
+                            )
                         }
                     }
                     SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION -> {
@@ -336,6 +361,8 @@ object MiBluetoothToastHook : HookContext() {
                         val singleBattery = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
                         render(context, device, batteryParams, sourceColor, singleBattery)
                     }
+                    SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND ->
+                        FocusIslandUtil.cancelBatteryIsland(context)
                     SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION -> {
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java) ?: return
                         cancel(context, device)
@@ -346,6 +373,7 @@ object MiBluetoothToastHook : HookContext() {
         val intentFilter = IntentFilter(SonyPodsAction.ACTION_SEND_STRONG_TOAST).apply {
             addAction(SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION)
             addAction(SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION)
+            addAction(SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND)
         }
         context.registerReceiver(broadcastReceiver, intentFilter, Context.RECEIVER_EXPORTED)
         notificationReceiver = broadcastReceiver

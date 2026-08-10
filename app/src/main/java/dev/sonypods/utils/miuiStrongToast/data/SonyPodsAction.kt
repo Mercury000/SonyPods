@@ -33,6 +33,7 @@ object SonyPodsAction {
 
     // app -> com.xiaomi.bluetooth: notification / island rendering
     const val ACTION_SEND_STRONG_TOAST = "dev.sonypods.action.send_strong_toast"
+    const val ACTION_CANCEL_BATTERY_ISLAND = "dev.sonypods.action.cancel_battery_island"
     const val ACTION_UPDATE_PODS_NOTIFICATION = "dev.sonypods.action.update_pods_notification"
     const val ACTION_CANCEL_PODS_NOTIFICATION = "dev.sonypods.action.cancel_pods_notification"
 
