@@ -9,6 +9,8 @@ import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.os.Handler
 import android.os.Looper
@@ -154,6 +156,15 @@ object FocusIslandUtil {
             val moduleContext = context.createPackageContext(
                 MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY
             )
+            // appIconPkg is serialized as a String reference. Register a fully
+            // transparent Icon under a picture key so this test targets appIconPkg
+            // itself, while the IM avatar remains the normal device picture.
+            val transparentAppIconBitmap = Bitmap.createBitmap(
+                1,
+                1,
+                Bitmap.Config.ARGB_8888,
+            ).apply { setPixel(0, 0, Color.TRANSPARENT) }
+            val transparentAppIcon = Icon.createWithBitmap(transparentAppIconBitmap)
             val leftIcon = if (singleBattery) {
                 Icon.createWithResource(moduleContext, R.drawable.earphone_single_head)
             } else {
@@ -209,6 +220,10 @@ object FocusIslandUtil {
                 val picRightActionDark = createPicture("key_pic_right_action_dark", rightSvgDarkIcon)
                 val picCaseActionLight = createPicture("key_pic_case_action_light", caseSvgLightIcon)
                 val picCaseActionDark = createPicture("key_pic_case_action_dark", caseSvgDarkIcon)
+                val appIconTransparent = createPicture(
+                    "key_app_icon_transparent_test",
+                    transparentAppIcon,
+                )
 
                 enableFloat = false
                 ticker = "SonyPods"
@@ -223,6 +238,7 @@ object FocusIslandUtil {
                 // 展开态使用焦点通知组件；bigIslandArea 只负责摘要态。
                 // 盒/设备图是头像，应使用 chatInfo.picProfile，而不是 baseInfo.picFunction。
                 chatInfo {
+                    appIconPkg = appIconTransparent
                     picProfile = picCase
                     picProfileDark = picCase
                     title = "已连接"
