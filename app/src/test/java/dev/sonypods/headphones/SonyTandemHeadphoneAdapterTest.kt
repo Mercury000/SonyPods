@@ -649,7 +649,8 @@ class SonyTandemHeadphoneAdapterTest {
             HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
             profile.protocolFor(HeadphoneFeature.PLAYBACK_CONTROL),
         )
-        val refresh = SonyTandemHeadphoneAdapter.buildRefreshPlaybackCommands(profile).single()
+        val refresh = SonyTandemHeadphoneAdapter.buildRefreshPlaybackCommands(profile)
+            .single { it.label == "GET playback status" }
         assertArrayEquals(byteArrayOf(0x0E, 0xA2.toByte(), 0x01), refresh.bytes)
         assertEquals(TandemChannel.GATT_V1_MC, refresh.channel)
     }
