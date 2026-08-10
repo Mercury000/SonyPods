@@ -1,6 +1,5 @@
 package dev.sonypods.data
 
-import android.content.Context
 import org.json.JSONArray
 
 data class SonyModelImageMatch(
@@ -10,55 +9,63 @@ data class SonyModelImageMatch(
     val sourceColor: String?,
 )
 
-class SonyModelImageCatalog(context: Context) {
-    private val entries: List<Entry> = runCatching {
-        context.assets.open(ASSET_NAME).bufferedReader().use { reader ->
-            val array = JSONArray(reader.readText())
-            buildList {
-                for (index in 0 until array.length()) {
-                    val item = array.getJSONObject(index)
-                    val modelName = item.optString("modelName").takeIf { it.isNotBlank() } ?: continue
-                    val imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() } ?: continue
-                    add(
-                        Entry(
-                            modelName = modelName,
-                            modelColor = item.optString("modelColor").takeIf { it.isNotBlank() } ?: DEFAULT_COLOR,
-                            modelColorId = item.optString("modelColorId").takeIf { it.isNotBlank() }?.let(::parseColorId),
-                            imageUrl = imageUrl,
-                            sourceColor = item.optString("sourceColor").takeIf { it.isNotBlank() },
-                        )
-                    )
-                }
-            }
-        }
-    }.getOrDefault(emptyList())
+/**
+ * Resolves model artwork from the catalog published by the module app.
+ *
+ * The catalog is deliberately supplied as a reader instead of a Context. A hooked
+ * process cannot read the module app's ordinary SharedPreferences or private files;
+ * the reader is backed by libxposed's openRemoteFile() and therefore works from
+ * com.android.bluetooth as well as after a scope restart.
+ */
+class SonyModelImageCatalog(
+    private var remoteJsonReader: (() -> String?)? = null,
+) {
+    @Volatile
+    private var entries: List<Entry> = emptyList()
+
+    /** Replace the Remote File reader and load the latest published catalog. */
+    @Synchronized
+    fun attachRemoteReader(reader: (() -> String?)?): Boolean {
+        remoteJsonReader = reader
+        return refresh()
+    }
+
+    /**
+     * Reload the catalog from Remote Files.
+     *
+     * A failed or temporarily unavailable read leaves the last valid catalog in
+     * place. This matters during service binding and hot reload, where the Remote
+     * File bridge can become available slightly after the Hook process starts.
+     */
+    @Synchronized
+    fun refresh(): Boolean {
+        val raw = runCatching { remoteJsonReader?.invoke() }
+            .onFailure { /* Keep the last valid catalog on a transient read error. */ }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+        val parsed = runCatching { parse(raw) }.getOrNull() ?: return false
+        if (parsed.isEmpty()) return false
+        entries = parsed
+        return true
+    }
 
     /**
      * Resolve the cloud image for a device.
      *
      * Matching priority:
-     *  1. exact numeric colour code ([colorCode]) against the catalog `modelColorId` —
-     *     bypasses the per-protocol colour-label tables, which disagree between V1 and
-     *     V2 for codes 0x06–0x0B and would otherwise pick the wrong image;
-     *  2. low-nibble fallback (`colorCode and 0x0F`) so the 0x1x "X-I" variant codes a
-     *     device may report map back to their base colour entry;
-     *  3. normalised colour-label equality (legacy path, kept for devices that report
-     *     a colour string but no code).
+     *  1. exact numeric colour code against the catalog `model_color_id`;
+     *  2. low-nibble fallback for 0x1x X-I variant codes;
+     *  3. normalised colour-label equality for callers that have no numeric code.
      *
-     * No Default fallback: if nothing above matches, returns null so a previously cached
-     * correct image for this MAC is kept rather than being overwritten with an unrelated
-     * Default image (a device that genuinely reports 0x00/Default is matched by step 1).
-     *
-     * Returns null when the device's colour is still unknown this session (no code and
-     * the label is absent or just the "Default" placeholder). On reconnect the colour
-     * code has not arrived yet at that moment, and resolving to the Default image would
-     * make [dev.sonypods.bridge.ModelImageSync] download a wrong-colour image and
-     * overwrite the correctly cached one for this MAC. Returning null leaves the cached
-     * image in place until the real colour is reported.
+     * There is no implicit Default fallback. If the device colour is not known yet,
+     * returning null prevents a reconnect from replacing a correctly cached image
+     * with an unrelated default image.
      */
     fun resolve(modelName: String?, modelColor: String?, colorCode: Int? = null): SonyModelImageMatch? {
         val normalizedModel = normalizeModelName(modelName) ?: return null
-        val modelEntries = entries.filter { normalizeModelName(it.modelName) == normalizedModel }
+        val currentEntries = entries
+        val modelEntries = currentEntries.filter { normalizeModelName(it.modelName) == normalizedModel }
         if (modelEntries.isEmpty()) return null
         val normalizedColor = normalizeColor(modelColor)
         if (colorCode == null && normalizedColor == normalizeColor(DEFAULT_COLOR)) {
@@ -69,11 +76,6 @@ class SonyModelImageCatalog(context: Context) {
                 modelEntries.firstOrNull { it.modelColorId != null && it.modelColorId == (code and 0x0F) }
             }
             ?: modelEntries.firstOrNull { normalizeColor(it.modelColor) == normalizedColor }
-            // No Default fallback: if the device's reported colour does not actually match
-            // any catalog entry, return null so a previously cached correct image for this
-            // MAC is kept rather than being overwritten with an unrelated Default image.
-            // (A device that genuinely reports 0x00/Default is still matched by the
-            // colorCode branch above.)
         return entry?.let {
             SonyModelImageMatch(
                 modelName = it.modelName,
@@ -81,6 +83,29 @@ class SonyModelImageCatalog(context: Context) {
                 imageUrl = it.imageUrl,
                 sourceColor = it.sourceColor,
             )
+        }
+    }
+
+    private fun parse(raw: String): List<Entry> {
+        val array = JSONArray(raw)
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val modelName = item.optString("model_name").takeIf { it.isNotBlank() } ?: continue
+                val imageUrl = item.optString("sca_image_image_url").takeIf { it.isNotBlank() } ?: continue
+                val colorId = item.optString("model_color_id")
+                    .takeIf { it.isNotBlank() }
+                    ?.let(::parseColorId)
+                add(
+                    Entry(
+                        modelName = modelName,
+                        modelColor = colorName(colorId),
+                        modelColorId = colorId,
+                        imageUrl = imageUrl,
+                        sourceColor = item.optString("sca_source_color").takeIf { it.isNotBlank() },
+                    )
+                )
+            }
         }
     }
 
@@ -93,7 +118,6 @@ class SonyModelImageCatalog(context: Context) {
     )
 
     private companion object {
-        const val ASSET_NAME = "sony_model_images.json"
         const val DEFAULT_COLOR = "Default"
 
         fun normalizeModelName(value: String?): String? =
@@ -113,12 +137,33 @@ class SonyModelImageCatalog(context: Context) {
                 ?: DEFAULT_COLOR.lowercase()
 
         fun parseColorId(raw: String): Int? = runCatching {
-            val v = raw.trim()
-            val n = when {
-                v.startsWith("0x", ignoreCase = true) || v.startsWith("0X") -> v.substring(2)
-                else -> v
+            val value = raw.trim()
+            val normalized = when {
+                value.startsWith("0x", ignoreCase = true) -> value.substring(2)
+                value.matches(Regex("[0-9A-Fa-f]{2}")) -> value
+                else -> return@runCatching value.toInt()
             }
-            n.toInt(16)
+            normalized.toInt(16)
         }.getOrNull()
+
+        /** The cloud API exposes the numeric colour id, while the UI expects a label. */
+        fun colorName(colorId: Int?): String = when (colorId) {
+            0x00 -> "Default"
+            0x01 -> "Black"
+            0x02 -> "White"
+            0x03 -> "Silver"
+            0x04 -> "Red"
+            0x05 -> "Blue"
+            0x06 -> "Pink"
+            0x07 -> "Yellow"
+            0x08 -> "Green"
+            0x09 -> "Gray"
+            0x0A -> "Gold"
+            0x0B -> "Cream"
+            0x0C -> "Orange"
+            0x0D -> "Brown"
+            0x0E -> "Violet"
+            else -> DEFAULT_COLOR
+        }
     }
 }

@@ -23,6 +23,10 @@ object PodImageLoader {
     @Volatile
     var remoteImageReader: ((fileName: String) -> Bitmap?)? = null
 
+    /** Temporary image fallback owned by the current Hook host process. */
+    @Volatile
+    var temporaryImageReader: ((address: String) -> Bitmap?)? = null
+
     fun loadBitmap(
         context: Context,
         prefs: SharedPreferences,
@@ -64,16 +68,19 @@ object PodImageLoader {
         address: String,
         resources: List<PodImageResource>,
     ): Bitmap? {
-        val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull() ?: return null
+        val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull()
         val reader = remoteImageReader
-        for (res in resources) {
-            val path = earphone.imagePath(res) ?: continue
-            val file = File(path)
-            if (reader != null) {
-                runCatching { reader(file.name) }.getOrNull()?.let { return it }
+        if (earphone != null) {
+            for (res in resources) {
+                val path = earphone.imagePath(res) ?: continue
+                val file = File(path)
+                if (reader != null) {
+                    runCatching { reader(file.name) }.getOrNull()?.let { return it }
+                }
+                runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()?.let { return it }
             }
-            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()?.let { return it }
         }
+        temporaryImageReader?.let { runCatching { it(address) }.getOrNull()?.let { return it } }
         return null
     }
 

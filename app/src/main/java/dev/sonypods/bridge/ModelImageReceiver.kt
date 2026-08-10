@@ -3,6 +3,7 @@ package dev.sonypods.bridge
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import dev.sonypods.config.CloudModelInfoSync
 
 /**
  * Keeps model-image synchronization independent from the module UI lifecycle.
@@ -15,7 +16,9 @@ class ModelImageReceiver : BroadcastReceiver() {
         if (intent.action != SonyBridge.ACTION_STATE) return
         val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
         val pendingResult = goAsync()
-        ModelImageSync.onState(context, SonyStateSnapshot.fromBundle(bundle)) {
+        val snapshot = SonyStateSnapshot.fromBundle(bundle)
+        CloudModelInfoSync.onState(context, snapshot)
+        ModelImageSync.onState(context, snapshot) {
             pendingResult.finish()
         }
     }

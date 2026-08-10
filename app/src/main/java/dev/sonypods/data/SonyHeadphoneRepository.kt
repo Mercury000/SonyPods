@@ -375,11 +375,12 @@ data class SonyHeadphoneUiState(
 class SonyHeadphoneRepository private constructor(
     resourceContext: Context,
     systemContext: Context = resourceContext,
+    remoteModelInfoReader: (() -> String?)? = null,
 ) : SonyBleClientListener {
     private val appContext = systemContext.applicationContext ?: systemContext
     private val client = SonyBleClient(appContext, this)
     private val mediaController = MediaPlaybackController(appContext)
-    private val modelImageCatalog = SonyModelImageCatalog(resourceContext.applicationContext ?: resourceContext)
+    private val modelImageCatalog = SonyModelImageCatalog(remoteModelInfoReader)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
@@ -416,6 +417,10 @@ class SonyHeadphoneRepository private constructor(
      * which is the only side allowed to write the shared remote-prefs store. */
     @Volatile
     private var cacheSink: ((String) -> Unit)? = null
+
+    /** Hook-host fallback invoked only when the current model has no catalog image. */
+    @Volatile
+    private var modelCatalogFallbackRequester: ((String?, String?, Int?) -> Unit)? = null
 
     /** In-process cache overlay: consulted before the prefs store on every connect. */
     private val capabilityCache = ConcurrentHashMap<String, CapabilityCacheEntry>()
@@ -507,6 +512,7 @@ class SonyHeadphoneRepository private constructor(
         pendingQuickAccessFunctionCodes = null
         prefsProvider = null
         cacheSink = null
+        modelCatalogFallbackRequester = null
     }
 
     /**
@@ -525,6 +531,45 @@ class SonyHeadphoneRepository private constructor(
      * persistence into the shared remote-prefs store. */
     fun attachCapabilityCacheSink(sink: ((String) -> Unit)?) {
         cacheSink = sink
+    }
+
+    /**
+     * Wire the Hook-side Remote File reader for the cloud model catalog. The reader
+     * must be backed by XposedInterface.openRemoteFile(); ordinary module-app files
+     * and SharedPreferences are not visible from this process.
+     */
+    fun attachModelInfoReader(reader: (() -> String?)?) {
+        modelImageCatalog.attachRemoteReader(reader)
+        _state.update { current ->
+            current.copy(deviceInfo = current.deviceInfo.withResolvedModelImage(current.connectedDevice))
+        }
+    }
+
+    fun attachModelCatalogFallback(requester: ((String?, String?, Int?) -> Unit)?) {
+        modelCatalogFallbackRequester = requester
+    }
+
+    /** Ask the host-local fallback to fetch the catalog only when resolution failed. */
+    fun ensureModelImageCatalogIfNeeded() {
+        val info = _state.value.deviceInfo
+        if (info.modelImageUrl == null) {
+            modelCatalogFallbackRequester?.invoke(
+                info.modelName,
+                info.modelColor,
+                info.modelColorCode,
+            )
+        }
+    }
+
+    /** Reload the published cloud catalog and re-resolve the connected device image. */
+    fun refreshModelImageCatalog(): Boolean {
+        val refreshed = modelImageCatalog.refresh()
+        if (refreshed) {
+            _state.update { current ->
+                current.copy(deviceInfo = current.deviceInfo.withResolvedModelImage(current.connectedDevice))
+            }
+        }
+        return refreshed
     }
 
     /** Re-read the cache map from the remote-prefs store into the in-process overlay. */
@@ -2521,9 +2566,14 @@ class SonyHeadphoneRepository private constructor(
         fun getInstance(
             resourceContext: Context,
             systemContext: Context = resourceContext,
+            remoteModelInfoReader: (() -> String?)? = null,
         ): SonyHeadphoneRepository {
             return instance ?: synchronized(this) {
-                instance ?: SonyHeadphoneRepository(resourceContext, systemContext).also { instance = it }
+                instance ?: SonyHeadphoneRepository(
+                    resourceContext,
+                    systemContext,
+                    remoteModelInfoReader,
+                ).also { instance = it }
             }
         }
 

@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import dev.sonypods.config.CloudModelInfoSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,7 +38,9 @@ object SonyRemoteState {
             val snapshot = SonyStateSnapshot.fromBundle(bundle)
             received = true
             _state.value = snapshot
-            context?.let { ModelImageSync.onState(it, snapshot) }
+            val appContext = context ?: return
+            CloudModelInfoSync.onState(appContext, snapshot)
+            ModelImageSync.onState(appContext, snapshot)
         }
     }
 

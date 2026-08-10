@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Downloads the cloud model image and stores it where the system notification and focus island
@@ -24,15 +25,22 @@ object ModelImageSync {
     private const val TAG = "SonyPods-ImageSync"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    @Volatile
-    private var inFlightKey: String? = null
+    private val inFlightKeys = ConcurrentHashMap.newKeySet<String>()
+    private val failedKeys = ConcurrentHashMap.newKeySet<String>()
+    private val connectionLock = Any()
+    private var connectionActive = false
+    private var activeAddress: String? = null
 
     fun onState(
         context: Context,
         snapshot: SonyStateSnapshot,
         onComplete: () -> Unit = {},
     ) {
+        updateConnection(snapshot)
+        if (!snapshot.connected) {
+            onComplete()
+            return
+        }
         val address = snapshot.deviceAddress ?: run {
             onComplete()
             return
@@ -49,19 +57,14 @@ object ModelImageSync {
         val upToDate = existing?.autoImageUrl == url &&
             existing.boxImagePath?.let { File(it).isFile && File(it).length() > 0L } == true
         if (upToDate) {
+            failedKeys.remove(key)
             onComplete()
             return
         }
 
-        synchronized(this) {
-            // Do not cache a successful key independently of the file check
-            // above: the file can be removed/corrupted while this process stays
-            // alive and must then be downloaded again for the same URL.
-            if (key == inFlightKey) {
-                onComplete()
-                return
-            }
-            inFlightKey = key
+        if (failedKeys.contains(key) || !inFlightKeys.add(key)) {
+            onComplete()
+            return
         }
 
         scope.launch {
@@ -74,7 +77,10 @@ object ModelImageSync {
                 }
                     .onFailure { Log.w(TAG, "model image download failed url=$url", it) }
                     .getOrNull()
-                if (bytes == null || bytes.isEmpty()) return@launch
+                if (bytes == null || bytes.isEmpty()) {
+                    failedKeys.add(key)
+                    return@launch
+                }
 
                 val stored = runCatching {
                     PodImagePrefs.saveImageBytes(
@@ -91,15 +97,33 @@ object ModelImageSync {
                 }.onFailure { Log.w(TAG, "model image store failed", it) }.getOrDefault(false)
 
                 if (stored) {
+                    failedKeys.remove(key)
                     // The notification and island embed Bitmap data at render time;
                     // tell the engine to rebuild them after the file is complete.
                     SonyBridge.imageReady(appContext, address)
+                } else {
+                    failedKeys.add(key)
                 }
             } finally {
-                synchronized(ModelImageSync) {
-                    if (inFlightKey == key) inFlightKey = null
-                }
+                inFlightKeys.remove(key)
                 onComplete()
+            }
+        }
+    }
+
+    private fun updateConnection(snapshot: SonyStateSnapshot) {
+        val address = snapshot.deviceAddress?.uppercase()
+        synchronized(connectionLock) {
+            if (!snapshot.connected) {
+                connectionActive = false
+                activeAddress = null
+                failedKeys.clear()
+                return
+            }
+            if (!connectionActive || activeAddress != address) {
+                failedKeys.clear()
+                connectionActive = true
+                activeAddress = address
             }
         }
     }

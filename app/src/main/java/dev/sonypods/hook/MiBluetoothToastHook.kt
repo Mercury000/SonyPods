@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.utils.FocusIslandUtil
 import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
@@ -37,6 +38,8 @@ object MiBluetoothToastHook : HookContext() {
     private var receiverContext: Context? = null
     private var notificationReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
+    private var stateMirror: HookStateMirror? = null
+    private var cloudFallback: HookCloudModelFallback? = null
     private var notificationRenderer: ((Context, BluetoothDevice?, BatteryParams, String?, Boolean) -> Unit)? = null
     private var notificationCanceller: ((Context, BluetoothDevice) -> Unit)? = null
     private val surfaceHandler = Handler(Looper.getMainLooper())
@@ -48,7 +51,12 @@ object MiBluetoothToastHook : HookContext() {
         }
         notificationReceiver = null
         unlockReceiver = null
+        stateMirror?.close()
+        stateMirror = null
+        cloudFallback?.close()
+        cloudFallback = null
         PodImageLoader.remoteImageReader = null
+        PodImageLoader.temporaryImageReader = null
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
@@ -389,7 +397,24 @@ object MiBluetoothToastHook : HookContext() {
         context.registerReceiver(broadcastReceiver, intentFilter, Context.RECEIVER_EXPORTED)
         notificationReceiver = broadcastReceiver
         receiverContext = context
+        registerCloudFallback(context)
         Log.d("SonyPods", "notification/island receiver registered")
+    }
+
+    private fun registerCloudFallback(context: Context) {
+        if (cloudFallback != null) return
+        val fallback = HookCloudModelFallback(
+            context = context,
+            remoteFileReader = remoteFileReader,
+            remotePrefsProvider = { runCatching { prefsProvider() }.getOrNull() },
+            onCatalogReady = {},
+            onImageReady = { address -> SonyBridge.imageReady(context, address) },
+        )
+        cloudFallback = fallback
+        PodImageLoader.temporaryImageReader = { address -> fallback.temporaryBitmap(address) }
+        val mirror = HookStateMirror { snapshot -> fallback.onState(snapshot) }
+        stateMirror = mirror
+        mirror.register(context)
     }
 
     /**

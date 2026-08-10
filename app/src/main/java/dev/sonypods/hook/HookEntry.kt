@@ -236,12 +236,22 @@ class HookEntry : XposedModule() {
         hook.packageName = packageName
         hook.prefs = getRemotePreferences("sonypods_settings")
         hook.prefsProvider = { getRemotePreferences("sonypods_settings") }
+        val remoteReader: (String) -> ByteArray? = { name ->
+            runCatching {
+                openRemoteFile(name).use { pfd ->
+                    java.io.FileInputStream(pfd.fileDescriptor).use { it.readBytes() }
+                }
+            }.getOrNull()
+        }
+        hook.remoteFileReader = remoteReader
         ConfigManager.init(hook.prefs)
         hook.onHook()
         PodImageLoader.remoteImageReader = { name ->
             runCatching {
                 openRemoteFile(name).use { pfd ->
-                    java.io.FileInputStream(pfd.fileDescriptor).use { android.graphics.BitmapFactory.decodeStream(it) }
+                    java.io.FileInputStream(pfd.fileDescriptor).use {
+                        android.graphics.BitmapFactory.decodeStream(it)
+                    }
                 }
             }.getOrNull()
         }

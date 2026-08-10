@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import com.mercury.sonypods.BuildConfig
+import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.bridge.SonyStateSnapshot
@@ -51,7 +52,13 @@ object HeadsetStateDispatcher : HookContext() {
                 .apply { isAccessible = true }
                 .invoke(null)
         }.getOrNull()
-        SonyEngineHost.start(context, adapterService, prefsProvider)
+        SonyEngineHost.start(
+            context,
+            adapterService,
+            prefsProvider,
+            remoteModelInfoReader = cloudModelInfoReader(),
+            remoteFileReader = remoteFileReader,
+        )
         registerAppRequestReceiver(context)
         registerAclReceiver(context)
         if (!address.isNullOrBlank()) {
@@ -68,7 +75,13 @@ object HeadsetStateDispatcher : HookContext() {
             hookAfter(findMethod("com.android.bluetooth.btservice.AdapterService", "onCreate")) {
                 val context = instance as? Context
                 SonyEngineHost.onAdapterService(instance)
-                if (context != null) SonyEngineHost.start(context, instance, prefsProvider)
+                if (context != null) SonyEngineHost.start(
+                    context,
+                    instance,
+                    prefsProvider,
+                    remoteModelInfoReader = cloudModelInfoReader(),
+                    remoteFileReader = remoteFileReader,
+                )
                 registerAppRequestReceiver(context)
                 registerAclReceiver(context)
             }
@@ -86,7 +99,13 @@ object HeadsetStateDispatcher : HookContext() {
             }
             handler.post {
                 val context = instance as ContextWrapper
-                SonyEngineHost.start(context, null, prefsProvider)
+                SonyEngineHost.start(
+                    context,
+                    null,
+                    prefsProvider,
+                    remoteModelInfoReader = cloudModelInfoReader(),
+                    remoteFileReader = remoteFileReader,
+                )
                 registerAppRequestReceiver(context)
                 if (!isSonyPod(device)) return@post
 
@@ -108,6 +127,11 @@ object HeadsetStateDispatcher : HookContext() {
 
     private var aclReceiverRegistered = false
     private var lastAclRefreshMs = 0L
+
+    /** Hook-side catalog access; the module app's ordinary files/prefs are not visible here. */
+    private fun cloudModelInfoReader(): () -> String? = {
+        readRemoteFileText(CloudModelInfoStore.REMOTE_FILE_NAME)
+    }
 
     /**
      * Refresh headphone state when a single bud connects or disconnects. The headset

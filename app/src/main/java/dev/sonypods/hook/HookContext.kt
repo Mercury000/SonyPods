@@ -26,6 +26,8 @@ abstract class HookContext {
      * raced the framework bridge is corrected by a later re-read.
      */
     lateinit var prefsProvider: () -> SharedPreferences
+    /** Read-only access to libxposed Remote Files, installed by [HookEntry]. */
+    lateinit var remoteFileReader: (String) -> ByteArray?
     lateinit var packageName: String
     lateinit var runtime: GenerationRuntime
         private set
@@ -95,6 +97,10 @@ abstract class HookContext {
         val json = intent?.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON)
         if (json != null) ConfigManager.applyConfigJson(json)
     }
+
+    internal fun readRemoteFileText(name: String): String? =
+        runCatching { remoteFileReader(name)?.toString(Charsets.UTF_8) }
+            .getOrNull()
 
     fun findClass(name: String): Class<*> = Class.forName(name, false, appClassLoader)
 

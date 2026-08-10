@@ -86,6 +86,8 @@ object SonyBridge {
     const val CMD_REFRESH = "refresh"
     /** The app finished writing a model image; refresh system surfaces immediately. */
     const val CMD_IMAGE_READY = "image_ready"
+    /** The app finished publishing the cloud model catalog to Remote Files. */
+    const val CMD_CLOUD_MODEL_INFO_READY = "cloud_model_info_ready"
     /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
     const val CMD_REPUBLISH = "republish"
 

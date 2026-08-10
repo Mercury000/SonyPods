@@ -3,6 +3,7 @@ package dev.sonypods
 import android.app.Application
 import android.util.Log
 import dev.sonypods.config.CapabilityProbeCache
+import dev.sonypods.config.CloudModelInfoSync
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
 import io.github.libxposed.service.XposedService
@@ -16,6 +17,9 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // the remote store. Otherwise an early bind would publish AppConfig's
         // in-memory defaults and overwrite the user's persisted settings.
         ConfigManager.init(getSharedPreferences(ConfigManager.PREFS_NAME, MODE_PRIVATE))
+        // Fetch/update the app-owned cloud cache independently of the Hook process.
+        // Hooked processes consume the published Remote File, never this app Pref.
+        CloudModelInfoSync.initialize(this)
         XposedServiceHelper.registerListener(this)
     }
 
@@ -23,6 +27,7 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         Log.d(TAG, "LSPosed service bound api=${service.apiVersion} framework=${service.frameworkName}/${service.frameworkVersionCode}")
         xposedService = service
         notifyListeners(service)
+        CloudModelInfoSync.onServiceBound(this, service)
         // Publish the initialized local config using the current schema. Must run before
         // flushPendingRemote so a pending write always lands on the current schema.
         ConfigManager.syncToRemote(service)
@@ -42,6 +47,7 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         if (xposedService == service) {
             Log.d(TAG, "LSPosed service died")
             xposedService = null
+            CloudModelInfoSync.onServiceDied(service)
             notifyListeners(null)
         }
     }

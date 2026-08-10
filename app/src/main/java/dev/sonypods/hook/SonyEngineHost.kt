@@ -62,6 +62,9 @@ object SonyEngineHost {
     private var repository: SonyHeadphoneRepository? = null
 
     @Volatile
+    private var cloudFallback: HookCloudModelFallback? = null
+
+    @Volatile
     private var appContext: Context? = null
 
     @Volatile
@@ -113,7 +116,13 @@ object SonyEngineHost {
     private var a2dpProxy: BluetoothProfile? = null
 
     @Synchronized
-    fun start(context: Context, adapterService: Any?, prefsProvider: (() -> SharedPreferences)? = null) {
+    fun start(
+        context: Context,
+        adapterService: Any?,
+        prefsProvider: (() -> SharedPreferences)? = null,
+        remoteModelInfoReader: (() -> String?)? = null,
+        remoteFileReader: ((String) -> ByteArray?)? = null,
+    ) {
         adapterService?.let { this.adapterService = it }
         prefsProvider?.let { this.prefsProvider = it }
         // Keep a snapshot of the store for the rare code paths that need a value without
@@ -125,12 +134,27 @@ object SonyEngineHost {
         appContext = ctx
         started = true
 
-        // The engine reads its model-image catalog from our own assets, which the
-        // bluetooth app's context cannot see.
-        val moduleContext = runCatching {
-            ctx.createPackageContext("com.mercury.sonypods", Context.CONTEXT_IGNORE_SECURITY)
-        }.getOrNull()
-        val repo = SonyHeadphoneRepository.getInstance(moduleContext ?: ctx, ctx)
+        // The engine cannot read module-app SharedPreferences or private files. The
+        // catalog reader is backed by Remote Files, with a host-local network fallback
+        // when the module process has not yet been allowed to publish them.
+        val fallback = remoteFileReader?.let { reader ->
+            HookCloudModelFallback(
+                context = ctx,
+                remoteFileReader = reader,
+                remotePrefsProvider = { currentPrefs() },
+                onCatalogReady = { repository?.refreshModelImageCatalog() },
+                onImageReady = { address ->
+                    SonyBridge.imageReady(ctx, address)
+                },
+            )
+        }
+        cloudFallback = fallback
+        val catalogReader = fallback?.let { { it.catalogReader() } } ?: remoteModelInfoReader
+        val repo = SonyHeadphoneRepository.getInstance(ctx, ctx, catalogReader)
+        catalogReader?.let { reader -> repo.attachModelInfoReader(reader) }
+        repo.attachModelCatalogFallback { modelName, _, _ ->
+            fallback?.ensureCatalogFor(modelName)
+        }
         repository = repo
         // Wire the remote-prefs store (read-only side) for the capability-probe
         // cache, and the sink that carries cache writes to the app process, which is
@@ -158,6 +182,8 @@ object SonyEngineHost {
                 val snapshot = SonyStateSnapshot.fromUiState(uiState)
                 if (snapshot != lastSnapshot) {
                     lastSnapshot = snapshot
+                    fallback?.onState(snapshot)
+                    repo.ensureModelImageCatalogIfNeeded()
                     publish(ctx, snapshot)
                 }
             }
@@ -203,7 +229,7 @@ object SonyEngineHost {
         // registering a listener is a read operation and is explicitly supported. This keeps
         // the engine's config in sync with the app even while the module app is backgrounded.
         registerRemoteConfigListener()
-        Log.d(TAG, "engine started in ${ctx.packageName} moduleContext=${moduleContext != null}")
+        Log.d(TAG, "engine started in ${ctx.packageName} cloudModelInfoRemoteFile=${remoteModelInfoReader != null}")
     }
 
     /** Idempotent generation teardown. Bluetooth transports never cross a hot reload. */
@@ -235,6 +261,8 @@ object SonyEngineHost {
         val repo = repository
         repository = null
         runCatching { repo?.close() }
+        cloudFallback?.close()
+        cloudFallback = null
 
         val proxy = a2dpProxy
         a2dpProxy = null
@@ -638,6 +666,16 @@ object SonyEngineHost {
             return
         }
 
+        // Catalog publication is independent of the Tandem lease and of whether a
+        // headphone is currently connected. Refresh it before the repository guard so
+        // a newly published Remote File is picked up even while Sound Connect owns the
+        // live session (or while the engine is between generations).
+        if (command == SonyBridge.CMD_CLOUD_MODEL_INFO_READY) {
+            repository?.refreshModelImageCatalog()
+            Log.d(TAG, "cloud model catalog ready command handled")
+            return
+        }
+
         if (officialAppOwnsTandem && command !in setOf(
                 SonyBridge.CMD_REPUBLISH,
                 SonyBridge.CMD_SURFACES_READY,
@@ -794,6 +832,7 @@ object SonyEngineHost {
                     lastRenderedAddress = null
                     lastRenderedBattery = null
                     lastConnectAnimationKey = null
+                    cloudFallback?.onState(current)
                     Log.d(TAG, "model image ready; re-rendering surfaces address=$imageAddress")
                     publish(it, current)
                 }
