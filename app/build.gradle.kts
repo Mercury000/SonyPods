@@ -25,7 +25,7 @@ if (signingProperties.all { providers.gradleProperty(it).isPresent }) {
 
 android {
     namespace = "com.mercury.sonypods"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.mercury.sonypods"
