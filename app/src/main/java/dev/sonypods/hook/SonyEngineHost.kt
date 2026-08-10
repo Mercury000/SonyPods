@@ -141,7 +141,6 @@ object SonyEngineHost {
             HookCloudModelFallback(
                 context = ctx,
                 remoteFileReader = reader,
-                remotePrefsProvider = { currentPrefs() },
                 onCatalogReady = { repository?.refreshModelImageCatalog() },
                 onImageReady = { address ->
                     SonyBridge.imageReady(ctx, address)

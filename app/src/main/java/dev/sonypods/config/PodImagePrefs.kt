@@ -150,7 +150,8 @@ object PodImagePrefs {
         return normalized
     }
 
-    private fun imageFileName(address: String, resource: PodImageResource): String =
+    /** Stable Remote File name shared by the module writer and Hook-side readers. */
+    fun remoteImageFileName(address: String, resource: PodImageResource): String =
         "${address.safeFileName()}_${resource.fileSuffix}.img"
 
     /**
@@ -207,7 +208,7 @@ object PodImagePrefs {
         bytes: ByteArray,
     ): String {
         val dir = imageDir(context)
-        val file = File(dir, imageFileName(address, resource))
+        val file = File(dir, remoteImageFileName(address, resource))
         // Do not expose a partially downloaded image to Compose or a hooked
         // system surface. The path is published only after the complete file
         // has been atomically moved into place.

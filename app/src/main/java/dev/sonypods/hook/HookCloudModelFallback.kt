@@ -1,7 +1,6 @@
 package dev.sonypods.hook
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
@@ -9,7 +8,9 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.CloudModelInfoNetwork
 import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.config.PodImageResource
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -30,7 +31,6 @@ import kotlinx.coroutines.launch
 class HookCloudModelFallback(
     context: Context,
     private val remoteFileReader: (String) -> ByteArray?,
-    private val remotePrefsProvider: () -> SharedPreferences?,
     private val onCatalogReady: () -> Unit,
     private val onImageReady: (String) -> Unit,
 ) {
@@ -123,7 +123,7 @@ class HookCloudModelFallback(
         val url = snapshot.modelImageUrl ?: return
         addressUrls[address.uppercase()] = url
         val key = "${address.uppercase()}|$url"
-        if (remoteImageAvailable(address, url)) {
+        if (remoteImageAvailable(address)) {
             failedImageKeys.remove(key)
             deleteTemporaryImage(url)
             return
@@ -161,7 +161,7 @@ class HookCloudModelFallback(
     /** Used by Hook-side renderers before the module process has published an image. */
     fun temporaryBitmap(address: String): Bitmap? {
         val url = addressUrls[address.uppercase()] ?: return null
-        if (remoteImageAvailable(address, url)) {
+        if (remoteImageAvailable(address)) {
             deleteTemporaryImage(url)
             return null
         }
@@ -194,14 +194,8 @@ class HookCloudModelFallback(
 
     private fun hasActiveConnection(): Boolean = synchronized(connectionLock) { connectionActive }
 
-    private fun remoteImageAvailable(address: String, url: String): Boolean {
-        val prefs = runCatching { remotePrefsProvider() }.getOrNull()
-        val preferredName = PodImagePrefs.find(prefs ?: return false, address)
-            ?.takeIf { it.autoImageUrl == url }
-            ?.boxImagePath
-            ?.let(::File)
-            ?.name
-        val remoteName = preferredName ?: imageFileName(address)
+    private fun remoteImageAvailable(address: String): Boolean {
+        val remoteName = PodImagePrefs.remoteImageFileName(address, PodImageResource.BOX)
         return runCatching { remoteFileReader(remoteName)?.isNotEmpty() == true }.getOrDefault(false)
     }
 
@@ -226,6 +220,10 @@ class HookCloudModelFallback(
     }
 
     private fun writeAtomically(target: File, bytes: ByteArray) {
+        val parent = target.parentFile
+        if (parent != null && !parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+            throw IOException("unable to create hook cache directory: ${parent.absolutePath}")
+        }
         val temp = File(target.parentFile, "${target.name}.tmp")
         temp.outputStream().use { it.write(bytes) }
         if (!temp.renameTo(target)) {
@@ -236,9 +234,6 @@ class HookCloudModelFallback(
 
     private fun validCatalog(raw: String?): String? =
         raw?.takeIf { CloudModelInfoStore.parseRecords(it).isNotEmpty() }
-
-    private fun imageFileName(address: String): String =
-        "${address.replace(Regex("[^A-Za-z0-9._-]"), "_")}_box.img"
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256")

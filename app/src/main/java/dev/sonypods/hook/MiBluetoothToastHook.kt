@@ -406,7 +406,6 @@ object MiBluetoothToastHook : HookContext() {
         val fallback = HookCloudModelFallback(
             context = context,
             remoteFileReader = remoteFileReader,
-            remotePrefsProvider = { runCatching { prefsProvider() }.getOrNull() },
             onCatalogReady = {},
             onImageReady = { address -> SonyBridge.imageReady(context, address) },
         )

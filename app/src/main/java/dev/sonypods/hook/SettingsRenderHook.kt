@@ -6,8 +6,8 @@ import android.os.Handler
 import android.view.View
 import android.widget.ImageView
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.config.PodImageResource
 import dev.sonypods.utils.PodImageLoader
-import java.io.File
 import java.lang.ref.WeakReference
 
 /**
@@ -46,14 +46,17 @@ class SettingsRenderHook : HookContext() {
                 }.getOrNull()
 
                 val earphone = PodImagePrefs.load(prefsProvider())
-                    .filter { it.boxImagePath != null }
+                    .filter { it.autoImageUrl != null }
                     .maxByOrNull { it.lastConnectedAt }
                 if (earphone == null) {
                     Log.i(TAG, "no earphone with box image, falling through to stock")
                     return@hookBefore
                 }
 
-                val fileName = File(earphone.boxImagePath!!).name
+                val fileName = PodImagePrefs.remoteImageFileName(
+                    earphone.address,
+                    PodImageResource.BOX,
+                )
                 val reader = PodImageLoader.remoteImageReader
                 val bitmap = reader?.let { runCatching { it(fileName) }.getOrNull() }
                 if (bitmap == null) {

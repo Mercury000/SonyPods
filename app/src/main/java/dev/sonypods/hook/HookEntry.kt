@@ -244,8 +244,9 @@ class HookEntry : XposedModule() {
             }.getOrNull()
         }
         hook.remoteFileReader = remoteReader
-        ConfigManager.init(hook.prefs)
-        hook.onHook()
+        // Install the read-only Remote File image reader before the hook itself is
+        // initialized. A hooked process must never enter the module-app local-file
+        // branch, even during its first callback.
         PodImageLoader.remoteImageReader = { name ->
             runCatching {
                 openRemoteFile(name).use { pfd ->
@@ -255,5 +256,7 @@ class HookEntry : XposedModule() {
                 }
             }.getOrNull()
         }
+        ConfigManager.init(hook.prefs)
+        hook.onHook()
     }
 }

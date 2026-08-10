@@ -7,7 +7,6 @@ import android.graphics.BitmapFactory
 import com.mercury.sonypods.R
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
-import java.io.File
 
 object PodImageLoader {
     private const val MODULE_PACKAGE = "com.mercury.sonypods"
@@ -34,7 +33,7 @@ object PodImageLoader {
         resource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        loadCached(context, prefs, address, listOf(resource))?.let { return it }
+        loadCached(prefs, address, listOf(resource))?.let { return it }
         val moduleContext = runCatching {
             context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull() ?: return null
@@ -49,7 +48,7 @@ object PodImageLoader {
         fallbackResource: PodImageResource,
         fallbackResId: Int,
     ): Bitmap? {
-        loadCached(context, prefs, address, listOf(resource, fallbackResource))?.let { return it }
+        loadCached(prefs, address, listOf(resource, fallbackResource))?.let { return it }
         val moduleContext = runCatching {
             context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull() ?: return null
@@ -59,25 +58,30 @@ object PodImageLoader {
     /**
      * Resolve a cached catalog image for [address], trying each [resources] in order.
      * In a hooked process the Remote Files reader is tried first (cold-safe).
-     * In the module app process (or on a remote-file miss) it falls back to the local file
-     * directly. Returns null if no cached catalog image is available.
+     * In the module app process it may read the module's local file. In a hooked process a
+     * Remote File miss goes only to the host-local temporary cache; it never reads a module
+     * private path. Returns null if no cached catalog image is available.
      */
     private fun loadCached(
-        context: Context,
         prefs: SharedPreferences,
         address: String,
         resources: List<PodImageResource>,
     ): Bitmap? {
-        val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull()
         val reader = remoteImageReader
-        if (earphone != null) {
+        if (reader != null) {
             for (res in resources) {
-                val path = earphone.imagePath(res) ?: continue
-                val file = File(path)
-                if (reader != null) {
-                    runCatching { reader(file.name) }.getOrNull()?.let { return it }
+                val fileName = PodImagePrefs.remoteImageFileName(address, res)
+                runCatching { reader(fileName) }.getOrNull()?.let { return it }
+            }
+        } else {
+            // Only the module process may read its own private image files. A hooked
+            // process must never try to decode the absolute path stored in prefs.
+            val earphone = runCatching { PodImagePrefs.find(prefs, address) }.getOrNull()
+            if (earphone != null) {
+                for (res in resources) {
+                    val path = earphone.imagePath(res) ?: continue
+                    runCatching { BitmapFactory.decodeFile(path) }.getOrNull()?.let { return it }
                 }
-                runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()?.let { return it }
             }
         }
         temporaryImageReader?.let { runCatching { it(address) }.getOrNull()?.let { return it } }
