@@ -324,7 +324,7 @@ object FocusIslandUtil {
                         }
                     }
                 }
-            } ?: return false
+            }
             // focus-api 1.4 未暴露文档中的两个进度按钮字段，补到最终 JSON，
             // 避免系统按默认动画/颜色渲染成红色。
             setStaticProgressOptions(extras)
@@ -398,7 +398,7 @@ object FocusIslandUtil {
         // leaving DynamicIsland waiting until open_app_timeout.
         val activityOptions = ActivityOptions.makeBasic().apply {
             setPendingIntentCreatorBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS,
             )
         }
         return PendingIntent.getActivity(

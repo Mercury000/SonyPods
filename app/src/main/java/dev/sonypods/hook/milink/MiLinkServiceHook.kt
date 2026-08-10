@@ -414,7 +414,6 @@ object MiLinkServiceHook : HookContext() {
             val single = batteryValue(currentBattery.left)
                 .takeIf { it >= 0 }
                 ?: batteryValue(currentBattery.right)
-                ?: 0
             val charging = if (single > 0) chargingValue(currentBattery.left) else 0
             return listOf(-1, -1, if (single > 0) single else -1, 0, 0, charging)
         }
@@ -437,7 +436,6 @@ object MiLinkServiceHook : HookContext() {
             val single = batteryValue(currentBattery.left)
                 .takeIf { it >= 0 }
                 ?: batteryValue(currentBattery.right)
-                ?: 0
             return single.coerceIn(0, 100)
         }
         val values = listOfNotNull(currentBattery.left, currentBattery.right)

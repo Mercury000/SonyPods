@@ -26,7 +26,7 @@ object AppLocale {
         }
     }
 
-    fun apply(context: Context, language: Int) {
+    fun apply(context: Context, language: Int): Context {
         rememberDeviceLocale(context)
         val locale = when (language) {
             CHINESE -> Locale.SIMPLIFIED_CHINESE
@@ -37,7 +37,7 @@ object AppLocale {
         val localeList = LocaleList(locale)
         LocaleList.setDefault(localeList)
         configuration.setLocales(localeList)
-        context.resources.updateConfiguration(configuration, context.resources.displayMetrics)
+        return context.createConfigurationContext(configuration)
     }
 
     fun applyAndRecreate(activity: Activity, language: Int) {

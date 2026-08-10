@@ -7,16 +7,25 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-apksign {
-    storeFileProperty = "KEYSTORE_FILE"
-    storePasswordProperty = "KEYSTORE_PASSWORD"
-    keyAliasProperty = "KEY_ALIAS"
-    keyPasswordProperty = "KEY_PASSWORD"
+val signingProperties = listOf(
+    "KEYSTORE_FILE",
+    "KEYSTORE_PASSWORD",
+    "KEY_ALIAS",
+    "KEY_PASSWORD",
+)
+
+if (signingProperties.all { providers.gradleProperty(it).isPresent }) {
+    apksign {
+        storeFileProperty = "KEYSTORE_FILE"
+        storePasswordProperty = "KEYSTORE_PASSWORD"
+        keyAliasProperty = "KEY_ALIAS"
+        keyPasswordProperty = "KEY_PASSWORD"
+    }
 }
 
 android {
     namespace = "com.mercury.sonypods"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.mercury.sonypods"

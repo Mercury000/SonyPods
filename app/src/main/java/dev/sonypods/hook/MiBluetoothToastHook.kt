@@ -115,11 +115,11 @@ object MiBluetoothToastHook : HookContext() {
                 intent.putExtra("btData", bundle)
                 intent.putExtra("disconnect", "1")
                 intent.setIdentifier("BTHeadset$address")
-                val disconnectAction = Notification.Action(
-                    285737079,
+                val disconnectAction = Notification.Action.Builder(
+                    Icon.createWithResource(context, 285737079),
                     context.resources.getString(miheadset_notification_Disconnect),
-                    PendingIntent.getBroadcast(context, 0, intent, 201326592)
-                )
+                    PendingIntent.getBroadcast(context, 0, intent, 201326592),
+                ).build()
                 // 循环切换降噪：命令直接送到蓝牙进程的引擎，不经过模块 App，
                 // 这样 App 未运行时通知栏按钮依然有效。
                 val ancCycleIntent = Intent(SonyBridge.ACTION_COMMAND)
@@ -146,7 +146,7 @@ object MiBluetoothToastHook : HookContext() {
                     ?: Icon.createWithResource(context, android.R.drawable.stat_sys_data_bluetooth)
                 val activityOptions = ActivityOptions.makeBasic().apply {
                     setPendingIntentCreatorBackgroundActivityStartMode(
-                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS,
                     )
                 }
                 val pendingIntent = PendingIntent.getActivity(
@@ -227,22 +227,20 @@ object MiBluetoothToastHook : HookContext() {
                     }
                 }
                 // AOD 息屏显示：左右耳电量拼合后注入 aodTitle
-                if (focusExtras != null) {
-                    val aodParts = mutableListOf<String>()
-                    if (batteryParams.left?.isConnected == true)
-                        aodParts.add(if (singleBattery) "电量${batteryParams.left!!.battery}%" else "L ${batteryParams.left!!.battery}%")
-                    if (batteryParams.right?.isConnected == true)
-                        aodParts.add("R ${batteryParams.right!!.battery}%")
-                    val aodTitle = aodParts.joinToString(" | ")
-                    try {
-                        val json = org.json.JSONObject(focusExtras.getString("miui.focus.param") ?: "{}")
-                        val pv2 = json.optJSONObject("param_v2") ?: org.json.JSONObject()
-                        pv2.put("aodTitle", aodTitle)
-                        pv2.put("aodPic", "key_headset")
-                        json.put("param_v2", pv2)
-                        focusExtras.putString("miui.focus.param", json.toString())
-                    } catch (_: Exception) {}
-                }
+                val aodParts = mutableListOf<String>()
+                if (batteryParams.left?.isConnected == true)
+                    aodParts.add(if (singleBattery) "电量${batteryParams.left!!.battery}%" else "L ${batteryParams.left!!.battery}%")
+                if (batteryParams.right?.isConnected == true)
+                    aodParts.add("R ${batteryParams.right!!.battery}%")
+                val aodTitle = aodParts.joinToString(" | ")
+                try {
+                    val json = org.json.JSONObject(focusExtras.getString("miui.focus.param") ?: "{}")
+                    val pv2 = json.optJSONObject("param_v2") ?: org.json.JSONObject()
+                    pv2.put("aodTitle", aodTitle)
+                    pv2.put("aodPic", "key_headset")
+                    json.put("param_v2", pv2)
+                    focusExtras.putString("miui.focus.param", json.toString())
+                } catch (_: Exception) {}
                 notificationManager.notifyAsUser(
                     "BTHeadset$address",
                     10003,
@@ -250,7 +248,6 @@ object MiBluetoothToastHook : HookContext() {
                         .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                         .setWhen(0L)
                         .setTicker(alias)
-                        .setDefaults(-1)
                         .setContentTitle(alias)
                         .setContentText(contentText)
                         .setContentIntent(pendingIntent)
@@ -260,7 +257,7 @@ object MiBluetoothToastHook : HookContext() {
                                 ?: context.getColor(system_notification_accent_color)
                         )
                         .addAction(disconnectAction)
-                        .apply { focusExtras?.let { addExtras(it) } }
+                        .addExtras(focusExtras)
                         .setVisibility(Notification.VISIBILITY_PUBLIC)
                         .build(),
                     SystemApisUtils.getUserAllUserHandle()

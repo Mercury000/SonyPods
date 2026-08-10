@@ -145,7 +145,7 @@ private fun BatteryColumn(
             )
             Image(
                 painter = themedPainterResource(
-                    getBatteryIconRes(iconLevel, if (isConnected) pod?.isCharging == true else false)
+                    getBatteryIconRes(iconLevel, if (isConnected) pod.isCharging else false)
                 ),
                 contentDescription = "$label $displayLevel",
                 modifier = Modifier.size(24.dp)

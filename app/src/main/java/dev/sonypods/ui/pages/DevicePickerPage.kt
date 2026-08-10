@@ -140,9 +140,9 @@ fun DevicePickerPage(
     val adapter = btManager?.adapter
     val bluetoothEnabled = adapter?.isEnabled == true
     val pairedDevices = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken) {
-        if (!bluetoothEnabled) emptyList() else adapter?.bondedDevices?.toList()?.sortedByDescending {
+        if (!bluetoothEnabled) emptyList() else adapter.bondedDevices.toList().sortedByDescending {
             isLikelySonyAudioDevice(it.name)
-        } ?: emptyList()
+        }
     }
 
     Box(Modifier.fillMaxSize()) {

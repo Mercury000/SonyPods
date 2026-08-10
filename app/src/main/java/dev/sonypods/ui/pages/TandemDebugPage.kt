@@ -1,5 +1,7 @@
 package dev.sonypods.ui.pages
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -28,9 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -139,10 +139,10 @@ private fun EmptyLogCard() {
 @Composable
 private fun TandemLogCard(entry: String) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
     Card(
         onClick = {
-            clipboard.setText(AnnotatedString(entry))
+            clipboard?.setPrimaryClip(ClipData.newPlainText(null, entry))
             Toast.makeText(context, "已复制日志", Toast.LENGTH_SHORT).show()
         }
     ) {

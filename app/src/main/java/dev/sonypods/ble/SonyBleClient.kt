@@ -335,16 +335,6 @@ class SonyBleClient(
             handleCharacteristicRead(gatt, characteristic.uuid, value, status)
         }
 
-        @Deprecated("Used below Android 13")
-        override fun onCharacteristicRead(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int,
-        ) {
-            if (this@SonyBleClient.gatt !== gatt) return
-            handleCharacteristicRead(gatt, characteristic.uuid, characteristic.value ?: byteArrayOf(), status)
-        }
-
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
@@ -352,15 +342,6 @@ class SonyBleClient(
         ) {
             if (this@SonyBleClient.gatt !== gatt) return
             handleCharacteristicChanged(gatt, characteristic, value)
-        }
-
-        @Deprecated("Used below Android 13")
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-        ) {
-            if (this@SonyBleClient.gatt !== gatt) return
-            handleCharacteristicChanged(gatt, characteristic, characteristic.value ?: byteArrayOf())
         }
 
         override fun onCharacteristicWrite(
