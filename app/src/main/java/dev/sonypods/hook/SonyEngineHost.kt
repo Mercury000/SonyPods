@@ -53,6 +53,7 @@ object SonyEngineHost {
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
+    private const val CONNECT_IN_FLIGHT_TIMEOUT_MS = 15_000L
 
     private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scope = newGenerationScope()
@@ -83,6 +84,8 @@ object SonyEngineHost {
     private var lastRenderedBattery: BatteryParams? = null
     private var lastRenderedAddress: String? = null
     private var lastConnectAttemptMs = 0L
+    /** Prevent startAfterReload and the A2DP proxy callback from opening two sessions. */
+    private var connectInFlightAddress: String? = null
 
     /**
      * Sound Connect holds this lease while it owns the headphone control session.
@@ -253,6 +256,7 @@ object SonyEngineHost {
         lastRenderedBattery = null
         lastRenderedAddress = null
         lastConnectAnimationKey = null
+        connectInFlightAddress = null
         Log.d(TAG, "engine generation shut down")
     }
 
@@ -286,7 +290,11 @@ object SonyEngineHost {
             return
         }
         val repo = repository ?: return
-        if (!repo.state.value.deviceInfo.protocolReady) return
+        if (!repo.state.value.deviceInfo.protocolReady || !repo.hasLiveTransport()) {
+            runCatching { reconcileConnection() }
+                .onFailure { Log.w(TAG, "refresh reconnect failed reason=$reason", it) }
+            return
+        }
         Log.d(TAG, "refresh requested: $reason")
         runCatching { repo.refreshBasics() }
             .onFailure { Log.w(TAG, "refresh failed reason=$reason", it) }
@@ -302,14 +310,28 @@ object SonyEngineHost {
         val address = runCatching { device.address }.getOrNull() ?: return
         val current = repo.state.value
         val alreadyLive = current.connectedDevice?.address.equals(address, ignoreCase = true) &&
-            current.deviceInfo.protocolReady
-        if (alreadyLive && !force) return
+            current.deviceInfo.protocolReady &&
+            repo.hasLiveTransport()
         val now = SystemClock.elapsedRealtime()
+        if (alreadyLive) {
+            connectInFlightAddress = null
+            if (!force) return
+        }
+        val sameAttemptInFlight = connectInFlightAddress?.equals(address, ignoreCase = true) == true &&
+            now - lastConnectAttemptMs < CONNECT_IN_FLIGHT_TIMEOUT_MS
+        if (sameAttemptInFlight) return
         if (!force && now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
         lastConnectAttemptMs = now
+        connectInFlightAddress = address
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
         Log.d(TAG, "connecting Tandem session to $name ($address)")
-        repo.connect(address, name)
+        runCatching { repo.connect(address, name) }
+            .onFailure {
+                if (connectInFlightAddress.equals(address, ignoreCase = true)) {
+                    connectInFlightAddress = null
+                }
+                Log.w(TAG, "Tandem connect request failed address=$address", it)
+            }
     }
 
     /**
@@ -330,7 +352,7 @@ object SonyEngineHost {
             return
         }
         val repo = repository ?: return
-        if (repo.state.value.deviceInfo.protocolReady) return
+        if (repo.state.value.deviceInfo.protocolReady && repo.hasLiveTransport()) return
         val allConnected = runCatching { a2dpProxy?.connectedDevices }.getOrNull()
         if (!allConnected.isNullOrEmpty() && allConnected.none { HeadsetStateDispatcher.isSonyPod(it) }) {
             // A2DP is active, but only non-Sony devices are connected — do nothing.
@@ -378,6 +400,7 @@ object SonyEngineHost {
         }
 
         lastConnectAttemptMs = 0L
+        connectInFlightAddress = null
         repository?.disconnect()
         Log.d(TAG, "Sound Connect acquired Tandem lease id=$leaseId; SonyPods disconnected")
     }
@@ -413,6 +436,7 @@ object SonyEngineHost {
         // This is an event-driven hand-back. Force intentionally bypasses the normal
         // reconnect cooldown so the Tandem session is re-established immediately.
         lastConnectAttemptMs = 0L
+        connectInFlightAddress = null
         val device = connectedSonyDevice()
         if (device == null) {
             Log.d(TAG, "Sound Connect released Tandem but no Sony A2DP device is connected")
@@ -478,6 +502,9 @@ object SonyEngineHost {
     fun disconnectDevice(device: BluetoothDevice) {
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
+        if (connectInFlightAddress?.equals(address, ignoreCase = true) == true) {
+            connectInFlightAddress = null
+        }
         if (repo.state.value.connectedDevice?.address.equals(address, ignoreCase = true)) {
             Log.d(TAG, "disconnecting Tandem session from $address")
             repo.disconnect()
@@ -741,10 +768,18 @@ object SonyEngineHost {
                 repo.connect(address, name)
             }
 
-            SonyBridge.CMD_DISCONNECT -> repo.disconnect()
+            SonyBridge.CMD_DISCONNECT -> {
+                connectInFlightAddress = null
+                repo.disconnect()
+            }
 
-            SonyBridge.CMD_REFRESH -> if (repo.state.value.deviceInfo.protocolReady) {
+            SonyBridge.CMD_REFRESH -> if (
+                repo.state.value.deviceInfo.protocolReady && repo.hasLiveTransport()
+            ) {
                 repo.refreshBasics()
+            } else {
+                runCatching { reconcileConnection() }
+                    .onFailure { Log.w(TAG, "manual refresh reconnect failed", it) }
             }
 
             SonyBridge.CMD_IMAGE_READY -> {

@@ -427,7 +427,18 @@ class SonyHeadphoneRepository private constructor(
         if (awaitingCapabilityInfo) {
             awaitingCapabilityInfo = false
             appendLog("GET_CAPABILITY_INFO timed out; falling back to full support-function probe")
-            runProbeFromSupportFunction(ensureConnectedProfile())
+            // A hot-reload or a transport failure may invalidate the repository while
+            // this delayed callback is still queued.  Do not let the fallback probe
+            // resurrect a stale profile (or throw "No connected device") against a
+            // closed GATT/SPP session.
+            val current = _state.value
+            if (current.connectedDevice == null || client.availableChannels().isEmpty()) {
+                appendLog("Capability fallback skipped: no live Sony transport")
+                return@Runnable
+            }
+            runCatching { ensureConnectedProfile() }
+                .onSuccess(::runProbeFromSupportFunction)
+                .onFailure { appendLog("Capability fallback skipped: ${it.message}") }
         }
     }
 
@@ -486,6 +497,12 @@ class SonyHeadphoneRepository private constructor(
     fun close() {
         mainHandler.removeCallbacksAndMessages(null)
         client.close()
+        // SonyBleClient.close() intentionally does not notify its listener because
+        // it is used for generation teardown.  The singleton repository is reused by
+        // the next libxposed generation, so explicitly clear every connection-scoped
+        // value here; otherwise protocolReady remains true while availableChannels()
+        // is empty and the next generation will never reconnect.
+        onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
         pendingQuickAccessFunctionCodes = null
         prefsProvider = null
@@ -543,6 +560,10 @@ class SonyHeadphoneRepository private constructor(
             } else {
                 onBluetoothUnavailable("Sony Tandem channel is not ready; cannot refresh device state.")
             }
+            return
+        }
+        if (client.availableChannels().isEmpty()) {
+            onBluetoothUnavailable("Sony Tandem channel is no longer available; reconnect required.")
             return
         }
         val profile = ensureConnectedProfile()
@@ -1546,7 +1567,11 @@ class SonyHeadphoneRepository private constructor(
                 },
                 noiseControlState = if (connected) it.noiseControlState else NoiseControlState(),
                 eqState = if (connected) it.eqState else EqState(),
+                leaState = if (connected) it.leaState else LeaState(),
+                quickAccessState = if (connected) it.quickAccessState else QuickAccessState(),
                 gestureOperationsState = if (connected) it.gestureOperationsState else GestureOperationsState(),
+                multipointState = if (connected) it.multipointState else MultipointState(),
+                wearingState = if (connected) it.wearingState else WearingState(),
                 eqUiCapability = if (connected) profile?.eqUiCapability else null,
                 playbackStatus = if (connected) it.playbackStatus else PlaybackStatus.UNKNOWN,
                 playbackState = if (connected) it.playbackState else PlaybackState(),
@@ -2439,8 +2464,8 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun ensureConnectedProfile(): ConnectedHeadphoneProfile {
-        _state.value.connectedProfile?.let { return it }
         val device = _state.value.connectedDevice ?: error("No connected device")
+        _state.value.connectedProfile?.let { return it }
         val profile = HeadphoneAdapterRegistry.resolve(device, _state.value.deviceInfo.modelName)
             .copy(transport = _state.value.connectionInfo?.transport.toHeadphoneTransport())
         _state.update {
@@ -2452,6 +2477,9 @@ class SonyHeadphoneRepository private constructor(
         }
         return profile
     }
+
+    /** True only while the BLE/SPP client still owns a usable Tandem transport. */
+    fun hasLiveTransport(): Boolean = client.availableChannels().isNotEmpty()
 
     private fun canWrite(feature: HeadphoneFeature): Boolean {
         val profile = _state.value.connectedProfile ?: return false
