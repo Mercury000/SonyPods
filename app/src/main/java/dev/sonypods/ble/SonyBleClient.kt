@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattConnectionSettings
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
@@ -510,10 +511,15 @@ class SonyBleClient(
             "Connecting to ${device.address} type=${remote.type} transport=${transportLabel(transport)} " +
                 "source=${device.source} sonyAd=${device.sonyAd?.summary.orEmpty()}"
         )
-        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            remote.connectGatt(context, false, gattCallback, transport)
+        gatt = if (Build.VERSION.SDK_INT >= 37) {
+            val settings = BluetoothGattConnectionSettings.Builder()
+                .setAutoConnectEnabled(false)
+                .setTransport(transport)
+                .build()
+            remote.connectGatt(settings, context.mainExecutor, gattCallback)
         } else {
-            remote.connectGatt(context, false, gattCallback)
+            @Suppress("DEPRECATION")
+            remote.connectGatt(context, false, gattCallback, transport)
         }
     }
 
