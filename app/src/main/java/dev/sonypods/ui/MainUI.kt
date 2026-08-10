@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -66,6 +67,7 @@ import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
@@ -93,6 +95,8 @@ fun MainUI(
     onFloatingBottomBarChange: (Boolean) -> Unit = {},
     blurBottomBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurBottomBarChange: (Boolean) -> Unit = {},
+    blurTopBar: MutableState<Boolean> = mutableStateOf(false),
+    onBlurTopBarChange: (Boolean) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     openEarphoneDetailAddress: MutableState<String?> = mutableStateOf(null),
@@ -540,6 +544,7 @@ fun MainUI(
                 onTabSelected = { selectedTab = it },
                 floatingBottomBar = floatingBottomBar.value,
                 blurBottomBar = blurBottomBar.value,
+                blurTopBar = blurTopBar,
                 backdrop = backdrop,
                 backgroundColor = backgroundColor,
                 overlayBottomBar = overlayBottomBar,
@@ -648,12 +653,29 @@ fun MainUI(
         }
         entry<Screen.About> {
             val aboutScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val aboutTopBarBackdrop = if (blurTopBar.value) {
+                rememberLayerBackdrop {
+                    drawRect(backgroundColor)
+                    drawContent()
+                }
+            } else {
+                null
+            }
 
             Scaffold(
                 topBar = {
                     TopAppBar(
                         title = stringResource(R.string.about),
                         largeTitle = stringResource(R.string.about),
+                        modifier = if (aboutTopBarBackdrop != null) {
+                            Modifier.textureBlur(
+                                backdrop = aboutTopBarBackdrop,
+                                shape = RectangleShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                        color = if (aboutTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                         scrollBehavior = aboutScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
@@ -667,6 +689,7 @@ fun MainUI(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(backgroundColor)
+                        .then(if (aboutTopBarBackdrop != null) Modifier.layerBackdrop(aboutTopBarBackdrop) else Modifier)
                         .padding(padding),
                 ) {
                     AboutPage(
@@ -680,12 +703,29 @@ fun MainUI(
         }
         entry<Screen.Theme> {
             val themeScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val themeTopBarBackdrop = if (blurTopBar.value) {
+                rememberLayerBackdrop {
+                    drawRect(backgroundColor)
+                    drawContent()
+                }
+            } else {
+                null
+            }
 
             Scaffold(
                 topBar = {
                     TopAppBar(
                         title = stringResource(R.string.theme_title),
                         largeTitle = stringResource(R.string.theme_title),
+                        modifier = if (themeTopBarBackdrop != null) {
+                            Modifier.textureBlur(
+                                backdrop = themeTopBarBackdrop,
+                                shape = RectangleShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                        color = if (themeTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                         scrollBehavior = themeScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
@@ -699,6 +739,7 @@ fun MainUI(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(backgroundColor)
+                        .then(if (themeTopBarBackdrop != null) Modifier.layerBackdrop(themeTopBarBackdrop) else Modifier)
                         .padding(padding),
                 ) {
                     ThemeSettingsPage(
@@ -714,12 +755,22 @@ fun MainUI(
                         onFloatingBottomBarChange = onFloatingBottomBarChange,
                         blurBottomBar = blurBottomBar,
                         onBlurBottomBarChange = onBlurBottomBarChange,
+                        blurTopBar = blurTopBar,
+                        onBlurTopBarChange = onBlurTopBarChange,
                     )
                 }
             }
         }
         entry<Screen.TandemDebug> {
             val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val debugTopBarBackdrop = if (blurTopBar.value) {
+                rememberLayerBackdrop {
+                    drawRect(backgroundColor)
+                    drawContent()
+                }
+            } else {
+                null
+            }
             var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
 
             Scaffold(
@@ -727,6 +778,15 @@ fun MainUI(
                     TopAppBar(
                         title = stringResource(R.string.tandem_debug_title),
                         largeTitle = stringResource(R.string.tandem_debug_title),
+                        modifier = if (debugTopBarBackdrop != null) {
+                            Modifier.textureBlur(
+                                backdrop = debugTopBarBackdrop,
+                                shape = RectangleShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                        color = if (debugTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                         scrollBehavior = debugScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
@@ -745,6 +805,7 @@ fun MainUI(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(backgroundColor)
+                        .then(if (debugTopBarBackdrop != null) Modifier.layerBackdrop(debugTopBarBackdrop) else Modifier)
                         .padding(padding),
                 ) {
                     TandemDebugPage(

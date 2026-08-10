@@ -26,6 +26,8 @@ fun ThemeSettingsPage(
     onFloatingBottomBarChange: (Boolean) -> Unit = {},
     blurBottomBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurBottomBarChange: (Boolean) -> Unit = {},
+    blurTopBar: MutableState<Boolean> = mutableStateOf(false),
+    onBlurTopBarChange: (Boolean) -> Unit = {},
 ) {
     val themeOptions = listOf(
         stringResource(R.string.theme_follow_system),
@@ -72,6 +74,12 @@ fun ThemeSettingsPage(
                     summary = stringResource(R.string.blur_bottom_bar_summary),
                     checked = blurBottomBar.value,
                     onCheckedChange = { onBlurBottomBarChange(it) },
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.blur_top_bar),
+                    summary = stringResource(R.string.blur_top_bar_summary),
+                    checked = blurTopBar.value,
+                    onCheckedChange = { onBlurTopBarChange(it) },
                 )
             }
         }

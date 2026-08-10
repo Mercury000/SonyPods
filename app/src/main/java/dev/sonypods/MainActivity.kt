@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
             val accentMode = remember { mutableStateOf(prefs.getInt("accent_mode", 0)) }
             val floatingBottomBar = remember { mutableStateOf(prefs.getBoolean("floating_bottom_bar", false)) }
             val blurBottomBar = remember { mutableStateOf(prefs.getBoolean("blur_bottom_bar", false)) }
+            val blurTopBar = remember { mutableStateOf(prefs.getBoolean("blur_top_bar", false)) }
             val appLanguage = remember { mutableStateOf(prefs.getInt("app_language", AppLocale.SYSTEM)) }
             val systemDark = isSystemInDarkTheme()
             val darkMode = when (themeMode.value) {
@@ -96,6 +97,11 @@ class MainActivity : ComponentActivity() {
                 onBlurBottomBarChange = {
                     blurBottomBar.value = it
                     prefs.edit().putBoolean("blur_bottom_bar", it).apply()
+                },
+                blurTopBar = blurTopBar,
+                onBlurTopBarChange = {
+                    blurTopBar.value = it
+                    prefs.edit().putBoolean("blur_top_bar", it).apply()
                 },
                 appLanguage = appLanguage,
                 onAppLanguageChange = {

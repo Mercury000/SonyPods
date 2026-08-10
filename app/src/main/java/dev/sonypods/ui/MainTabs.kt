@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -47,11 +48,14 @@ import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
@@ -61,6 +65,7 @@ internal fun MainTabsScaffold(
     onTabSelected: (MainTab) -> Unit,
     floatingBottomBar: Boolean,
     blurBottomBar: Boolean,
+    blurTopBar: MutableState<Boolean>,
     backdrop: LayerBackdrop?,
     backgroundColor: Color,
     overlayBottomBar: Boolean,
@@ -224,6 +229,8 @@ internal fun MainTabsScaffold(
                         onPairedBluetoothClick = onPairedBluetoothClick,
                         onOpenTandemDebug = onOpenTandemDebug,
                         pageBottomContentPadding = pageBottomContentPadding,
+                        backgroundColor = backgroundColor,
+                        blurTopBar = blurTopBar.value,
                         restartingScopes = restartingScopes,
                         onShowRestartScopeDialog = onShowRestartScopeDialog,
                     )
@@ -245,6 +252,8 @@ internal fun MainTabsScaffold(
                         connectingDeviceAddress = connectingDeviceAddress,
                         showConnectErrorDialog = showConnectErrorDialog,
                         pageBottomContentPadding = pageBottomContentPadding,
+                        backgroundColor = backgroundColor,
+                         blurTopBar = blurTopBar.value,
                         onDeviceSelected = onDeviceSelected,
                         onConnectedDeviceClick = onConnectedDeviceClick,
                         onDeviceDisconnect = onDeviceDisconnect,
@@ -257,6 +266,8 @@ internal fun MainTabsScaffold(
 
                     MainTab.Settings -> SettingsTabPage(
                         pageBottomContentPadding = pageBottomContentPadding,
+                        backgroundColor = backgroundColor,
+                         blurTopBar = blurTopBar.value,
                         desktopIconHidden = desktopIconHidden,
                         onDesktopIconHiddenChange = onDesktopIconHiddenChange,
                         logLevel = logLevel,
@@ -324,15 +335,34 @@ private fun ModuleTabPage(
     onPairedBluetoothClick: () -> Unit,
     onOpenTandemDebug: () -> Unit,
     pageBottomContentPadding: Dp,
+    backgroundColor: Color,
+    blurTopBar: Boolean,
     restartingScopes: Boolean,
     onShowRestartScopeDialog: () -> Unit,
 ) {
+    val topBarBackdrop = if (blurTopBar) {
+        rememberLayerBackdrop {
+            drawRect(backgroundColor)
+            drawContent()
+        }
+    } else {
+        null
+    }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
     Scaffold(
         topBar = {
             TopAppBar(
                 title = stringResource(R.string.app_name),
                 largeTitle = stringResource(R.string.app_name),
+                modifier = if (topBarBackdrop != null) {
+                    Modifier.textureBlur(
+                        backdrop = topBarBackdrop,
+                        shape = RectangleShape,
+                    )
+                } else {
+                    Modifier
+                },
+                color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                 scrollBehavior = scrollBehavior,
                 actions = {
                     IconButton(onClick = onOpenTandemDebug) {
@@ -349,19 +379,26 @@ private fun ModuleTabPage(
             )
         },
     ) { pagePadding ->
-        HomePage(
+        Box(
             modifier = Modifier
-                .overScrollVertical()
-                .nestedScroll(scrollBehavior.nestedScrollConnection),
-            xposedService = xposedService,
-            bluetoothServiceResponsive = bluetoothServiceResponsive,
-            bluetoothEnabled = bluetoothEnabled,
-            bondedDeviceCount = bondedDeviceCount,
-            onBluetoothStatusClick = onBluetoothStatusClick,
-            onPairedBluetoothClick = onPairedBluetoothClick,
-            contentPadding = pagePadding,
-            bottomContentPadding = pageBottomContentPadding,
-        )
+                .fillMaxSize()
+                .background(backgroundColor)
+                .then(if (topBarBackdrop != null) Modifier.layerBackdrop(topBarBackdrop) else Modifier),
+        ) {
+            HomePage(
+                modifier = Modifier
+                    .overScrollVertical()
+                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                xposedService = xposedService,
+                bluetoothServiceResponsive = bluetoothServiceResponsive,
+                bluetoothEnabled = bluetoothEnabled,
+                bondedDeviceCount = bondedDeviceCount,
+                onBluetoothStatusClick = onBluetoothStatusClick,
+                onPairedBluetoothClick = onPairedBluetoothClick,
+                contentPadding = pagePadding,
+                bottomContentPadding = pageBottomContentPadding,
+            )
+        }
     }
 }
 
@@ -383,6 +420,8 @@ private fun EarphonesTabShell(
     connectingDeviceAddress: String?,
     showConnectErrorDialog: Boolean,
     pageBottomContentPadding: Dp,
+    backgroundColor: Color,
+    blurTopBar: Boolean,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onConnectedDeviceClick: () -> Unit,
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
@@ -392,6 +431,14 @@ private fun EarphonesTabShell(
     powerOffEnabled: Boolean,
     onOpenSystemHeadsetSettings: () -> Unit,
 ) {
+    val topBarBackdrop = if (blurTopBar) {
+        rememberLayerBackdrop {
+            drawRect(backgroundColor)
+            drawContent()
+        }
+    } else {
+        null
+    }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
     val onSubPage = showGestureOperations || showMultipointSettings
     val pageTitle = when {
@@ -405,6 +452,15 @@ private fun EarphonesTabShell(
                 TopAppBar(
                     title = pageTitle,
                     largeTitle = pageTitle,
+                    modifier = if (topBarBackdrop != null) {
+                        Modifier.textureBlur(
+                            backdrop = topBarBackdrop,
+                            shape = RectangleShape,
+                        )
+                    } else {
+                        Modifier
+                    },
+                    color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                     scrollBehavior = scrollBehavior,
                     navigationIcon = {
                         if (onSubPage) {
@@ -430,34 +486,43 @@ private fun EarphonesTabShell(
             }
         },
     ) { pagePadding ->
-        EarphonesTabPage(
-            showEarphoneDetail = showEarphoneDetail,
-            showGestureOperations = showGestureOperations,
-            showMultipointSettings = showMultipointSettings,
-            displayTitle = displayTitle,
-            uiState = sonyState,
-            actions = sonyActions.copy(
-                onOpenGestureOperations = onOpenGestureOperations,
-                onOpenMultipointSettings = onOpenMultipointSettings,
-            ),
-            boxImagePath = boxImagePath,
-            connectedDeviceAddress = connectedDeviceAddress,
-            connectingDeviceAddress = connectingDeviceAddress,
-            showConnectErrorDialog = showConnectErrorDialog,
-            contentPadding = pagePadding,
-            pageBottomContentPadding = pageBottomContentPadding,
-            nestedScrollConnection = scrollBehavior.nestedScrollConnection,
-            onDeviceSelected = onDeviceSelected,
-            onConnectedDeviceClick = onConnectedDeviceClick,
-            onDeviceDisconnect = onDeviceDisconnect,
-            onDismissConnectError = onDismissConnectError,
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundColor)
+                .then(if (topBarBackdrop != null) Modifier.layerBackdrop(topBarBackdrop) else Modifier),
+        ) {
+            EarphonesTabPage(
+                showEarphoneDetail = showEarphoneDetail,
+                showGestureOperations = showGestureOperations,
+                showMultipointSettings = showMultipointSettings,
+                displayTitle = displayTitle,
+                uiState = sonyState,
+                actions = sonyActions.copy(
+                    onOpenGestureOperations = onOpenGestureOperations,
+                    onOpenMultipointSettings = onOpenMultipointSettings,
+                ),
+                boxImagePath = boxImagePath,
+                connectedDeviceAddress = connectedDeviceAddress,
+                connectingDeviceAddress = connectingDeviceAddress,
+                showConnectErrorDialog = showConnectErrorDialog,
+                contentPadding = pagePadding,
+                pageBottomContentPadding = pageBottomContentPadding,
+                nestedScrollConnection = scrollBehavior.nestedScrollConnection,
+                onDeviceSelected = onDeviceSelected,
+                onConnectedDeviceClick = onConnectedDeviceClick,
+                onDeviceDisconnect = onDeviceDisconnect,
+                onDismissConnectError = onDismissConnectError,
+            )
+        }
     }
 }
 
 @Composable
 private fun SettingsTabPage(
     pageBottomContentPadding: Dp,
+    backgroundColor: Color,
+    blurTopBar: Boolean,
     desktopIconHidden: MutableState<Boolean>,
     onDesktopIconHiddenChange: (Boolean) -> Unit,
     logLevel: MutableState<Int>,
@@ -483,49 +548,73 @@ private fun SettingsTabPage(
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
+    val topBarBackdrop = if (blurTopBar) {
+        rememberLayerBackdrop {
+            drawRect(backgroundColor)
+            drawContent()
+        }
+    } else {
+        null
+    }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
     Scaffold(
         topBar = {
             TopAppBar(
                 title = stringResource(R.string.settings),
                 largeTitle = stringResource(R.string.settings),
+                modifier = if (topBarBackdrop != null) {
+                    Modifier.textureBlur(
+                        backdrop = topBarBackdrop,
+                        shape = RectangleShape,
+                    )
+                } else {
+                    Modifier
+                },
+                color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                 scrollBehavior = scrollBehavior,
             )
         },
     ) { pagePadding ->
-        SettingsPage(
+        Box(
             modifier = Modifier
-                .overScrollVertical()
-                .nestedScroll(scrollBehavior.nestedScrollConnection),
-            contentPadding = PaddingValues(
-                top = pagePadding.calculateTopPadding(),
-                bottom = pageBottomContentPadding,
-            ),
-            desktopIconHidden = desktopIconHidden,
-            onDesktopIconHiddenChange = onDesktopIconHiddenChange,
-            logLevel = logLevel,
-            onLogLevelChange = onLogLevelChange,
-            islandMode = islandMode,
-            onIslandModeChange = onIslandModeChange,
-            islandDurationSeconds = islandDurationSeconds,
-            onIslandDurationSecondsChange = onIslandDurationSecondsChange,
-            ancCycleModes = ancCycleModes,
-            onAncCycleModesChange = onAncCycleModesChange,
-            startupTab = startupTab,
-            onStartupTabChange = onStartupTabChange,
-            appLanguage = appLanguage,
-            onAppLanguageChange = onAppLanguageChange,
-            notificationClickAction = notificationClickAction,
-            onNotificationClickActionChange = onNotificationClickActionChange,
-            moreClickAction = moreClickAction,
-            onMoreClickActionChange = onMoreClickActionChange,
-            fusionMoreClickAction = fusionMoreClickAction,
-            onFusionMoreClickActionChange = onFusionMoreClickActionChange,
-            fakeDeviceId = fakeDeviceId,
-            onFakeDeviceIdChange = onFakeDeviceIdChange,
-            onOpenTheme = onOpenTheme,
-            onOpenAbout = onOpenAbout,
-        )
+                .fillMaxSize()
+                .background(backgroundColor)
+                .then(if (topBarBackdrop != null) Modifier.layerBackdrop(topBarBackdrop) else Modifier),
+        ) {
+            SettingsPage(
+                modifier = Modifier
+                    .overScrollVertical()
+                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                contentPadding = PaddingValues(
+                    top = pagePadding.calculateTopPadding(),
+                    bottom = pageBottomContentPadding,
+                ),
+                desktopIconHidden = desktopIconHidden,
+                onDesktopIconHiddenChange = onDesktopIconHiddenChange,
+                logLevel = logLevel,
+                onLogLevelChange = onLogLevelChange,
+                islandMode = islandMode,
+                onIslandModeChange = onIslandModeChange,
+                islandDurationSeconds = islandDurationSeconds,
+                onIslandDurationSecondsChange = onIslandDurationSecondsChange,
+                ancCycleModes = ancCycleModes,
+                onAncCycleModesChange = onAncCycleModesChange,
+                startupTab = startupTab,
+                onStartupTabChange = onStartupTabChange,
+                appLanguage = appLanguage,
+                onAppLanguageChange = onAppLanguageChange,
+                notificationClickAction = notificationClickAction,
+                onNotificationClickActionChange = onNotificationClickActionChange,
+                moreClickAction = moreClickAction,
+                onMoreClickActionChange = onMoreClickActionChange,
+                fusionMoreClickAction = fusionMoreClickAction,
+                onFusionMoreClickActionChange = onFusionMoreClickActionChange,
+                fakeDeviceId = fakeDeviceId,
+                onFakeDeviceIdChange = onFakeDeviceIdChange,
+                onOpenTheme = onOpenTheme,
+                onOpenAbout = onOpenAbout,
+            )
+        }
     }
 }
 
