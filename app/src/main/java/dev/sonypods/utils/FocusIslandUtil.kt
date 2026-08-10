@@ -1,5 +1,6 @@
 package dev.sonypods.utils
 import android.annotation.SuppressLint
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -25,6 +26,10 @@ object FocusIslandUtil {
     private const val CHANNEL_ID = "sonypods_focus_island"
     private const val CHANNEL_NAME = "SonyPods Battery"
     private const val NOTIFICATION_ID = 10086
+    // Keep this distinct from the legacy PendingIntent request code so an
+    // installed upgrade cannot reuse a record created before the Android 15
+    // background-start opt-in was added.
+    private const val POD_DIALOG_PENDING_INTENT_REQUEST_CODE = 10087
     private const val MODULE_PACKAGE = "com.mercury.sonypods"
     private const val IOS_CHARGING_GREEN = "#34C759"
 
@@ -32,6 +37,10 @@ object FocusIslandUtil {
     // Single pending dismissal: each (re-)post reschedules it, so an earlier
     // island's timer cannot kill a newer in-place update prematurely.
     private var dismissRunnable: Runnable? = null
+    // A replay is intentionally delayed until HyperOS finishes removing the
+    // consumed notification. Keep it cancellable so a disconnect cannot resurrect
+    // the island after the device is gone.
+    private var repostRunnable: Runnable? = null
     private var islandVisible = false
     private var islandExpiresAtMillis = 0L
 
@@ -39,6 +48,8 @@ object FocusIslandUtil {
     fun cancelBatteryIsland(context: Context) {
         dismissRunnable?.let(mainHandler::removeCallbacks)
         dismissRunnable = null
+        repostRunnable?.let(mainHandler::removeCallbacks)
+        repostRunnable = null
         islandVisible = false
         islandExpiresAtMillis = 0L
         runCatching {
@@ -57,6 +68,7 @@ object FocusIslandUtil {
         deviceName: String? = null,
         device: BluetoothDevice? = null,
         durationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+        islandFirstFloat: Boolean = true,
     ): Boolean = renderBatteryIsland(
         context = context,
         prefs = prefs,
@@ -67,6 +79,7 @@ object FocusIslandUtil {
         device = device,
         durationSeconds = durationSeconds,
         timeoutAtMillis = null,
+        firstFloatOverride = islandFirstFloat,
     )
 
     /** Update a currently visible island without making a new connection popup. */
@@ -96,6 +109,7 @@ object FocusIslandUtil {
             device = device,
             durationSeconds = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
             timeoutAtMillis = deadline,
+            firstFloatOverride = null,
         )
     }
 
@@ -109,6 +123,7 @@ object FocusIslandUtil {
         device: BluetoothDevice? = null,
         durationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
         timeoutAtMillis: Long?,
+        firstFloatOverride: Boolean?,
     ): Boolean {
         try {
             val now = System.currentTimeMillis()
@@ -200,7 +215,11 @@ object FocusIslandUtil {
                 tickerPic = picCase
 
                 isShowNotification = false
-                islandFirstFloat = true
+                // This is only supplied when a new island notification is being
+                // re-sent (for example after the action activity consumed it).
+                // Ordinary battery updates intentionally leave islandFirstFloat
+                // untouched; enableFloat below is the update-notification switch.
+                firstFloatOverride?.let { islandFirstFloat = it }
                 // 展开态使用焦点通知组件；bigIslandArea 只负责摘要态。
                 // 盒/设备图是头像，应使用 chatInfo.picProfile，而不是 baseInfo.picFunction。
                 chatInfo {
@@ -303,7 +322,25 @@ object FocusIslandUtil {
                 .addExtras(extras)
                 .build()
 
-            nm.notify(NOTIFICATION_ID, notification)
+            // HyperOS removes the island from DynamicIsland's visible-state list
+            // when its content action opens the mini window, but keeps the 10086
+            // NotificationRecord alive. A direct notify() then only updates that
+            // hidden record and the island never returns. For a replay, make it a
+            // real remove -> add cycle; ordinary battery updates must stay in-place.
+            repostRunnable?.let(mainHandler::removeCallbacks)
+            repostRunnable = null
+            if (firstFloatOverride != null) {
+                nm.cancel(NOTIFICATION_ID)
+                val repost = Runnable {
+                    repostRunnable = null
+                    runCatching { nm.notify(NOTIFICATION_ID, notification) }
+                        .onFailure { Log.e(TAG, "Failed to repost Focus Island", it) }
+                }
+                repostRunnable = repost
+                mainHandler.postDelayed(repost, 150L)
+            } else {
+                nm.notify(NOTIFICATION_ID, notification)
+            }
 
             dismissRunnable?.let(mainHandler::removeCallbacks)
             val dismiss = Runnable {
@@ -339,11 +376,21 @@ object FocusIslandUtil {
             deviceName?.let { putExtra("device_name", it) }
             device?.let { putExtra("android.bluetooth.device.extra.DEVICE", it) }
         }
+        // Android 15/HyperOS requires the PendingIntent creator to opt in to
+        // background activity starts. Without this, pulling the island down
+        // enters the mini-window animation but PopupActivity is BAL-blocked,
+        // leaving DynamicIsland waiting until open_app_timeout.
+        val activityOptions = ActivityOptions.makeBasic().apply {
+            setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+            )
+        }
         return PendingIntent.getActivity(
             context,
-            NOTIFICATION_ID,
+            POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            activityOptions.toBundle(),
         )
     }
 

@@ -805,8 +805,13 @@ object SonyEngineHost {
                 // Forget what we think is on screen so the island shows again.
                 lastRenderedAddress = null
                 lastRenderedBattery = null
+                val islandFirstFloat = if (intent.hasExtra(SonyBridge.EXTRA_ISLAND_FIRST_FLOAT)) {
+                    intent.getBooleanExtra(SonyBridge.EXTRA_ISLAND_FIRST_FLOAT, true)
+                } else {
+                    null
+                }
                 Log.d(TAG, "surfaces ready; re-rendering notification and island")
-                publish(it, snapshot())
+                publish(it, snapshot(), islandFirstFloat)
             }
 
             SonyBridge.CMD_DEBUG_RAW ->
@@ -837,7 +842,11 @@ object SonyEngineHost {
 
     // ── State fan-out ──
 
-    private fun publish(context: Context, snapshot: SonyStateSnapshot) {
+    private fun publish(
+        context: Context,
+        snapshot: SonyStateSnapshot,
+        islandFirstFloat: Boolean? = null,
+    ) {
         val bundle = snapshot.toBundle()
         SonyBridge.STATE_CONSUMERS.forEach { target ->
             runCatching {
@@ -851,7 +860,7 @@ object SonyEngineHost {
             }.onFailure { Log.w(TAG, "state broadcast to $target failed", it) }
         }
         injectSystemBattery(context, snapshot)
-        renderXiaomiSurfaces(context, snapshot)
+        renderXiaomiSurfaces(context, snapshot, islandFirstFloat)
     }
 
     /**
@@ -860,7 +869,11 @@ object SonyEngineHost {
      * here is what keeps them alive when the app is not running.
      */
     @SuppressLint("MissingPermission")
-    private fun renderXiaomiSurfaces(context: Context, snapshot: SonyStateSnapshot) {
+    private fun renderXiaomiSurfaces(
+        context: Context,
+        snapshot: SonyStateSnapshot,
+        islandFirstFloat: Boolean? = null,
+    ) {
         val address = snapshot.deviceAddress
         if (address == null || !snapshot.connected) {
             val previous = lastRenderedAddress ?: return
@@ -904,6 +917,11 @@ object SonyEngineHost {
         // they must not retrigger the connection animation.
         val hasBatteryData = battery.left != null || battery.right != null || battery.case != null
         val isNewDevice = address != lastConnectAnimationKey && hasBatteryData
+        // A surface replay explicitly requested by PopupActivity is a new
+        // notification submission, not a battery update.  It must recreate the
+        // island even though the connection animation has already been shown.
+        val isIslandReplay = islandFirstFloat != null
+        val showIsland = isNewDevice || isIslandReplay
         if (isNewDevice) lastConnectAnimationKey = address
         lastRenderedBattery = battery
         lastRenderedAddress = address
@@ -928,9 +946,10 @@ object SonyEngineHost {
                 // Headband models report one level; the connect animation has a
                 // dedicated single-battery variant for them.
                 singleBattery = singleBattery,
-                showIsland = isNewDevice,
+                showIsland = showIsland,
+                islandFirstFloat = islandFirstFloat?.takeIf { showIsland },
             )
-            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice single=$singleBattery")
+            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice islandReplay=$isIslandReplay showIsland=$showIsland single=$singleBattery")
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }
 

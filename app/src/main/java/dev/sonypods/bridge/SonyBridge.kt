@@ -50,6 +50,8 @@ object SonyBridge {
     const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
     const val EXTRA_OFFICIAL_SENDER_PACKAGE = "official_sender_package"
     const val EXTRA_OFFICIAL_SENDER_UID = "official_sender_uid"
+    /** Optional island animation override for a surface replay after an action click. */
+    const val EXTRA_ISLAND_FIRST_FLOAT = "island_first_float"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"

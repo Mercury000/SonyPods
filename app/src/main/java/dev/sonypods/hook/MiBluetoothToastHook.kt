@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -32,6 +33,7 @@ import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {
+    private const val POD_DIALOG_PENDING_INTENT_REQUEST_CODE = 10087
     private var receiverContext: Context? = null
     private var notificationReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
@@ -142,16 +144,22 @@ object MiBluetoothToastHook : HookContext() {
                 }
                 val headsetIcon = headsetBitmap?.let { Icon.createWithBitmap(it) }
                     ?: Icon.createWithResource(context, android.R.drawable.stat_sys_data_bluetooth)
+                val activityOptions = ActivityOptions.makeBasic().apply {
+                    setPendingIntentCreatorBackgroundActivityStartMode(
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                    )
+                }
                 val pendingIntent = PendingIntent.getActivity(
                     context,
-                    0,
+                    POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
                     Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
                         setClassName("com.mercury.sonypods", "dev.sonypods.PopupActivity")
                         putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
                         putExtra("bluetoothaddress", bluetoothDevice.address)
                         putExtra("device_name", alias)
                     },
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    activityOptions.toBundle(),
                 )
                 val focusExtras = FocusNotification.buildV3 {
                     val logo = createPicture("key_headset", headsetIcon)
@@ -314,6 +322,11 @@ object MiBluetoothToastHook : HookContext() {
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
                         val single = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
                         val showIsland = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SHOW_ISLAND, true)
+                        val islandFirstFloat = if (intent.hasExtra(MiuiStrongToastUtil.EXTRA_ISLAND_FIRST_FLOAT)) {
+                            intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_ISLAND_FIRST_FLOAT, true)
+                        } else {
+                            null
+                        }
                         val deviceName = intent.getStringExtra("deviceName")
                         // Pull the freshest config at render time. The app persists the
                         // full config into remote prefs on every change; re-reading here
@@ -333,6 +346,7 @@ object MiBluetoothToastHook : HookContext() {
                                         deviceName = deviceName,
                                         device = device,
                                         durationSeconds = ConfigManager.islandDurationSeconds(),
+                                        islandFirstFloat = islandFirstFloat ?: true,
                                     )
                                 ConfigManager.ISLAND_MODE_OFFICIAL ->
                                     MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)

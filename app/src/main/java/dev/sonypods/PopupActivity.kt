@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -53,6 +55,8 @@ import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 
 class PopupActivity : ComponentActivity() {
+    private var surfacesReplayScheduled = false
+
     override fun attachBaseContext(newBase: Context) {
         AppLocale.rememberDeviceLocale(newBase)
         AppLocale.apply(newBase, newBase.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE).getInt("app_language", AppLocale.SYSTEM))
@@ -88,6 +92,35 @@ class PopupActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scheduleSurfacesReplay()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Pulling the island down puts this activity in HyperOS' mini-window.  In
+        // that path the activity can become stopped without being marked finishing
+        // (and sometimes without a useful onDestroy callback).  The island has
+        // already been consumed by the time the activity leaves the foreground, so
+        // this is the earliest lifecycle point at which it is safe to restore it.
+        scheduleSurfacesReplay()
+    }
+
+    private fun scheduleSurfacesReplay() {
+        if (isChangingConfigurations || surfacesReplayScheduled) return
+        surfacesReplayScheduled = true
+        // HyperOS consumes the island notification when its content action launches
+        // this activity. Re-publish after the mini-window transition has completed;
+        // FocusIslandUtil then performs the required remove -> add notification
+        // cycle instead of merely updating the hidden notification record.
+        Handler(Looper.getMainLooper()).postDelayed({
+            SonyBridge.sendCommand(applicationContext, SonyBridge.CMD_SURFACES_READY) {
+                putExtra(SonyBridge.EXTRA_ISLAND_FIRST_FLOAT, false)
+            }
+        }, 350L)
     }
 
     private fun openNotificationTarget(action: Int, bluetoothDevice: BluetoothDevice?) {
