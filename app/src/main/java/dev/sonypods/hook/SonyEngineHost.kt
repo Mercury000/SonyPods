@@ -24,6 +24,7 @@ import dev.sonypods.utils.miuiStrongToast.MiuiStrongToastUtil
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
+import dev.sonypods.headphones.HeadphoneFormFactor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -837,11 +838,26 @@ object SonyEngineHost {
             return
         }
 
+        // Form factor (headband vs TWS) is only known once the capability probe
+        // finished — cached devices restore it instantly, a first-time connection
+        // must wait. Rendering earlier races the neutral profile's single-battery
+        // query and flashes the headband notification variant for TWS buds.
+        if (!snapshot.probeComplete) return
+
+        val singleBattery = when (snapshot.formFactor) {
+            HeadphoneFormFactor.HEADSET.name -> true
+            HeadphoneFormFactor.TRUE_WIRELESS.name -> false
+            else -> snapshot.batterySingle != null && snapshot.batteryLeft == null
+        }
+
         // Sony reports 0 for a bud that is not in place rather than omitting it, which
         // would otherwise be rendered as a real "0%".
         fun pod(level: Int?) = level?.takeIf { it > 0 }?.let { PodParams(battery = it, isConnected = true) }
         val battery = BatteryParams(
-            left = pod(snapshot.batteryLeft ?: snapshot.batterySingle),
+            // Fold the single (headband) level into the left slot only for actual
+            // single-battery devices; a stale pre-probe BATTERY reading must not
+            // masquerade as a TWS left bud.
+            left = pod(snapshot.batteryLeft ?: snapshot.batterySingle.takeIf { singleBattery }),
             right = pod(snapshot.batteryRight),
             case = pod(snapshot.batteryCradle),
         )
@@ -866,7 +882,7 @@ object SonyEngineHost {
                 sourceColor = snapshot.modelImageSourceColor,
                 // Headband models report one level; tag the notification so the label
                 // reads "电量" (battery) instead of "左"+"%" for the single over-ear value.
-                singleBattery = snapshot.batterySingle != null && snapshot.batteryLeft == null,
+                singleBattery = singleBattery,
             )
             // The island is an arrival animation: only on a fresh connection, not on
             // every battery tick.
@@ -877,10 +893,10 @@ object SonyEngineHost {
                     device = device,
                     // Headband models report one level; the connect animation has a
                     // dedicated single-battery variant for them.
-                    singleBattery = snapshot.batterySingle != null && snapshot.batteryLeft == null,
+                    singleBattery = singleBattery,
                 )
             }
-            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice")
+            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice single=$singleBattery")
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }
 
