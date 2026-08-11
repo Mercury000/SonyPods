@@ -5,7 +5,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,11 +15,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -29,8 +29,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.sonypods.bridge.SonyBridge
@@ -206,7 +206,6 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
     }
 
     val dialogBgColor = if (isDarkMode) Color(0xFF1A1A1A) else Color(0xFFF7F7F7)
-    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     Scaffold(containerColor = Color.Transparent) { _ ->
         OverlayDialog(
@@ -220,35 +219,22 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                 onDone()
             }
         ) {
-            if (isLandscape) {
-                LandscapePopupBody(
-                    sonyState = sonyState,
-                    onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
-                    onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
-                    onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
-                    onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
-                    onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
-                    onMore = onMore,
-                    onDone = { showDialog.value = false },
-                )
-            } else {
-                PortraitPopupBody(
-                    sonyState = sonyState,
-                    onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
-                    onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
-                    onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
-                    onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
-                    onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
-                    onMore = onMore,
-                    onDone = { showDialog.value = false },
-                )
-            }
+            PopupBody(
+                sonyState = sonyState,
+                onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+                onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
+                onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
+                onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
+                onNoiseAdaptiveSensitivityChange = { SonyBridge.setNoiseAdaptiveSensitivity(context, it.name) },
+                onMore = onMore,
+                onDone = { showDialog.value = false },
+            )
         }
     }
 }
 
 @Composable
-private fun PortraitPopupBody(
+private fun PopupBody(
     sonyState: SonyStateSnapshot,
     onAncModeChange: (NoiseControlMode) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
@@ -258,7 +244,12 @@ private fun PortraitPopupBody(
     onMore: () -> Unit,
     onDone: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = LocalWindowInfo.current.containerDpSize.height * 0.8f)
+            .verticalScroll(rememberScrollState())
+    ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             PodStatus(
                 batteryParams = sonyState.toBatteryParams(),
@@ -296,77 +287,6 @@ private fun PortraitPopupBody(
                 text = stringResource(R.string.done),
                 onClick = onDone,
                 modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun LandscapePopupBody(
-    sonyState: SonyStateSnapshot,
-    onAncModeChange: (NoiseControlMode) -> Unit,
-    onAmbientLevelChange: (Int) -> Unit,
-    onAmbientVoiceModeChange: (Boolean) -> Unit,
-    onNoiseAdaptiveChange: (Boolean) -> Unit,
-    onNoiseAdaptiveSensitivityChange: (NoiseAdaptiveSensitivity) -> Unit,
-    onMore: () -> Unit,
-    onDone: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .widthIn(min = 560.dp)
-            .height(240.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(0.60f)
-                .fillMaxHeight(),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                PodStatus(
-                    batteryParams = sonyState.toBatteryParams(),
-                    single = sonyState.toSinglePodParams(),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-                    compact = true
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                AncSwitch(
-                    ancStatus = sonyState.noiseControlMode,
-                    onAncModeChange = onAncModeChange,
-                    ambientLevel = sonyState.ambientLevel,
-                    onAmbientLevelChange = onAmbientLevelChange,
-                    ambientVoiceMode = sonyState.ambientVoiceMode,
-                    onAmbientVoiceModeChange = onAmbientVoiceModeChange,
-                    noiseAdaptiveSupported = sonyState.supportsNoiseAdaptive,
-                    noiseAdaptiveEnabled = sonyState.noiseAdaptiveEnabled,
-                    onNoiseAdaptiveChange = onNoiseAdaptiveChange,
-                    noiseAdaptiveSensitivity = sonyState.noiseAdaptiveSensitivityValue(),
-                    onNoiseAdaptiveSensitivityChange = onNoiseAdaptiveSensitivityChange,
-                    compact = true,
-                )
-            }
-        }
-        Column(
-            modifier = Modifier
-                .weight(0.40f)
-                .fillMaxHeight(),
-            verticalArrangement = Arrangement.Center
-        ) {
-            TextButton(
-                text = stringResource(R.string.more),
-                onClick = onMore,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            TextButton(
-                text = stringResource(R.string.done),
-                onClick = onDone,
-                modifier = Modifier.fillMaxWidth()
             )
         }
     }
