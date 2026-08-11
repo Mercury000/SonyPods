@@ -49,6 +49,8 @@ fun SettingsPage(
     onNotificationClickActionChange: (Int) -> Unit = {},
     popupOnConnect: MutableState<Boolean> = mutableStateOf(false),
     onPopupOnConnectChange: (Boolean) -> Unit = {},
+    suppressPopupOnConnectWhenForeground: MutableState<Boolean> = mutableStateOf(true),
+    onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
     onMoreClickActionChange: (Int) -> Unit = {},
     fusionMoreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS),
@@ -218,6 +220,14 @@ fun SettingsPage(
                     checked = popupOnConnect.value,
                     onCheckedChange = { onPopupOnConnectChange(it) }
                 )
+                if (popupOnConnect.value) {
+                    SwitchPreference(
+                        title = stringResource(R.string.suppress_popup_on_connect_when_foreground),
+                        summary = stringResource(R.string.suppress_popup_on_connect_when_foreground_summary),
+                        checked = suppressPopupOnConnectWhenForeground.value,
+                        onCheckedChange = { onSuppressPopupOnConnectWhenForegroundChange(it) }
+                    )
+                }
                 if (notificationClickAction.value == ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
                     OverlayDropdownPreference(
                         title = stringResource(R.string.more_click_action),

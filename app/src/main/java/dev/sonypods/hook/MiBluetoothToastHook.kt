@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
@@ -30,11 +31,18 @@ import dev.sonypods.utils.SystemApisUtils.notifyAsUser
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
+import com.mercury.sonypods.BuildConfig
 import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {
     private const val POD_DIALOG_PENDING_INTENT_REQUEST_CODE = 10087
+
+    /**
+     * Whether the module app's main activity is the foreground app, queried live
+     * from the process scheduler right before a popup decision. A killed module
+     * process reads as not-foreground automatically, so there is no stale state.
+     */
     private var receiverContext: Context? = null
     private var notificationReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
@@ -304,6 +312,27 @@ object MiBluetoothToastHook : HookContext() {
         }
     }
 
+    /**
+     * Query whether the module app currently owns the foreground. Uses the hidden
+     * ActivityManager.getUidProcessState (unavailable in the public SDK jar, but
+     * present at runtime) so the answer is the live process-scheduler state: no
+     * broadcast round trip, and a killed module process reads as not-foreground.
+     * Fails open (not-foreground) if the hidden API is unavailable.
+     */
+    private fun isModuleUiForeground(context: Context): Boolean = runCatching {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val uid = context.packageManager
+            .getApplicationInfo(BuildConfig.APPLICATION_ID, 0)
+            .uid
+        val state = ActivityManager::class.java
+            .getMethod("getUidProcessState", Int::class.javaPrimitiveType)
+            .invoke(am, uid) as Int
+        val topState = ActivityManager::class.java
+            .getField("PROCESS_STATE_TOP")
+            .getInt(null)
+        state == topState
+    }.getOrDefault(false)
+
     /** Rebind receivers and request a surface replay when package callbacks are not replayed. */
     internal fun startAfterReload(context: Context) {
         registerNotificationReceiver(context)
@@ -371,8 +400,11 @@ object MiBluetoothToastHook : HookContext() {
                             // EXTRA_ISLAND_FIRST_FLOAT=false) after the popup closes so the
                             // island reappears. That replay is not a new connection and must
                             // not relaunch the popup; only a genuine first render (no extra)
-                            // may trigger it.
-                            if (ConfigManager.popupOnConnect() && islandFirstFloat == null) {
+                            // may trigger it. While the module UI is the foreground app the
+                            // auto popup is suppressed too (the user is already in the app).
+                            if (ConfigManager.popupOnConnect() && islandFirstFloat == null &&
+                                !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
+                            ) {
                                 launchConnectPopup(context, device, address, deviceName)
                             }
                             when (ConfigManager.islandMode()) {
