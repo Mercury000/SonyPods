@@ -80,33 +80,44 @@ fun PodDetailPage(
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (isLandscape) {
+        val overviewListState = remember { LazyListState() }
         Row(
             modifier = modifier
                 .fillMaxSize()
                 .padding(contentPadding)
         ) {
-            Column(
+            LazyColumn(
+                state = overviewListState,
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp),
+                    .fillMaxSize(),
+                contentPadding = PaddingValues(top = 12.dp, bottom = bottomContentPadding),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
             ) {
-                Image(
-                    painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
-                    contentDescription = "Earphones",
-                    modifier = Modifier
-                        .fillMaxWidth(0.82f)
-                        .widthIn(max = 360.dp),
-                    contentScale = ContentScale.FillWidth
-                )
-                Text(
-                    text = podName,
-                    modifier = Modifier.padding(top = 12.dp),
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Image(
+                            painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
+                            contentDescription = "Earphones",
+                            modifier = Modifier
+                                .fillMaxWidth(0.62f)
+                                .widthIn(max = 280.dp),
+                            contentScale = ContentScale.FillWidth
+                        )
+                    }
+                }
+                item {
+                    BatteryStatusCard(uiState = uiState)
+                }
+                item {
+                    DeviceStatusCard(uiState = uiState)
+                }
             }
 
             LazyColumn(
@@ -121,7 +132,9 @@ fun PodDetailPage(
                 podControlItems(
                     uiState = uiState,
                     actions = actions,
-                    bottomContentPadding = bottomContentPadding
+                    bottomContentPadding = bottomContentPadding,
+                    includeBattery = false,
+                    includeDeviceStatus = false,
                 )
             }
         }
@@ -171,37 +184,20 @@ private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
 private fun LazyListScope.podControlItems(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
-    bottomContentPadding: Dp
+    bottomContentPadding: Dp,
+    includeBattery: Boolean = true,
+    includeAnc: Boolean = true,
+    includeDeviceStatus: Boolean = true,
 ) {
-    item {
-        Card(
-            modifier = Modifier.padding(horizontal = 12.dp)
-        ) {
-            PodStatus(
-                batteryParams = uiState.toBatteryParams(),
-                single = uiState.toSinglePodParams(),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp)
-            )
+    if (includeBattery) {
+        item {
+            BatteryStatusCard(uiState = uiState)
         }
     }
 
-    item {
-        Card(
-            modifier = Modifier.padding(horizontal = 12.dp)
-        ) {
-            AncSwitch(
-                ancStatus = uiState.noiseControlMode,
-                onAncModeChange = actions.onAncModeChange,
-                ambientLevel = uiState.ambientLevel,
-                onAmbientLevelChange = actions.onAmbientLevelChange,
-                ambientVoiceMode = uiState.ambientVoiceMode,
-                onAmbientVoiceModeChange = actions.onAmbientVoiceModeChange,
-                noiseAdaptiveSupported = uiState.supportsNoiseAdaptive,
-                noiseAdaptiveEnabled = uiState.noiseAdaptiveEnabled,
-                onNoiseAdaptiveChange = actions.onNoiseAdaptiveChange,
-                noiseAdaptiveSensitivity = uiState.noiseAdaptiveSensitivityValue(),
-                onNoiseAdaptiveSensitivityChange = actions.onNoiseAdaptiveSensitivityChange,
-            )
+    if (includeAnc) {
+        item {
+            AncControlCard(uiState = uiState, actions = actions)
         }
     }
 
@@ -234,12 +230,48 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    item {
-        DeviceStatusCard(uiState = uiState)
+    if (includeDeviceStatus) {
+        item {
+            DeviceStatusCard(uiState = uiState)
+        }
     }
 
     item {
         Spacer(modifier = Modifier.height(bottomContentPadding))
+    }
+}
+
+@Composable
+private fun BatteryStatusCard(uiState: SonyStateSnapshot) {
+    Card(
+        modifier = Modifier.padding(horizontal = 12.dp)
+    ) {
+        PodStatus(
+            batteryParams = uiState.toBatteryParams(),
+            single = uiState.toSinglePodParams(),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun AncControlCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
+    Card(
+        modifier = Modifier.padding(horizontal = 12.dp)
+    ) {
+        AncSwitch(
+            ancStatus = uiState.noiseControlMode,
+            onAncModeChange = actions.onAncModeChange,
+            ambientLevel = uiState.ambientLevel,
+            onAmbientLevelChange = actions.onAmbientLevelChange,
+            ambientVoiceMode = uiState.ambientVoiceMode,
+            onAmbientVoiceModeChange = actions.onAmbientVoiceModeChange,
+            noiseAdaptiveSupported = uiState.supportsNoiseAdaptive,
+            noiseAdaptiveEnabled = uiState.noiseAdaptiveEnabled,
+            onNoiseAdaptiveChange = actions.onNoiseAdaptiveChange,
+            noiseAdaptiveSensitivity = uiState.noiseAdaptiveSensitivityValue(),
+            onNoiseAdaptiveSensitivityChange = actions.onNoiseAdaptiveSensitivityChange,
+        )
     }
 }
 
@@ -620,7 +652,13 @@ private fun DeviceStatusCard(uiState: SonyStateSnapshot) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(
             title = stringResource(R.string.firmware_version),
-            summary = uiState.firmwareVersion ?: "—",
+            endActions = {
+                Text(
+                    text = uiState.firmwareVersion ?: "—",
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            },
         )
     }
 }
