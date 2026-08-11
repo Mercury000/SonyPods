@@ -19,7 +19,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -28,7 +27,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.EarphonePref
 import io.github.libxposed.service.XposedService
@@ -44,6 +42,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
@@ -297,14 +296,6 @@ internal fun MainTabsScaffold(
                 }
             }
 
-            if (isLandscapeDetail) {
-                LandscapeDetailActions(
-                    onBackToDevicePicker = onBackToDevicePicker,
-                    onPowerOff = { showPowerOffDialog = true },
-                    powerOffEnabled = sonyState.supportsPowerOff,
-                    onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
-                )
-            }
         }
 
         RestartScopeDialog(
@@ -450,7 +441,33 @@ private fun EarphonesTabShell(
     }
     Scaffold(
         topBar = {
-            if (!isLandscapeDetail) {
+            if (isLandscapeDetail) {
+                SmallTopAppBar(
+                    title = pageTitle,
+                    modifier = if (topBarBackdrop != null) {
+                        Modifier.textureBlur(
+                            backdrop = topBarBackdrop,
+                            shape = RectangleShape,
+                        )
+                    } else {
+                        Modifier
+                    },
+                    color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
+                    scrollBehavior = scrollBehavior,
+                    navigationIcon = {
+                        IconButton(onClick = onBackToDevicePicker) {
+                            Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        EarphoneDetailActions(
+                            onPowerOff = onPowerOff,
+                            powerOffEnabled = powerOffEnabled,
+                            onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
+                        )
+                    },
+                )
+            } else {
                 TopAppBar(
                     title = pageTitle,
                     largeTitle = pageTitle,
@@ -616,51 +633,6 @@ private fun SettingsTabPage(
                 onFakeDeviceIdChange = onFakeDeviceIdChange,
                 onOpenTheme = onOpenTheme,
                 onOpenAbout = onOpenAbout,
-            )
-        }
-    }
-}
-
-@Composable
-private fun LandscapeDetailActions(
-    onBackToDevicePicker: () -> Unit,
-    onPowerOff: () -> Unit,
-    powerOffEnabled: Boolean,
-    onOpenSystemHeadsetSettings: () -> Unit,
-) {
-    IconButton(
-        modifier = Modifier
-            .padding(top = 8.dp, start = 8.dp)
-            .zIndex(1f),
-        onClick = onBackToDevicePicker,
-    ) {
-        Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
-    }
-    Box(Modifier.fillMaxSize()) {
-        if (powerOffEnabled) {
-            IconButton(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 8.dp, end = 56.dp)
-                    .zIndex(1f),
-                onClick = onPowerOff,
-            ) {
-                Icon(
-                    imageVector = AppIcons.Power,
-                    contentDescription = stringResource(R.string.power_off),
-                )
-            }
-        }
-        IconButton(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 8.dp, end = 8.dp)
-                .zIndex(1f),
-            onClick = onOpenSystemHeadsetSettings,
-        ) {
-            Icon(
-                imageVector = MiuixIcons.Settings,
-                contentDescription = stringResource(R.string.click_action_system_settings),
             )
         }
     }
