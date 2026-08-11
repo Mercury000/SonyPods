@@ -168,7 +168,7 @@ object SettingsHeadsetHook : HookContext() {
                 val device = args[1] as? BluetoothDevice
                 val deviceId = args[2] as? String
                 Log.d(TAG, "isBleMmaConnect(Context) old=$result device=${device.describe()} deviceId=$deviceId service=${runCatching { callMethod(args[0], "getService") }.getOrNull()}")
-                if (deviceId == fakeDeviceId() || isSonyPod(device)) {
+                if (isSonyPod(device)) {
                     result = true
                     Log.d(TAG, "isBleMmaConnect(Context) forced true")
                 }
@@ -183,7 +183,7 @@ object SettingsHeadsetHook : HookContext() {
                 val device = args[1] as? BluetoothDevice
                 val deviceId = args[2] as? String
                 Log.d(TAG, "isBleMmaConnect(Service) old=$result service=${args[0]} device=${device.describe()} deviceId=$deviceId")
-                if (deviceId == fakeDeviceId() || isSonyPod(device)) {
+                if (isSonyPod(device)) {
                     result = true
                     Log.d(TAG, "isBleMmaConnect(Service) forced true")
                 }
@@ -686,13 +686,10 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun isSonyFragment(fragment: Any?): Boolean {
         val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
-        val deviceId = runCatching { getObjectField(fragment, "mDeviceId") as? String }.getOrNull()
-        val support = runCatching { getObjectField(fragment, "mSupport") as? String }.getOrNull()
-        val fakeDeviceId = fakeDeviceId()
-        return isSonyPod(device) || deviceId == fakeDeviceId || support?.startsWith(fakeDeviceId) == true
+        return isSonyPod(device)
     }
 
-    private fun isSonyPod(device: BluetoothDevice?): Boolean {
+    internal fun isSonyPod(device: BluetoothDevice?): Boolean {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull()
         if (address != null && isSonyAddress(address)) return true

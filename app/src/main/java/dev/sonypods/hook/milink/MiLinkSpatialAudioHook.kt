@@ -32,9 +32,8 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
     fun hookCirculateHeadsetServiceInfo() {
         runCatching {
             hook.hookAfter(hook.findMethod("com.miui.circulate.api.service.CirculateServiceInfo", "setHeadsetId", String::class.java, Int::class.javaPrimitiveType!!)) {
-                val headsetId = args[0] as? String ?: return@hookAfter
                 val address = getObjectField(instance, "deviceId") as? String ?: return@hookAfter
-                if (!hook.isSonyAddress(address) && address != hook.currentAddress && headsetId != hook.fakeDeviceId()) return@hookAfter
+                if (!hook.isSonyAddress(address) && address != hook.currentAddress) return@hookAfter
                 val serviceProperties = getObjectField(instance, "serviceProperties")
                 val bundle = callMethod(serviceProperties, "getAll") as? Bundle ?: return@hookAfter
                 // Keep the fusion-center controls (ANC / volume) enabled for Sony devices.

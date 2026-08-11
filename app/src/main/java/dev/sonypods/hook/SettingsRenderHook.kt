@@ -1,5 +1,6 @@
 package dev.sonypods.hook
 
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.graphics.drawable.BitmapDrawable
 import android.os.Handler
@@ -30,10 +31,12 @@ class SettingsRenderHook : HookContext() {
             val m = findMethodByParamCount(animClass, "loadDefaultInternal", 0)
             hookBefore(m) {
                 val instance = this.instance ?: return@hookBefore
-                val deviceId = runCatching {
-                    getObjectField(instance, "mDeviceId") as? String
+                val device = runCatching {
+                    getObjectField(instance, "mDevice") as? BluetoothDevice
+                }.getOrNull() ?: runCatching {
+                    getObjectField(instance, "mBluetoothDevice") as? BluetoothDevice
                 }.getOrNull()
-                if (deviceId != fakeDeviceId()) return@hookBefore
+                if (device == null || !SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
 
                 val ctx = runCatching {
                     (getObjectField(instance, "mContext") as? WeakReference<*>)?.get() as? Context
