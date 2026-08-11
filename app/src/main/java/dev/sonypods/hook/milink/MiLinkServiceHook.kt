@@ -44,9 +44,9 @@ object MiLinkServiceHook : HookContext() {
     private var configReceiver: BroadcastReceiver? = null
     private var stateSeeded = false
     internal var currentAddress: String? = null
-    private var currentName: String? = null
+    internal var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
-    private var currentAnc = 1
+    internal var currentAnc = 1
     /** Over-ear devices carry a single battery and must not be projected onto
      * MiLink's TWS case/left/right slot layout. Follows the engine's capability-
      * derived form factor (SC BatterySupportType): left/right (+ case) is TWS,
@@ -58,6 +58,7 @@ object MiLinkServiceHook : HookContext() {
     internal var lastAncBatteryController: Any? = null
     internal var lastProfileContext: Any? = null
     private val spatialAudioHook = MiLinkSpatialAudioHook(this)
+    private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
 
     override fun onHook() {
         hookContextEntry()
@@ -65,6 +66,7 @@ object MiLinkServiceHook : HookContext() {
         hookFusionMoreSettings()
         hookHeadsetRuntimeDisplay()
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
+        remoteProtocolHook.hookRemoteProtocol()
     }
 
     override fun onBeforeReload() {
@@ -205,10 +207,8 @@ object MiLinkServiceHook : HookContext() {
         spatialAudioHook.hookHeadsetRuntimeDisplay()
         hookHeadsetInfoNoArg("getDeviceId") { fakeDeviceId() }
         hookHeadsetInfoNoArg("component3") { fakeDeviceId() }
-        hookHeadsetInfoNoArg("getPowers") { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArg("component4") { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArg("getMode") { miLinkAncState() }
-        hookHeadsetInfoNoArg("component5") { miLinkAncState() }
+        hookHeadsetInfoNoArgWhen("getPowers", { value -> !hasKnownBatteryLevels(value) }) { miLinkBatteryLevels() }
+        hookHeadsetInfoNoArgWhen("component4", { value -> !hasKnownBatteryLevels(value) }) { miLinkBatteryLevels() }
         hookHeadsetInfoNoArg("getSwitchState") { miLinkSwitchState() }
         hookHeadsetInfoNoArg("component8") { miLinkSwitchState() }
     }
@@ -285,6 +285,26 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook HeadsetInfo.$methodName skipped", it) }
     }
 
+    private fun hookHeadsetInfoNoArgWhen(
+        methodName: String,
+        shouldReplace: (Any?) -> Boolean,
+        replacement: () -> Any,
+    ) {
+        runCatching {
+            hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
+                if (!isTargetHeadsetInfo(instance)) return@hookAfter
+                if (shouldReplace(this.result)) {
+                    this.result = replacement()
+                }
+            }
+        }.onFailure { Log.d(TAG, "conditional hook HeadsetInfo.$methodName skipped", it) }
+    }
+
+    private fun hasKnownBatteryLevels(value: Any?): Boolean {
+        val levels = value as? List<*> ?: return false
+        return levels.take(3).any { (it as? Number)?.toInt()?.let { level -> level >= 0 } == true }
+    }
+
     private val stateMirror = HookStateMirror { snapshot -> applySnapshot(snapshot) }
 
     private fun registerStatusReceiver(ctx: Context?) {
@@ -341,7 +361,7 @@ object MiLinkServiceHook : HookContext() {
      * in our cache unseen — which is why the panel looked empty until the process was
      * restarted. Tell the runtime its properties changed so it queries us again.
      */
-    private fun pushStateToPanel() {
+    internal fun pushStateToPanel() {
         val address = currentAddress ?: return
         val device = runCatching {
             context?.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
@@ -389,13 +409,20 @@ object MiLinkServiceHook : HookContext() {
         return false
     }
 
-    private fun miLinkAncState(): Int {
+    internal fun miLinkAncState(): Int {
         loadState()
         return when (currentAnc) {
             2, 5, 6, 7, 8 -> 1
             3 -> 2
             else -> 0
         }
+    }
+
+    internal fun applyRemoteAncMode(miLinkMode: Int) {
+        val sonyAnc = sonyAncFromMiLink(miLinkMode)
+        currentAnc = sonyAnc
+        sendSonyAnc(sonyAnc)
+        sendAncChanged(sonyAnc)
     }
 
     private fun sonyAncFromMiLink(mode: Int): Int {
@@ -406,7 +433,7 @@ object MiLinkServiceHook : HookContext() {
         }
     }
 
-    private fun miLinkBatteryLevels(): List<Int> {
+    internal fun miLinkBatteryLevels(): List<Int> {
         loadState()
         // Over-ear headphones present a single (overall) battery in MiLink slots 2/5,
         // matching SC's headset presentation. TWS instead uses case/left/right + charging.
