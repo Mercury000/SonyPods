@@ -951,9 +951,9 @@ object SonyEngineHost {
             else -> snapshot.batterySingle != null && snapshot.batteryLeft == null
         }
 
-        // Sony reports 0 for a bud that is not in place rather than omitting it, which
-        // would otherwise be rendered as a real "0%".
-        fun pod(level: Int?) = level?.takeIf { it > 0 }?.let { PodParams(battery = it, isConnected = true) }
+        // Battery values are normalized once in SonyHeadphoneRepository: disconnected
+        // buds are null, while a cradle at 0% remains a valid non-null level.
+        fun pod(level: Int?) = level?.let { PodParams(battery = it, isConnected = true) }
         val battery = BatteryParams(
             // Fold the single (headband) level into the left slot only for actual
             // single-battery devices; a stale pre-probe BATTERY reading must not

@@ -780,7 +780,9 @@ object SettingsHeadsetHook : HookContext() {
                 left = PodParams(battery = single.coerceIn(0, 100), isConnected = true),
             )
         } else {
-            fun pod(level: Int?) = level?.takeIf { it > 0 }
+            // The repository already maps disconnected buds to null and preserves a
+            // real 0% cradle level, so consumers must not reinterpret the value.
+            fun pod(level: Int?) = level
                 ?.let { PodParams(battery = it.coerceIn(0, 100), isConnected = true) }
             BatteryParams(
                 left = pod(snapshot.batteryLeft),
