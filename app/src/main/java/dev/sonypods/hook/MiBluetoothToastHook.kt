@@ -311,6 +311,33 @@ object MiBluetoothToastHook : HookContext() {
         registerUnlockReceiver(context)
     }
 
+    fun launchConnectPopup(context: Context, device: BluetoothDevice?, address: String, deviceName: String?) {
+        // Start from the bluetooth process: mirror the notification's PendingIntent
+        // (same request code / FLAG_UPDATE_CURRENT) so the popup behaves exactly like
+        // tapping the island, including the background-activity-start allowance.
+        runCatching {
+            val activityOptions = ActivityOptions.makeBasic().apply {
+                setPendingIntentCreatorBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS,
+                )
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
+                Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
+                    setClassName("com.mercury.sonypods", "dev.sonypods.PopupActivity")
+                    device?.let { putExtra("android.bluetooth.device.extra.DEVICE", it) }
+                    putExtra("bluetoothaddress", address)
+                    deviceName?.let { putExtra("device_name", it) }
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                activityOptions.toBundle(),
+            )
+            pendingIntent.send()
+            Log.d("SonyPods", "popup on connect launched $address")
+        }.onFailure { Log.e("SonyPods", "popup on connect failed", it) }
+    }
+
     private fun registerNotificationReceiver(context: Context) {
         if (notificationReceiver != null) return
         val render = notificationRenderer
@@ -340,6 +367,14 @@ object MiBluetoothToastHook : HookContext() {
                         val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
                         runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
                         if (showIsland) {
+                            // PopupActivity re-submits the island (CMD_SURFACES_READY with
+                            // EXTRA_ISLAND_FIRST_FLOAT=false) after the popup closes so the
+                            // island reappears. That replay is not a new connection and must
+                            // not relaunch the popup; only a genuine first render (no extra)
+                            // may trigger it.
+                            if (ConfigManager.popupOnConnect() && islandFirstFloat == null) {
+                                launchConnectPopup(context, device, address, deviceName)
+                            }
                             when (ConfigManager.islandMode()) {
                                 ConfigManager.ISLAND_MODE_MODULE ->
                                     FocusIslandUtil.showBatteryIsland(

@@ -14,6 +14,7 @@ data class AppConfig(
     val superIslandMode: Int = ConfigManager.ISLAND_MODE_MODULE,
     val islandDurationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
+    val popupOnConnect: Boolean = false,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
     val fusionMoreClickAction: Int = ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS,
     val adaptiveCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
@@ -36,6 +37,7 @@ object ConfigManager {
     const val PREF_KEY_SUPER_ISLAND_MODE = "super_island_mode"
     const val PREF_KEY_ISLAND_DURATION_SECONDS = "island_duration_seconds"
     const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
+    const val PREF_KEY_POPUP_ON_CONNECT = "popup_on_connect"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_FUSION_MORE_CLICK_ACTION = "fusion_more_click_action"
     const val PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE = "adaptive_capability_override"
@@ -146,6 +148,8 @@ object ConfigManager {
 
     fun notificationClickAction(): Int = current().notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP)
 
+    fun popupOnConnect(): Boolean = current().popupOnConnect
+
     fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
 
     fun fusionMoreClickAction(): Int = current().fusionMoreClickAction.coerceIn(
@@ -194,6 +198,11 @@ object ConfigManager {
 
     fun updateNotificationClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
         val config = current().copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
+        save(prefs, service, config)
+    }
+
+    fun updatePopupOnConnect(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
+        val config = current().copy(popupOnConnect = enabled)
         save(prefs, service, config)
     }
 
@@ -314,6 +323,7 @@ object ConfigManager {
             .remove("island_show_timings")
             .putInt(PREF_KEY_ISLAND_DURATION_SECONDS, config.islandDurationSeconds)
             .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
+            .putBoolean(PREF_KEY_POPUP_ON_CONNECT, config.popupOnConnect)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, config.fusionMoreClickAction)
             .putInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, config.adaptiveCapabilityOverride)
@@ -347,6 +357,11 @@ object ConfigManager {
         val directSuperIslandMode = prefs.getInt(PREF_KEY_SUPER_ISLAND_MODE, Int.MIN_VALUE)
         val directIslandDurationSeconds = prefs.getInt(PREF_KEY_ISLAND_DURATION_SECONDS, Int.MIN_VALUE)
         val directNotificationClickAction = prefs.getInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, Int.MIN_VALUE)
+        val directPopupOnConnect = if (prefs.contains(PREF_KEY_POPUP_ON_CONNECT)) {
+            prefs.getBoolean(PREF_KEY_POPUP_ON_CONNECT, false)
+        } else {
+            null
+        }
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directFusionMoreClickAction = prefs.getInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directAdaptiveCapabilityOverride = prefs.getInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
@@ -368,6 +383,7 @@ object ConfigManager {
                 superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
                 islandDurationSeconds = directIslandDurationSeconds.takeIf { it != Int.MIN_VALUE } ?: config.islandDurationSeconds,
                 notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
+                popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
                 adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -383,6 +399,7 @@ object ConfigManager {
             logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
             superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
             notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
+            popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
             adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -465,6 +482,9 @@ object ConfigManager {
             }
             if (oldConfig.notificationClickAction != newConfig.notificationClickAction) {
                 add("notificationClickAction=${oldConfig.notificationClickAction}->${newConfig.notificationClickAction}")
+            }
+            if (oldConfig.popupOnConnect != newConfig.popupOnConnect) {
+                add("popupOnConnect=${oldConfig.popupOnConnect}->${newConfig.popupOnConnect}")
             }
             if (oldConfig.moreClickAction != newConfig.moreClickAction) {
                 add("moreClickAction=${oldConfig.moreClickAction}->${newConfig.moreClickAction}")

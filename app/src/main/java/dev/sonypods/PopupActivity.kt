@@ -112,6 +112,11 @@ class PopupActivity : ComponentActivity() {
 
     private fun scheduleSurfacesReplay() {
         if (isChangingConfigurations || surfacesReplayScheduled) return
+        // The popup only ever consumes the module island: the official strong toast
+        // cannot be tapped, so it never launches this activity and nothing needs to
+        // be restored afterwards. Replay is meaningless (and would re-submit the
+        // official toast for nothing) outside the module island mode.
+        if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_MODULE) return
         surfacesReplayScheduled = true
         // HyperOS consumes the island notification when its content action launches
         // this activity. Re-publish after the mini-window transition has completed;
@@ -190,6 +195,18 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
     LaunchedEffect(sonyState.connected) {
         if (sonyState.connected && !showDialog.value) {
             showDialog.value = true
+        }
+    }
+
+    // Track the connected->disconnected transition (not the initial state, so the
+    // timeout fallback below can still show the dialog for a never-connected
+    // session) and close the dialog the moment the headset disconnects.
+    val wasConnected = remember { mutableStateOf(sonyState.connected) }
+    LaunchedEffect(sonyState.connected) {
+        val previous = wasConnected.value
+        wasConnected.value = sonyState.connected
+        if (previous && !sonyState.connected && showDialog.value) {
+            showDialog.value = false
         }
     }
 

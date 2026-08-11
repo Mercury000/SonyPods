@@ -47,6 +47,8 @@ fun SettingsPage(
     onAppLanguageChange: (Int) -> Unit = {},
     notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
     onNotificationClickActionChange: (Int) -> Unit = {},
+    popupOnConnect: MutableState<Boolean> = mutableStateOf(false),
+    onPopupOnConnectChange: (Boolean) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
     onMoreClickActionChange: (Int) -> Unit = {},
     fusionMoreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS),
@@ -209,6 +211,12 @@ fun SettingsPage(
                     items = notificationClickActionOptions,
                     selectedIndex = notificationClickActionValues.indexOf(notificationClickAction.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onNotificationClickActionChange(notificationClickActionValues[it]) }
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.popup_on_connect),
+                    summary = stringResource(R.string.popup_on_connect_summary),
+                    checked = popupOnConnect.value,
+                    onCheckedChange = { onPopupOnConnectChange(it) }
                 )
                 if (notificationClickAction.value == ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
                     OverlayDropdownPreference(

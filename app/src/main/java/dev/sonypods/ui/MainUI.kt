@@ -147,6 +147,7 @@ fun MainUI(
     val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
+    val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
@@ -609,6 +610,13 @@ fun MainUI(
                 onNotificationClickActionChange = {
                     notificationClickAction.value = it
                     ConfigManager.updateNotificationClickAction(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                },
+                popupOnConnect = popupOnConnect,
+                onPopupOnConnectChange = {
+                    popupOnConnect.value = it
+                    ConfigManager.updatePopupOnConnect(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.android.bluetooth")
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
                 moreClickAction = moreClickAction,
