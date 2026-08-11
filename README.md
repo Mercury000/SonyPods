@@ -56,3 +56,15 @@
 
 - [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — HyperOS 系统集成外壳来源
 - [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — 项目早期 Sony Tandem 协议栈来源
+
+### 问题反馈
+
+- 提交issue
+- [Telegram频道私信](https://t.me/sonypods)
+- [QQ群1090259252](https://qm.qq.com/q/afQhNE2QUg)
+
+### 支持我的开发  
+
+你可以通过下方赞赏码支持我的开发，或通过我的aff注册[Agent Router公益站](https://agentrouter.org/register?aff=HRHy)，你可以获得175刀的token，我也能获得相应token以维持开发  
+
+![赞赏码](docs/donation.webp)
