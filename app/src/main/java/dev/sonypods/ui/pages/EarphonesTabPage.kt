@@ -9,7 +9,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -41,6 +43,10 @@ internal fun EarphonesTabPage(
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
     onDismissConnectError: () -> Unit,
 ) {
+    // AnimatedContent removes the detail page while a level-3 page is visible.
+    // Own its list state here so returning restores the previous scroll position.
+    // A new detail session/device still starts from the top.
+    val detailListState = remember(showEarphoneDetail, connectedDeviceAddress) { LazyListState() }
     val page = when {
         !showEarphoneDetail -> EarphonesPage.DEVICE_PICKER
         showGestureOperations -> EarphonesPage.GESTURE_OPERATIONS
@@ -88,6 +94,7 @@ internal fun EarphonesTabPage(
                 podName = displayTitle.ifEmpty { stringResource(R.string.pod_info) },
                 uiState = uiState,
                 actions = actions,
+                listState = detailListState,
                 boxImagePath = boxImagePath,
                 boxImageRevision = boxImageRevision,
             )

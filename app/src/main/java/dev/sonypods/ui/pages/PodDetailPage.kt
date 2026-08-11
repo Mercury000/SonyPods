@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -72,6 +73,7 @@ fun PodDetailPage(
     podName: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions = SonyDetailActions(),
+    listState: LazyListState,
     boxImagePath: String? = null,
     /** Changes whenever the cached image record is rewritten, even if its path is stable. */
     boxImageRevision: Long = 0L,
@@ -108,6 +110,7 @@ fun PodDetailPage(
             }
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxSize(),
@@ -126,6 +129,7 @@ fun PodDetailPage(
     }
 
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
         horizontalAlignment = Alignment.CenterHorizontally,
