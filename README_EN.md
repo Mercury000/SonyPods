@@ -55,3 +55,14 @@ Theoretically supports all released Sony headphones
 
 - [OppoPods-Enhanced](https://github.com/1812z/OppoPods) — Source of the HyperOS system integration shell
 - [OpenBuds](https://github.com/IgnotusJee/OpenBuds) — Origin of the early Sony Tandem protocol stack
+
+### Feedback
+
+- [Submit an issue](https://github.com/Mercury000/SonyPods/issues/new)
+- [Telegram channel DM](https://t.me/sonypods)
+- [QQ Group 1090259252](https://qm.qq.com/q/afQhNE2QUg)
+
+### Support My Development
+You can support my development via the tipping QR code below, or register for [Agent Router Public Welfare Station](https://agentrouter.org/register?aff=HRHy) through my affiliate link. You will receive $175 worth of tokens, and I will also receive corresponding tokens to sustain development.
+
+![赞赏码](docs/donation.webp)
