@@ -777,13 +777,12 @@ object OfficialFastConnectDialogHook : HookContext() {
         applyOfficialIdentity(snapshot)
 
         if (!snapshot.connected) {
-            // The bridge can replay a transient disconnected snapshot while
-            // the official Activity is still binding its own fast-connect
-            // service.  Finishing here makes that race fatal: the stock
-            // Activity's onDestroy() exits its :ui process, so the dialog
-            // disappears even though the device is already connected.
-            // Let the official controller own its lifecycle instead.
-            Log.d(TAG, "official dialog ignored transient disconnected snapshot address=$address")
+            // connected=false means the whole Bluetooth session is gone. A
+            // single earbud loss keeps connected=true and is handled by the
+            // battery refresh below, so only the full disconnect dismisses the
+            // synthetic official dialog.
+            Log.d(TAG, "official dialog dismissed after full disconnect address=$address")
+            if (!activity.isFinishing) activity.finish()
             return
         }
         if (!connectingSent || !address.equals(activeAddress, ignoreCase = true)) {
@@ -793,11 +792,7 @@ object OfficialFastConnectDialogHook : HookContext() {
             Log.d(TAG, "official dialog state=connecting address=$address")
         }
 
-        val hasBattery = snapshot.batterySingle != null ||
-            snapshot.batteryLeft != null ||
-            snapshot.batteryRight != null ||
-            snapshot.batteryCradle != null
-        if (!hasBattery || !snapshot.probeComplete) return
+        if (!snapshot.probeComplete) return
         activeView?.let { view ->
             refreshBatteryText(view, snapshot)
             refreshBatteryIcons(view, snapshot)
@@ -902,8 +897,16 @@ object OfficialFastConnectDialogHook : HookContext() {
                 ?: 0
         }
 
+        fun showPathToRoot(view: View) {
+            var current: View? = view
+            while (current != null) {
+                current.visibility = View.VISIBLE
+                if (roots.any { it === current }) break
+                current = current.parent as? View
+            }
+        }
+
         fun setPercent(resourceName: String, value: Int?) {
-            if (value == null) return
             val id = resourceId(resourceName)
             val targets = roots.flatMap(::allViews)
                 .filterIsInstance<TextView>()
@@ -914,13 +917,22 @@ object OfficialFastConnectDialogHook : HookContext() {
                 }
                 .distinct()
             targets.forEach { textView ->
-                textView.apply {
-                    text = "${value.coerceIn(0, 100)}%"
-                    visibility = View.VISIBLE
-                    // The stock controller can hide the enclosing battery row
-                    // when its synthetic payload says that a side is absent.
-                    (parent as? View)?.visibility = View.VISIBLE
+                if (value == null) {
+                    // Null is the repository's disconnected-side state. Do
+                    // not leave the previous percentage visible after one bud
+                    // goes off-link.
+                    textView.visibility = View.GONE
+                    (textView.parent as? View)?.visibility = View.GONE
+                } else {
+                    textView.text = "${value.coerceIn(0, 100)}%"
+                    showPathToRoot(textView)
                     updated++
+                }
+            }
+            if (value == null) {
+                when (resourceName) {
+                    "textViewHeadsetLBatteryPercent" -> hideHeadsetSideRow(roots, activity, "L")
+                    "textViewHeadsetRBatteryPercent" -> hideHeadsetSideRow(roots, activity, "R")
                 }
             }
             if (id == 0) {
@@ -980,18 +992,12 @@ object OfficialFastConnectDialogHook : HookContext() {
      */
     private fun refreshBatteryIcons(view: View, snapshot: SonyStateSnapshot) {
         val activity = activeActivity ?: return
-        val controller = activeController ?: return
-        val arrays = findOfficialBatteryArrays(controller, activity)
-        if (arrays == null) {
-            Log.d(TAG, "official dialog battery drawable arrays not found")
-            return
-        }
         val roots = listOfNotNull(view, activity.window?.decorView).distinct()
+        val controller = activeController
+        val arrays = controller?.let { findOfficialBatteryArrays(it, activity) }
         var updated = 0
 
         fun setIcon(resourceName: String, value: Int?) {
-            if (value == null) return
-            val drawable = officialBatteryDrawable(controller, arrays, value) ?: return
             val targets = roots.flatMap(::allViews)
                 .filterIsInstance<ImageView>()
                 .filter { imageView ->
@@ -999,6 +1005,18 @@ object OfficialFastConnectDialogHook : HookContext() {
                         .equals(resourceName, ignoreCase = true)
                 }
                 .distinct()
+            if (value == null) {
+                targets.forEach { imageView ->
+                    imageView.visibility = View.GONE
+                    (imageView.parent as? View)?.visibility = View.GONE
+                }
+                return
+            }
+            val drawable = if (controller != null && arrays != null) {
+                officialBatteryDrawable(controller, arrays, value)
+            } else {
+                null
+            } ?: return
             targets.forEach { imageView ->
                 // A Drawable instance must not be shared between ImageViews;
                 // use the official constant state when the loader provides it.
@@ -1007,6 +1025,10 @@ object OfficialFastConnectDialogHook : HookContext() {
                 (imageView.parent as? View)?.visibility = View.VISIBLE
                 updated++
             }
+        }
+
+        if (arrays == null) {
+            Log.d(TAG, "official dialog battery drawable arrays not found")
         }
 
         if (isHeadsetSnapshot(snapshot)) {
