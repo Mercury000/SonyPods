@@ -49,6 +49,17 @@ object OfficialFastConnectDialogHook : HookContext() {
     private const val FAST_CONTROLLER_CLASS =
         "com.android.bluetooth.ble.app.fastconnect.MiuiFastConnectController"
     private const val FAST_CONNECT_ACTION = "com.android.bluetooth.FAST_CONNECT_DEVICE"
+    /**
+     * The Activity class is shared by Xiaomi's own fast-connect flow and the
+     * synthetic Sony flow.  Class-name matching alone therefore hijacks every
+     * official earphone popup.  This marker is written only by
+     * [launchOfficialActivity] and is required at every mutation entry point.
+     */
+    private const val EXTRA_MODULE_DIALOG_MARKER =
+        "dev.sonypods.extra.OFFICIAL_FAST_CONNECT_DIALOG"
+    private const val EXTRA_MODULE_DIALOG_ADDRESS =
+        "dev.sonypods.extra.OFFICIAL_FAST_CONNECT_ADDRESS"
+    private const val MODULE_DIALOG_MARKER = "sony_pods_official_fast_connect"
     private const val SINGLE_IMAGE_SCALE = 1.4f
 
     private var mainContext: Context? = null
@@ -183,14 +194,14 @@ object OfficialFastConnectDialogHook : HookContext() {
                 logicalRole = "official-dialog-framework-activity-create",
             ) {
                 val activity = instance as? Activity ?: return@hookAfter
-                if (isOfficialActivity(activity)) onOfficialActivityCreated(activity)
+                if (isManagedOfficialActivity(activity)) onOfficialActivityCreated(activity)
             }
             hookAfter(
                 findMethodWithLoader("android.app.Activity", appClassLoader, "onDestroy"),
                 logicalRole = "official-dialog-framework-activity-destroy",
             ) {
                 val activity = instance as? Activity ?: return@hookAfter
-                if (isOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
+                if (isManagedOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
             }
             frameworkActivityHookInstalled = true
             Log.i(TAG, "official framework Activity fallback hook installed")
@@ -201,6 +212,67 @@ object OfficialFastConnectDialogHook : HookContext() {
         activity.javaClass.name == FAST_CONNECT_ACTIVITY ||
             activity.javaClass.name == FAST_CONNECT_ACTIVITY_VARIANT
 
+    /**
+     * Returns the address carried by a module-owned synthetic dialog.  The
+     * marker is deliberately checked together with all address carriers: an
+     * official Xiaomi Intent must not be treated as ours merely because it
+     * targets the same Activity class.
+     */
+    private fun managedOfficialAddress(activity: Activity): String? {
+        if (!isOfficialActivity(activity)) return null
+        val intent = activity.intent ?: return null
+        if (intent.getStringExtra(EXTRA_MODULE_DIALOG_MARKER) != MODULE_DIALOG_MARKER) {
+            return null
+        }
+
+        val taggedAddress = intent.getStringExtra(EXTRA_MODULE_DIALOG_ADDRESS)
+            ?.trim()
+            ?.takeIf(::isBluetoothAddress)
+            ?: return null
+        val headsetAddress = intent.getStringArrayExtra("headset_addresses")
+            ?.firstOrNull()
+            ?.trim()
+            ?.takeIf(::isBluetoothAddress)
+            ?: return null
+        if (!taggedAddress.equals(headsetAddress, ignoreCase = true)) return null
+
+        val deviceAddress = runCatching {
+            intent.getParcelableExtra(
+                "android.bluetooth.device.extra.DEVICE",
+                BluetoothDevice::class.java,
+            )
+        }.getOrNull()
+        if (deviceAddress != null && !taggedAddress.equals(deviceAddress.address, ignoreCase = true)) {
+            return null
+        }
+
+        return taggedAddress
+    }
+
+    /** True only for the Activity instance launched by this module for its Sony address. */
+    private fun isManagedOfficialActivity(activity: Activity?): Boolean {
+        val address = activity?.let(::managedOfficialAddress) ?: return false
+        val active = activeAddress
+        return active == null || active.equals(address, ignoreCase = true)
+    }
+
+    /**
+     * Mutation-time gate.  A stale snapshot for another Sony device may still
+     * be in this process while a new Activity is being created; that must not
+     * prevent the Activity from being registered, but it must prevent a global
+     * Controller/TextView/Handler callback from applying the stale device's
+     * data to this dialog.
+     */
+    private fun isManagedOfficialTarget(activity: Activity?): Boolean {
+        val address = activity?.let(::managedOfficialAddress) ?: return false
+        if (activeAddress != null && !activeAddress.equals(address, ignoreCase = true)) return false
+        val snapshotAddress = latestSnapshot?.deviceAddress
+        return snapshotAddress == null || snapshotAddress.equals(address, ignoreCase = true)
+    }
+
+    private fun isBluetoothAddress(value: String): Boolean =
+        value.matches(Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"))
+
     private fun installActivityHooks(className: String, role: String) {
         runCatching {
             hookAfter(
@@ -209,19 +281,24 @@ object OfficialFastConnectDialogHook : HookContext() {
                 required = true,
             ) {
                 val activity = instance as? Activity ?: return@hookAfter
-                onOfficialActivityCreated(activity)
+                if (isManagedOfficialActivity(activity)) onOfficialActivityCreated(activity)
             }
             hookAfter(
                 findMethod(className, "onDestroy"),
                 logicalRole = "official-dialog-$role-activity-destroy",
             ) {
-                onOfficialActivityDestroyed(instance as? Activity)
+                val activity = instance as? Activity ?: return@hookAfter
+                if (isManagedOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
             }
             Log.i(TAG, "official Activity hooks installed class=$className")
         }.onFailure { Log.w(TAG, "official Activity hooks unavailable class=$className", it) }
     }
 
     private fun onOfficialActivityCreated(activity: Activity) {
+        val dialogAddress = managedOfficialAddress(activity) ?: run {
+            Log.d(TAG, "bypass official Activity without SonyPods marker/address class=${activity.javaClass.name}")
+            return
+        }
         if (activeActivity === activity && activeController != null) return
         activeActivity = activity
         uiContext = activity
@@ -234,7 +311,7 @@ object OfficialFastConnectDialogHook : HookContext() {
         activeView = activeController?.let { controller -> findControllerView(controller) }
         officialHandler = activeController?.let(::findControllerHandler)
         installFastControllerHooks(activeController, activity.classLoader)
-        activeAddress = activity.intent?.getStringArrayExtra("headset_addresses")?.firstOrNull()
+        activeAddress = dialogAddress
         connectingSent = false
         successSent = false
         // The main process may have sent the connected snapshot before :ui
@@ -306,7 +383,12 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val handler = instance as? Handler ?: return@hookBefore
                 val message = args.firstOrNull() as? Message ?: return@hookBefore
                 val snapshot = latestSnapshot ?: return@hookBefore
-                if (handler !== officialHandler || message.what !in setOf(3, 6) || !snapshot.connected) {
+                if (!isManagedOfficialTarget(activeActivity) ||
+                    handler !== officialHandler ||
+                    message.what !in setOf(3, 6) ||
+                    !snapshot.connected ||
+                    !snapshot.deviceAddress.equals(activeAddress, ignoreCase = true)
+                ) {
                     return@hookBefore
                 }
                 Log.i(
@@ -351,7 +433,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 ),
                 logicalRole = "official-dialog-fast-image-refresh-${className.hashCode()}",
             ) {
-                onOfficialViewRefreshed(args.firstOrNull() as? View)
+                onOfficialViewRefreshed(args.firstOrNull() as? View, instance)
             }
             fastControllerHookedClasses += className
             Log.i(TAG, "official fast controller hook installed class=$className")
@@ -371,7 +453,7 @@ object OfficialFastConnectDialogHook : HookContext() {
             ) {
                 val view = args.filterIsInstance<View>().firstOrNull() ?: activeView
                     ?: activeController?.let(::findControllerView)
-                onOfficialViewRefreshed(view)
+                onOfficialViewRefreshed(view, instance)
             }
             fastSuccessHookedClasses += className
             Log.i(
@@ -384,8 +466,13 @@ object OfficialFastConnectDialogHook : HookContext() {
         }
     }
 
-    private fun onOfficialViewRefreshed(view: View?) {
+    private fun onOfficialViewRefreshed(view: View?, controller: Any? = null) {
         view ?: return
+        if (!isManagedOfficialTarget(activeActivity) ||
+            (controller != null && controller !== activeController)
+        ) {
+            return
+        }
         activeView = view
         applyOfficialIdentity(latestSnapshot)
         replaceOfficialImages(view)
@@ -562,6 +649,15 @@ object OfficialFastConnectDialogHook : HookContext() {
             Log.w(TAG, "cannot create BluetoothDevice for official dialog address=$address")
             return false
         }
+        // The snapshot/address comes from the Sony engine and is authoritative.
+        // Do not use the Bluetooth name as a hard gate: users can rename a Sony
+        // device to an arbitrary name.  Keep the name only for diagnostics.
+        val deviceName = runCatching { device.name ?: device.alias }.getOrNull()
+        Log.d(
+            TAG,
+            "launching Sony official dialog address=$address " +
+                "name=${deviceName ?: snapshot.deviceName.orEmpty()}",
+        )
         val intent = Intent().apply {
             // The current stock dialog is the feature-module activity. The
             // root activity is a legacy implementation and has a different
@@ -597,6 +693,11 @@ object OfficialFastConnectDialogHook : HookContext() {
             // success renderer deliberately show disabled/0% values.
             putExtra("headset_extra_data", intArrayOf(0, 0x0F, 0, 1, 0))
             putExtra("current_a2dp_devices", 0)
+            // This Activity class is also used by Xiaomi's own earphone flow.
+            // Keep a module-only marker and bind it to the exact Sony address
+            // so every UI-process hook can fail closed for official popups.
+            putExtra(EXTRA_MODULE_DIALOG_MARKER, MODULE_DIALOG_MARKER)
+            putExtra(EXTRA_MODULE_DIALOG_ADDRESS, address)
         }
         return runCatching {
             context.startActivity(intent)
@@ -669,6 +770,7 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     private fun applySnapshot(snapshot: SonyStateSnapshot) {
         val activity = activeActivity ?: return
+        if (!isManagedOfficialActivity(activity)) return
         val address = snapshot.deviceAddress ?: activeAddress ?: return
         if (activeAddress != null && !address.equals(activeAddress, ignoreCase = true)) return
 
@@ -1117,7 +1219,10 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val textView = instance as? TextView ?: return@hookAfter
                 if (batteryTextRewriteDepth.get() == true) return@hookAfter
                 val snapshot = latestSnapshot ?: return@hookAfter
-                if (!snapshot.probeComplete || !isActiveBatteryTextView(textView)) return@hookAfter
+                if (!snapshot.probeComplete ||
+                    !isManagedOfficialTarget(activeActivity) ||
+                    !isActiveBatteryTextView(textView)
+                ) return@hookAfter
                 val value = batteryValueForTextView(textView, snapshot) ?: return@hookAfter
                 val current = textView.text?.toString()?.trim()
                 if (current != "0%" && current != "0") return@hookAfter
@@ -1141,6 +1246,7 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     private fun isActiveBatteryTextView(textView: TextView): Boolean {
         val activity = activeActivity ?: return false
+        if (!isManagedOfficialTarget(activity)) return false
         val resourceName = resourceEntryName(activity, textView.id).lowercase()
         if (!resourceName.contains("battery") ||
             (!resourceName.contains("percent") && !resourceName.contains("level"))
