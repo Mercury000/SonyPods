@@ -16,7 +16,7 @@ data class AppConfig(
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
     val popupOnConnect: Boolean = false,
     /** Connection dialog renderer: module-owned popup or Bluetooth Extension's PairingDialog. */
-    val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_MODULE,
+    val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL,
     /** Skip the auto popup on connect while the module UI is the foreground app. */
     val suppressPopupOnConnectWhenForeground: Boolean = true,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
