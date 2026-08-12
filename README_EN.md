@@ -35,8 +35,9 @@ Theoretically supports all released Sony headphones
 - **System battery injection** — battery synced into the system bluetooth stack
 - **Focus Island / notifications** — connect & battery island, AOD battery, ANC-cycle notification button
 - **Fusion device center** — battery and ANC state read/write
-- **Quick popup** — control popup from the notification
+- **Quick popup** — control popup from the notification and on connection
 - **Model images** — automatically matched from the Sound Connect model/colour catalog, without custom image configuration
+- **Device handoff** — supports Xiaomi Interconnect device handoff (not recommended together with dual-device connection, as they may conflict)
 
 ### Usage
 
@@ -48,7 +49,7 @@ Theoretically supports all released Sony headphones
 
 ### Requirements
 
-- HyperOS (Android 15+)
+- HyperOS (Android 14+)
 - LSPosed (libxposed API 102)
 
 ### Credits
