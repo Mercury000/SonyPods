@@ -884,6 +884,7 @@ object OfficialFastConnectDialogHook : HookContext() {
         val activity = activeActivity ?: return
         var updated = 0
         val roots = listOfNotNull(view, activity.window?.decorView).distinct()
+        hideOfficialChargingIndicators(roots, activity)
 
         fun resourceId(resourceName: String): Int {
             val packages = listOf<String?>(XIAOMI_PACKAGE, activity.packageName, null)
@@ -997,6 +998,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     private fun refreshBatteryIcons(view: View, snapshot: SonyStateSnapshot) {
         val activity = activeActivity ?: return
         val roots = listOfNotNull(view, activity.window?.decorView).distinct()
+        hideOfficialChargingIndicators(roots, activity)
         val controller = activeController
         val arrays = controller?.let { findOfficialBatteryArrays(it, activity) }
         var updated = 0
@@ -1062,6 +1064,12 @@ object OfficialFastConnectDialogHook : HookContext() {
         val activity = activeActivity ?: return
         val roots = listOfNotNull(view, activity.window?.decorView).distinct()
 
+        // SonyStateSnapshot currently has no reliable charging state. The
+        // stock fast-connect payload can make these overlay views look like
+        // the headset/case is charging, so keep the indicator hidden until a
+        // real charging value is available.
+        hideOfficialChargingIndicators(roots, activity)
+
         hideHeadsetSideRow(roots, activity, "L")
         hideHeadsetSideRow(roots, activity, "R")
 
@@ -1093,7 +1101,6 @@ object OfficialFastConnectDialogHook : HookContext() {
             "textViewHeadset${side}Battery",
             "textViewHeadset${side}BatteryPercent",
             "imageViewHeadset${side}Battery",
-            "imageViewHeadset${side}Charge",
         )
         val targets = exactNames.mapNotNull {
             findViewByResourceName(roots, activity, it)
@@ -1128,7 +1135,6 @@ object OfficialFastConnectDialogHook : HookContext() {
             "textViewHeadset${side}Battery",
             "textViewHeadset${side}BatteryPercent",
             "imageViewHeadset${side}Battery",
-            "imageViewHeadset${side}Charge",
         )
         val targets = exactNames.mapNotNull {
             findViewByResourceName(roots, activity, it)
@@ -1152,6 +1158,25 @@ object OfficialFastConnectDialogHook : HookContext() {
             }
         row?.visibility = View.VISIBLE
         targets.forEach { it.visibility = View.VISIBLE }
+        hideOfficialChargingIndicators(roots, activity)
+    }
+
+    /**
+     * The synthetic official-dialog payload only supplies battery levels, not
+     * charging state. Hide the stock charging overlays so stale/default stock
+     * state cannot be presented as a real charging status.
+     */
+    private fun hideOfficialChargingIndicators(
+        roots: List<View>,
+        activity: Activity,
+    ) {
+        listOf(
+            "imageViewHeadsetLCharge",
+            "imageViewHeadsetRCharge",
+            "imageViewBoxCharge",
+        ).mapNotNull { findViewByResourceName(roots, activity, it) }
+            .distinct()
+            .forEach { it.visibility = View.GONE }
     }
 
     private fun ancestors(view: View): List<View> {
