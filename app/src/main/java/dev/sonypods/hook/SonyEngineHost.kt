@@ -100,6 +100,8 @@ object SonyEngineHost {
     private var officialAppLeaseId: String? = null
     private var officialAppLeaseToken: IBinder? = null
     private var officialAppDeathRecipient: IBinder.DeathRecipient? = null
+    /** Address saved before Sound Connect disconnects the repository session. */
+    private var officialAppLeaseAddress: String? = null
 
     /** Address + which sides report; the connect animation replays when this changes. */
     private var lastConnectAnimationKey: String? = null
@@ -286,6 +288,7 @@ object SonyEngineHost {
         officialAppLeaseToken = null
         officialAppLeaseId = null
         officialAppOwnsTandem = false
+        officialAppLeaseAddress = null
         appContext = null
         adapterService = null
         prefs = null
@@ -409,6 +412,13 @@ object SonyEngineHost {
             a2dpProxy?.connectedDevices?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
         }.getOrNull()
 
+    @SuppressLint("MissingPermission")
+    private fun knownSonyAddress(): String? =
+        connectedSonyDevice()?.let { runCatching { it.address }.getOrNull() }
+            ?: repository?.state?.value?.connectedDevice?.address
+            ?: lastSnapshot?.deviceAddress
+            ?: lastRenderedAddress
+
     private fun acquireOfficialAppLease(intent: Intent) {
         val leaseId = intent.getStringExtra(SonyBridge.EXTRA_OFFICIAL_LEASE_ID) ?: run {
             Log.w(TAG, "ignored Sound Connect acquire without lease id")
@@ -419,6 +429,8 @@ object SonyEngineHost {
             return
         }
         if (officialAppLeaseId == leaseId && officialAppLeaseToken == token) return
+
+        val leaseAddress = knownSonyAddress()
 
         // A newer ownership lease replaces an older one without briefly reconnecting.
         clearOfficialAppLease(reconnect = false, reason = "replaced")
@@ -431,6 +443,7 @@ object SonyEngineHost {
         officialAppLeaseToken = token
         officialAppDeathRecipient = deathRecipient
         officialAppOwnsTandem = true
+        officialAppLeaseAddress = leaseAddress
         soundConnectHandoffAddress = null
         try {
             token.linkToDeath(deathRecipient, 0)
@@ -442,7 +455,11 @@ object SonyEngineHost {
         lastConnectAttemptMs = 0L
         connectInFlightAddress = null
         repository?.disconnect()
-        Log.d(TAG, "Sound Connect acquired Tandem lease id=$leaseId; SonyPods disconnected")
+        Log.d(
+            TAG,
+            "Sound Connect acquired Tandem lease id=$leaseId; " +
+                "SonyPods disconnected handoffAddress=$leaseAddress",
+        )
     }
 
     private fun releaseOfficialAppLease(leaseId: String, reason: String, token: IBinder? = null) {
@@ -458,6 +475,10 @@ object SonyEngineHost {
     }
 
     private fun clearOfficialAppLease(reconnect: Boolean, reason: String) {
+        // The A2DP profile can report an empty list for a short period while the
+        // official app releases its session. Keep the address captured at acquire
+        // time instead of trying to discover it only after the disconnect.
+        val handoffAddress = officialAppLeaseAddress ?: knownSonyAddress()
         val token = officialAppLeaseToken
         val deathRecipient = officialAppDeathRecipient
         if (token != null && deathRecipient != null) {
@@ -468,21 +489,53 @@ object SonyEngineHost {
         officialAppLeaseToken = null
         officialAppDeathRecipient = null
         officialAppOwnsTandem = false
+        officialAppLeaseAddress = null
 
         if (previousLeaseId == null) return
         Log.d(TAG, "Sound Connect lease cleared id=$previousLeaseId reason=$reason reconnect=$reconnect")
         if (!reconnect) return
 
-        // This is an event-driven hand-back. Force intentionally bypasses the normal
-        // reconnect cooldown so the Tandem session is re-established immediately.
-        lastConnectAttemptMs = 0L
-        connectInFlightAddress = null
-        val device = connectedSonyDevice()
-        if (device == null) {
-            Log.d(TAG, "Sound Connect released Tandem but no Sony A2DP device is connected")
+        if (handoffAddress.isNullOrBlank()) {
+            Log.d(TAG, "Sound Connect released Tandem but no known Sony address is available")
             return
         }
-        soundConnectHandoffAddress = runCatching { device.address }.getOrNull()
+
+        // Keep this marker until the first successful state is rendered. That state
+        // is a control-session hand-off, not a user-visible new connection, so the
+        // reconnect must not reopen the connection popup.
+        soundConnectHandoffAddress = handoffAddress
+        lastConnectAttemptMs = 0L
+        connectInFlightAddress = null
+        restoreSoundConnectConnection(handoffAddress)
+    }
+
+    /**
+     * Reconnect once after Sound Connect hands the control session back. A2DP can
+     * be temporarily empty at the release callback, so use the address captured
+     * before Sound Connect disconnected the repository session.
+     */
+    @SuppressLint("MissingPermission")
+    private fun restoreSoundConnectConnection(address: String) {
+        if (officialAppOwnsTandem) {
+            Log.d(TAG, "handoff reconnect skipped: official lease reacquired address=$address")
+            return
+        }
+        val context = appContext ?: run {
+            Log.w(TAG, "cannot restore Sound Connect handoff without context address=$address")
+            return
+        }
+        val a2dpDevice = runCatching {
+            a2dpProxy?.connectedDevices?.firstOrNull {
+                it.address.equals(address, ignoreCase = true)
+            }
+        }.getOrNull()
+        val device = a2dpDevice ?: remoteDevice(context, address)
+        if (device == null) {
+            Log.w(TAG, "handoff reconnect skipped: cannot resolve device address=$address")
+            return
+        }
+        val source = if (a2dpDevice != null) "a2dp" else "saved-address"
+        Log.d(TAG, "handoff reconnect request source=$source address=$address")
         connectDevice(device, force = true)
     }
 
