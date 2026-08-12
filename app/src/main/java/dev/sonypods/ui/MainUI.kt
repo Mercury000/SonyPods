@@ -18,6 +18,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -53,6 +54,7 @@ import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
+import dev.sonypods.ui.dialogs.MultipointAlertDialog
 import dev.sonypods.utils.RootManager
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.Dispatchers
@@ -220,6 +222,8 @@ fun MainUI(
             onMultipointDisconnect = { address -> SonyBridge.disconnectMultipointDevice(context, address) },
             onMultipointUnpair = { address -> SonyBridge.unpairMultipointDevice(context, address) },
             onSourceSwitchEnabledChange = { enabled -> SonyBridge.setSourceSwitchEnabled(context, enabled) },
+            onMultipointEnabledChange = { enabled -> SonyBridge.setMultipointEnabled(context, enabled) },
+            onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
             onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
             onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },
             onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
@@ -831,16 +835,39 @@ fun MainUI(
         entryProvider = entryProvider
     )
 
-    NavDisplay(
-        entries = entries,
-        onBack = {
-            if (backStack.size > 1) {
-                backStack.removeLast()
-            } else {
-                (context as? Activity)?.finish()
+    // Outer transparent Scaffold: provides a root-level MiuixPopupHost so that
+    // OverlayDialog-based composables (e.g. MultipointAlertDialog) render even
+    // when invoked outside the per-screen Scaffolds. Inner Scaffolds propagate
+    // LocalRootDialogStates up to this host. Zero contentWindowInsets so the
+    // outer host does not steal insets the inner Scaffolds rely on.
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    ) {
+        NavDisplay(
+            entries = entries,
+            onBack = {
+                if (backStack.size > 1) {
+                    backStack.removeLast()
+                } else {
+                    (context as? Activity)?.finish()
+                }
             }
+        )
+
+        // Device-driven multipoint reconnection alert: shown globally once the engine
+        // reports a pending FIXED_MESSAGE alert (V2 Table1 ALERT_NTFY_PARAM 0x99).
+        val pendingAlertMsgType = sonyState.multipoint.pendingAlertMessageType
+        LaunchedEffect(pendingAlertMsgType) {
+            android.util.Log.i("OpenBuds", "UI pendingAlertMsgType=$pendingAlertMsgType show=${pendingAlertMsgType != null}")
         }
-    )
+        MultipointAlertDialog(
+            show = pendingAlertMsgType != null,
+            messageType = pendingAlertMsgType ?: 7,
+            onConfirm = { sonyActions.onMultipointAlertReply(true) },
+            onCancel = { sonyActions.onMultipointAlertReply(false) },
+        )
+    }
 }
 
 @Composable

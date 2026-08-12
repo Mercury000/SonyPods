@@ -112,6 +112,14 @@ interface TandemCodec {
     } else {
         null
     }
+    fun buildGetGeneralSettingCapability(type: Byte): ByteArray? = null
+    fun buildGetGeneralSettingStatus(type: Byte): ByteArray? = null
+    fun buildGetGeneralSettingParam(type: Byte): ByteArray? = null
+    fun buildSetGeneralSetting(type: Byte, on: Boolean): ByteArray? = null
+    fun generalSettingSlots(): List<Byte> = emptyList()
+    fun buildReplyAlertFixingMessage(messageType: Int, positive: Boolean): ByteArray? = null
+    fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray? = null
+    fun buildSetAlertFixedMessage(enable: Boolean): ByteArray? = null
 }
 
 object TandemCodecRegistry {
@@ -459,6 +467,29 @@ object SonyTandemV2Table1Codec : TandemCodec {
         type: SystemInquiredType,
         mappings: List<AssignableSettingsMapping>,
     ): ByteArray = SonyTandemV2Table1Protocol.buildSetAssignableSettingsExtendedParam(type, mappings)
+
+    override fun buildGetGeneralSettingCapability(type: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetGeneralSettingCapability(type)
+
+    override fun buildGetGeneralSettingStatus(type: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetGeneralSettingStatus(type)
+
+    override fun buildGetGeneralSettingParam(type: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetGeneralSettingParam(type)
+
+    override fun buildSetGeneralSetting(type: Byte, on: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetGeneralSetting(type, on)
+
+    override fun generalSettingSlots(): List<Byte> = SonyTandemV2Table1Protocol.generalSettingSlots()
+
+    override fun buildReplyAlertFixingMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage(messageType, positive)
+
+    override fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetAlertAppBecomesForeground(enable)
+
+    override fun buildSetAlertFixedMessage(enable: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetAlertFixedMessage(enable)
 
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV2Table1Protocol.parse(raw)

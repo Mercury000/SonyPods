@@ -365,6 +365,9 @@ data class SonyStateSnapshot(
                     fixedSourceAddress = state.multipointState.fixedSourceAddress,
                     sourceSwitchResult = state.multipointState.sourceSwitchResult,
                     musicHandOverEnabled = state.multipointState.musicHandOverEnabled,
+                    multipointEnabled = state.multipointState.multipointEnabled,
+                    multipointTogglePending = state.multipointState.pendingMultipointToggle != null,
+                    pendingAlertMessageType = state.multipointState.pendingAlertMessageType,
                 ),
                 wearingStatus = state.wearingState.status,
                 playbackStatus = state.playbackStatus,
@@ -498,6 +501,9 @@ data class SonyStateSnapshot(
             fixedSourceAddress = getString("fixed_source_address"),
             sourceSwitchResult = getString("source_switch_result"),
             musicHandOverEnabled = if (getBoolean("music_hand_over_known", false)) getBoolean("music_hand_over_enabled") else null,
+            multipointEnabled = if (getBoolean("multipoint_enabled_known", false)) getBoolean("multipoint_enabled") else null,
+            multipointTogglePending = getBoolean("multipoint_toggle_pending", false),
+            pendingAlertMessageType = if (getBoolean("pending_alert_known", false)) getInt("pending_alert_message_type") else null,
         )
 
         private fun MultipointSnapshot.toBundle(): Bundle = Bundle().apply {
@@ -527,6 +533,15 @@ data class SonyStateSnapshot(
             musicHandOverEnabled?.let {
                 putBoolean("music_hand_over_known", true)
                 putBoolean("music_hand_over_enabled", it)
+            }
+            multipointEnabled?.let {
+                putBoolean("multipoint_enabled_known", true)
+                putBoolean("multipoint_enabled", it)
+            }
+            putBoolean("multipoint_toggle_pending", multipointTogglePending)
+            pendingAlertMessageType?.let {
+                putBoolean("pending_alert_known", true)
+                putInt("pending_alert_message_type", it)
             }
         }
 
@@ -566,6 +581,12 @@ data class MultipointSnapshot(
     val fixedSourceAddress: String? = null,
     val sourceSwitchResult: String? = null,
     val musicHandOverEnabled: Boolean? = null,
+    /** "同时连接2台设备" — V2 Table1 GS multipoint toggle; null = unknown. */
+    val multipointEnabled: Boolean? = null,
+    /** A write is waiting for the device to settle; ignore repeated taps. */
+    val multipointTogglePending: Boolean = false,
+    /** Pending device alert msgType (6/7) awaiting reconnection confirmation; null = none. */
+    val pendingAlertMessageType: Int? = null,
 )
 
 data class MultipointDeviceSnapshot(

@@ -39,6 +39,7 @@ import top.yukonga.miuix.kmp.icon.extended.More
 import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -67,6 +68,14 @@ internal fun MultipointSettingsPage(
     val headphoneName = uiState.displayName.ifBlank { "耳机" }
     val sourceSwitchSupported = state.sourceSwitchEnabled != null
     val sourceKeepEnabled = state.sourceSwitchEnabled == true
+    val multipointToggleSupported = state.multipointEnabled != null
+    // The target value is used only by the switch while a write is pending.
+    // Keep the rest of the page on the pre-tap state until the device settles.
+    val multipointDisabled = if (state.multipointTogglePending) {
+        state.multipointEnabled == true
+    } else {
+        state.multipointEnabled == false
+    }
     val slotCount = maxOf(state.maxConnectedDevices, 2)
 
     var pendingDisconnect by remember { mutableStateOf<MultipointDeviceSnapshot?>(null) }
@@ -87,9 +96,25 @@ internal fun MultipointSettingsPage(
         verticalArrangement = Arrangement.spacedBy(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        item("multipoint-toggle") {
+            if (multipointToggleSupported) {
+                Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    SwitchPreference(
+                        title = "同时连接2台设备",
+                        checked = state.multipointEnabled == true,
+                        onCheckedChange = { enabled ->
+                            if (!state.multipointTogglePending) {
+                                actions.onMultipointEnabledChange(enabled)
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
         item("description") {
             Text(
-                text = if (sourceSwitchSupported) {
+                text = if (!multipointDisabled && sourceSwitchSupported) {
                     "耳机可以同时连接 2 台蓝牙设备。\n要手动切换播放设备，请在已连接设备列表中点按目标设备；也可以通过设备菜单固定播放设备。"
                 } else {
                     "耳机可以同时连接 2 台蓝牙设备。"
@@ -102,42 +127,44 @@ internal fun MultipointSettingsPage(
             )
         }
 
-        item("connected-header") {
-            SmallTitle(text = "已连接", modifier = Modifier.fillMaxWidth())
-        }
+        if (!multipointDisabled) {
+            item("connected-header") {
+                SmallTitle(text = "已连接", modifier = Modifier.fillMaxWidth())
+            }
 
-        item("connected-card") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp)) {
-                (1..slotCount).forEach { slot ->
-                    val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
-                    ConnectedSlotRow(
-                        slot = slot,
-                        device = device,
-                        state = state,
-                        sourceSwitchSupported = sourceSwitchSupported,
-                        sourceKeepEnabled = sourceKeepEnabled,
-                        onRowClick = { snapshot ->
-                            if (sourceSwitchSupported) {
-                                switchPlaybackTo(snapshot.address)
-                            } else {
-                                // Official Msg_MultiPoint_change_player dialog.
-                                showSwitchUnsupported = true
-                            }
-                        },
-                        onFixPlayback = { actions.onSourceSwitchEnabledChange(true) },
-                        onSwitchAndFix = { snapshot ->
-                            if (!sourceKeepEnabled) actions.onSourceSwitchEnabledChange(true)
-                            actions.onFixedSourceChange(snapshot.address)
-                        },
-                        onUnfix = { actions.onSourceSwitchEnabledChange(false) },
-                        onDisconnect = { pendingDisconnect = it },
-                        onUnpair = { pendingUnpair = it },
-                    )
+            item("connected-card") {
+                Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    (1..slotCount).forEach { slot ->
+                        val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
+                        ConnectedSlotRow(
+                            slot = slot,
+                            device = device,
+                            state = state,
+                            sourceSwitchSupported = sourceSwitchSupported,
+                            sourceKeepEnabled = sourceKeepEnabled,
+                            onRowClick = { snapshot ->
+                                if (sourceSwitchSupported) {
+                                    switchPlaybackTo(snapshot.address)
+                                } else {
+                                    // Official Msg_MultiPoint_change_player dialog.
+                                    showSwitchUnsupported = true
+                                }
+                            },
+                            onFixPlayback = { actions.onSourceSwitchEnabledChange(true) },
+                            onSwitchAndFix = { snapshot ->
+                                if (!sourceKeepEnabled) actions.onSourceSwitchEnabledChange(true)
+                                actions.onFixedSourceChange(snapshot.address)
+                            },
+                            onUnfix = { actions.onSourceSwitchEnabledChange(false) },
+                            onDisconnect = { pendingDisconnect = it },
+                            onUnpair = { pendingUnpair = it },
+                        )
+                    }
                 }
             }
         }
 
-        if (state.historyDevices.isNotEmpty()) {
+        if (!multipointDisabled && state.historyDevices.isNotEmpty()) {
             item("history-header") {
                 SmallTitle(text = "已配对", modifier = Modifier.fillMaxWidth())
             }
@@ -161,47 +188,49 @@ internal fun MultipointSettingsPage(
             }
         }
 
-        item("add-device") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp)) {
-                if (state.pairingMode) {
-                    Text(
-                        text = "请在要连接设备的蓝牙设置中选择「$headphoneName」。",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                    TextButton(
-                        text = "停止搜索",
-                        onClick = { actions.onMultipointPairingModeChange(false) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .padding(bottom = 12.dp),
-                    )
-                } else {
-                    BasicComponent(
-                        title = "连接新设备",
-                        titleColor = top.yukonga.miuix.kmp.basic.BasicComponentDefaults.titleColor(
-                            color = MiuixTheme.colorScheme.primary,
-                        ),
-                        endActions = {
-                            Icon(
-                                imageVector = MiuixIcons.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MiuixTheme.colorScheme.primary,
-                            )
-                        },
-                        onClick = {
-                            if (state.connectedDevices.size >= slotCount) {
-                                showMaxReached = true
-                            } else {
-                                actions.onMultipointPairingModeChange(true)
-                            }
-                        },
-                    )
+        if (!multipointDisabled) {
+            item("add-device") {
+                Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    if (state.pairingMode) {
+                        Text(
+                            text = "请在要连接设备的蓝牙设置中选择「$headphoneName」。",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        TextButton(
+                            text = "停止搜索",
+                            onClick = { actions.onMultipointPairingModeChange(false) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .padding(bottom = 12.dp),
+                        )
+                    } else {
+                        BasicComponent(
+                            title = "连接新设备",
+                            titleColor = top.yukonga.miuix.kmp.basic.BasicComponentDefaults.titleColor(
+                                color = MiuixTheme.colorScheme.primary,
+                            ),
+                            endActions = {
+                                Icon(
+                                    imageVector = MiuixIcons.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MiuixTheme.colorScheme.primary,
+                                )
+                            },
+                            onClick = {
+                                if (state.connectedDevices.size >= slotCount) {
+                                    showMaxReached = true
+                                } else {
+                                    actions.onMultipointPairingModeChange(true)
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }

@@ -37,6 +37,59 @@ object SonyTandemV2Table1Protocol {
     private const val SYSTEM_GET_STATUS: Byte = 0xF2.toByte()
     private const val SYSTEM_RET_STATUS: Byte = 0xF3.toByte()
     private const val SYSTEM_NTFY_STATUS: Byte = 0xF5.toByte()
+    // ── General Setting (GS) domain, SC `table1/generalsetting` (if0/*). The
+    // multipoint ("同时连接2台设备") toggle lives here, NOT in SOURCE_SWITCH_CONTROL.
+    // GsInquiredType slots: GENERAL_SETTING1..4 = 0xD1..0xD4 (byte codes from
+    // `GsInquiredType`); each slot's title is resolved via GET_CAPABILITY and the
+    // official app matches `GsTitleTitle.MULTIPOINT_SETTING` ("MULTIPOINT_SETTING").
+    private const val GS_GET_CAPABILITY: Byte = 0xD0.toByte()
+    private const val GS_RET_CAPABILITY: Byte = 0xD1.toByte()
+    private const val GS_GET_STATUS: Byte = 0xD2.toByte()
+    private const val GS_RET_STATUS: Byte = 0xD3.toByte()
+    private const val GS_NTFY_STATUS: Byte = 0xD5.toByte()
+    private const val GS_GET_PARAM: Byte = 0xD6.toByte()
+    private const val GS_RET_PARAM: Byte = 0xD7.toByte()
+    private const val GS_SET_PARAM: Byte = 0xD8.toByte()
+    private const val GS_NTFY_PARAM: Byte = 0xD9.toByte()
+    // GsSettingType: BOOLEAN_TYPE=0x00, LIST_TYPE=0x01.
+    private const val GS_SETTING_TYPE_BOOLEAN: Byte = 0x00
+    // GsSettingValue: ON=0x00, OFF=0x01.
+    private const val GS_VALUE_ON: Byte = 0x00
+    private const val GS_VALUE_OFF: Byte = 0x01
+    // EnableDisable: ENABLE=0x00, DISABLE=0x01.
+    private const val GS_ENABLE: Byte = 0x00
+    // GsStringFormat: RAW_NAME=0x00, ENUM_NAME=0x01.
+    const val GS_STRING_FORMAT_ENUM_NAME: Byte = 0x01
+    // DisplayLanguage.ENGLISH (SC `le0/b` locale mapping table).
+    private const val GS_DISPLAY_LANGUAGE_ENGLISH: Byte = 0x01
+    // The official app's slot-title match (`GsTitleTitle.MULTIPOINT_SETTING`).
+    const val GS_TITLE_MULTIPOINT_SETTING = "MULTIPOINT_SETTING"
+    // ── Alert (bf0/*): device-driven FIXED_MESSAGE confirmation loop. When a
+    // multipoint toggle needs a disconnect/reconnect, the device replies with
+    // ALERT_NTFY_PARAM (0x99, FIXED_MESSAGE=0x00, AlertMessageType, AlertActionType)
+    // and only executes the change after the app answers ALERT_SET_PARAM (0x98,
+    // FIXED_MESSAGE, same AlertMessageType, AlertAction POSITIVE/NEGATIVE).
+    private const val ALERT_NTFY_PARAM: Byte = 0x99.toByte()
+    private const val ALERT_SET_PARAM: Byte = 0x98.toByte()
+    private const val ALERT_SET_STATUS: Byte = 0x94.toByte()
+    private const val ALERT_INQUIRED_TYPE_FIXED_MESSAGE: Byte = 0x00
+    private const val ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND: Byte = 0x02
+    // AlertEnable/Disable (SC `bf0.AbstractC5678b` EnableDisable): ENABLE=0x00, DISABLE=0x01.
+    private const val ALERT_ENABLE: Byte = 0x00
+    private const val ALERT_DISABLE: Byte = 0x01
+    // AlertMessageType (SC `com.sony.songpal.tandemfamily.message.mdr.v2.table1.alert.param.AlertMessageType`).
+    // SC `C14663l0` switch (case 71-76) maps these to dialog → POSITIVE reply (0x98).
+    const val ALERT_MESSAGE_TYPE_MULTIPOINT_LDAC_DISABLE = 6
+    const val ALERT_MESSAGE_TYPE_MULTIPOINT = 7
+    // 2-devices connection alerts (SC case 73-76): all surface a dialog and reply
+    // ALERT_SET_PARAM POSITIVE on user confirmation.
+    const val ALERT_MESSAGE_TYPE_ENABLING_2_DEVICES_WITH_LDAC = 112
+    const val ALERT_MESSAGE_TYPE_QUALITY_PRIOR_WITH_2_DEVICES = 113
+    const val ALERT_MESSAGE_TYPE_CONNECTED_2_DEVICES_BG_WITH_LDAC = 114
+    const val ALERT_MESSAGE_TYPE_LDAC_990_WITH_2_DEVICES = 115
+    // AlertActionType / AlertAction: NEGATIVE=0, POSITIVE=1.
+    private const val ALERT_ACTION_NEGATIVE: Byte = 0x00
+    private const val ALERT_ACTION_POSITIVE: Byte = 0x01
     private const val LEA_GET_STATUS: Byte = 0x42
     private const val LEA_RET_STATUS: Byte = 0x43
     private const val LEA_NTFY_STATUS: Byte = 0x45
@@ -473,6 +526,64 @@ object SonyTandemV2Table1Protocol {
     fun buildGetWearingStatus(): ByteArray =
         SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.WEARING_STATUS_DETECTOR.code))
 
+    // ── General Setting (GS) builders ────────────────────────────────────────
+    // Layouts verified against SC 13.2.1 `if0/{a,b,h,i,j,o,p}` + `jf0/a`:
+    // GET_CAPABILITY (0xD0) body = [type][DisplayLanguage];
+    // RET_CAPABILITY (0xD1) body = [type][settingType][stringFormat][titleLen][title..][descLen][desc..];
+    // GET_STATUS (0xD2) body = [type]; RET_STATUS (0xD3) = [type][EnableDisable];
+    // GET_PARAM (0xD6) body = [type]; RET_PARAM (0xD7) = [type][settingType][value];
+    // SET_PARAM (0xD8) body = [type][settingType][value] (boolean: ON=0x00/OFF=0x01).
+
+    fun buildGetGeneralSettingCapability(type: Byte): ByteArray =
+        SonyTandemFrame.message(GS_GET_CAPABILITY, byteArrayOf(type, GS_DISPLAY_LANGUAGE_ENGLISH))
+
+    fun buildGetGeneralSettingStatus(type: Byte): ByteArray =
+        SonyTandemFrame.message(GS_GET_STATUS, byteArrayOf(type))
+
+    fun buildGetGeneralSettingParam(type: Byte): ByteArray =
+        SonyTandemFrame.message(GS_GET_PARAM, byteArrayOf(type))
+
+    fun buildSetGeneralSetting(type: Byte, on: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            GS_SET_PARAM,
+            byteArrayOf(type, GS_SETTING_TYPE_BOOLEAN, if (on) GS_VALUE_ON else GS_VALUE_OFF),
+        )
+
+    /** 0xD1-0xD4 GENERAL_SETTING1..4 slot codes (SC `GsInquiredType`). */
+    fun generalSettingSlots(): List<Byte> = (0xD1..0xD4).map { it.toByte() }
+
+    /** Reply to a device FIXED_MESSAGE alert: [0x98, 0x00(FIXED_MESSAGE), msgType, action].
+     * POSITIVE lets the device execute the requested change (e.g. multipoint reconnection),
+     * NEGATIVE cancels it. Same channel as GS. */
+    fun buildReplyAlertFixingMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            ALERT_SET_PARAM,
+            byteArrayOf(
+                ALERT_INQUIRED_TYPE_FIXED_MESSAGE,
+                messageType.toByte(),
+                if (positive) ALERT_ACTION_POSITIVE else ALERT_ACTION_NEGATIVE,
+            ),
+        )
+
+    /** ALERT_SET_STATUS (0x94, SC `bf0.AbstractC5694r`): arm the device alert domain.
+     * The device only pushes ALERT_NTFY_PARAM (0x99) confirmations (e.g. multipoint
+     * reconnect) after the app has sent ENABLE — FIXED_MESSAGE on connect
+     * (SC `C15100d0.m65206b` → `i00.C17828a.mo70105d`) and APP_BECOMES_FOREGROUND
+     * when the remote UI is shown (SC `MdrRemoteBaseActivity.onRemoteShown` → `mo70103b`). */
+    fun buildSetAlertStatus(inquiredType: Byte, enable: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            ALERT_SET_STATUS,
+            byteArrayOf(inquiredType, if (enable) ALERT_ENABLE else ALERT_DISABLE),
+        )
+
+    /** 0x94 [0x02][0x00]: arm the device alert domain for UI-shown notifications. */
+    fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray =
+        buildSetAlertStatus(ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND, enable)
+
+    /** 0x94 [0x00][0x00]: arm the device alert domain for fixed-message confirmations. */
+    fun buildSetAlertFixedMessage(enable: Boolean): ByteArray =
+        buildSetAlertStatus(ALERT_INQUIRED_TYPE_FIXED_MESSAGE, enable)
+
     fun buildSetNcOnOff(enabled: Boolean): ByteArray =
         SonyTandemFrame.message(
             NCASM_SET_PARAM,
@@ -597,6 +708,10 @@ object SonyTandemV2Table1Protocol {
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaParam(payload, raw)
             SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
             SYSTEM_RET_EXT_PARAM, SYSTEM_NTFY_EXT_PARAM -> parseSystemRetExtendedParam(payload, raw)
+            GS_RET_CAPABILITY -> parseGeneralSettingCapability(payload, raw)
+            GS_RET_STATUS, GS_NTFY_STATUS -> parseGeneralSettingStatus(payload, raw)
+            GS_RET_PARAM, GS_NTFY_PARAM -> parseGeneralSettingParam(payload, raw)
+            ALERT_NTFY_PARAM -> parseAlertParam(payload, raw)
             else -> ParsedTandemResponse.Unknown(dataType.unsigned, command.unsigned, payload, raw)
         }
     }
@@ -1337,5 +1452,83 @@ object SonyTandemV2Table1Protocol {
             values = payload.unsignedList(),
             raw = raw,
         )
+    }
+
+    /**
+     * RET_CAPABILITY (0xD1). Engine payload (dataType+command stripped):
+     * `[0]=type, [1]=GsSettingType, [2]=GsStringFormat, [3]=titleLen,
+     * [4..4+len)=title, [4+len]=descLen, [5+len..]=desc`.
+     * Mirrors SC `if0/h` (title/desc length-prefixed strings, `jf0/a`).
+     */
+    private fun parseGeneralSettingCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.getOrNull(0)?.unsigned ?: return ParsedTandemResponse.Unknown(
+            null, GS_RET_CAPABILITY.unsigned, payload, raw,
+        )
+        val settingType = payload.getOrNull(1)?.unsigned
+        val stringFormat = payload.getOrNull(2)?.unsigned
+        val titleLen = payload.getOrNull(3)?.unsigned ?: return ParsedTandemResponse.Unknown(
+            null, GS_RET_CAPABILITY.unsigned, payload, raw,
+        )
+        val titleStart = 4
+        val titleEnd = titleStart + titleLen
+        if (payload.size < titleEnd) {
+            return ParsedTandemResponse.Unknown(null, GS_RET_CAPABILITY.unsigned, payload, raw)
+        }
+        val title = payload.copyOfRange(titleStart, titleEnd).decodeToString()
+        val descStart = titleEnd + 1
+        val descLen = payload.getOrNull(titleEnd)?.unsigned ?: 0
+        val desc = if (payload.size >= descStart + descLen) {
+            payload.copyOfRange(descStart, descStart + descLen).decodeToString()
+        } else {
+            ""
+        }
+        return ParsedTandemResponse.GeneralSettingCapability(
+            type = type,
+            settingType = settingType,
+            stringFormat = stringFormat,
+            title = title,
+            description = desc,
+            raw = raw,
+        )
+    }
+
+    /** RET/NTFY_STATUS (0xD3/0xD5): `[type][EnableDisable]` (ENABLE=0x00). */
+    private fun parseGeneralSettingStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.getOrNull(0)?.unsigned
+        val enabled = payload.getOrNull(1)?.let { it == GS_ENABLE }
+        return ParsedTandemResponse.GeneralSettingStatus(
+            type = type,
+            enabled = enabled,
+            raw = raw,
+        )
+    }
+
+    /** RET/NTFY_PARAM (0xD7/0xD9): `[type][settingType][value]` (boolean ON=0x00). */
+    private fun parseGeneralSettingParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.getOrNull(0)?.unsigned
+        val settingType = payload.getOrNull(1)?.unsigned
+        val value = payload.getOrNull(2)?.unsigned
+        val on = when (settingType) {
+            GS_SETTING_TYPE_BOOLEAN.unsigned -> value?.let { it == GS_VALUE_ON.unsigned }
+            else -> null
+        }
+        return ParsedTandemResponse.GeneralSettingParam(
+            type = type,
+            settingType = settingType,
+            on = on,
+            raw = raw,
+        )
+    }
+
+    /** ALERT_NTFY_PARAM (0x99) FIXED_MESSAGE: payload = [0x00(FIXED_MESSAGE), AlertMessageType, AlertActionType].
+     * Only FIXED_MESSAGE alerts are surfaced; other inquired types fall back to Unknown. */
+    private fun parseAlertParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val inquiredType = payload.getOrNull(0)
+        val messageType = payload.getOrNull(1)?.unsigned
+        val actionType = payload.getOrNull(2)?.unsigned
+        if (inquiredType != ALERT_INQUIRED_TYPE_FIXED_MESSAGE || messageType == null || actionType == null) {
+            return ParsedTandemResponse.Unknown(ALERT_INQUIRED_TYPE_FIXED_MESSAGE.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+        }
+        return ParsedTandemResponse.AlertFixedMessage(messageType, actionType, raw)
     }
 }

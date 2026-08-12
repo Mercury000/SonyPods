@@ -179,10 +179,15 @@ object SonyEngineHost {
         scope.launch {
             repo.state.collect { uiState ->
                 val snapshot = SonyStateSnapshot.fromUiState(uiState)
+                val pendingAlert = snapshot.multipoint.pendingAlertMessageType
+                val lastPending = lastSnapshot?.multipoint?.pendingAlertMessageType
+                val same = snapshot == lastSnapshot
+                android.util.Log.i("OpenBuds", "engine collect pendingAlert=$pendingAlert lastPending=$lastPending same=$same")
                 if (snapshot != lastSnapshot) {
                     lastSnapshot = snapshot
                     fallback?.onState(snapshot)
                     repo.ensureModelImageCatalogIfNeeded()
+                    android.util.Log.i("OpenBuds", "engine publish pendingAlert=$pendingAlert")
                     publish(ctx, snapshot)
                 }
             }
@@ -788,6 +793,10 @@ object SonyEngineHost {
                 intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::unpairMultipointDevice)
             SonyBridge.CMD_SET_SOURCE_SWITCH_ENABLED ->
                 repo.setSourceSwitchEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_MULTIPOINT_ENABLED ->
+                repo.setMultipointEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_REPLY_MULTIPOINT_ALERT ->
+                repo.replyMultipointAlert(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_FIXED_SOURCE ->
                 intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::setFixedSource)
             SonyBridge.CMD_SET_MUSIC_HAND_OVER ->

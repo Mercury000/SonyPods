@@ -22,6 +22,7 @@ import dev.sonypods.protocol.PeripheralInquiredTypeTable2
 import dev.sonypods.protocol.SonyTandemV2Table2Protocol
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR
 import dev.sonypods.protocol.SonyTandemConstants.DATA_MDR_NO2
+import dev.sonypods.protocol.unsigned
 
 object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     private const val COMMON_RET_BATTERY_LEVEL: Byte = 0x11
@@ -229,6 +230,14 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 codecFor(profile, HeadphoneFeature.WEARING_STATUS).buildGetWearingStatus()?.let {
                     add(command(profile, HeadphoneFeature.WEARING_STATUS, "GET Wearing status", it))
                 }
+            }
+            // SC arms the alert domain or the device never pushes the 0x99
+            // confirmation for GS SETs that need one (multipoint reconnect etc.):
+            // 0x94 [APP_BECOMES_FOREGROUND=0x02][ENABLE] on UI shown, 0x94
+            // [FIXED_MESSAGE=0x00][ENABLE] on connect. Both are idempotent, so the
+            // refresh (connection + UI entry) is the right place.
+            if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+                addAll(buildRefreshAlertCommands(profile))
             }
         }
 
@@ -540,6 +549,47 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         multipointCommand(profile, if (enabled) "ENABLE source switch" else "DISABLE source switch", SonyTandemV2Table2Protocol.buildSetPeripheralSourceSwitch(enabled))
     )
 
+    /**
+     * Toggle the "同时连接2台设备" setting: V2 Table1 GS SET_PARAM on the slot
+     * discovered via [buildRefreshGeneralSettingMultipointCommands]. Runs on the
+     * Table1 channel (HPC/SPP). Empty when the slot is unknown or the protocol
+     * isn't V2 Table1.
+     */
+    override fun buildSetMultipointEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> {
+        val slot = profile.multipointGsSlot ?: return emptyList()
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        return listOf(
+            HeadphoneCommand(
+                label = if (enabled) "ENABLE 2-device multipoint" else "DISABLE 2-device multipoint",
+                bytes = SonyTandemV2Table1Codec.buildSetGeneralSetting(slot.toByte(), enabled),
+                channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
+            )
+        )
+    }
+
+    /** V2 Table1 ALERT_SET_PARAM (0x98) FIXED_MESSAGE reply on the GS channel. */
+    override fun buildReplyAlertCommand(
+        profile: ConnectedHeadphoneProfile,
+        messageType: Int,
+        positive: Boolean,
+    ): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        return listOf(
+            HeadphoneCommand(
+                label = "REPLY multipoint alert ${if (positive) "POSITIVE" else "NEGATIVE"} ($messageType)",
+                bytes = SonyTandemV2Table1Codec.buildReplyAlertFixingMessage(messageType, positive),
+                channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
+            )
+        )
+    }
+
     override fun buildSetFixedSourceCommand(
         profile: ConnectedHeadphoneProfile,
         address: String,
@@ -602,7 +652,38 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         } + listOf(
             multipointCommand(profile, "GET source switch status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL)),
             multipointCommand(profile, "GET music hand-over status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.MUSIC_HAND_OVER_SETTING)),
-        )
+        ) + buildRefreshGeneralSettingMultipointCommands(profile)
+    }
+
+    /**
+     * V2 Table1 General Setting probes for the "同时连接2台设备" toggle. The GS
+     * slot is discovered by GET_CAPABILITY on 0xD1..0xD4 and matched by title
+     * ("MULTIPOINT_SETTING") like SC `DeviceCapabilityTableset2.E1()`; once the
+     * slot is known, its status/param are read on every refresh. GS is a Table1
+     * domain, so the commands ride the Table1 channel (HPC/SPP), not MC.
+     */
+    private fun buildRefreshGeneralSettingMultipointCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        val codec = SonyTandemV2Table1Codec
+        val gsChannel = profile.channelFor(HeadphoneFeature.DEVICE_INFO)
+        val slot = profile.multipointGsSlot
+        return if (slot == null) {
+            codec.generalSettingSlots().map { slotCode ->
+                HeadphoneCommand(
+                    label = "GET GS capability slot 0x%02X".format(slotCode.unsigned),
+                    bytes = codec.buildGetGeneralSettingCapability(slotCode),
+                    channel = gsChannel,
+                )
+            }
+        } else {
+            val type = slot.toByte()
+            listOf(
+                HeadphoneCommand("GET GS multipoint status", codec.buildGetGeneralSettingStatus(type), gsChannel),
+                HeadphoneCommand("GET GS multipoint param", codec.buildGetGeneralSettingParam(type), gsChannel),
+            )
+        }
     }
 
     private fun multipointCommand(
@@ -610,6 +691,27 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         label: String,
         bytes: ByteArray,
     ): HeadphoneCommand = HeadphoneCommand(label, bytes, TandemChannel.GATT_V2_MC)
+
+    /**
+     * ALERT_SET_STATUS (0x94) ENABLE for both alert inquired types SC arms:
+     * APP_BECOMES_FOREGROUND on UI shown, FIXED_MESSAGE on device connect.
+     * Table1 domain, same channel as GS.
+     */
+    private fun buildRefreshAlertCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        val channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO)
+        return listOf(
+            HeadphoneCommand(
+                "SET alert status APP_BECOMES_FOREGROUND ENABLE",
+                SonyTandemV2Table1Codec.buildSetAlertAppBecomesForeground(true),
+                channel,
+            ),
+            HeadphoneCommand(
+                "SET alert status FIXED_MESSAGE ENABLE",
+                SonyTandemV2Table1Codec.buildSetAlertFixedMessage(true),
+                channel,
+            ),
+        )
+    }
 
     private fun multipointType(profile: ConnectedHeadphoneProfile): PeripheralInquiredTypeTable2 =
         profile.multipointTypeCode

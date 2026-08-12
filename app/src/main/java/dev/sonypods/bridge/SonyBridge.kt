@@ -73,6 +73,8 @@ object SonyBridge {
     const val CMD_DISCONNECT_MULTIPOINT_DEVICE = "disconnect_multipoint_device"
     const val CMD_UNPAIR_MULTIPOINT_DEVICE = "unpair_multipoint_device"
     const val CMD_SET_SOURCE_SWITCH_ENABLED = "set_source_switch_enabled"
+    const val CMD_SET_MULTIPOINT_ENABLED = "set_multipoint_enabled"
+    const val CMD_REPLY_MULTIPOINT_ALERT = "reply_multipoint_alert"
     const val CMD_SET_FIXED_SOURCE = "set_fixed_source"
     const val CMD_SET_MUSIC_HAND_OVER = "set_music_hand_over"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
@@ -193,6 +195,13 @@ object SonyBridge {
 
     fun setSourceSwitchEnabled(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_SOURCE_SWITCH_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setMultipointEnabled(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_MULTIPOINT_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    /** Reply to the device's pending reconnection alert; true = confirm (execute), false = cancel. */
+    fun replyMultipointAlert(context: Context, positive: Boolean) =
+        sendCommand(context, CMD_REPLY_MULTIPOINT_ALERT) { putExtra(EXTRA_BOOL, positive) }
 
     fun setFixedSource(context: Context, address: String) =
         sendCommand(context, CMD_SET_FIXED_SOURCE) { putExtra(EXTRA_STRING, address) }

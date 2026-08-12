@@ -63,8 +63,10 @@ import dev.sonypods.protocol.AssignableSettingsKeyCapability
 import dev.sonypods.protocol.AssignableSettingsActionFunction
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTandemConstants
+import dev.sonypods.protocol.SonyTandemV2Table1Protocol
 import dev.sonypods.protocol.MultipointDevice
 import dev.sonypods.protocol.hexString
+import dev.sonypods.protocol.unsigned
 import dev.sonypods.protocol.unsignedList
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,6 +82,9 @@ private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
 private const val PLAYBACK_METADATA_REFETCH_DELAY_MS = 50L
 private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
+/** Keep the optimistic GS value alive while the device asks for reconnection
+ * confirmation and while the link is being re-established. */
+private const val MULTIPOINT_TOGGLE_RECONCILE_TIMEOUT_MS = 5_000L
 private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
@@ -119,6 +124,19 @@ private fun multipointResultLabel(code: Int): String = when (code) {
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
     val ignoreOppositeUntilMs: Long,
+)
+
+private enum class MultipointToggleDecision {
+    AWAITING_CONFIRMATION,
+    CONFIRMED,
+    CANCELLED,
+}
+
+private data class PendingMultipointToggle(
+    val address: String,
+    val original: Boolean,
+    val target: Boolean,
+    val decision: MultipointToggleDecision = MultipointToggleDecision.AWAITING_CONFIRMATION,
 )
 
 data class DeviceInfoState(
@@ -266,6 +284,17 @@ data class MultipointState(
     val fixedSourceAddress: String? = null,
     val sourceSwitchResult: String? = null,
     val musicHandOverEnabled: Boolean? = null,
+    /** "同时连接2台设备" — the V2 Table1 General Setting multipoint toggle
+     * (GS slot matched by title "MULTIPOINT_SETTING"); null = slot unknown. */
+    val multipointEnabled: Boolean? = null,
+    /** User-requested toggle target while a GS write is being reconciled. While
+     * non-null, the UI keeps showing this value and stale device reports do not
+     * overwrite it. The repository clears it only after the device reaches the
+     * confirmed or cancelled value. */
+    val pendingMultipointToggle: Boolean? = null,
+    /** Pending device alert (V2 Table1 AlertMessageType 6/7) awaiting app reply;
+     * non-null while the reconnection confirmation dialog is outstanding. */
+    val pendingAlertMessageType: Int? = null,
     val raw: List<Int> = emptyList(),
 )
 
@@ -394,6 +423,10 @@ class SonyHeadphoneRepository private constructor(
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
     private var pendingQuickAccessFunctionCodes: List<Int>? = null
+    /** Connection-scoped request; unlike the UI state, this survives the brief
+     * disconnect/reconnect caused by a confirmed multipoint change. */
+    private var pendingMultipointToggle: PendingMultipointToggle? = null
+    private val multipointToggleReconcileRunnable = Runnable { reconcileMultipointToggleTimeout() }
     private val quickAccessConfirmTimeoutRunnable = Runnable {
         val expected = pendingQuickAccessFunctionCodes ?: return@Runnable
         val actual = _state.value.quickAccessState.functionCodes
@@ -502,6 +535,7 @@ class SonyHeadphoneRepository private constructor(
     fun close() {
         mainHandler.removeCallbacksAndMessages(null)
         client.close()
+        pendingMultipointToggle = null
         // SonyBleClient.close() intentionally does not notify its listener because
         // it is used for generation teardown.  The singleton repository is reused by
         // the next libxposed generation, so explicitly clear every connection-scoped
@@ -695,6 +729,7 @@ class SonyHeadphoneRepository private constructor(
         val functions = SonyCapabilityProbe.restoreFunctions(profile, entry.functions)
         if (functions.isEmpty()) return false
         val restored = SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
+            .withCachedMultipointSlot(entry)
         _state.update {
             it.copy(
                 connectedProfile = restored,
@@ -722,11 +757,15 @@ class SonyHeadphoneRepository private constructor(
     private fun resolveFromCache(resolved: ConnectedHeadphoneProfile, address: String?): ConnectedHeadphoneProfile {
         if (address.isNullOrBlank()) return resolved
         val entry = readCapabilityCache(address) ?: return resolved
-        if (entry.functions.isEmpty()) return resolved
+        if (entry.functions.isEmpty()) return resolved.withCachedMultipointSlot(entry)
         val functions = SonyCapabilityProbe.restoreFunctions(resolved, entry.functions)
-        if (functions.isEmpty()) return resolved
+        if (functions.isEmpty()) return resolved.withCachedMultipointSlot(entry)
         return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport)
+            .withCachedMultipointSlot(entry)
     }
+
+    private fun ConnectedHeadphoneProfile.withCachedMultipointSlot(entry: CapabilityCacheEntry): ConnectedHeadphoneProfile =
+        entry.multipointGsSlot.takeIf { it >= 0 }?.let { copy(multipointGsSlot = it) } ?: this
 
     /** Persist the current probe result (counter + function list) for this device. */
     private fun saveCapabilityCache(functions: List<SonySupportedFunction>) {
@@ -744,10 +783,32 @@ class SonyHeadphoneRepository private constructor(
             playVolumeStep = _state.value.playbackState.musicVolumeStep.takeIf { it > 0 }
                 ?: capabilityCache[address]?.playVolumeStep
                 ?: -1,
+            multipointGsSlot = profile.multipointGsSlot ?: capabilityCache[address]?.multipointGsSlot ?: -1,
+            multipointEnabled = _state.value.multipointState.multipointEnabled
+                ?: capabilityCache[address]?.multipointEnabled,
             savedAtMs = System.currentTimeMillis(),
         )
         capabilityCache[address] = entry
         appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
+        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+    }
+
+    /** Update the small amount of multipoint state that is useful before the
+     * first refresh response on the next connection. Capability cache writes are
+     * durable in the app process, so this also removes the visible GS discovery
+     * delay after a scope/process restart. */
+    private fun saveMultipointCache() {
+        val address = _state.value.connectedDevice?.address ?: return
+        val current = capabilityCache[address] ?: return
+        val profile = _state.value.connectedProfile
+        val multipoint = _state.value.multipointState
+        val updated = current.copy(
+            multipointGsSlot = profile?.multipointGsSlot ?: current.multipointGsSlot,
+            multipointEnabled = multipoint.multipointEnabled ?: current.multipointEnabled,
+            savedAtMs = System.currentTimeMillis(),
+        )
+        if (updated == current) return
+        capabilityCache[address] = updated
         cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
@@ -928,6 +989,91 @@ class SonyHeadphoneRepository private constructor(
         if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
         HeadphoneAdapterRegistry.buildSetSourceSwitchCommands(ensureConnectedProfile(), enabled).forEach(::sendCommand)
         _state.update { it.copy(multipointState = it.multipointState.copy(sourceSwitchEnabled = enabled)) }
+        scheduleMultipointRefresh()
+    }
+
+    /** Toggle "同时连接2台设备" (V2 Table1 GS multipoint slot). */
+    fun setMultipointEnabled(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        val profile = ensureConnectedProfile()
+        val address = _state.value.connectedDevice?.address
+        val current = _state.value.multipointState
+        val existing = pendingMultipointToggle?.takeIf { it.address.equals(address, ignoreCase = true) }
+        if (existing != null) {
+            appendLog("Ignoring multipoint toggle while the previous request is pending")
+            return
+        }
+        val original = current.multipointEnabled ?: return
+        if (profile.multipointGsSlot == null || address.isNullOrBlank()) {
+            appendLog("Cannot toggle 2-device multipoint: GS slot not discovered")
+            return
+        }
+        val commands = HeadphoneAdapterRegistry.buildSetMultipointEnabledCommands(profile, enabled)
+        if (commands.isEmpty()) return
+
+        pendingMultipointToggle = PendingMultipointToggle(
+            address = address,
+            original = original,
+            target = enabled,
+        )
+        _state.update {
+            it.copy(
+                multipointState = it.multipointState.copy(
+                    multipointEnabled = enabled,
+                    pendingMultipointToggle = enabled,
+                ),
+            )
+        }
+        // Send only after publishing the optimistic state, so a quick device
+        // notification cannot win a race with the user's tap.
+        commands.forEach(::sendCommand)
+        mainHandler.removeCallbacks(multipointToggleReconcileRunnable)
+        mainHandler.postDelayed(multipointToggleReconcileRunnable, MULTIPOINT_TOGGLE_RECONCILE_TIMEOUT_MS)
+        scheduleMultipointRefresh()
+    }
+
+    /** Reply to the device's pending multipoint alert (7=reconnect, 6=LDAC disable):
+     * ALERT_SET_PARAM [0x98, 0x00, msgType, action]. POSITIVE lets the device
+     * execute the requested change; NEGATIVE cancels it. Clears the pending state. */
+    fun replyMultipointAlert(positive: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        val messageType = _state.value.multipointState.pendingAlertMessageType ?: return
+        val pendingToggle = pendingMultipointToggle
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildReplyAlertCommand(profile, messageType, positive).forEach(::sendCommand)
+        val decided = pendingToggle?.copy(
+            decision = if (positive) {
+                MultipointToggleDecision.CONFIRMED
+            } else {
+                MultipointToggleDecision.CANCELLED
+            },
+        )
+        pendingMultipointToggle = decided
+        _state.update {
+            it.copy(
+                multipointState = it.multipointState.copy(
+                    pendingAlertMessageType = null,
+                    // Confirm: keep showing the optimistic target until the
+                    // device reports it after reconnect. Cancel: immediately
+                    // restore the value from before the user's tap.
+                    // A cancelled request is no longer optimistic from the
+                    // UI's point of view, even though the private transaction
+                    // remains alive to reject a stale device report.
+                    pendingMultipointToggle = decided?.target?.takeIf { positive },
+                    multipointEnabled = if (positive) {
+                        decided?.target ?: it.multipointState.multipointEnabled
+                    } else {
+                        decided?.original ?: it.multipointState.multipointEnabled
+                    },
+                ),
+            )
+        }
+        if (pendingToggle != null) {
+            // The alert is now the source of truth for this transaction; do not
+            // let the pre-alert fallback timer make a late cancel ineffective.
+            mainHandler.removeCallbacks(multipointToggleReconcileRunnable)
+            mainHandler.postDelayed(multipointToggleReconcileRunnable, MULTIPOINT_TOGGLE_RECONCILE_TIMEOUT_MS)
+        }
         scheduleMultipointRefresh()
     }
 
@@ -1549,6 +1695,18 @@ class SonyHeadphoneRepository private constructor(
             pendingCapabilityIdentifier = ""
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
         }
+        val pendingForConnection = if (connected && device != null) {
+            pendingMultipointToggle?.takeIf { it.address.equals(device.address, ignoreCase = true) }
+                ?: run {
+                    if (pendingMultipointToggle != null) {
+                        pendingMultipointToggle = null
+                        mainHandler.removeCallbacks(multipointToggleReconcileRunnable)
+                    }
+                    null
+                }
+        } else {
+            pendingMultipointToggle
+        }
         _state.update {
             val deviceInfo = if (connected) {
                 it.deviceInfo.withResolvedModelImage(device)
@@ -1615,7 +1773,25 @@ class SonyHeadphoneRepository private constructor(
                 leaState = if (connected) it.leaState else LeaState(),
                 quickAccessState = if (connected) it.quickAccessState else QuickAccessState(),
                 gestureOperationsState = if (connected) it.gestureOperationsState else GestureOperationsState(),
-                multipointState = if (connected) it.multipointState else MultipointState(),
+                multipointState = when {
+                    !connected -> MultipointState()
+                    sameDevice -> it.multipointState
+                    else -> {
+                        val cached = device?.address?.let(::readCapabilityCache)
+                        val optimisticValue = pendingForConnection?.let { request ->
+                            if (request.decision == MultipointToggleDecision.CANCELLED) request.original else request.target
+                        }
+                        MultipointState(
+                            supported = profile?.supports(HeadphoneFeature.MULTIPOINT) == true,
+                            // Restore the last confirmed value immediately. A
+                            // following GS GET still remains authoritative.
+                            multipointEnabled = optimisticValue ?: cached?.multipointEnabled,
+                            pendingMultipointToggle = pendingForConnection
+                                ?.takeIf { it.decision != MultipointToggleDecision.CANCELLED }
+                                ?.target,
+                        )
+                    }
+                },
                 wearingState = if (connected) it.wearingState else WearingState(),
                 eqUiCapability = if (connected) profile?.eqUiCapability else null,
                 playbackStatus = if (connected) it.playbackStatus else PlaybackStatus.UNKNOWN,
@@ -1693,6 +1869,10 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.SourceSwitchStatus -> applySourceSwitchStatus(parsed)
             is ParsedTandemResponse.SourceSwitchResult -> applySourceSwitchResult(parsed)
             is ParsedTandemResponse.MusicHandOverStatus -> applyMusicHandOverStatus(parsed)
+            is ParsedTandemResponse.GeneralSettingCapability -> applyGeneralSettingCapability(parsed)
+            is ParsedTandemResponse.GeneralSettingStatus -> applyGeneralSettingStatus(parsed)
+            is ParsedTandemResponse.GeneralSettingParam -> applyGeneralSettingParam(parsed)
+            is ParsedTandemResponse.AlertFixedMessage -> applyAlertFixedMessage(parsed)
             is ParsedTandemResponse.Unknown -> applyKnownOrUnknown(parsed)
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.Table2Generic -> applyTable2Diagnostic(channel, parsed)
@@ -2357,6 +2537,141 @@ class SonyHeadphoneRepository private constructor(
         // SC `x30/c.java` builds the UI value as the inverse of the wire OnOff:
         // `new v30.e(!rVar.c())`. Our parser reports isOn, so invert here.
         _state.update { it.copy(multipointState = it.multipointState.copy(musicHandOverEnabled = !response.enabled, raw = response.raw.unsignedList())) }
+    }
+
+    /**
+     * GS RET_CAPABILITY: find the "同时连接2台设备" slot by title, mirroring SC
+     * `DeviceCapabilityTableset2.E1()` (ENUM_NAME format + exact title match).
+     * Once found, store the slot on the profile so the refresh probes the right
+     * slot and the UI toggle can write it.
+     */
+    private fun applyGeneralSettingCapability(response: ParsedTandemResponse.GeneralSettingCapability) {
+        val type = response.type ?: return
+        if (response.stringFormat != SonyTandemV2Table1Protocol.GS_STRING_FORMAT_ENUM_NAME.unsigned) return
+        if (response.title != SonyTandemV2Table1Protocol.GS_TITLE_MULTIPOINT_SETTING) return
+        _state.update { current ->
+            val profile = current.connectedProfile ?: return@update current
+            current.copy(
+                connectedProfile = if (profile.multipointGsSlot == type) profile else profile.copy(multipointGsSlot = type),
+                multipointState = current.multipointState.copy(supported = true),
+            )
+        }
+        appendLog("GS multipoint slot discovered: 0x%02X (%s)".format(type, response.title))
+        saveMultipointCache()
+        scheduleMultipointRefresh()
+    }
+
+    /** GS RET/NTFY_STATUS (0xD3/0xD5): slot availability, kept for diagnostics. */
+    private fun applyGeneralSettingStatus(response: ParsedTandemResponse.GeneralSettingStatus) {
+        val type = response.type
+        val slot = _state.value.connectedProfile?.multipointGsSlot
+        if (type == null || slot != type) return
+        appendLog("GS multipoint status slot=0x%02X enabled=${response.enabled}".format(type))
+        if (response.enabled != null) {
+            _state.update { it.copy(multipointState = it.multipointState.copy(raw = response.raw.unsignedList())) }
+        }
+    }
+
+    /** GS RET/NTFY_PARAM (0xD7/0xD9): the actual on/off state of the toggle. */
+    private fun applyGeneralSettingParam(response: ParsedTandemResponse.GeneralSettingParam) {
+        val type = response.type
+        val slot = _state.value.connectedProfile?.multipointGsSlot
+        if (type == null || slot != type || response.on == null) return
+        val pending = pendingMultipointToggle
+        if (pending != null) {
+            when (pending.decision) {
+                MultipointToggleDecision.AWAITING_CONFIRMATION -> {
+                    // The device commonly reports the old value between GS SET
+                    // and the user's 0x98 reply. Keep the optimistic target for
+                    // both old and early target reports; the timeout below is a
+                    // fallback for models that do not emit an alert.
+                    if (response.on != pending.target) {
+                        appendLog("Ignore stale multipoint value=${response.on} while target=${pending.target} is pending")
+                    }
+                    _state.update {
+                        it.copy(multipointState = it.multipointState.copy(
+                            multipointEnabled = pending.target,
+                            pendingMultipointToggle = pending.target,
+                            raw = response.raw.unsignedList(),
+                        ))
+                    }
+                    return
+                }
+                MultipointToggleDecision.CONFIRMED -> {
+                    if (response.on != pending.target) {
+                        appendLog("Ignore stale multipoint value=${response.on} after confirmation; target=${pending.target}")
+                        return
+                    }
+                }
+                MultipointToggleDecision.CANCELLED -> {
+                    if (response.on != pending.original) {
+                        appendLog("Ignore stale multipoint value=${response.on} after cancellation; restore=${pending.original}")
+                        return
+                    }
+                }
+            }
+        }
+        if (pending != null) {
+            pendingMultipointToggle = null
+            mainHandler.removeCallbacks(multipointToggleReconcileRunnable)
+        }
+        _state.update {
+            it.copy(
+                multipointState = it.multipointState.copy(
+                    multipointEnabled = pending?.let { request ->
+                        if (request.decision == MultipointToggleDecision.CANCELLED) request.original else request.target
+                    } ?: response.on,
+                    raw = response.raw.unsignedList(),
+                    pendingMultipointToggle = null,
+                ),
+            )
+        }
+        saveMultipointCache()
+    }
+
+    private fun reconcileMultipointToggleTimeout() {
+        val pending = pendingMultipointToggle ?: return
+        // No response arrived in time. Keep the user's chosen value (or the
+        // pre-tap value after cancellation) and release the stale-response lock.
+        val settled = if (pending.decision == MultipointToggleDecision.CANCELLED) {
+            pending.original
+        } else {
+            pending.target
+        }
+        pendingMultipointToggle = null
+        _state.update {
+            it.copy(multipointState = it.multipointState.copy(
+                multipointEnabled = settled,
+                pendingMultipointToggle = null,
+            ))
+        }
+        saveMultipointCache()
+    }
+
+    /** V2 Table1 ALERT_NTFY_PARAM (0x99, FIXED_MESSAGE): surface the multipoint
+     * reconnection alerts (7=reconnect, 6=LDAC disable) and the 2-devices-connection
+     * alerts (112=enable with LDAC, 113=quality-prior switch, 114=bg connected LDAC,
+     * 115=LDAC 990 warning). Other message types ignored. */
+    private fun applyAlertFixedMessage(response: ParsedTandemResponse.AlertFixedMessage) {
+        appendLog("V2 alert NTFY msgType=${response.messageType} action=${response.actionType}")
+        when (response.messageType) {
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_MULTIPOINT,
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_MULTIPOINT_LDAC_DISABLE,
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_ENABLING_2_DEVICES_WITH_LDAC,
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_QUALITY_PRIOR_WITH_2_DEVICES,
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CONNECTED_2_DEVICES_BG_WITH_LDAC,
+            SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_LDAC_990_WITH_2_DEVICES -> {
+                if (pendingMultipointToggle != null) {
+                    mainHandler.removeCallbacks(multipointToggleReconcileRunnable)
+                }
+                _state.update {
+                    it.copy(multipointState = it.multipointState.copy(pendingAlertMessageType = response.messageType))
+                }
+            }
+            else -> {
+                appendLog("Ignoring non-multipoint V2 fixed alert msgType=${response.messageType}")
+            }
+        }
     }
 
     private fun applyTable2Diagnostic(channel: TandemChannel, response: ParsedTandemResponse) {

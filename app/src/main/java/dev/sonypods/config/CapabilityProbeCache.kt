@@ -29,6 +29,10 @@ data class CapabilityCacheEntry(
      * Restored on a cache hit so the volume row appears without waiting for the
      * capability round-trip. */
     val playVolumeStep: Int = -1,
+    /** GS slot for the "同时连接2台设备" setting; -1 = not discovered yet. */
+    val multipointGsSlot: Int = -1,
+    /** Last device-confirmed value of the GS multipoint setting. */
+    val multipointEnabled: Boolean? = null,
     val savedAtMs: Long = 0L,
 )
 

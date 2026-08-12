@@ -502,6 +502,45 @@ sealed interface ParsedTandemResponse {
         val enabled: Boolean,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
+
+    /**
+     * GENERAL_SETTING_RET_CAPABILITY (V2 Table1, 0xD1). A GS slot's title is
+     * matched against `GS_TITLE_MULTIPOINT_SETTING` ("MULTIPOINT_SETTING") —
+     * the official app's `DeviceCapabilityTableset2.E1()` discovery — to find
+     * which of the 0xD1..0xD4 slots is the "同时连接2台设备" toggle.
+     */
+    data class GeneralSettingCapability(
+        val type: Int?,
+        val settingType: Int?,
+        val stringFormat: Int?,
+        val title: String,
+        val description: String,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** GENERAL_SETTING_RET/NTFY_STATUS (0xD3/0xD5): EnableDisable of the slot. */
+    data class GeneralSettingStatus(
+        val type: Int?,
+        val enabled: Boolean?,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** GENERAL_SETTING_RET/NTFY_PARAM (0xD7/0xD9): the boolean slot value. */
+    data class GeneralSettingParam(
+        val type: Int?,
+        val settingType: Int?,
+        val on: Boolean?,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** ALERT_NTFY_PARAM (0x99, FIXED_MESSAGE): device requests app confirmation for
+     * a change (e.g. multipoint reconnection). Reply via ALERT_SET_PARAM echoing the
+     * same messageType; see [dev.sonypods.protocol.SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage]. */
+    data class AlertFixedMessage(
+        val messageType: Int,
+        val actionType: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
 }
 
 typealias AssignableSettingsActionCapability = ParsedTandemResponse.AssignableSettingsActionCapability

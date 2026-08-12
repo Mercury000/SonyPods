@@ -1,5 +1,7 @@
 package dev.sonypods.headphones
 
+import dev.sonypods.config.CapabilityCacheEntry
+import dev.sonypods.config.CapabilityProbeCache
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
@@ -29,6 +31,22 @@ import org.junit.Test
  * probes and to the engine's feature/query/writable sets.
  */
 class SonyCapabilityProbeTest {
+
+    @Test
+    fun capabilityCache_preservesMultipointSlotAndLastKnownValue() {
+        val entry = CapabilityCacheEntry(
+            counter = 3,
+            multipointGsSlot = 0xD2,
+            multipointEnabled = true,
+        )
+
+        val decoded = CapabilityProbeCache.decode(
+            CapabilityProbeCache.encode(mapOf("AA:BB:CC:DD:EE:FF" to entry)),
+        ).getValue("AA:BB:CC:DD:EE:FF")
+
+        assertEquals(0xD2, decoded.multipointGsSlot)
+        assertEquals(true, decoded.multipointEnabled)
+    }
 
     private val v2Profile = ConnectedHeadphoneProfile(
         adapterId = "sony-tandem",

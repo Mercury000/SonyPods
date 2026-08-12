@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -285,6 +286,13 @@ private fun MultipointEntryCard(
     // fixed slot list numbered 1..maxConnected; the playback-right holder
     // carries the sound indicator and empty slots render greyed-out.
     val slotCount = maxOf(state.maxConnectedDevices, 2)
+    // During an optimistic toggle, only the switch should change on the
+    // settings page. Keep this dashboard card on the pre-tap content state.
+    val multipointDisabled = if (state.multipointTogglePending) {
+        state.multipointEnabled == true
+    } else {
+        state.multipointEnabled == false
+    }
     Card(
         modifier = Modifier.padding(horizontal = 12.dp),
         showIndication = true,
@@ -307,41 +315,57 @@ private fun MultipointEntryCard(
                 tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
             )
         }
-        (1..slotCount).forEach { slot ->
-            val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
-            val holdsPlayback = device != null && state.playbackRight > 0 &&
-                device.connectedStatus == state.playbackRight
-            Row(
+        if (multipointDisabled) {
+            // 功能关闭：不显示两个未连接槽位，居中显示"关闭"（高度约两个槽位行）。
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .padding(bottom = if (slot == slotCount) 10.dp else 0.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .height(76.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "$slot.",
-                    modifier = Modifier.widthIn(min = 22.dp),
-                    fontSize = 14.sp,
+                    text = "关闭",
+                    fontSize = 16.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
-                if (holdsPlayback) {
-                    Icon(
-                        imageVector = MiuixIcons.VolumeUp,
-                        contentDescription = "正在播放",
-                        modifier = Modifier.size(18.dp).padding(end = 2.dp),
-                        tint = MiuixTheme.colorScheme.primary,
+            }
+        } else {
+            (1..slotCount).forEach { slot ->
+                val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
+                val holdsPlayback = device != null && state.playbackRight > 0 &&
+                    device.connectedStatus == state.playbackRight
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(bottom = if (slot == slotCount) 10.dp else 0.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "$slot.",
+                        modifier = Modifier.widthIn(min = 22.dp),
+                        fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
-                    Spacer(modifier = Modifier.widthIn(min = 4.dp))
+                    if (holdsPlayback) {
+                        Icon(
+                            imageVector = MiuixIcons.VolumeUp,
+                            contentDescription = "正在播放",
+                            modifier = Modifier.size(18.dp).padding(end = 2.dp),
+                            tint = MiuixTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.widthIn(min = 4.dp))
+                    }
+                    Text(
+                        text = device?.name?.ifBlank { device.address } ?: "未连接",
+                        fontSize = 14.sp,
+                        color = if (device != null) {
+                            MiuixTheme.colorScheme.onSurface
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        },
+                    )
                 }
-                Text(
-                    text = device?.name?.ifBlank { device.address } ?: "未连接",
-                    fontSize = 14.sp,
-                    color = if (device != null) {
-                        MiuixTheme.colorScheme.onSurface
-                    } else {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    },
-                )
             }
         }
     }

@@ -1341,4 +1341,46 @@ class SonyTandemV2Table1ProtocolTest {
 
         assertTrue(parsed is ParsedTandemResponse.Unknown)
     }
+
+    // ── General Setting / multipoint toggle ────────────────────────────────
+
+    @Test
+    fun generalSettingMultipoint_roundTripsBooleanParamAndAlertReply() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xD8.toByte(), 0xD2.toByte(), 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetGeneralSetting(0xD2.toByte(), on = true),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xD8.toByte(), 0xD2.toByte(), 0x00, 0x01),
+            SonyTandemV2Table1Protocol.buildSetGeneralSetting(0xD2.toByte(), on = false),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x00, 0x07, 0x01),
+            SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage(7, positive = true),
+        )
+
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xD7.toByte(), 0xD2.toByte(), 0x00, 0x00),
+        ) as ParsedTandemResponse.GeneralSettingParam
+        assertEquals(0xD2, parsed.type)
+        assertTrue(parsed.on == true)
+    }
+
+    @Test
+    fun generalSettingCapability_findsMultipointTitleAndAlertNotificationParses() {
+        val title = SonyTandemV2Table1Protocol.GS_TITLE_MULTIPOINT_SETTING
+        val rawCapability = byteArrayOf(
+            0x0E, 0xD1.toByte(), 0xD2.toByte(), 0x00, 0x01, title.length.toByte(),
+        ) + title.encodeToByteArray() + byteArrayOf(0x00)
+        val capability = SonyTandemV2Table1Protocol.parse(rawCapability) as ParsedTandemResponse.GeneralSettingCapability
+        assertEquals(0xD2, capability.type)
+        assertEquals(title, capability.title)
+        assertEquals(SonyTandemV2Table1Protocol.GS_STRING_FORMAT_ENUM_NAME.toInt(), capability.stringFormat)
+
+        val alert = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x99.toByte(), 0x00, 0x07, 0x00),
+        ) as ParsedTandemResponse.AlertFixedMessage
+        assertEquals(7, alert.messageType)
+        assertEquals(0, alert.actionType)
+    }
 }

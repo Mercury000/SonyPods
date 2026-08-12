@@ -149,6 +149,10 @@ data class ConnectedHeadphoneProfile(
     val playbackDispatchStrategy: PlaybackDispatchStrategy = PlaybackDispatchStrategy.TANDEM_FIRST,
     /** Peripheral pairing domain selected by the headset (0x00 or 0x02). */
     val multipointTypeCode: Int? = null,
+    /** V2 Table1 General Setting slot (0xD1..0xD4) whose title matched
+     * "MULTIPOINT_SETTING" — the "同时连接2台设备" toggle slot. Discovered via
+     * GS GET_CAPABILITY, mirroring SC `DeviceCapabilityTableset2.E1()`. */
+    val multipointGsSlot: Int? = null,
     /** Runtime protocol version reported by CONNECT_RET_PROTOCOL_INFO (2 bytes BE),
      * validated against [dev.sonypods.protocol.SonyTandemConstants.PROTOCOL_VERSIONS]. */
     val protocolVersion: Int? = null,
@@ -383,6 +387,20 @@ interface HeadphoneAdapter {
         enabled: Boolean,
     ): List<HeadphoneCommand> = emptyList()
 
+    /** Toggle the V2 Table1 General Setting "同时连接2台设备" slot. */
+    fun buildSetMultipointEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
+    /** Reply to a pending FIXED_MESSAGE alert (V2 Table1 ALERT_SET_PARAM 0x98),
+     * echoing [messageType] with POSITIVE/NEGATIVE action. */
+    fun buildReplyAlertCommand(
+        profile: ConnectedHeadphoneProfile,
+        messageType: Int,
+        positive: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
     fun buildSetFixedSourceCommand(
         profile: ConnectedHeadphoneProfile,
         address: String,
@@ -516,6 +534,12 @@ object HeadphoneAdapterRegistry {
 
     fun buildSetSourceSwitchCommands(profile: ConnectedHeadphoneProfile, enabled: Boolean): List<HeadphoneCommand> =
         adapterFor(profile).buildSetSourceSwitchCommands(profile, enabled)
+
+    fun buildSetMultipointEnabledCommands(profile: ConnectedHeadphoneProfile, enabled: Boolean): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetMultipointEnabledCommands(profile, enabled)
+
+    fun buildReplyAlertCommand(profile: ConnectedHeadphoneProfile, messageType: Int, positive: Boolean): List<HeadphoneCommand> =
+        adapterFor(profile).buildReplyAlertCommand(profile, messageType, positive)
 
     fun buildSetFixedSourceCommand(profile: ConnectedHeadphoneProfile, address: String): List<HeadphoneCommand> =
         adapterFor(profile).buildSetFixedSourceCommand(profile, address)

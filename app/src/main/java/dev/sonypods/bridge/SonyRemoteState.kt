@@ -37,6 +37,7 @@ object SonyRemoteState {
             val bundle = intent.bundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
             val snapshot = SonyStateSnapshot.fromBundle(bundle)
             received = true
+            android.util.Log.i("OpenBuds", "remote state pendingAlert=${snapshot.multipoint.pendingAlertMessageType}")
             _state.value = snapshot
             val appContext = context ?: return
             CloudModelInfoSync.onState(appContext, snapshot)
