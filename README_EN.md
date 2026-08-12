@@ -37,7 +37,7 @@ Theoretically supports all released Sony headphones
 - **Fusion device center** — battery and ANC state read/write
 - **Quick popup** — control popup from the notification and on connection
 - **Model images** — automatically matched from the Sound Connect model/colour catalog, without custom image configuration
-- **Device handoff** — supports Xiaomi Interconnect device handoff (Another device needs to pair with this headset once,not recommended together with dual-device connection, as they may conflict)
+- **Device handoff** — supports Xiaomi Interconnect device handoff; the other device must first pair with the headset once and also have this module installed and enabled (not recommended together with dual-device connection, as they may conflict)
 
 ### Usage
 
