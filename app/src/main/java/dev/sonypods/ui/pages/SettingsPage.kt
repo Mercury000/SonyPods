@@ -49,6 +49,8 @@ fun SettingsPage(
     onNotificationClickActionChange: (Int) -> Unit = {},
     popupOnConnect: MutableState<Boolean> = mutableStateOf(false),
     onPopupOnConnectChange: (Boolean) -> Unit = {},
+    connectDialogMode: MutableState<Int> = mutableStateOf(ConfigManager.CONNECT_DIALOG_MODE_MODULE),
+    onConnectDialogModeChange: (Int) -> Unit = {},
     suppressPopupOnConnectWhenForeground: MutableState<Boolean> = mutableStateOf(true),
     onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
@@ -95,6 +97,14 @@ fun SettingsPage(
     val notificationClickActionOptions = listOf(
         stringResource(R.string.notification_click_module_popup),
         stringResource(R.string.click_action_system_settings),
+    )
+    val connectDialogModeValues = listOf(
+        ConfigManager.CONNECT_DIALOG_MODE_MODULE,
+        ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL,
+    )
+    val connectDialogModeOptions = listOf(
+        stringResource(R.string.connect_dialog_mode_module),
+        stringResource(R.string.connect_dialog_mode_official),
     )
     val startupTabValues = listOf(ConfigManager.STARTUP_TAB_MODULE, ConfigManager.STARTUP_TAB_EARPHONES)
     val startupTabOptions = listOf(
@@ -221,6 +231,13 @@ fun SettingsPage(
                     onCheckedChange = { onPopupOnConnectChange(it) }
                 )
                 if (popupOnConnect.value) {
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.connect_dialog_mode),
+                        summary = stringResource(R.string.connect_dialog_mode_summary),
+                        items = connectDialogModeOptions,
+                        selectedIndex = connectDialogModeValues.indexOf(connectDialogMode.value).coerceAtLeast(0),
+                        onSelectedIndexChange = { onConnectDialogModeChange(connectDialogModeValues[it]) },
+                    )
                     SwitchPreference(
                         title = stringResource(R.string.suppress_popup_on_connect_when_foreground),
                         summary = stringResource(R.string.suppress_popup_on_connect_when_foreground_summary),

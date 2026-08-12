@@ -15,6 +15,8 @@ data class AppConfig(
     val islandDurationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
     val popupOnConnect: Boolean = false,
+    /** Connection dialog renderer: module-owned popup or Bluetooth Extension's PairingDialog. */
+    val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_MODULE,
     /** Skip the auto popup on connect while the module UI is the foreground app. */
     val suppressPopupOnConnectWhenForeground: Boolean = true,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
@@ -40,6 +42,7 @@ object ConfigManager {
     const val PREF_KEY_ISLAND_DURATION_SECONDS = "island_duration_seconds"
     const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
     const val PREF_KEY_POPUP_ON_CONNECT = "popup_on_connect"
+    const val PREF_KEY_CONNECT_DIALOG_MODE = "connect_dialog_mode"
     const val PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND = "suppress_popup_on_connect_when_foreground"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_FUSION_MORE_CLICK_ACTION = "fusion_more_click_action"
@@ -56,6 +59,8 @@ object ConfigManager {
     const val ISLAND_MODE_NONE = 0
     const val ISLAND_MODE_OFFICIAL = 1
     const val ISLAND_MODE_MODULE = 2
+    const val CONNECT_DIALOG_MODE_MODULE = 0
+    const val CONNECT_DIALOG_MODE_OFFICIAL = 1
     const val DEFAULT_ISLAND_DURATION_SECONDS = 10
     /** islandTimeout is specified in seconds by the system; cap at 24h. */
     const val MAX_ISLAND_DURATION_SECONDS = 24 * 60 * 60
@@ -153,6 +158,11 @@ object ConfigManager {
 
     fun popupOnConnect(): Boolean = current().popupOnConnect
 
+    fun connectDialogMode(): Int = current().connectDialogMode.coerceIn(
+        CONNECT_DIALOG_MODE_MODULE,
+        CONNECT_DIALOG_MODE_OFFICIAL,
+    )
+
     fun suppressPopupOnConnectWhenForeground(): Boolean = current().suppressPopupOnConnectWhenForeground
 
     fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
@@ -208,6 +218,13 @@ object ConfigManager {
 
     fun updatePopupOnConnect(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
         val config = current().copy(popupOnConnect = enabled)
+        save(prefs, service, config)
+    }
+
+    fun updateConnectDialogMode(prefs: SharedPreferences, service: XposedService?, mode: Int) {
+        val config = current().copy(
+            connectDialogMode = mode.coerceIn(CONNECT_DIALOG_MODE_MODULE, CONNECT_DIALOG_MODE_OFFICIAL),
+        )
         save(prefs, service, config)
     }
 
@@ -334,6 +351,7 @@ object ConfigManager {
             .putInt(PREF_KEY_ISLAND_DURATION_SECONDS, config.islandDurationSeconds)
             .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
             .putBoolean(PREF_KEY_POPUP_ON_CONNECT, config.popupOnConnect)
+            .putInt(PREF_KEY_CONNECT_DIALOG_MODE, config.connectDialogMode)
             .putBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, config.suppressPopupOnConnectWhenForeground)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, config.fusionMoreClickAction)
@@ -373,6 +391,7 @@ object ConfigManager {
         } else {
             null
         }
+        val directConnectDialogMode = prefs.getInt(PREF_KEY_CONNECT_DIALOG_MODE, Int.MIN_VALUE)
         val directSuppressPopupOnConnectWhenForeground = if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND)) {
             prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, true)
         } else {
@@ -400,6 +419,7 @@ object ConfigManager {
                 islandDurationSeconds = directIslandDurationSeconds.takeIf { it != Int.MIN_VALUE } ?: config.islandDurationSeconds,
                 notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
                 popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
+                connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
                 suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
@@ -417,6 +437,7 @@ object ConfigManager {
             superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
             notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
             popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
+            connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
             suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
@@ -435,6 +456,7 @@ object ConfigManager {
         superIslandMode = superIslandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
         islandDurationSeconds = islandDurationSeconds.normalizedIslandDuration(),
         notificationClickAction = notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP),
+        connectDialogMode = connectDialogMode.coerceIn(CONNECT_DIALOG_MODE_MODULE, CONNECT_DIALOG_MODE_OFFICIAL),
         moreClickAction = moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE),
         fusionMoreClickAction = fusionMoreClickAction.coerceIn(FUSION_MORE_CLICK_SYSTEM_SETTINGS, FUSION_MORE_CLICK_MODULE),
         adaptiveCapabilityOverride = adaptiveCapabilityOverride.normalizedCapabilityOverride(),
@@ -503,6 +525,9 @@ object ConfigManager {
             }
             if (oldConfig.popupOnConnect != newConfig.popupOnConnect) {
                 add("popupOnConnect=${oldConfig.popupOnConnect}->${newConfig.popupOnConnect}")
+            }
+            if (oldConfig.connectDialogMode != newConfig.connectDialogMode) {
+                add("connectDialogMode=${oldConfig.connectDialogMode}->${newConfig.connectDialogMode}")
             }
             if (oldConfig.suppressPopupOnConnectWhenForeground != newConfig.suppressPopupOnConnectWhenForeground) {
                 add("suppressPopupOnConnectWhenForeground=${oldConfig.suppressPopupOnConnectWhenForeground}->${newConfig.suppressPopupOnConnectWhenForeground}")

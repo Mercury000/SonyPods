@@ -302,13 +302,28 @@ object MiBluetoothToastHook : HookContext() {
             cancelNotification(device, context)
         }
 
-        hookConstructorAfter(findConstructorByParamCount("com.android.bluetooth.ble.app.MiuiBluetoothNotification", 2)) {
-            val context = getObjectField(instance, "mContext") as Context
-            registerNotificationReceiver(context)
-            // This class is constructed well after boot, so anything the engine
-            // rendered before now was lost; ask it to render again.
-            announceSurfacesReady(context)
-            registerUnlockReceiver(context)
+        // The notification constructor is an optional surface.  Its signature
+        // has changed between Bluetooth Extension builds; a miss must not abort
+        // the whole Xiaomi scope, otherwise the upstream hook and every
+        // notification/island receiver disappear together.
+        runCatching {
+            hookConstructorAfter(
+                findConstructorByParamCount(
+                    "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
+                    2,
+                ),
+            ) {
+                val context = getObjectField(instance, "mContext") as? Context
+                    ?: return@hookConstructorAfter
+                registerNotificationReceiver(context)
+                // This class is constructed well after boot, so anything the engine
+                // rendered before now was lost; ask it to render again.
+                announceSurfacesReady(context)
+                registerUnlockReceiver(context)
+            }
+            Log.i("SonyPods", "MiuiBluetoothNotification constructor hook installed")
+        }.onFailure {
+            Log.w("SonyPods", "MiuiBluetoothNotification constructor hook skipped", it)
         }
     }
 
@@ -402,7 +417,9 @@ object MiBluetoothToastHook : HookContext() {
                             // not relaunch the popup; only a genuine first render (no extra)
                             // may trigger it. While the module UI is the foreground app the
                             // auto popup is suppressed too (the user is already in the app).
-                            if (ConfigManager.popupOnConnect() && islandFirstFloat == null &&
+                            if (ConfigManager.popupOnConnect() &&
+                                ConfigManager.connectDialogMode() == ConfigManager.CONNECT_DIALOG_MODE_MODULE &&
+                                islandFirstFloat == null &&
                                 !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
                             ) {
                                 launchConnectPopup(context, device, address, deviceName)

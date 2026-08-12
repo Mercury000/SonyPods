@@ -12,6 +12,10 @@
     <string name="notification_click_action_summary">Choose where tapping the headset notification opens</string>
     <string name="popup_on_connect">Popup on connect</string>
     <string name="popup_on_connect_summary">Automatically open the control panel when the headphones connect</string>
+    <string name="connect_dialog_mode">Connection dialog style</string>
+    <string name="connect_dialog_mode_summary">Choose the module dialog or the official dialog</string>
+    <string name="connect_dialog_mode_module">Module</string>
+    <string name="connect_dialog_mode_official">Official</string>
     <string name="suppress_popup_on_connect_when_foreground">Suppress popup while module is open</string>
     <string name="suppress_popup_on_connect_when_foreground_summary">Do not auto-open the popup while the module app is in the foreground</string>
     <string name="more_click_action">\"More\" button behavior</string>

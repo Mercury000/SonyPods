@@ -13,6 +13,10 @@
     <string name="notification_click_action_summary">选择点击耳机通知时打开的位置</string>
     <string name="popup_on_connect">连接时弹窗</string>
     <string name="popup_on_connect_summary">耳机连接时自动弹出控制面板</string>
+    <string name="connect_dialog_mode">连接弹窗样式</string>
+    <string name="connect_dialog_mode_summary">选择模块弹窗或官方弹窗</string>
+    <string name="connect_dialog_mode_module">模块</string>
+    <string name="connect_dialog_mode_official">官方</string>
     <string name="suppress_popup_on_connect_when_foreground">模块在前台时禁止连接弹窗</string>
     <string name="suppress_popup_on_connect_when_foreground_summary">模块界面处于前台时不自动弹出连接面板</string>
     <string name="more_click_action">点击更多时行为</string>

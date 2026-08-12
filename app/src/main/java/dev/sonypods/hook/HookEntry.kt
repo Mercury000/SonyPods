@@ -26,8 +26,22 @@ class HookEntry : XposedModule() {
     private var processName: String = "unknown"
     private var runtime: GenerationRuntime? = null
 
+    /**
+     * Keep lifecycle diagnostics visible even before ConfigManager has read the
+     * remote preferences.  A filtered Log.d at this point made a scope which
+     * was never entered indistinguishable from a scope whose hook failed.
+     */
+    private fun lifecycle(message: String, throwable: Throwable? = null) {
+        if (throwable == null) {
+            android.util.Log.i(tag, message)
+        } else {
+            android.util.Log.e(tag, message, throwable)
+        }
+    }
+
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         processName = param.processName
+        lifecycle("onModuleLoaded process=${param.processName} api=$apiVersion")
         if (apiVersion < XposedInterface.API_102) {
             Log.e(tag, "libxposed API ${apiVersion} is below required 102; refusing to initialize")
             return
@@ -36,6 +50,10 @@ class HookEntry : XposedModule() {
     }
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
+        lifecycle(
+            "onPackageLoaded package=${param.packageName} first=${param.isFirstPackage} " +
+                "process=$processName api=$apiVersion",
+        )
         if (apiVersion < XposedInterface.API_102 || param.packageName !in supportedScopes) return
         processName = runCatching { android.app.Application.getProcessName() }.getOrDefault(processName)
         // Class discovery and installation are intentionally deferred to
@@ -44,6 +62,10 @@ class HookEntry : XposedModule() {
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
+        lifecycle(
+            "onPackageReady package=${param.packageName} first=${param.isFirstPackage} " +
+                "process=$processName api=$apiVersion loader=${param.classLoader.javaClass.name}",
+        )
         if (apiVersion < XposedInterface.API_102 || param.packageName !in supportedScopes) return
         processName = runCatching { android.app.Application.getProcessName() }.getOrDefault(processName)
         val current = runtime
@@ -58,10 +80,12 @@ class HookEntry : XposedModule() {
         val scope = param.packageName
         val active = GenerationRuntime(this, processName, scope).also { runtime = it }
         try {
+            lifecycle("installing scope=$scope process=$processName generation=${active.generationId}")
             loadScope(scope, param.classLoader, active)
         } catch (error: Throwable) {
             active.abortReplacement()
             if (runtime === active) runtime = null
+            lifecycle("initial hook load failed scope=$scope process=$processName", error)
             Log.e(tag, "initial hook load failed scope=$scope process=$processName", error)
             throw error
         }
@@ -162,6 +186,7 @@ class HookEntry : XposedModule() {
             }
             "com.milink.service" -> loadHook(MiLinkServiceHook, classLoader, scope, active)
             "com.xiaomi.bluetooth" -> {
+                loadHook(OfficialFastConnectDialogHook, classLoader, scope, active)
                 loadHook(MiBluetoothToastHook, classLoader, scope, active)
                 loadHook(BluetoothUpstreamHeadsetHook(), classLoader, scope, active)
             }
@@ -197,6 +222,7 @@ class HookEntry : XposedModule() {
             "com.milink.service" ->
                 active.contexts().filterIsInstance<MiLinkServiceHook>().forEach { it.startAfterReload(context) }
             "com.xiaomi.bluetooth" -> {
+                active.contexts().filterIsInstance<OfficialFastConnectDialogHook>().forEach { it.startAfterReload(context) }
                 active.contexts().filterIsInstance<MiBluetoothToastHook>().forEach { it.startAfterReload(context) }
                 // Same process also hosts the upstream headset hook, whose
                 // ACTION_CONFIG_CHANGED receiver keeps the new generation's
@@ -229,6 +255,10 @@ class HookEntry : XposedModule() {
         runtime.contexts().firstOrNull { type.isInstance(it) }
 
     private fun loadHook(hook: HookContext, classLoader: ClassLoader, packageName: String, active: GenerationRuntime) {
+        lifecycle(
+            "loadHook type=${hook.javaClass.name} scope=$packageName process=$processName " +
+                "loader=${classLoader.javaClass.name}",
+        )
         active.attach(hook)
         Log.module = this
         hook.module = this
@@ -258,5 +288,6 @@ class HookEntry : XposedModule() {
         }
         ConfigManager.init(hook.prefs)
         hook.onHook()
+        lifecycle("loadHook complete type=${hook.javaClass.name} scope=$packageName process=$processName")
     }
 }

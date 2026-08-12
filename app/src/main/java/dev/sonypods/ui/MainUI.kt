@@ -150,6 +150,7 @@ fun MainUI(
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
+    val connectDialogMode = remember { mutableStateOf(appConfig.connectDialogMode) }
     val suppressPopupOnConnectWhenForeground = remember { mutableStateOf(appConfig.suppressPopupOnConnectWhenForeground) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
@@ -622,6 +623,12 @@ fun MainUI(
                     popupOnConnect.value = it
                     ConfigManager.updatePopupOnConnect(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.android.bluetooth")
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                },
+                connectDialogMode = connectDialogMode,
+                onConnectDialogModeChange = {
+                    connectDialogMode.value = it
+                    ConfigManager.updateConnectDialogMode(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
                 suppressPopupOnConnectWhenForeground = suppressPopupOnConnectWhenForeground,
