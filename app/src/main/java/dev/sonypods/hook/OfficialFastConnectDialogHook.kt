@@ -16,9 +16,13 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.RelativeLayout
 import android.widget.TextView
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
@@ -45,6 +49,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     private const val FAST_CONTROLLER_CLASS =
         "com.android.bluetooth.ble.app.fastconnect.MiuiFastConnectController"
     private const val FAST_CONNECT_ACTION = "com.android.bluetooth.FAST_CONNECT_DEVICE"
+    private const val SINGLE_IMAGE_SCALE = 1.4f
 
     private var mainContext: Context? = null
     private var mainStateReceiver: BroadcastReceiver? = null
@@ -839,15 +844,20 @@ object OfficialFastConnectDialogHook : HookContext() {
                 }
         }
 
-        setPercent("textViewHeadsetLBatteryPercent", snapshot.batteryLeft ?: snapshot.batterySingle)
-        setPercent("textViewHeadsetRBatteryPercent", snapshot.batteryRight)
-        setPercent("textViewBoxBatteryPercent", snapshot.batteryCradle)
+        if (isHeadsetSnapshot(snapshot)) {
+            // Reuse the stock cradle battery row as the single battery row.
+            setPercent("textViewBoxBatteryPercent", snapshot.batterySingle)
+        } else {
+            setPercent("textViewHeadsetLBatteryPercent", snapshot.batteryLeft ?: snapshot.batterySingle)
+            setPercent("textViewHeadsetRBatteryPercent", snapshot.batteryRight)
+            setPercent("textViewBoxBatteryPercent", snapshot.batteryCradle)
 
-        // Keep a single-battery headset visible in the official TWS layout.
-        if (snapshot.batterySingle != null &&
-            snapshot.batteryLeft == null && snapshot.batteryRight == null
-        ) {
-            setPercent("textViewHeadsetRBatteryPercent", snapshot.batterySingle)
+            // Keep a single-battery value visible in the official TWS layout.
+            if (snapshot.batterySingle != null &&
+                snapshot.batteryLeft == null && snapshot.batteryRight == null
+            ) {
+                setPercent("textViewHeadsetRBatteryPercent", snapshot.batterySingle)
+            }
         }
         if (updated == 0) dumpBatteryTextViews()
         Log.d(
@@ -897,15 +907,93 @@ object OfficialFastConnectDialogHook : HookContext() {
             }
         }
 
-        setIcon("imageViewHeadsetLBattery", snapshot.batteryLeft ?: snapshot.batterySingle)
-        setIcon("imageViewHeadsetRBattery", snapshot.batteryRight ?: snapshot.batterySingle)
-        setIcon("imageViewBoxBattery", snapshot.batteryCradle)
+        if (isHeadsetSnapshot(snapshot)) {
+            setIcon("imageViewBoxBattery", snapshot.batterySingle)
+        } else {
+            setIcon("imageViewHeadsetLBattery", snapshot.batteryLeft ?: snapshot.batterySingle)
+            setIcon("imageViewHeadsetRBattery", snapshot.batteryRight ?: snapshot.batterySingle)
+            setIcon("imageViewBoxBattery", snapshot.batteryCradle)
+        }
         Log.d(
             TAG,
             "official dialog stock battery icons applied updated=$updated " +
                 "values=${snapshot.batteryLeft ?: snapshot.batterySingle}/" +
                 "${snapshot.batteryRight ?: snapshot.batterySingle}/${snapshot.batteryCradle}",
         )
+    }
+
+    private fun isHeadsetSnapshot(snapshot: SonyStateSnapshot): Boolean =
+        snapshot.formFactor?.equals("HEADSET", ignoreCase = true) == true
+
+    private fun applyHeadsetLayout(view: View, snapshot: SonyStateSnapshot) {
+        if (!isHeadsetSnapshot(snapshot)) return
+        val activity = activeActivity ?: return
+        val roots = listOfNotNull(view, activity.window?.decorView).distinct()
+
+        hideHeadsetSideRow(roots, activity, "L")
+        hideHeadsetSideRow(roots, activity, "R")
+
+        val boxLabel = findViewByResourceName(roots, activity, "textViewBox") as? TextView
+        boxLabel?.let {
+            it.text = "电量"
+            it.visibility = View.VISIBLE
+        }
+
+        val boxBatteryRow = findViewByResourceName(roots, activity, "textViewBoxBattery")
+        boxBatteryRow?.let {
+            it.visibility = View.VISIBLE
+            centerOfficialImage(view, it)
+        }
+
+        // A single-battery headset has no cradle charging indicator.
+        findViewByResourceName(roots, activity, "imageViewBoxCharge")?.visibility = View.GONE
+        Log.d(TAG, "official dialog headset layout applied: side rows hidden, battery row centered")
+    }
+
+    private fun hideHeadsetSideRow(
+        roots: List<View>,
+        activity: Activity,
+        side: String,
+    ) {
+        val sideLower = side.lowercase()
+        val exactNames = listOf(
+            "textViewHeadset$side",
+            "textViewHeadset${side}Battery",
+            "textViewHeadset${side}BatteryPercent",
+            "imageViewHeadset${side}Battery",
+            "imageViewHeadset${side}Charge",
+        )
+        val targets = exactNames.mapNotNull {
+            findViewByResourceName(roots, activity, it)
+        }.distinct()
+        if (targets.isEmpty()) return
+
+        val root = roots.firstOrNull { containsView(it, targets.first()) } ?: return
+        val row = ancestors(targets.first())
+            .filterIsInstance<ViewGroup>()
+            .firstOrNull { candidate ->
+                if (candidate === root) return@firstOrNull false
+                val descendants = allViews(candidate)
+                val names = descendants.map { resourceEntryName(activity, it.id).lowercase() }
+                val hasThisSide = names.any { it.contains("headset$sideLower") }
+                val hasOtherSide = names.any {
+                    it.contains("headset") &&
+                        (if (sideLower == "l") it.contains("headsetr") else it.contains("headsetl"))
+                }
+                hasThisSide && !hasOtherSide
+            }
+        row?.visibility = View.GONE
+        targets.forEach { it.visibility = View.GONE }
+    }
+
+    private fun ancestors(view: View): List<View> {
+        val result = ArrayList<View>()
+        var current: View? = view.parent as? View
+        while (current != null) {
+            result += current
+            current = current.parent as? View
+        }
+        return result
     }
 
     private data class OfficialBatteryArrays(
@@ -1084,8 +1172,7 @@ object OfficialFastConnectDialogHook : HookContext() {
         val prefs = runCatching { prefsProvider() }.getOrElse { prefs }
         val bitmap = runCatching {
             PodImageLoader.loadBoxBitmap(activity, prefs, address)
-        }.getOrNull() ?: return
-        val drawable = BitmapDrawable(activity.resources, bitmap)
+        }.getOrNull()
 
         val roots = listOfNotNull(view, activity.window?.decorView).distinct()
         val imageViews = roots.flatMap(::allViews).filterIsInstance<ImageView>().distinct()
@@ -1107,15 +1194,112 @@ object OfficialFastConnectDialogHook : HookContext() {
         }
         val headset = namedHeadset ?: semantic.firstOrNull() ?: fallback.getOrNull(0)
         val box = namedBox ?: semantic.firstOrNull { it !== headset } ?: fallback.getOrNull(1)
-        listOfNotNull(headset, box).distinct().forEach {
-            it.setImageDrawable(drawable)
-            it.visibility = View.VISIBLE
+
+        // The stock TWS layout has separate headset and cradle image slots.
+        // Sony's image is a single product image, so collapse the cradle slot
+        // and center the remaining official ImageView in its actual parent.
+        val single = headset ?: box
+        if (single != null) {
+            val drawable = bitmap?.let { BitmapDrawable(activity.resources, it) }
+            drawable?.let { single.setImageDrawable(it) }
+            single.visibility = View.VISIBLE
+            single.scaleX = SINGLE_IMAGE_SCALE
+            single.scaleY = SINGLE_IMAGE_SCALE
+            collapseOfficialBoxImage(roots, activity, single, box)
+            centerOfficialImage(view, single)
         }
+        latestSnapshot?.let { applyHeadsetLayout(view, it) }
         Log.d(
             TAG,
-            "official dialog images applied targets=${listOfNotNull(headset, box).distinct().size} " +
+            "official dialog single image applied hasImage=${bitmap != null} " +
                 "views=${imageViews.size} address=$address",
         )
+    }
+
+    private fun collapseOfficialBoxImage(
+        roots: List<View>,
+        activity: Activity,
+        single: View,
+        box: View?,
+    ) {
+        val boxLayout = findViewByResourceName(roots, activity, "imageViewBoxLayout")
+        if (boxLayout != null && boxLayout !== single && !containsView(boxLayout, single)) {
+            boxLayout.visibility = View.GONE
+        } else if (box != null && box !== single) {
+            box.visibility = View.GONE
+        }
+    }
+
+    private fun centerOfficialImage(root: View, image: View) {
+        // The stock ImageView can be nested in one or more layout wrappers.
+        // Center every direct child in its parent until the official content
+        // root is reached; centering only imageViewHeadsetLayout is not enough
+        // when that wrapper itself is positioned by another container.
+        var child: View? = image
+        while (child != null && child !== root) {
+            centerViewInParent(child)
+            child = child.parent as? View
+        }
+    }
+
+    private fun centerViewInParent(view: View) {
+        val parent = view.parent as? ViewGroup ?: return
+        val params = view.layoutParams ?: return
+        when (params) {
+            is LinearLayout.LayoutParams -> {
+                if (params.weight > 0f) {
+                    params.weight = 0f
+                    if (params.width == 0) params.width = ViewGroup.LayoutParams.WRAP_CONTENT
+                }
+                params.gravity = (params.gravity and Gravity.VERTICAL_GRAVITY_MASK) or
+                    Gravity.CENTER_HORIZONTAL
+                view.layoutParams = params
+            }
+
+            is RelativeLayout.LayoutParams -> {
+                params.addRule(RelativeLayout.CENTER_HORIZONTAL, RelativeLayout.TRUE)
+                params.addRule(RelativeLayout.ALIGN_PARENT_LEFT, 0)
+                params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT, 0)
+                params.addRule(RelativeLayout.ALIGN_PARENT_START, 0)
+                params.addRule(RelativeLayout.ALIGN_PARENT_END, 0)
+                view.layoutParams = params
+            }
+
+            is FrameLayout.LayoutParams -> {
+                params.gravity = (params.gravity and Gravity.VERTICAL_GRAVITY_MASK) or
+                    Gravity.CENTER_HORIZONTAL
+                view.layoutParams = params
+            }
+        }
+        // LayoutParams gravity/rules do not affect custom or nested stock
+        // containers consistently. The post-layout correction is relative to
+        // the direct parent and therefore remains valid at every nesting
+        // level, including an obfuscated ViewGroup implementation.
+        view.post {
+            val parentWidth = parent.width
+            val childWidth = view.width
+            if (parentWidth > 0 && childWidth > 0) {
+                view.translationX = (parentWidth - childWidth) / 2f - view.left
+            }
+        }
+        parent.requestLayout()
+    }
+
+    private fun findViewByResourceName(
+        roots: List<View>,
+        activity: Activity,
+        name: String,
+    ): View? = roots.flatMap(::allViews).firstOrNull {
+        resourceEntryName(activity, it.id).equals(name, ignoreCase = true)
+    }
+
+    private fun containsView(root: View, target: View): Boolean {
+        if (root === target) return true
+        if (root !is ViewGroup) return false
+        for (index in 0 until root.childCount) {
+            if (containsView(root.getChildAt(index), target)) return true
+        }
+        return false
     }
 
     private fun imageResourceMatches(activity: Activity, view: ImageView, entryName: String): Boolean {
