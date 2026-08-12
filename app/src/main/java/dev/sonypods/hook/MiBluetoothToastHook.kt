@@ -36,7 +36,11 @@ import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : HookContext() {
-    private const val POD_DIALOG_PENDING_INTENT_REQUEST_CODE = 10087
+    // Keep notification and automatic-connect entries separate from the island
+    // PendingIntent. Extras are not part of PendingIntent identity, so sharing a
+    // request code could overwrite the island-source marker.
+    private const val POD_DIALOG_NOTIFICATION_PENDING_INTENT_REQUEST_CODE = 10087
+    private const val POD_DIALOG_CONNECT_PENDING_INTENT_REQUEST_CODE = 10089
 
     /**
      * Whether the module app's main activity is the foreground app, queried live
@@ -167,9 +171,10 @@ object MiBluetoothToastHook : HookContext() {
                 }
                 val pendingIntent = PendingIntent.getActivity(
                     context,
-                    POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
+                    POD_DIALOG_NOTIFICATION_PENDING_INTENT_REQUEST_CODE,
                     Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
                         setClassName("com.mercury.sonypods", "dev.sonypods.PopupActivity")
+                        putExtra(SonyPodsAction.EXTRA_POPUP_FROM_ISLAND, false)
                         putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
                         putExtra("bluetoothaddress", bluetoothDevice.address)
                         putExtra("device_name", alias)
@@ -356,9 +361,9 @@ object MiBluetoothToastHook : HookContext() {
     }
 
     fun launchConnectPopup(context: Context, device: BluetoothDevice?, address: String, deviceName: String?) {
-        // Start from the bluetooth process: mirror the notification's PendingIntent
-        // (same request code / FLAG_UPDATE_CURRENT) so the popup behaves exactly like
-        // tapping the island, including the background-activity-start allowance.
+        // Start from the bluetooth process with a separate PendingIntent identity.
+        // This popup is automatic connection UI, not an island click, so closing
+        // it must not trigger the island replay path.
         runCatching {
             val activityOptions = ActivityOptions.makeBasic().apply {
                 setPendingIntentCreatorBackgroundActivityStartMode(
@@ -367,9 +372,10 @@ object MiBluetoothToastHook : HookContext() {
             }
             val pendingIntent = PendingIntent.getActivity(
                 context,
-                POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
+                POD_DIALOG_CONNECT_PENDING_INTENT_REQUEST_CODE,
                 Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
                     setClassName("com.mercury.sonypods", "dev.sonypods.PopupActivity")
+                    putExtra(SonyPodsAction.EXTRA_POPUP_FROM_ISLAND, false)
                     device?.let { putExtra("android.bluetooth.device.extra.DEVICE", it) }
                     putExtra("bluetoothaddress", address)
                     deviceName?.let { putExtra("device_name", it) }

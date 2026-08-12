@@ -39,6 +39,8 @@ object SonyPodsAction {
 
     // Popup activity intent action (manifest intent-filter)
     const val ACTION_SHOW_PODS_UI = "dev.sonypods.action.show_pods_ui"
+    /** True only when PopupActivity was opened by tapping the module island. */
+    const val EXTRA_POPUP_FROM_ISLAND = "dev.sonypods.extra.POPUP_FROM_ISLAND"
 
     // Explicit entry from the fusion device center to the module's Sony detail page.
     // MainActivity is exported, but this action is intentionally not exposed through

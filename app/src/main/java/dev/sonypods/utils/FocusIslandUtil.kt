@@ -28,10 +28,10 @@ object FocusIslandUtil {
     private const val CHANNEL_ID = "sonypods_focus_island"
     private const val CHANNEL_NAME = "SonyPods Battery"
     private const val NOTIFICATION_ID = 10086
-    // Keep this distinct from the legacy PendingIntent request code so an
-    // installed upgrade cannot reuse a record created before the Android 15
-    // background-start opt-in was added.
-    private const val POD_DIALOG_PENDING_INTENT_REQUEST_CODE = 10087
+    // Keep the island entry separate from notification/automatic-popup entries:
+    // PendingIntent identity does not include extras, so sharing a request code
+    // would let a later entry overwrite the source marker.
+    private const val POD_DIALOG_ISLAND_PENDING_INTENT_REQUEST_CODE = 10088
     private const val MODULE_PACKAGE = "com.mercury.sonypods"
     private const val IOS_CHARGING_GREEN = "#34C759"
 
@@ -388,6 +388,7 @@ object FocusIslandUtil {
     ): PendingIntent {
         val intent = Intent(SonyPodsAction.ACTION_SHOW_PODS_UI).apply {
             setClassName(MODULE_PACKAGE, "dev.sonypods.PopupActivity")
+            putExtra(SonyPodsAction.EXTRA_POPUP_FROM_ISLAND, true)
             putExtra("bluetoothaddress", address)
             deviceName?.let { putExtra("device_name", it) }
             device?.let { putExtra("android.bluetooth.device.extra.DEVICE", it) }
@@ -403,7 +404,7 @@ object FocusIslandUtil {
         }
         return PendingIntent.getActivity(
             context,
-            POD_DIALOG_PENDING_INTENT_REQUEST_CODE,
+            POD_DIALOG_ISLAND_PENDING_INTENT_REQUEST_CODE,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             activityOptions.toBundle(),

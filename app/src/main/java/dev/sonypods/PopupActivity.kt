@@ -48,6 +48,7 @@ import dev.sonypods.ui.displayName
 import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
+import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -112,10 +113,10 @@ class PopupActivity : ComponentActivity() {
 
     private fun scheduleSurfacesReplay() {
         if (isChangingConfigurations || surfacesReplayScheduled) return
-        // The popup only ever consumes the module island: the official strong toast
-        // cannot be tapped, so it never launches this activity and nothing needs to
-        // be restored afterwards. Replay is meaningless (and would re-submit the
-        // official toast for nothing) outside the module island mode.
+        // Only tapping the module island consumes the island notification. A
+        // notification click or an automatic connect popup must not recreate
+        // the island after the popup closes.
+        if (!intent.getBooleanExtra(SonyPodsAction.EXTRA_POPUP_FROM_ISLAND, false)) return
         if (ConfigManager.islandMode() != ConfigManager.ISLAND_MODE_MODULE) return
         surfacesReplayScheduled = true
         // HyperOS consumes the island notification when its content action launches
