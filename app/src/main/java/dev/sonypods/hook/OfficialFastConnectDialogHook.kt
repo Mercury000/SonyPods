@@ -925,6 +925,10 @@ object OfficialFastConnectDialogHook : HookContext() {
                     (textView.parent as? View)?.visibility = View.GONE
                 } else {
                     textView.text = "${value.coerceIn(0, 100)}%"
+                    when (resourceName) {
+                        "textViewHeadsetLBatteryPercent" -> showHeadsetSideRow(roots, activity, "L")
+                        "textViewHeadsetRBatteryPercent" -> showHeadsetSideRow(roots, activity, "R")
+                    }
                     showPathToRoot(textView)
                     updated++
                 }
@@ -1011,6 +1015,10 @@ object OfficialFastConnectDialogHook : HookContext() {
                     (imageView.parent as? View)?.visibility = View.GONE
                 }
                 return
+            }
+            when (resourceName) {
+                "imageViewHeadsetLBattery" -> showHeadsetSideRow(roots, activity, "L")
+                "imageViewHeadsetRBattery" -> showHeadsetSideRow(roots, activity, "R")
             }
             val drawable = if (controller != null && arrays != null) {
                 officialBatteryDrawable(controller, arrays, value)
@@ -1108,6 +1116,42 @@ object OfficialFastConnectDialogHook : HookContext() {
             }
         row?.visibility = View.GONE
         targets.forEach { it.visibility = View.GONE }
+    }
+
+    private fun showHeadsetSideRow(
+        roots: List<View>,
+        activity: Activity,
+        side: String,
+    ) {
+        val exactNames = listOf(
+            "textViewHeadset$side",
+            "textViewHeadset${side}Battery",
+            "textViewHeadset${side}BatteryPercent",
+            "imageViewHeadset${side}Battery",
+            "imageViewHeadset${side}Charge",
+        )
+        val targets = exactNames.mapNotNull {
+            findViewByResourceName(roots, activity, it)
+        }.distinct()
+        if (targets.isEmpty()) return
+
+        val sideLower = side.lowercase()
+        val root = roots.firstOrNull { containsView(it, targets.first()) }
+        val row = ancestors(targets.first())
+            .filterIsInstance<ViewGroup>()
+            .firstOrNull { candidate ->
+                if (root != null && candidate === root) return@firstOrNull false
+                val descendants = allViews(candidate)
+                val names = descendants.map { resourceEntryName(activity, it.id).lowercase() }
+                val hasThisSide = names.any { it.contains("headset$sideLower") }
+                val hasOtherSide = names.any {
+                    it.contains("headset") &&
+                        (if (sideLower == "l") it.contains("headsetr") else it.contains("headsetl"))
+                }
+                hasThisSide && !hasOtherSide
+            }
+        row?.visibility = View.VISIBLE
+        targets.forEach { it.visibility = View.VISIBLE }
     }
 
     private fun ancestors(view: View): List<View> {
