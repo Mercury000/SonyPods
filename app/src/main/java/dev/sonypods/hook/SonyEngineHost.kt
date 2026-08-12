@@ -103,6 +103,12 @@ object SonyEngineHost {
 
     /** Address + which sides report; the connect animation replays when this changes. */
     private var lastConnectAnimationKey: String? = null
+    /**
+     * Address handed back by Sound Connect. Its reconnect is a control-session
+     * handoff, not a user-visible new connection: restore surfaces once without
+     * reopening the connect popup.
+     */
+    private var soundConnectHandoffAddress: String? = null
 
     private var commandReceiver: BroadcastReceiver? = null
     private var configReceiver: BroadcastReceiver? = null
@@ -288,6 +294,7 @@ object SonyEngineHost {
         lastRenderedBattery = null
         lastRenderedAddress = null
         lastConnectAnimationKey = null
+        soundConnectHandoffAddress = null
         connectInFlightAddress = null
         Log.d(TAG, "engine generation shut down")
     }
@@ -424,6 +431,7 @@ object SonyEngineHost {
         officialAppLeaseToken = token
         officialAppDeathRecipient = deathRecipient
         officialAppOwnsTandem = true
+        soundConnectHandoffAddress = null
         try {
             token.linkToDeath(deathRecipient, 0)
         } catch (_: RemoteException) {
@@ -474,6 +482,7 @@ object SonyEngineHost {
             Log.d(TAG, "Sound Connect released Tandem but no Sony A2DP device is connected")
             return
         }
+        soundConnectHandoffAddress = runCatching { device.address }.getOrNull()
         connectDevice(device, force = true)
     }
 
@@ -909,6 +918,8 @@ object SonyEngineHost {
     private fun publishState(
         context: Context,
         snapshot: SonyStateSnapshot,
+        suppressConnectPopup: Boolean = soundConnectHandoffAddress
+            ?.equals(snapshot.deviceAddress, ignoreCase = true) == true,
     ) {
         val bundle = snapshot.toBundle()
         SonyBridge.STATE_CONSUMERS.forEach { target ->
@@ -916,6 +927,7 @@ object SonyEngineHost {
                 context.sendBroadcast(
                     Intent(SonyBridge.ACTION_STATE).apply {
                         putExtra(SonyStateSnapshot.EXTRA_SNAPSHOT, bundle)
+                        putExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, suppressConnectPopup)
                         setPackage(target)
                         addFlags(Intent.FLAG_RECEIVER_FOREGROUND or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                     }
@@ -937,6 +949,20 @@ object SonyEngineHost {
     ) {
         val address = snapshot.deviceAddress
         if (address == null || !snapshot.connected) {
+            val handoffAddress = soundConnectHandoffAddress
+            if (handoffAddress != null) {
+                val a2dpStillHasHandoffDevice = connectedSonyDevice()
+                    ?.address
+                    ?.equals(handoffAddress, ignoreCase = true) == true
+                if (!a2dpStillHasHandoffDevice) {
+                    soundConnectHandoffAddress = null
+                    Log.d(
+                        TAG,
+                        "cleared Sound Connect handoff after Sony A2DP device disappeared " +
+                            "address=$handoffAddress",
+                    )
+                }
+            }
             val previous = lastRenderedAddress ?: return
             lastRenderedAddress = null
             lastRenderedBattery = null
@@ -971,19 +997,25 @@ object SonyEngineHost {
             right = pod(snapshot.batteryRight),
             case = pod(snapshot.batteryCradle),
         )
-        if (battery == lastRenderedBattery && address == lastRenderedAddress) return
+        val isSoundConnectHandoff = soundConnectHandoffAddress
+            ?.equals(address, ignoreCase = true) == true
+        if (battery == lastRenderedBattery && address == lastRenderedAddress &&
+            !isSoundConnectHandoff
+        ) return
 
         // Pop the island once per connection. Subsequent battery replies still go
         // through the same bridge so the visible island can update in place, but
         // they must not retrigger the connection animation.
         val hasBatteryData = battery.left != null || battery.right != null || battery.case != null
-        val isNewDevice = address != lastConnectAnimationKey && hasBatteryData
+        val isSoundConnectReplay = isSoundConnectHandoff && hasBatteryData
+        val isNewDevice = !isSoundConnectHandoff &&
+            address != lastConnectAnimationKey && hasBatteryData
         // A surface replay explicitly requested by PopupActivity is a new
         // notification submission, not a battery update.  It must recreate the
         // island even though the connection animation has already been shown.
         val isIslandReplay = islandFirstFloat != null
-        val showIsland = isNewDevice || isIslandReplay
-        if (isNewDevice) lastConnectAnimationKey = address
+        val showIsland = isNewDevice || isSoundConnectReplay || isIslandReplay
+        if (isNewDevice || isSoundConnectReplay) lastConnectAnimationKey = address
         lastRenderedBattery = battery
         lastRenderedAddress = address
 
@@ -1008,9 +1040,21 @@ object SonyEngineHost {
                 // dedicated single-battery variant for them.
                 singleBattery = singleBattery,
                 showIsland = showIsland,
-                islandFirstFloat = islandFirstFloat?.takeIf { showIsland },
+                // Sound Connect handoff is still a surface replay rather than a
+                // new connection (so the popup remains suppressed), but the
+                // module island is allowed to use its normal expanded animation.
+                islandFirstFloat = when {
+                    isSoundConnectReplay -> true
+                    else -> islandFirstFloat?.takeIf { showIsland }
+                },
             )
-            Log.d(TAG, "xiaomi surfaces updated address=$address newDevice=$isNewDevice islandReplay=$isIslandReplay showIsland=$showIsland single=$singleBattery")
+            if (isSoundConnectReplay) soundConnectHandoffAddress = null
+            Log.d(
+                TAG,
+                "xiaomi surfaces updated address=$address " +
+                    "newDevice=$isNewDevice soundConnectReplay=$isSoundConnectReplay " +
+                    "islandReplay=$isIslandReplay showIsland=$showIsland single=$singleBattery",
+            )
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }
 

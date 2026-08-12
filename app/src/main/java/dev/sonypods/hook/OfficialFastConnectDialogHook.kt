@@ -587,6 +587,18 @@ object OfficialFastConnectDialogHook : HookContext() {
                     lastLaunchedAddress = null
                     return
                 }
+                if (intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false)) {
+                    // Sound Connect has just handed the existing session back.
+                    // This is not a new user connection, so consume the address
+                    // without launching a second official dialog.
+                    lastLaunchedAddress = snapshot.deviceAddress
+                    Log.d(
+                        TAG,
+                        "official dialog suppressed for Sound Connect handoff " +
+                            "address=${snapshot.deviceAddress}",
+                    )
+                    return
+                }
                 if (!shouldLaunchOfficialDialog(appContext, snapshot)) return
                 val address = snapshot.deviceAddress
                 if (address.equals(lastLaunchedAddress, ignoreCase = true)) return

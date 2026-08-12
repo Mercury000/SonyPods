@@ -52,6 +52,8 @@ object SonyBridge {
     const val EXTRA_OFFICIAL_SENDER_UID = "official_sender_uid"
     /** Optional island animation override for a surface replay after an action click. */
     const val EXTRA_ISLAND_FIRST_FLOAT = "island_first_float"
+    /** State-only flag: Sound Connect handoff reconnect must not open a connect popup. */
+    const val EXTRA_SUPPRESS_CONNECT_POPUP = "suppress_connect_popup"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
