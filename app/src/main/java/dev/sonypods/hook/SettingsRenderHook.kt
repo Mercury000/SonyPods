@@ -31,12 +31,22 @@ class SettingsRenderHook : HookContext() {
             val m = findMethodByParamCount(animClass, "loadDefaultInternal", 0)
             hookBefore(m) {
                 val instance = this.instance ?: return@hookBefore
+                // MiuiHeadsetAnimation carries the *spoofed* device id, not a
+                // BluetoothDevice — reading mDevice/mBluetoothDevice always came
+                // back null and silently disabled the image swap. Gate on the id
+                // again, and only claim the render when the device that actually
+                // owns this page is a Sony pod (guards against a genuine Xiaomi
+                // headset that happens to share the spoofed id).
+                val deviceId = runCatching {
+                    getObjectField(instance, "mDeviceId") as? String
+                }.getOrNull()
+                if (deviceId != fakeDeviceId()) return@hookBefore
                 val device = runCatching {
                     getObjectField(instance, "mDevice") as? BluetoothDevice
                 }.getOrNull() ?: runCatching {
                     getObjectField(instance, "mBluetoothDevice") as? BluetoothDevice
                 }.getOrNull()
-                if (device == null || !SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
+                if (device != null && !SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
 
                 val ctx = runCatching {
                     (getObjectField(instance, "mContext") as? WeakReference<*>)?.get() as? Context
