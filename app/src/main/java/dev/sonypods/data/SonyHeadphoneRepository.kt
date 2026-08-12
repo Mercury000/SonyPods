@@ -34,8 +34,16 @@ import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheEntry
+import dev.sonypods.config.CapabilityValueCache
 import dev.sonypods.config.CapabilityProbeCache
+import dev.sonypods.config.EqBandInfoCache
 import dev.sonypods.config.FunctionCode
+import dev.sonypods.config.GeneralSettingCapabilityCache
+import dev.sonypods.config.GestureActionCapabilityCache
+import dev.sonypods.config.GestureKeyCapabilityCache
+import dev.sonypods.config.GesturePresetCapabilityCache
+import dev.sonypods.config.QuickAccessActionCapabilityCache
+import dev.sonypods.config.QuickAccessCapabilityCache
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
@@ -55,6 +63,7 @@ import dev.sonypods.protocol.QuickAccessKey
 import dev.sonypods.protocol.QuickAccessServiceCatalog
 import dev.sonypods.protocol.AssignableSettingsType
 import dev.sonypods.protocol.AssignableSettingsAction
+import dev.sonypods.protocol.AssignableSettingsActionCapability
 import dev.sonypods.protocol.AssignableSettingsFunction
 import dev.sonypods.protocol.AssignableSettingsKey
 import dev.sonypods.protocol.AssignableSettingsMapping
@@ -90,6 +99,11 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
 private val MULTIPOINT_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
+
+private fun List<CapabilityValueCache>.replaceCapabilityValue(value: CapabilityValueCache): List<CapabilityValueCache> =
+    filterNot {
+        it.domain == value.domain && it.inquiredTypeCode == value.inquiredTypeCode
+    } + value
 
 /** SC `SourceSwitchControlResult`: SUCCESS 0x00 … FAIL_GIVE_PRIORITY_TO_VOICE_ASSISTANT 0x04. */
 private fun sourceSwitchResultLabel(code: Int): String = when (code) {
@@ -703,7 +717,10 @@ class SonyHeadphoneRepository private constructor(
         mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
         val address = _state.value.connectedDevice?.address.orEmpty()
         val cached = readCapabilityCache(address)
-        if (cached != null && cached.counter == response.capabilityCounter && restoreProfileFromCache(cached)) {
+        val identifierMatches = cached?.identifier.isNullOrBlank() ||
+            response.identifier.isBlank() ||
+            cached.identifier == response.identifier
+        if (cached != null && cached.counter == response.capabilityCounter && identifierMatches && restoreProfileFromCache(cached)) {
             appendLog(
                 "Capability counter ${response.capabilityCounter} matches cache " +
                     "(identifier=${response.identifier}) → omit capability probe; restoring profile"
@@ -729,8 +746,11 @@ class SonyHeadphoneRepository private constructor(
         val functions = SonyCapabilityProbe.restoreFunctions(profile, entry.functions)
         if (functions.isEmpty()) return false
         val restored = SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
+            .withCachedCapabilityDetails(entry)
             .withCachedMultipointSlot(entry)
         _state.update {
+            val quickAccess = entry.quickAccessCapability?.toQuickAccessState(it.quickAccessState)
+            val gestureCapabilities = entry.gestureCapabilities.toGestureCapabilities()
             it.copy(
                 connectedProfile = restored,
                 eqUiCapability = restored.eqUiCapability,
@@ -740,6 +760,22 @@ class SonyHeadphoneRepository private constructor(
                 } else {
                     it.playbackState
                 },
+                quickAccessState = quickAccess ?: it.quickAccessState,
+                gestureOperationsState = if (gestureCapabilities.isNotEmpty()) {
+                    it.gestureOperationsState.copy(capabilities = gestureCapabilities)
+                } else {
+                    it.gestureOperationsState
+                },
+                multipointState = it.multipointState.copy(
+                    supported = it.multipointState.supported || entry.multipointTypeCode != null,
+                    inquiredType = entry.multipointTypeCode ?: it.multipointState.inquiredType,
+                    maxPairedDevices = entry.maxPairedDevices.takeIf { value -> value > 0 }
+                        ?: it.multipointState.maxPairedDevices,
+                    maxConnectedDevices = entry.maxConnectedDevices.takeIf { value -> value > 0 }
+                        ?: it.multipointState.maxConnectedDevices,
+                    supportsFileTransfer = entry.supportsFileTransfer
+                        ?: it.multipointState.supportsFileTransfer,
+                ),
             )
         }
         appendLog(
@@ -757,12 +793,114 @@ class SonyHeadphoneRepository private constructor(
     private fun resolveFromCache(resolved: ConnectedHeadphoneProfile, address: String?): ConnectedHeadphoneProfile {
         if (address.isNullOrBlank()) return resolved
         val entry = readCapabilityCache(address) ?: return resolved
-        if (entry.functions.isEmpty()) return resolved.withCachedMultipointSlot(entry)
+        if (entry.functions.isEmpty()) {
+            return resolved.withCachedCapabilityDetails(entry).withCachedMultipointSlot(entry)
+        }
         val functions = SonyCapabilityProbe.restoreFunctions(resolved, entry.functions)
-        if (functions.isEmpty()) return resolved.withCachedMultipointSlot(entry)
+        if (functions.isEmpty()) {
+            return resolved.withCachedCapabilityDetails(entry).withCachedMultipointSlot(entry)
+        }
         return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport)
+            .withCachedCapabilityDetails(entry)
             .withCachedMultipointSlot(entry)
     }
+
+    /** Restore capability details that cannot be re-derived from the support-function list. */
+    private fun ConnectedHeadphoneProfile.withCachedCapabilityDetails(entry: CapabilityCacheEntry): ConnectedHeadphoneProfile {
+        val currentEq = capabilities.eqConfig
+        val cachedPresets = entry.eqAvailablePresetCodes.mapNotNull { code ->
+            EqPresetId.entries.firstOrNull { it.code.toInt() and 0xFF == code }
+        }
+        val cachedBandCount = entry.eqBandInfo.size.takeIf { it > 0 } ?: currentEq.bandCount
+        val restoredCapabilities = capabilities.copy(
+            features = if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
+                capabilities.features + HeadphoneFeature.MULTIPOINT
+            } else {
+                capabilities.features
+            },
+            eqConfig = currentEq.copy(
+                availablePresets = cachedPresets.ifEmpty { currentEq.availablePresets },
+                bandCount = cachedBandCount,
+                hasClearBass = entry.eqHasClearBass ?: currentEq.hasClearBass,
+            ),
+        )
+        return copy(
+            capabilities = restoredCapabilities,
+            featureBindings = buildFeatureBindings(featureProtocolMap, restoredCapabilities),
+            multipointTypeCode = entry.multipointTypeCode ?: multipointTypeCode,
+        )
+    }
+
+    private fun QuickAccessCapabilityCache.toQuickAccessState(current: QuickAccessState): QuickAccessState? {
+        val key = QuickAccessKey.entries.firstOrNull { it.code.toInt() and 0xFF == keyCode }
+            ?: return null
+        val type = AssignableSettingsType.entries.firstOrNull { it.code.toInt() and 0xFF == typeCode }
+            ?: return null
+        return current.copy(
+            key = key,
+            type = type,
+            actions = actions.mapNotNull { action ->
+                AssignableSettingsAction.entries.firstOrNull {
+                    it.code.toInt() and 0xFF == action.actionCode
+                }?.let {
+                    QuickAccessActionState(
+                        action = it,
+                        currentFunctionCode = current.functionCodes.getOrNull(actions.indexOf(action)),
+                        defaultFunctionCode = action.defaultFunctionCode,
+                        availableFunctionCodes = action.availableFunctionCodes,
+                    )
+                }
+            },
+        )
+    }
+
+    private fun List<GestureKeyCapabilityCache>.toGestureCapabilities(): List<AssignableSettingsKeyCapability> =
+        mapNotNull { keyCache ->
+            val key = AssignableSettingsKey.entries.firstOrNull {
+                it.code.toInt() and 0xFF == keyCache.keyCode
+            } ?: return@mapNotNull null
+            val type = AssignableSettingsType.entries.firstOrNull {
+                it.code.toInt() and 0xFF == keyCache.typeCode
+            } ?: return@mapNotNull null
+            val defaultPreset = AssignableSettingsPreset.entries.firstOrNull {
+                it.code.toInt() and 0xFF == keyCache.defaultPresetCode
+            } ?: return@mapNotNull null
+            val actionsByPreset = keyCache.actionsByPreset.mapNotNull { presetCache ->
+                val preset = AssignableSettingsPreset.entries.firstOrNull {
+                    it.code.toInt() and 0xFF == presetCache.presetCode
+                } ?: return@mapNotNull null
+                val actions = presetCache.actions.mapNotNull { actionCache ->
+                    val action = AssignableSettingsAction.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == actionCache.actionCode
+                    } ?: return@mapNotNull null
+                    val defaultFunction = AssignableSettingsFunction.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == actionCache.defaultFunctionCode
+                    } ?: return@mapNotNull null
+                    val functions = actionCache.availableFunctionCodes.mapNotNull { code ->
+                        AssignableSettingsFunction.entries.firstOrNull {
+                            it.code.toInt() and 0xFF == code
+                        }
+                    }
+                    AssignableSettingsActionCapability(
+                        action = action,
+                        defaultFunction = defaultFunction,
+                        availableFunctions = functions.ifEmpty { listOf(defaultFunction) },
+                    )
+                }
+                preset to actions
+            }.toMap()
+            AssignableSettingsKeyCapability(
+                key = key,
+                type = type,
+                defaultPreset = defaultPreset,
+                presets = keyCache.presets.mapNotNull { code ->
+                    AssignableSettingsPreset.entries.firstOrNull {
+                        it.code.toInt() and 0xFF == code
+                    }
+                },
+                actionsByPreset = actionsByPreset,
+            )
+        }
 
     private fun ConnectedHeadphoneProfile.withCachedMultipointSlot(entry: CapabilityCacheEntry): ConnectedHeadphoneProfile =
         entry.multipointGsSlot.takeIf { it >= 0 }?.let { copy(multipointGsSlot = it) } ?: this
@@ -772,6 +910,8 @@ class SonyHeadphoneRepository private constructor(
         val address = _state.value.connectedDevice?.address ?: return
         val counter = pendingCapabilityCounter ?: return
         val profile = _state.value.connectedProfile ?: return
+        val previous = capabilityCache[address]
+        val eqConfig = profile.capabilities.eqConfig
         val entry = CapabilityCacheEntry(
             counter = counter,
             identifier = pendingCapabilityIdentifier,
@@ -786,10 +926,37 @@ class SonyHeadphoneRepository private constructor(
             multipointGsSlot = profile.multipointGsSlot ?: capabilityCache[address]?.multipointGsSlot ?: -1,
             multipointEnabled = _state.value.multipointState.multipointEnabled
                 ?: capabilityCache[address]?.multipointEnabled,
+            capabilityValues = previous?.capabilityValues.orEmpty(),
+            eqBandInfo = previous?.eqBandInfo.orEmpty(),
+            eqAvailablePresetCodes = eqConfig.availablePresets.map { it.code.toInt() and 0xFF },
+            eqHasClearBass = eqConfig.hasClearBass,
+            playbackSupportsButtons = previous?.playbackSupportsButtons,
+            playbackSupportsMetadata = previous?.playbackSupportsMetadata,
+            quickAccessCapability = previous?.quickAccessCapability,
+            gestureCapabilities = previous?.gestureCapabilities.orEmpty(),
+            multipointTypeCode = _state.value.multipointState.inquiredType
+                ?: previous?.multipointTypeCode,
+            maxPairedDevices = _state.value.multipointState.maxPairedDevices
+                .takeIf { it > 0 } ?: previous?.maxPairedDevices ?: 0,
+            maxConnectedDevices = _state.value.multipointState.maxConnectedDevices
+                .takeIf { it > 0 } ?: previous?.maxConnectedDevices ?: 0,
+            supportsFileTransfer = _state.value.multipointState.supportsFileTransfer
+                ?: previous?.supportsFileTransfer,
+            generalSettingCapability = previous?.generalSettingCapability,
             savedAtMs = System.currentTimeMillis(),
         )
         capabilityCache[address] = entry
         appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
+        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+    }
+
+    /** Update one device's persisted capability entry without losing fields from
+     * the earlier support-function save. */
+    private fun updateCapabilityCache(address: String, transform: (CapabilityCacheEntry) -> CapabilityCacheEntry) {
+        val current = capabilityCache[address] ?: return
+        val updated = transform(current).copy(savedAtMs = System.currentTimeMillis())
+        if (updated == current) return
+        capabilityCache[address] = updated
         cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
@@ -1783,6 +1950,10 @@ class SonyHeadphoneRepository private constructor(
                         }
                         MultipointState(
                             supported = profile?.supports(HeadphoneFeature.MULTIPOINT) == true,
+                            inquiredType = cached?.multipointTypeCode,
+                            maxPairedDevices = cached?.maxPairedDevices ?: 0,
+                            maxConnectedDevices = cached?.maxConnectedDevices ?: 0,
+                            supportsFileTransfer = cached?.supportsFileTransfer,
                             // Restore the last confirmed value immediately. A
                             // following GS GET still remains authoritative.
                             multipointEnabled = optimisticValue ?: cached?.multipointEnabled,
@@ -2067,6 +2238,19 @@ class SonyHeadphoneRepository private constructor(
                 }
             }
         }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    eqBandInfo = response.bands.map { band ->
+                        EqBandInfoCache(
+                            typeCode = band.type?.code?.toInt()?.and(0xFF) ?: -1,
+                            value = band.value,
+                        )
+                    },
+                )
+            }
+        }
     }
 
     private fun sendEqBandSteps(label: String, rawSteps: List<Int>, preset: EqPresetId?) {
@@ -2215,6 +2399,19 @@ class SonyHeadphoneRepository private constructor(
             capabilityCache[address] = existing.copy(playVolumeStep = response.musicVolumeStep)
             cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
         }
+        updateCapabilityCache(address) { entry ->
+            entry.copy(
+                capabilityValues = entry.capabilityValues.replaceCapabilityValue(
+                    CapabilityValueCache(
+                        domain = "PLAY",
+                        inquiredTypeCode = response.inquiredTypeCode,
+                        values = response.raw.unsignedList(),
+                    ),
+                ),
+                playbackSupportsButtons = response.supportsPlaybackButtons,
+                playbackSupportsMetadata = response.supportsMetadata,
+            )
+        }
     }
 
     private fun PlaybackName.toUiValue(): String? = when (status) {
@@ -2330,6 +2527,24 @@ class SonyHeadphoneRepository private constructor(
                 )
             )
         }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    quickAccessCapability = QuickAccessCapabilityCache(
+                        keyCode = response.key.code.toInt() and 0xFF,
+                        typeCode = response.type.code.toInt() and 0xFF,
+                        actions = response.actions.map { action ->
+                            QuickAccessActionCapabilityCache(
+                                actionCode = action.action.code.toInt() and 0xFF,
+                                defaultFunctionCode = action.defaultFunctionCode,
+                                availableFunctionCodes = action.availableFunctionCodes,
+                            )
+                        },
+                    ),
+                )
+            }
+        }
     }
 
     private fun applyQuickAccessStatus(response: ParsedTandemResponse.QuickAccessStatus) {
@@ -2357,6 +2572,35 @@ class SonyHeadphoneRepository private constructor(
                     rawCapability = response.values,
                 )
             )
+        }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    gestureCapabilities = response.keys.map { key ->
+                        GestureKeyCapabilityCache(
+                            keyCode = key.key.code.toInt() and 0xFF,
+                            typeCode = key.type.code.toInt() and 0xFF,
+                            defaultPresetCode = key.defaultPreset.code.toInt() and 0xFF,
+                            presets = key.presets.map { it.code.toInt() and 0xFF },
+                            actionsByPreset = key.actionsByPreset.map { (preset, actions) ->
+                                GesturePresetCapabilityCache(
+                                    presetCode = preset.code.toInt() and 0xFF,
+                                    actions = actions.map { action ->
+                                        GestureActionCapabilityCache(
+                                            actionCode = action.action.code.toInt() and 0xFF,
+                                            defaultFunctionCode = action.defaultFunction.code.toInt() and 0xFF,
+                                            availableFunctionCodes = action.availableFunctions.map {
+                                                it.code.toInt() and 0xFF
+                                            },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            }
         }
     }
 
@@ -2439,6 +2683,17 @@ class SonyHeadphoneRepository private constructor(
                     raw = response.raw.unsignedList(),
                 ),
             )
+        }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    multipointTypeCode = response.inquiredType,
+                    maxPairedDevices = response.maxPairedDevices,
+                    maxConnectedDevices = response.maxConnectedDevices,
+                    supportsFileTransfer = response.fileTransferInMultiConnection == 0,
+                )
+            }
         }
     }
 
@@ -2557,6 +2812,26 @@ class SonyHeadphoneRepository private constructor(
             )
         }
         appendLog("GS multipoint slot discovered: 0x%02X (%s)".format(type, response.title))
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    capabilityValues = entry.capabilityValues.replaceCapabilityValue(
+                        CapabilityValueCache(
+                            domain = "GENERAL_SETTING",
+                            inquiredTypeCode = type,
+                            values = response.raw.unsignedList(),
+                        ),
+                    ),
+                    generalSettingCapability = GeneralSettingCapabilityCache(
+                        settingType = response.settingType,
+                        stringFormat = response.stringFormat,
+                        title = response.title,
+                        description = response.description,
+                    ),
+                )
+            }
+        }
         saveMultipointCache()
         scheduleMultipointRefresh()
     }
@@ -2732,14 +3007,14 @@ class SonyHeadphoneRepository private constructor(
                 supportedFeatures = featureStatusesFor(profile),
             )
         }
+        // Create the cache entry before dispatching the per-domain probes so a
+        // very fast device response cannot arrive before there is an entry to
+        // merge its detailed capability into.
+        saveCapabilityCache(response.functions)
         if (!alreadyProbed) {
             probeCommands.forEach(::sendCommand)
         }
         refreshBasics()
-        // The profile is now fully derived from RET_SUPPORT_FUNCTION; persist the
-        // probe result (counter + function list) so the next connection can omit
-        // the probe when the counter matches (SC `exchanged_capabilities`).
-        saveCapabilityCache(response.functions)
         markProbeComplete()
     }
 
@@ -2756,6 +3031,20 @@ class SonyHeadphoneRepository private constructor(
                         listOf("probe:ret-capability(${response.domain},type=$typeHex,len=${response.raw.size})"),
                 )
             )
+        }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                entry.copy(
+                    capabilityValues = entry.capabilityValues.replaceCapabilityValue(
+                        CapabilityValueCache(
+                            domain = response.domain,
+                            inquiredTypeCode = response.inquiredTypeCode,
+                            values = response.values,
+                        ),
+                    ),
+                )
+            }
         }
     }
 

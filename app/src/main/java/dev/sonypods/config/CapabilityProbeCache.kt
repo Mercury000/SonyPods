@@ -33,11 +33,89 @@ data class CapabilityCacheEntry(
     val multipointGsSlot: Int = -1,
     /** Last device-confirmed value of the GS multipoint setting. */
     val multipointEnabled: Boolean? = null,
+    /** Raw values returned by typed/generic capability responses, keyed by domain/type. */
+    val capabilityValues: List<CapabilityValueCache> = emptyList(),
+    /** EQ extended-info geometry, including the raw band information type/value pairs. */
+    val eqBandInfo: List<EqBandInfoCache> = emptyList(),
+    /** The preset IDs and Clear Bass support used to build the EQ UI. */
+    val eqAvailablePresetCodes: List<Int> = emptyList(),
+    val eqHasClearBass: Boolean? = null,
+    /** PLAY capability bits not derivable from RET_SUPPORT_FUNCTION. */
+    val playbackSupportsButtons: Boolean? = null,
+    val playbackSupportsMetadata: Boolean? = null,
+    /** Quick Access capability grammar used by the editor. */
+    val quickAccessCapability: QuickAccessCapabilityCache? = null,
+    /** ASSIGNABLE_SETTINGS capability grammar used by the gesture editor. */
+    val gestureCapabilities: List<GestureKeyCapabilityCache> = emptyList(),
+    /** PERIPHERAL capability values used by the multipoint page. */
+    val multipointTypeCode: Int? = null,
+    val maxPairedDevices: Int = 0,
+    val maxConnectedDevices: Int = 0,
+    val supportsFileTransfer: Boolean? = null,
+    /** GS capability metadata; the matched slot remains in [multipointGsSlot]. */
+    val generalSettingCapability: GeneralSettingCapabilityCache? = null,
     val savedAtMs: Long = 0L,
 )
 
 @Serializable
 data class FunctionCode(val code: Int, val order: Int)
+
+@Serializable
+data class CapabilityValueCache(
+    val domain: String,
+    val inquiredTypeCode: Int? = null,
+    val values: List<Int> = emptyList(),
+)
+
+@Serializable
+data class EqBandInfoCache(
+    val typeCode: Int,
+    val value: Int,
+)
+
+@Serializable
+data class QuickAccessActionCapabilityCache(
+    val actionCode: Int,
+    val defaultFunctionCode: Int,
+    val availableFunctionCodes: List<Int> = emptyList(),
+)
+
+@Serializable
+data class QuickAccessCapabilityCache(
+    val keyCode: Int,
+    val typeCode: Int,
+    val actions: List<QuickAccessActionCapabilityCache> = emptyList(),
+)
+
+@Serializable
+data class GestureActionCapabilityCache(
+    val actionCode: Int,
+    val defaultFunctionCode: Int,
+    val availableFunctionCodes: List<Int> = emptyList(),
+)
+
+@Serializable
+data class GesturePresetCapabilityCache(
+    val presetCode: Int,
+    val actions: List<GestureActionCapabilityCache> = emptyList(),
+)
+
+@Serializable
+data class GestureKeyCapabilityCache(
+    val keyCode: Int,
+    val typeCode: Int,
+    val defaultPresetCode: Int,
+    val presets: List<Int> = emptyList(),
+    val actionsByPreset: List<GesturePresetCapabilityCache> = emptyList(),
+)
+
+@Serializable
+data class GeneralSettingCapabilityCache(
+    val settingType: Int? = null,
+    val stringFormat: Int? = null,
+    val title: String = "",
+    val description: String = "",
+)
 
 /**
  * Serialization and persistence of the capability-probe cache.

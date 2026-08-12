@@ -2,6 +2,14 @@ package dev.sonypods.headphones
 
 import dev.sonypods.config.CapabilityCacheEntry
 import dev.sonypods.config.CapabilityProbeCache
+import dev.sonypods.config.CapabilityValueCache
+import dev.sonypods.config.EqBandInfoCache
+import dev.sonypods.config.GeneralSettingCapabilityCache
+import dev.sonypods.config.GestureActionCapabilityCache
+import dev.sonypods.config.GestureKeyCapabilityCache
+import dev.sonypods.config.GesturePresetCapabilityCache
+import dev.sonypods.config.QuickAccessActionCapabilityCache
+import dev.sonypods.config.QuickAccessCapabilityCache
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
@@ -46,6 +54,54 @@ class SonyCapabilityProbeTest {
 
         assertEquals(0xD2, decoded.multipointGsSlot)
         assertEquals(true, decoded.multipointEnabled)
+    }
+
+    @Test
+    fun capabilityCache_roundTripsDetailedCapabilityPayloads() {
+        val entry = CapabilityCacheEntry(
+            counter = 7,
+            capabilityValues = listOf(CapabilityValueCache("NCASM", 0x19, listOf(1, 2, 3))),
+            eqBandInfo = listOf(EqBandInfoCache(0x01, 400)),
+            eqAvailablePresetCodes = listOf(0x00, 0x01),
+            eqHasClearBass = true,
+            playbackSupportsButtons = true,
+            playbackSupportsMetadata = false,
+            quickAccessCapability = QuickAccessCapabilityCache(
+                keyCode = 0x00,
+                typeCode = 0x00,
+                actions = listOf(QuickAccessActionCapabilityCache(0x00, 0x01, listOf(0x01, 0x02))),
+            ),
+            gestureCapabilities = listOf(
+                GestureKeyCapabilityCache(
+                    keyCode = 0x00,
+                    typeCode = 0x00,
+                    defaultPresetCode = 0x20,
+                    presets = listOf(0x20),
+                    actionsByPreset = listOf(
+                        GesturePresetCapabilityCache(
+                            presetCode = 0x20,
+                            actions = listOf(GestureActionCapabilityCache(0x00, 0x20, listOf(0x20))),
+                        ),
+                    ),
+                ),
+            ),
+            multipointTypeCode = 0x00,
+            maxPairedDevices = 8,
+            maxConnectedDevices = 2,
+            supportsFileTransfer = true,
+            generalSettingCapability = GeneralSettingCapabilityCache(
+                settingType = 0x00,
+                stringFormat = 0x01,
+                title = "MULTIPOINT_SETTING",
+                description = "two devices",
+            ),
+        )
+
+        val decoded = CapabilityProbeCache.decode(
+            CapabilityProbeCache.encode(mapOf("AA:BB:CC:DD:EE:FF" to entry)),
+        ).getValue("AA:BB:CC:DD:EE:FF")
+
+        assertEquals(entry, decoded)
     }
 
     private val v2Profile = ConnectedHeadphoneProfile(
