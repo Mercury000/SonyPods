@@ -60,7 +60,7 @@
 
 ### 问题反馈
 
-- [提交issue]((https://github.com/Mercury000/SonyPods/issues/new))
+- [提交issue](https://github.com/Mercury000/SonyPods/issues/new)
 - [Telegram频道私信](https://t.me/sonypods)
 - [QQ群1090259252](https://qm.qq.com/q/afQhNE2QUg)
 
