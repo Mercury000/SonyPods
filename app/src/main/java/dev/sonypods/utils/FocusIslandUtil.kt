@@ -95,11 +95,32 @@ object FocusIslandUtil {
         device: BluetoothDevice? = null,
     ): Boolean {
         val now = System.currentTimeMillis()
-        val deadline = islandExpiresAtMillis
+        var deadline = islandExpiresAtMillis
         if (!islandVisible || deadline <= now) {
-            islandVisible = false
-            islandExpiresAtMillis = 0L
-            return false
+            // The island lifecycle fields belong to this classloader. During a
+            // hot reload they reset even though HyperOS still owns the existing
+            // notification record, so a normal recovery update would be rejected
+            // as "not visible" and the old island would stop receiving battery
+            // updates. Rehydrate the short-lived state from our own notification
+            // record before deciding that the island has really disappeared.
+            val notificationStillExists = runCatching {
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                    as NotificationManager
+                manager.activeNotifications.any { it.id == NOTIFICATION_ID }
+            }.getOrDefault(false)
+            if (!notificationStillExists) {
+                islandVisible = false
+                islandExpiresAtMillis = 0L
+                return false
+            }
+            islandVisible = true
+            islandExpiresAtMillis = now +
+                ConfigManager.islandDurationSeconds().coerceIn(
+                    1,
+                    ConfigManager.MAX_ISLAND_DURATION_SECONDS,
+                ) * 1000L
+            deadline = islandExpiresAtMillis
+            Log.d(TAG, "rehydrated existing Focus Island after classloader reload")
         }
         return renderBatteryIsland(
             context = context,
