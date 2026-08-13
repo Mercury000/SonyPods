@@ -409,6 +409,10 @@ object MiBluetoothToastHook : HookContext() {
                         } else {
                             null
                         }
+                        val transportRecovery = intent.getBooleanExtra(
+                            MiuiStrongToastUtil.EXTRA_TRANSPORT_RECOVERY,
+                            false,
+                        )
                         val deviceName = intent.getStringExtra("deviceName")
                         // Pull the freshest config at render time. The app persists the
                         // full config into remote prefs on every change; re-reading here
@@ -416,6 +420,24 @@ object MiBluetoothToastHook : HookContext() {
                         // broadcast was missed (e.g. receiver lost across a hot reload).
                         val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
                         runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
+
+                        fun updateRecoveryIsland() {
+                            val updated = FocusIslandUtil.updateBatteryIsland(
+                                context,
+                                livePrefs,
+                                batteryParams,
+                                address,
+                                singleBattery = single,
+                                deviceName = deviceName,
+                                device = device,
+                            )
+                            if (!updated) {
+                                // An expired island is intentionally not recreated during
+                                // a transport recovery. The notification and state still
+                                // update, but the UI remains in its current no-island state.
+                                Log.d("SonyPods", "recovery island update skipped: island is no longer visible")
+                            }
+                        }
                         if (showIsland) {
                             // PopupActivity re-submits the island (CMD_SURFACES_READY with
                             // EXTRA_ISLAND_FIRST_FLOAT=false) after the popup closes so the
@@ -426,38 +448,51 @@ object MiBluetoothToastHook : HookContext() {
                             if (ConfigManager.popupOnConnect() &&
                                 ConfigManager.connectDialogMode() == ConfigManager.CONNECT_DIALOG_MODE_MODULE &&
                                 islandFirstFloat == null &&
+                                !transportRecovery &&
                                 !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
                             ) {
                                 launchConnectPopup(context, device, address, deviceName)
                             }
                             when (ConfigManager.islandMode()) {
                                 ConfigManager.ISLAND_MODE_MODULE ->
-                                    FocusIslandUtil.showBatteryIsland(
-                                        context,
-                                        livePrefs,
-                                        batteryParams,
-                                        address,
-                                        singleBattery = single,
-                                        deviceName = deviceName,
-                                        device = device,
-                                        durationSeconds = ConfigManager.islandDurationSeconds(),
-                                        islandFirstFloat = islandFirstFloat ?: true,
-                                    )
+                                    if (transportRecovery) {
+                                        updateRecoveryIsland()
+                                    } else {
+                                        FocusIslandUtil.showBatteryIsland(
+                                            context,
+                                            livePrefs,
+                                            batteryParams,
+                                            address,
+                                            singleBattery = single,
+                                            deviceName = deviceName,
+                                            device = device,
+                                            durationSeconds = ConfigManager.islandDurationSeconds(),
+                                            islandFirstFloat = islandFirstFloat ?: true,
+                                        )
+                                    }
                                 ConfigManager.ISLAND_MODE_OFFICIAL ->
-                                    MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                                    if (!transportRecovery) {
+                                        MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                                    } else {
+                                        Log.d("SonyPods", "official island suppressed during Tandem recovery")
+                                    }
                                 else ->
                                     Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
                             }
                         } else if (ConfigManager.islandMode() == ConfigManager.ISLAND_MODE_MODULE) {
-                            FocusIslandUtil.updateBatteryIsland(
-                                context,
-                                livePrefs,
-                                batteryParams,
-                                address,
-                                singleBattery = single,
-                                deviceName = deviceName,
-                                device = device,
-                            )
+                            if (transportRecovery) {
+                                updateRecoveryIsland()
+                            } else {
+                                FocusIslandUtil.updateBatteryIsland(
+                                    context,
+                                    livePrefs,
+                                    batteryParams,
+                                    address,
+                                    singleBattery = single,
+                                    deviceName = deviceName,
+                                    device = device,
+                                )
+                            }
                         }
                     }
                     SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION -> {

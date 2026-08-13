@@ -28,6 +28,8 @@ class GenerationRuntime(
         const val KEY_CONNECTION_PRESENT = "connection_present"
         const val KEY_DEVICE_ADDRESS = "device_address"
         const val KEY_DEVICE_NAME = "device_name"
+        const val KEY_A2DP_DEVICE_ADDRESS = "a2dp_device_address"
+        const val KEY_PHYSICAL_DISCONNECT_ADDRESS = "physical_disconnect_address"
         const val KEY_TRANSPORT = "selected_transport"
         const val KEY_DYNAMIC_BINDER_CLASSES = "dynamic_binder_classes"
         const val KEY_CONFIG_REVISION = "config_revision"
@@ -55,10 +57,12 @@ class GenerationRuntime(
     private val contexts = linkedSetOf<HookContext>()
     private var quiesced = false
     private var reloadSnapshot: SonyStateSnapshot? = null
+    private var reloadState: Bundle? = null
 
     fun attach(context: HookContext) {
         contexts += context
         context.attachRuntime(this)
+        savedState?.let { context.restoreReloadState(it) }
     }
 
     fun updateClassLoader(classLoader: ClassLoader) {
@@ -82,9 +86,21 @@ class GenerationRuntime(
         quiesced = true
         acceptingEvents = false
         val snapshot = runCatching { dev.sonypods.hook.SonyEngineHost.snapshot() }.getOrDefault(SonyStateSnapshot())
+        val reloadAddress = runCatching {
+            dev.sonypods.hook.SonyEngineHost.reloadDeviceAddress()
+        }.getOrNull()
+        val physicalDisconnectAddress = runCatching {
+            dev.sonypods.hook.SonyEngineHost.reloadPhysicalDisconnectAddress()
+        }.getOrNull()
         reloadSnapshot = snapshot
         val dynamicClasses = dynamicBinderClasses()
         val failures = mutableListOf<String>()
+        val reloadState = Bundle()
+        contexts.forEach { context ->
+            runCatching { context.saveReloadState(reloadState) }
+                .onFailure { failures += "${context.javaClass.name}: ${it.message}" }
+        }
+        this.reloadState = reloadState
         contexts.forEach { context ->
             runCatching { context.onBeforeReload() }
                 .onFailure { failures += "${context.javaClass.name}: ${it.message}" }
@@ -107,9 +123,18 @@ class GenerationRuntime(
             putStringArray(KEY_SCOPE_PACKAGES, SCOPE_PACKAGES)
             putLong(KEY_OLD_GENERATION, generationId)
             putLong(KEY_RELOAD_EPOCH, generationId)
-            putBoolean(KEY_CONNECTION_PRESENT, snapshot.connected)
-            putString(KEY_DEVICE_ADDRESS, snapshot.deviceAddress)
+            putBoolean(
+                KEY_CONNECTION_PRESENT,
+                snapshot.connected || (!reloadAddress.isNullOrBlank() && physicalDisconnectAddress.isNullOrBlank()),
+            )
+            // Keep the old key for consumers which already use it, but prefer the
+            // A2DP-derived address in the new dispatcher. Tandem may be false while
+            // the classic audio link is still alive.
+            putString(KEY_DEVICE_ADDRESS, reloadAddress ?: snapshot.deviceAddress)
             putString(KEY_DEVICE_NAME, snapshot.deviceName)
+            putString(KEY_A2DP_DEVICE_ADDRESS, reloadAddress)
+            putString(KEY_PHYSICAL_DISCONNECT_ADDRESS, physicalDisconnectAddress)
+            putAll(reloadState)
             putString(KEY_TRANSPORT, "unknown")
             putStringArrayList(KEY_DYNAMIC_BINDER_CLASSES, ArrayList(dynamicClasses))
             putLong(KEY_CONFIG_REVISION, 0L)
@@ -140,6 +165,12 @@ class GenerationRuntime(
     fun restoreAfterReloadRejection(preexistingFailures: List<String> = emptyList()): List<String> {
         val snapshot = reloadSnapshot ?: SonyStateSnapshot()
         val failures = preexistingFailures.toMutableList()
+        reloadState?.let { state ->
+            contexts.forEach { context ->
+                runCatching { context.restoreReloadState(state) }
+                    .onFailure { failures += "${context.javaClass.name}: ${it.message ?: it.javaClass.simpleName}" }
+            }
+        }
         contexts.toList().asReversed().forEach { context ->
             runCatching { context.onReloadRejected(snapshot) }
                 .onFailure { failures += "${context.javaClass.name}: ${it.message ?: it.javaClass.simpleName}" }

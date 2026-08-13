@@ -43,7 +43,12 @@ object HeadsetStateDispatcher : HookContext() {
     }
 
     @SuppressLint("MissingPermission")
-    internal fun startAfterReload(context: Context, address: String?, name: String?) {
+    internal fun startAfterReload(
+        context: Context,
+        address: String?,
+        name: String?,
+        physicalDisconnectAddress: String? = null,
+    ) {
         // AdapterService.onCreate will not fire again in a live bluetooth process,
         // so the reloaded generation must re-resolve the running instance itself.
         val adapterService = runCatching {
@@ -52,6 +57,10 @@ object HeadsetStateDispatcher : HookContext() {
                 .apply { isAccessible = true }
                 .invoke(null)
         }.getOrNull()
+        // Must happen before start() launches the repository collector and its
+        // startup announce. Otherwise the initial Tandem=false snapshot can clear
+        // surfaces or look like a new connection during a hot reload.
+        SonyEngineHost.restoreHotReloadState(address, physicalDisconnectAddress)
         SonyEngineHost.start(
             context,
             adapterService,
@@ -119,7 +128,16 @@ object HeadsetStateDispatcher : HookContext() {
                     SonyEngineHost.refreshNow("a2dp-connected")
                 } else if (currState == BluetoothHeadset.STATE_DISCONNECTING || currState == BluetoothHeadset.STATE_DISCONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", false)
-                    SonyEngineHost.disconnectDevice(device)
+                    // DISCONNECTING is only an intermediate A2DP state.  Tandem/GATT
+                    // may be rebuilding at the same time, so treating it as a
+                    // physical disconnect clears the recovery identity too early and
+                    // the following same-address transport reconnect looks new.  Only
+                    // the terminal profile state is authoritative here.
+                    if (currState == BluetoothHeadset.STATE_DISCONNECTED) {
+                        SonyEngineHost.disconnectDevice(device)
+                    } else {
+                        Log.d("SonyPods", "A2DP disconnecting; deferring Tandem teardown for ${device.address}")
+                    }
                 }
             }
         }

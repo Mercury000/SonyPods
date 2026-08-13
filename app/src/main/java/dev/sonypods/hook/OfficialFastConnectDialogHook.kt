@@ -61,6 +61,10 @@ object OfficialFastConnectDialogHook : HookContext() {
         "dev.sonypods.extra.OFFICIAL_FAST_CONNECT_ADDRESS"
     private const val MODULE_DIALOG_MARKER = "sony_pods_official_fast_connect"
     private const val SINGLE_IMAGE_SCALE = 1.4f
+    private const val RELOAD_LAST_LAUNCHED_ADDRESS =
+        "sonypods.reload.official_dialog.last_launched_address"
+    private const val RELOAD_RECOVERY_SUPPRESSION_ADDRESS =
+        "sonypods.reload.official_dialog.recovery_suppression_address"
 
     private var mainContext: Context? = null
     private var mainStateReceiver: BroadcastReceiver? = null
@@ -79,10 +83,20 @@ object OfficialFastConnectDialogHook : HookContext() {
     private var officialHandler: Handler? = null
     private var handlerDispatchGuardInstalled = false
     private var lastLaunchedAddress: String? = null
+    private var latestPhysicalDisconnectAddress: String? = null
+    /**
+     * Address of a Tandem recovery for which the stock Bluetooth process must not
+     * show a second fast-connect dialog. This is deliberately separate from
+     * [lastLaunchedAddress]: the Xiaomi process may launch its own unmarked
+     * Activity long after the module-owned Activity has gone away.
+     */
+    private var recoverySuppressionAddress: String? = null
     private var uiCloudFallback: HookCloudModelFallback? = null
     private val fastControllerHookedClasses = mutableSetOf<String>()
     private val fastSuccessHookedClasses = mutableSetOf<String>()
     private var frameworkActivityHookInstalled = false
+    private var uiApplicationHookInstalled = false
+    private var activityLaunchGuardInstalled = false
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val isUiProcess: Boolean
@@ -117,13 +131,29 @@ object OfficialFastConnectDialogHook : HookContext() {
         successSent = false
         latestSnapshot = null
         lastLaunchedAddress = null
+        latestPhysicalDisconnectAddress = null
+        recoverySuppressionAddress = null
         fastControllerHookedClasses.clear()
         fastSuccessHookedClasses.clear()
         frameworkActivityHookInstalled = false
+        uiApplicationHookInstalled = false
+        activityLaunchGuardInstalled = false
         uiCloudFallback?.close()
         uiCloudFallback = null
         uiHandler.removeCallbacksAndMessages(null)
         PodImageLoader.temporaryImageReader = null
+    }
+
+    override fun saveReloadState(state: Bundle) {
+        lastLaunchedAddress?.let { state.putString(RELOAD_LAST_LAUNCHED_ADDRESS, it) }
+        recoverySuppressionAddress?.let {
+            state.putString(RELOAD_RECOVERY_SUPPRESSION_ADDRESS, it)
+        }
+    }
+
+    override fun restoreReloadState(state: Bundle) {
+        lastLaunchedAddress = state.getString(RELOAD_LAST_LAUNCHED_ADDRESS)
+        recoverySuppressionAddress = state.getString(RELOAD_RECOVERY_SUPPRESSION_ADDRESS)
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
@@ -143,6 +173,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun installMainHooks() {
+        installActivityLaunchGuard()
         currentApplicationContext()?.let { registerMainStateReceiver(it) }
         // MiuiBluetoothNotification is constructed after package-ready on some
         // builds. Its context is a reliable second chance for registering the
@@ -170,6 +201,12 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     private fun installUiHooks() {
         installUiImageFallback()
+        installActivityLaunchGuard()
+        installUiApplicationHook()
+        currentApplicationContext()?.let { context ->
+            registerUiStateReceiver(context)
+            SonyBridge.sendCommand(context, SonyBridge.CMD_REPUBLISH)
+        }
         // The modern activity is loaded from a Qigsaw feature after the
         // package classloader is created. Hook the framework lifecycle as a
         // fallback so we can observe it even when its class is not visible at
@@ -179,6 +216,81 @@ object OfficialFastConnectDialogHook : HookContext() {
         installHandlerDispatchGuard(appClassLoader)
         installActivityHooks(FAST_CONNECT_ACTIVITY, "root")
         installActivityHooks(FAST_CONNECT_ACTIVITY_VARIANT, "fast")
+    }
+
+    /**
+     * The UI process can be started by Xiaomi's own unmarked Activity, before
+     * our module-created Activity has ever registered the state receiver. Hook
+     * Application creation so the recovery marker is available before the
+     * first Activity lifecycle callback in that process.
+     */
+    private fun installUiApplicationHook() {
+        if (uiApplicationHookInstalled) return
+        runCatching {
+            hookAfter(
+                findMethodWithLoader(
+                    "android.app.Instrumentation",
+                    appClassLoader,
+                    "callApplicationOnCreate",
+                    android.app.Application::class.java,
+                ),
+                logicalRole = "official-dialog-ui-application-ready",
+            ) {
+                val application = args.firstOrNull() as? android.app.Application ?: return@hookAfter
+                registerUiStateReceiver(application)
+                SonyBridge.sendCommand(application, SonyBridge.CMD_REPUBLISH)
+            }
+            uiApplicationHookInstalled = true
+            Log.i(TAG, "official dialog UI application receiver hook installed")
+        }.onFailure { Log.w(TAG, "official dialog UI application hook unavailable", it) }
+    }
+
+    /**
+     * Cancel Xiaomi's native fast-connect launch before Activity.onCreate. There
+     * is intentionally no post-create fallback: if this hook is unavailable,
+     * the problem must remain visible in the log and be fixed at this boundary.
+     */
+    private fun installActivityLaunchGuard() {
+        if (activityLaunchGuardInstalled) return
+        runCatching {
+            val instrumentation = Class.forName(
+                "android.app.Instrumentation",
+                false,
+                appClassLoader,
+            )
+            val method = instrumentation.declaredMethods
+                .filter { it.name == "execStartActivity" }
+                .filter { method -> method.parameterTypes.any { it == Intent::class.java } }
+                .sortedBy { it.parameterTypes.size }
+                .firstOrNull()
+                ?.apply { isAccessible = true }
+                ?: throw NoSuchMethodException("Instrumentation.execStartActivity(Intent)")
+            hookBefore(
+                method,
+                logicalRole = "official-dialog-start-before-create",
+                required = true,
+            ) {
+                val intent = args.filterIsInstance<Intent>().firstOrNull() ?: return@hookBefore
+                if (!shouldSuppressExternalOfficialIntent(intent)) return@hookBefore
+                Log.i(
+                    TAG,
+                    "blocked delayed unmarked official Activity before launch " +
+                        "class=${intent.component?.className} " +
+                        "address=$recoverySuppressionAddress",
+                )
+                // Instrumentation callers accept a null ActivityResult for a
+                // start that was consumed by a hook. No Activity is constructed.
+                result = null
+            }
+            activityLaunchGuardInstalled = true
+            Log.i(TAG, "official dialog pre-launch guard installed method=${method.name}")
+        }.onFailure {
+            Log.e(
+                TAG,
+                "official dialog pre-launch guard unavailable; no suppression installed",
+                it,
+            )
+        }
     }
 
     private fun installFrameworkActivityHooks() {
@@ -247,6 +359,67 @@ object OfficialFastConnectDialogHook : HookContext() {
         }
 
         return taggedAddress
+    }
+
+    /**
+     * Extracts the address carried by Xiaomi's own fast-connect Intent without
+     * relying on any JADX-generated class, method, or field name. Native and
+     * module-generated flows use the same stable Android Bluetooth extras.
+     */
+    private fun officialIntentAddresses(intent: Intent?): List<String> {
+        intent ?: return emptyList()
+        val values = ArrayList<String>()
+        listOf(
+            "device_address",
+            "deviceAddress",
+            "bluetooth_address",
+            "bluetoothAddress",
+            "headset_address",
+            "address",
+            "mac_address",
+            "mac",
+        ).forEach { key ->
+            intent.getStringExtra(key)?.let(values::add)
+        }
+        intent.getStringArrayExtra("headset_addresses")?.let { values.addAll(it) }
+        intent.getStringArrayListExtra("headset_addresses")?.let { values.addAll(it) }
+        runCatching {
+            intent.getParcelableExtra(
+                "android.bluetooth.device.extra.DEVICE",
+                BluetoothDevice::class.java,
+            )
+        }.getOrNull()?.address?.let(values::add)
+        return values
+            .map(String::trim)
+            .filter(::isBluetoothAddress)
+            .distinct()
+    }
+
+    private fun isOfficialActivityIntent(intent: Intent): Boolean =
+        intent.component?.className == FAST_CONNECT_ACTIVITY ||
+            intent.component?.className == FAST_CONNECT_ACTIVITY_VARIANT
+
+    /**
+     * Native Xiaomi fast-connect launches the same Activity class as the module
+     * but without our marker. Only suppress it when both the bridge and the
+     * Intent identify the exact address previously reported as a Tandem recovery.
+     */
+    private fun shouldSuppressExternalOfficialIntent(intent: Intent?): Boolean {
+        if (intent == null || !isOfficialActivityIntent(intent)) return false
+        if (intent.getStringExtra(EXTRA_MODULE_DIALOG_MARKER) == MODULE_DIALOG_MARKER) return false
+        val recoveryAddress = recoverySuppressionAddress ?: return false
+        val snapshot = latestSnapshot ?: return false
+        if (!snapshot.connected || !snapshot.deviceAddress.equals(recoveryAddress, ignoreCase = true)) {
+            return false
+        }
+        val addresses = officialIntentAddresses(intent)
+        val matches = addresses.any { it.equals(recoveryAddress, ignoreCase = true) }
+        Log.d(
+            TAG,
+            "unmarked official Activity candidate class=${intent.component?.className} " +
+                "addresses=$addresses recovery=$recoveryAddress matches=$matches",
+        )
+        return matches
     }
 
     /** True only for the Activity instance launched by this module for its Sony address. */
@@ -583,11 +756,29 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
                 val snapshot = SonyStateSnapshot.fromBundle(bundle)
                 latestSnapshot = snapshot
+                val suppressPopup = intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false)
+                val physicalDisconnectAddress = intent.getStringExtra(
+                    SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS,
+                )
+                latestPhysicalDisconnectAddress = physicalDisconnectAddress
+                updateRecoverySuppression(snapshot, suppressPopup, physicalDisconnectAddress)
                 if (!snapshot.connected || snapshot.deviceAddress.isNullOrBlank()) {
-                    lastLaunchedAddress = null
+                    // Only the terminal A2DP callback is a real disconnect. A
+                    // Tandem/GATT loss, Sound Connect handoff, or reload snapshot
+                    // must retain the key so recovery is not treated as new UI.
+                    if (!physicalDisconnectAddress.isNullOrBlank()) {
+                        lastLaunchedAddress = null
+                    } else {
+                        Log.d(TAG, "official dialog key retained during transient transport loss")
+                    }
                     return
                 }
-                if (intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false)) {
+                // A same-address state carrying the terminal marker is a genuine
+                // physical reconnect; allow its next connect popup once.
+                if (physicalDisconnectAddress.equals(snapshot.deviceAddress, ignoreCase = true)) {
+                    lastLaunchedAddress = null
+                }
+                if (suppressPopup) {
                     // Sound Connect has just handed the existing session back.
                     // This is not a new user connection, so consume the address
                     // without launching a second official dialog.
@@ -629,8 +820,17 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
                 val snapshot = SonyStateSnapshot.fromBundle(bundle)
                 latestSnapshot = snapshot
+                val physicalDisconnectAddress = intent.getStringExtra(
+                    SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS,
+                )
+                latestPhysicalDisconnectAddress = physicalDisconnectAddress
+                updateRecoverySuppression(
+                    snapshot,
+                    intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false),
+                    physicalDisconnectAddress,
+                )
                 uiCloudFallback?.onState(snapshot)
-                applySnapshot(snapshot)
+                applySnapshot(snapshot, physicalDisconnectAddress)
             }
         }
         runCatching {
@@ -642,6 +842,42 @@ object OfficialFastConnectDialogHook : HookContext() {
             uiContext = appContext
             uiStateReceiver = receiver
         }.onFailure { Log.w(TAG, "ui-process receiver registration failed", it) }
+    }
+
+    private fun updateRecoverySuppression(
+        snapshot: SonyStateSnapshot,
+        suppressPopup: Boolean,
+        physicalDisconnectAddress: String?,
+    ) {
+        val address = snapshot.deviceAddress?.takeIf(::isBluetoothAddress)
+        when {
+            suppressPopup && snapshot.connected && address != null -> {
+                recoverySuppressionAddress = address
+                Log.d(TAG, "official dialog suppression armed for Tandem recovery address=$address")
+            }
+            !snapshot.connected && !physicalDisconnectAddress.isNullOrBlank() -> {
+                if (recoverySuppressionAddress != null) {
+                    Log.d(
+                        TAG,
+                        "official dialog suppression cleared after physical disconnect " +
+                            "address=$recoverySuppressionAddress",
+                    )
+                }
+                recoverySuppressionAddress = null
+            }
+            physicalDisconnectAddress != null -> {
+                recoverySuppressionAddress = null
+            }
+            snapshot.connected && address != null &&
+                recoverySuppressionAddress != null &&
+                !address.equals(recoverySuppressionAddress, ignoreCase = true) -> {
+                Log.d(
+                    TAG,
+                    "official dialog suppression moved to new connected address=$address",
+                )
+                recoverySuppressionAddress = null
+            }
+        }
     }
 
     private fun shouldLaunchOfficialDialog(context: Context, snapshot: SonyStateSnapshot): Boolean {
@@ -780,7 +1016,10 @@ object OfficialFastConnectDialogHook : HookContext() {
         ) + nameBytes
     }
 
-    private fun applySnapshot(snapshot: SonyStateSnapshot) {
+    private fun applySnapshot(
+        snapshot: SonyStateSnapshot,
+        physicalDisconnectAddress: String? = latestPhysicalDisconnectAddress,
+    ) {
         val activity = activeActivity ?: return
         if (!isManagedOfficialActivity(activity)) return
         val address = snapshot.deviceAddress ?: activeAddress ?: return
@@ -789,12 +1028,17 @@ object OfficialFastConnectDialogHook : HookContext() {
         applyOfficialIdentity(snapshot)
 
         if (!snapshot.connected) {
-            // connected=false means the whole Bluetooth session is gone. A
-            // single earbud loss keeps connected=true and is handled by the
-            // battery refresh below, so only the full disconnect dismisses the
-            // synthetic official dialog.
-            Log.d(TAG, "official dialog dismissed after full disconnect address=$address")
-            if (!activity.isFinishing) activity.finish()
+            // Tandem can briefly report false while A2DP remains connected. Keep
+            // the dialog alive in that case; only the explicit terminal A2DP
+            // marker is allowed to dismiss this synthetic official Activity.
+            if (physicalDisconnectAddress.equals(address, ignoreCase = true) ||
+                (!physicalDisconnectAddress.isNullOrBlank() && activeAddress == null)
+            ) {
+                Log.d(TAG, "official dialog dismissed after real A2DP disconnect address=$address")
+                if (!activity.isFinishing) activity.finish()
+            } else {
+                Log.d(TAG, "official dialog retained during Tandem transport loss address=$address")
+            }
             return
         }
         if (!connectingSent || !address.equals(activeAddress, ignoreCase = true)) {

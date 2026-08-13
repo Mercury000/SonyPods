@@ -54,6 +54,8 @@ object SonyBridge {
     const val EXTRA_ISLAND_FIRST_FLOAT = "island_first_float"
     /** State-only flag: Sound Connect handoff reconnect must not open a connect popup. */
     const val EXTRA_SUPPRESS_CONNECT_POPUP = "suppress_connect_popup"
+    /** Address of the terminal A2DP disconnect which caused this state transition. */
+    const val EXTRA_PHYSICAL_DISCONNECT_ADDRESS = "physical_a2dp_disconnect_address"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"

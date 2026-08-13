@@ -114,6 +114,7 @@ object MiuiStrongToastUtil {
         singleBattery: Boolean = false,
         showIsland: Boolean = true,
         islandFirstFloat: Boolean? = null,
+        transportRecovery: Boolean = false,
     ) {
         val intent = Intent(SonyPodsAction.ACTION_SEND_STRONG_TOAST)
         intent.putExtra("batteryParams", batteryParams)
@@ -121,6 +122,7 @@ object MiuiStrongToastUtil {
         intent.putExtra("address", device?.address.orEmpty())
         intent.putExtra(EXTRA_SINGLE_BATTERY, singleBattery)
         intent.putExtra(EXTRA_SHOW_ISLAND, showIsland)
+        intent.putExtra(EXTRA_TRANSPORT_RECOVERY, transportRecovery)
         // islandFirstFloat belongs to a fresh island submission only.  A normal
         // battery update must stay on the notification-update path.
         if (showIsland) {
@@ -148,6 +150,7 @@ object MiuiStrongToastUtil {
     const val EXTRA_SINGLE_BATTERY = "single_battery"
     const val EXTRA_SHOW_ISLAND = "show_island"
     const val EXTRA_ISLAND_FIRST_FLOAT = "island_first_float"
+    const val EXTRA_TRANSPORT_RECOVERY = "transport_recovery"
     const val EXTRA_SOURCE_COLOR = "source_color"
 
     /**

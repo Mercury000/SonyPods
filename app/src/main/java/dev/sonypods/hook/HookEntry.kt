@@ -212,8 +212,12 @@ class HookEntry : XposedModule() {
                     ?: throw IllegalStateException("bluetooth dispatcher was not rebuilt")
                 dispatcher.startAfterReload(
                     context = context,
-                    address = saved.getString(GenerationRuntime.KEY_DEVICE_ADDRESS),
+                    address = saved.getString(GenerationRuntime.KEY_A2DP_DEVICE_ADDRESS)
+                        ?: saved.getString(GenerationRuntime.KEY_DEVICE_ADDRESS),
                     name = saved.getString(GenerationRuntime.KEY_DEVICE_NAME),
+                    physicalDisconnectAddress = saved.getString(
+                        GenerationRuntime.KEY_PHYSICAL_DISCONNECT_ADDRESS,
+                    ),
                 )
                 active.contexts().filterIsInstance<BluetoothUpstreamHeadsetHook>().forEach { it.startAfterReload(context) }
             }

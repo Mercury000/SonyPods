@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Bundle
 import dev.sonypods.bridge.SonyStateSnapshot
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -47,6 +48,16 @@ abstract class HookContext {
      * restores resources that were intentionally quiesced during preparation.
      */
     internal open fun onReloadRejected(snapshot: SonyStateSnapshot) = Unit
+
+    /**
+     * Save small classloader-neutral state before API 102 replaces this generation.
+     * Process-local objects must not be put in the Bundle; hooks may use this only
+     * for stable values such as a Bluetooth address or a deduplication key.
+     */
+    internal open fun saveReloadState(state: Bundle) = Unit
+
+    /** Restore the values written by [saveReloadState] in the replacement generation. */
+    internal open fun restoreReloadState(state: Bundle) = Unit
 
     /** Unregisters a receiver while treating an already-unregistered receiver as idempotent. */
     internal fun unregisterReceiverForReload(context: Context?, receiver: BroadcastReceiver?) {
