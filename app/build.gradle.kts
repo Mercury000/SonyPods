@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.mercury.sonypods.noroot"
-        minSdk = 34
+        minSdk = 33
         targetSdk = 36
         versionCode = 14
         versionName = "1.5.1"
