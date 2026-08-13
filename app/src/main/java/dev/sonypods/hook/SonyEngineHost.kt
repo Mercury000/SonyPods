@@ -640,7 +640,6 @@ object SonyEngineHost {
 
     @SuppressLint("MissingPermission")
     fun disconnectDevice(device: BluetoothDevice) {
-        val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
         // This is an explicit A2DP disconnect, not a recoverable Tandem transport loss.
         transportRecoveryAddress = null
@@ -648,10 +647,34 @@ object SonyEngineHost {
         if (connectInFlightAddress?.equals(address, ignoreCase = true) == true) {
             connectInFlightAddress = null
         }
-        if (repo.state.value.connectedDevice?.address.equals(address, ignoreCase = true)) {
+        // GATT/SPP usually reports false before the terminal A2DP callback. In that
+        // ordering the repository already looks disconnected and no second state
+        // emission is produced, leaving the notification/island alive forever.
+        // Clear the Xiaomi surfaces at the authoritative A2DP boundary instead of
+        // waiting for a repository callback that may already have happened.
+        appContext?.let { clearXiaomiSurfaces(it, address, device) }
+
+        val repo = repository
+        if (repo?.state?.value?.connectedDevice?.address.equals(address, ignoreCase = true)) {
             Log.d(TAG, "disconnecting Tandem session from $address")
-            repo.disconnect()
+            repo?.disconnect()
         }
+    }
+
+    /** Cancel both Xiaomi battery surfaces for a terminal Bluetooth disconnect. */
+    private fun clearXiaomiSurfaces(
+        context: Context,
+        address: String,
+        device: BluetoothDevice? = null,
+    ) {
+        lastRenderedAddress = null
+        lastRenderedBattery = null
+        lastConnectAnimationKey = null
+        (device ?: remoteDevice(context, address))?.let {
+            runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
+        }
+        runCatching { MiuiStrongToastUtil.cancelBatteryIslandByMiuiBt(context) }
+        Log.d(TAG, "xiaomi surfaces cancelled for physical disconnect address=$address")
     }
 
     /** Latest known state; hooks render system surfaces from this. */
@@ -1091,13 +1114,7 @@ object SonyEngineHost {
             physicalDisconnectAddress = null
             lastConnectedAddress = null
             if (previous == null) return
-            lastRenderedAddress = null
-            lastRenderedBattery = null
-            lastConnectAnimationKey = null
-            remoteDevice(context, previous)?.let {
-                runCatching { MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt(context, it) }
-            }
-            runCatching { MiuiStrongToastUtil.cancelBatteryIslandByMiuiBt(context) }
+            clearXiaomiSurfaces(context, previous)
             return
         }
 
