@@ -83,6 +83,7 @@ class HookCloudModelFallback(
                     .onFailure { Log.w(TAG, "hook fallback catalog fetch failed key=$key", it) }
                     .getOrNull()
                     ?.takeIf { it.isNotEmpty() }
+                if (!job.isActive) return@launch
                 if (records == null) {
                     failedCatalogKeys.add(key)
                     return@launch
@@ -99,6 +100,7 @@ class HookCloudModelFallback(
                         (imageUrl.isNullOrBlank() || record.imageUrl == imageUrl)
                 }
                 val stored = runCatching {
+                    check(job.isActive) { "hook fallback generation is closed" }
                     writeAtomically(catalogFile, raw.toByteArray(Charsets.UTF_8))
                 }.onFailure { Log.w(TAG, "hook fallback catalog store failed", it) }
                     .isSuccess
@@ -106,6 +108,7 @@ class HookCloudModelFallback(
                     failedCatalogKeys.add(key)
                     return@launch
                 }
+                if (!job.isActive) return@launch
                 if (matchesCurrentDevice) failedCatalogKeys.remove(key) else failedCatalogKeys.add(key)
                 Log.i(TAG, "hook fallback catalog ready host=${appContext.packageName} records=${records.size}")
                 onCatalogReady()
@@ -138,17 +141,22 @@ class HookCloudModelFallback(
                     .onFailure { Log.w(TAG, "hook fallback image fetch failed url=$url", it) }
                     .getOrNull()
                     ?.takeIf { it.isNotEmpty() }
+                if (!job.isActive) return@launch
                 if (bytes == null) {
                     failedImageKeys.add(key)
                     return@launch
                 }
-                val stored = runCatching { writeAtomically(file, bytes) }
+                val stored = runCatching {
+                    check(job.isActive) { "hook fallback generation is closed" }
+                    writeAtomically(file, bytes)
+                }
                     .onFailure { Log.w(TAG, "hook fallback image store failed url=$url", it) }
                     .isSuccess
                 if (!stored) {
                     failedImageKeys.add(key)
                     return@launch
                 }
+                if (!job.isActive) return@launch
                 failedImageKeys.remove(key)
                 Log.i(TAG, "hook fallback image ready host=${appContext.packageName} address=$address bytes=${bytes.size}")
                 onImageReady(address)

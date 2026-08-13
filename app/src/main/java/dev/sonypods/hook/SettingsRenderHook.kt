@@ -23,8 +23,13 @@ import java.lang.ref.WeakReference
  */
 class SettingsRenderHook : HookContext() {
     private val TAG = "SonyPods-SettingsRender"
+    private var reloadEpoch = 0L
 
     private val animClass = "com.android.settings.bluetooth.tws.MiuiHeadsetAnimation"
+
+    override fun onBeforeReload() {
+        reloadEpoch += 1L
+    }
 
     override fun onHook() {
         runCatching {
@@ -90,7 +95,9 @@ class SettingsRenderHook : HookContext() {
                 }
 
                 // Post at the same 50ms delay the stock code uses.
+                val epoch = reloadEpoch
                 val action = Runnable {
+                    if (epoch != reloadEpoch) return@Runnable
                     Log.i(TAG, "setting catalog box image")
                     ticId.setImageDrawable(drawable)
                 }

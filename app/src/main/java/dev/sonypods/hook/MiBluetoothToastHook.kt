@@ -58,6 +58,7 @@ object MiBluetoothToastHook : HookContext() {
 
     override fun onBeforeReload() {
         surfaceHandler.removeCallbacksAndMessages(null)
+        FocusIslandUtil.onBeforeReload()
         listOf(notificationReceiver, unlockReceiver).filterNotNull().forEach { receiver ->
             unregisterReceiverForReload(receiverContext, receiver)
         }

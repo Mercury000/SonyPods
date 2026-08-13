@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -17,6 +18,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.UUID
+import java.lang.reflect.Modifier
 
 /**
  * Gives the official Sound Connect app exclusive ownership of the Sony Tandem
@@ -101,6 +103,7 @@ object SoundConnectHandoverHook : HookContext() {
         )
         installKeepConnectionServiceHooks(coordinator)
         installMdrSessionHooks(coordinator)
+        coordinator.restoreExistingOwnership()
         leaseCoordinator = coordinator
         this.engineReadyReceiver = engineReadyReceiver
         installedApplication = application
@@ -183,6 +186,7 @@ object SoundConnectHandoverHook : HookContext() {
         private var pendingRelease: Runnable? = null
         private var leaseId: String? = null
         private var leaseToken: IBinder? = null
+        private val restoredServiceMarker = Any()
 
         fun close() {
             synchronized(this) {
@@ -195,6 +199,53 @@ object SoundConnectHandoverHook : HookContext() {
                 releaseLocked("generation-teardown")
             }
             application.unregisterActivityLifecycleCallbacks(this)
+        }
+
+        /** Lifecycle callbacks are not replayed after hot reload; recover live holds. */
+        fun restoreExistingOwnership() {
+            synchronized(this) {
+                runCatching {
+                    val thread = Class.forName("android.app.ActivityThread")
+                        .getDeclaredMethod("currentActivityThread")
+                        .apply { isAccessible = true }
+                        .invoke(null)
+                        ?: return@runCatching
+                    val roots = mutableListOf<Any>(application)
+                    val activities = findFieldValue(thread, "mActivities") as? Map<*, *>
+                    activities?.values.orEmpty().forEach { record ->
+                        val activity = findFieldValue(record, "activity") as? Activity ?: return@forEach
+                        roots += activity
+                        val stopped = findFieldValue(record, "stopped") as? Boolean ?: false
+                        if (!stopped && !activity.isFinishing &&
+                            (android.os.Build.VERSION.SDK_INT < 17 || !activity.isDestroyed)
+                        ) {
+                            startedActivities += activity
+                        }
+                    }
+                    (findFieldValue(thread, "mServices") as? Map<*, *>)?.values
+                        ?.filterNotNull()
+                        ?.let(roots::addAll)
+                    val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+                    roots.flatMap { root ->
+                        findObjectsByClassName(root, MDR_CONNECTION_CONTROLLER, seen)
+                    }.distinct().forEach { controller ->
+                        refreshMdrSession(controller, "hot-reload-existing-mdr")
+                    }
+                }.onFailure { Log.w(TAG, "existing Sound Connect Activity scan failed", it) }
+
+                runCatching {
+                    val manager = application.getSystemService(ActivityManager::class.java)
+                    val running = manager?.getRunningServices(100).orEmpty()
+                    if (running.any {
+                            it.service?.className == KEEP_CONNECTION_SERVICE &&
+                                (it.pid <= 0 || it.pid == Process.myPid())
+                        }
+                    ) {
+                        activeKeepConnectionServices += restoredServiceMarker
+                    }
+                }.onFailure { Log.d(TAG, "existing Sound Connect service scan skipped", it) }
+                reconcileLocked("hot-reload-existing-ownership")
+            }
         }
 
         /** Acquire before Activity.onCreate so Sound Connect cannot race our UI lifecycle. */
@@ -346,6 +397,55 @@ object SoundConnectHandoverHook : HookContext() {
         override fun onActivityResumed(activity: Activity) = Unit
         override fun onActivityPaused(activity: Activity) = Unit
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+
+        private fun findFieldValue(owner: Any?, fieldName: String): Any? {
+            if (owner == null) return null
+            var type: Class<*>? = owner.javaClass
+            while (type != null) {
+                runCatching {
+                    return type!!.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
+                }
+                type = type.superclass
+            }
+            return null
+        }
+
+        private fun findObjectsByClassName(
+            root: Any?,
+            className: String,
+            seen: MutableSet<Any>,
+            depth: Int = 0,
+        ): List<Any> {
+            if (root == null || depth > 8 || !seen.add(root)) return emptyList()
+            if (root.javaClass.name == className) return listOf(root)
+            if (root is String || root is Number || root is Boolean || root is Enum<*> ||
+                root is Class<*> || root is ClassLoader || (root is Context && depth > 0)
+            ) return emptyList()
+            val result = mutableListOf<Any>()
+            when (root) {
+                is Map<*, *> -> root.values.forEach {
+                    result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
+                }
+                is Iterable<*> -> root.forEach {
+                    result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
+                }
+                else -> {
+                    var type: Class<*>? = root.javaClass
+                    while (type != null) {
+                        type.declaredFields.forEach { field ->
+                            if (Modifier.isStatic(field.modifiers) || field.type.isPrimitive) return@forEach
+                            val value = runCatching {
+                                field.isAccessible = true
+                                field.get(root)
+                            }.getOrNull()
+                            result.addAll(findObjectsByClassName(value, className, seen, depth + 1))
+                        }
+                        type = type.superclass
+                    }
+                }
+            }
+            return result
+        }
 
         companion object {
             private fun <T : Any> identitySet(): MutableSet<T> =

@@ -25,6 +25,7 @@ import org.json.JSONObject
 @SuppressLint("MissingPermission")
 class BluetoothUpstreamHeadsetHook : HookContext() {
     private val TAG = "SonyPods-Upstream"
+    private val reloadCallbackBinders = mutableListOf<IBinder>()
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
     private val knownSonyAddresses = linkedSetOf<String>()
     private val callbacks = linkedMapOf<IBinder, Any>()
@@ -75,8 +76,22 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     override fun onHook() {
+        restoreReloadCallbacks()
         hookHeadsetServiceBinder()
         hookNotificationBatteryUpstream()
+    }
+
+    override fun saveReloadState(state: Bundle) {
+        val binders = Bundle()
+        callbacks.keys.forEachIndexed { index, binder -> binders.putBinder(index.toString(), binder) }
+        if (!binders.isEmpty) state.putBundle(KEY_RELOAD_CALLBACK_BINDERS, binders)
+    }
+
+    override fun restoreReloadState(state: Bundle) {
+        reloadCallbackBinders.clear()
+        state.getBundle(KEY_RELOAD_CALLBACK_BINDERS)?.let { binders ->
+            binders.keySet().sorted().forEach { key -> binders.getBinder(key)?.let(reloadCallbackBinders::add) }
+        }
     }
 
     override fun onBeforeReload() {
@@ -91,6 +106,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
+        restoreReloadCallbacks()
         context?.let { registerStatusReceiver(it) }
     }
 
@@ -222,6 +238,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
         stateMirror.register(context)
+        var configRegistered = false
         runCatching {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
@@ -232,8 +249,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             }
             context?.registerReceiver(receiver, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
             configReceiver = receiver
-        }
-        receiverRegistered = true
+            configRegistered = true
+        }.onFailure { Log.w(TAG, "config receiver registration failed", it) }
+        receiverRegistered = configRegistered
         Log.d(TAG, "registered status mirror context=$context")
     }
 
@@ -319,6 +337,21 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             }
             Log.d(TAG, "BinderC6776v callback hooks installed")
         }.onFailure { Log.d(TAG, "hook BinderC6776v callback methods skipped", it) }
+    }
+
+    /** Recreate callback proxies from Binder handles carried across reload. */
+    private fun restoreReloadCallbacks() {
+        if (reloadCallbackBinders.isEmpty()) return
+        runCatching {
+            val stub = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetCallback\$Stub")
+            val asInterface = stub.getDeclaredMethod("asInterface", IBinder::class.java)
+            reloadCallbackBinders.forEach { binder ->
+                val callback = asInterface.invoke(null, binder) ?: return@forEach
+                callbacks[binder] = callback
+            }
+            Log.d(TAG, "restored ${callbacks.size} MIUI headset callbacks after reload")
+        }.onFailure { Log.w(TAG, "failed to restore MIUI headset callbacks after reload", it) }
+        reloadCallbackBinders.clear()
     }
 
     private fun hookBinderVoidDevice(binderClass: Class<*>, methodName: String, after: (BluetoothDevice?, String) -> Unit) {
@@ -695,6 +728,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         // State now arrives via broadcasts from the app-process Sony repository
         // (wired up in phase 3); the local caches are the single source here.
         return miuiRefreshPayload(currentBattery, currentAnc, currentTransparencyVocalEnhancement)
+    }
+
+    private companion object {
+        const val KEY_RELOAD_CALLBACK_BINDERS = "sonypods.reload.miui_callback_binders"
     }
 
     private fun effectiveBattery(): BatteryParams? {

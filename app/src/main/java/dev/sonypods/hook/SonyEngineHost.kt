@@ -93,6 +93,9 @@ object SonyEngineHost {
     private var connectInFlightAddress: String? = null
     /** A2DP has explicitly gone down; do not classify its trailing Tandem callback as recovery. */
     private var physicalDisconnectAddress: String? = null
+    /** Snapshot retained for the rare path where a reload request is rejected after shutdown. */
+    private var preparedReloadAddress: String? = null
+    private var preparedReloadPhysicalDisconnectAddress: String? = null
 
     /**
      * Sound Connect holds this lease while it owns the headphone control session.
@@ -121,6 +124,7 @@ object SonyEngineHost {
     private var capabilityCacheReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
     private var remotePreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var remotePreferenceStore: SharedPreferences? = null
     private var a2dpContext: Context? = null
     private var a2dpListener: BluetoothProfile.ServiceListener? = null
 
@@ -140,7 +144,20 @@ object SonyEngineHost {
         // Keep a snapshot of the store for the rare code paths that need a value without
         // re-fetching; the cycle command and the deferred re-read prefer currentPrefs().
         this.prefs = prefsProvider?.invoke()
-        if (started) return
+        if (started) {
+            // A receiver registration can fail transiently while the system
+            // process is still starting. Retry only the idempotent bindings on
+            // later AdapterService/A2DP callbacks.
+            appContext?.let {
+                registerCommandReceiver(it)
+                registerConfigReceiver(it)
+                registerCapabilityCacheReceiver(it)
+                registerUnlockReceiver(it)
+            }
+            registerRemoteConfigListener()
+            if (a2dpListener == null) bindA2dpProxy(appContext ?: context)
+            return
+        }
         if (scope.coroutineContext[Job]?.isActive != true) scope = newGenerationScope()
         val ctx = context.applicationContext ?: context
         appContext = ctx
@@ -265,11 +282,12 @@ object SonyEngineHost {
         capabilityCacheReceiver = null
         unlockReceiver = null
 
-        val prefsStore = currentPrefs()
+        val prefsStore = remotePreferenceStore ?: currentPrefs()
         remotePreferenceListener?.let { listener ->
             prefsStore?.let { runCatching { it.unregisterOnSharedPreferenceChangeListener(listener) } }
         }
         remotePreferenceListener = null
+        remotePreferenceStore = null
         remoteConfigListenerRegistered = false
         configReceiverRegistered = false
         capabilityCacheReceiverRegistered = false
@@ -312,7 +330,6 @@ object SonyEngineHost {
     private fun registerRemoteConfigListener() {
         if (remoteConfigListenerRegistered) return
         val p = currentPrefs() ?: return
-        remoteConfigListenerRegistered = true
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             runCatching {
                 currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
@@ -320,9 +337,13 @@ object SonyEngineHost {
                 Log.d(TAG, "remote config changed; refreshed; ancCycleModes=${ConfigManager.ancCycleModes()}")
             }.onFailure { Log.w(TAG, "remote config change refresh failed", it) }
         }
-        remotePreferenceListener = listener
-        p.registerOnSharedPreferenceChangeListener(listener)
-        Log.d(TAG, "remote config change listener registered")
+        runCatching {
+            p.registerOnSharedPreferenceChangeListener(listener)
+            remotePreferenceListener = listener
+            remotePreferenceStore = p
+            remoteConfigListenerRegistered = true
+            Log.d(TAG, "remote config change listener registered")
+        }.onFailure { Log.w(TAG, "remote config change listener registration failed", it) }
     }
 
     fun onAdapterService(service: Any?) {
@@ -441,10 +462,15 @@ object SonyEngineHost {
             ?: lastRenderedAddress
 
     /** Address to carry across a hot reload, including a Tandem-only loss. */
-    fun reloadDeviceAddress(): String? = knownSonyAddress()
+    fun reloadDeviceAddress(): String? = (knownSonyAddress() ?: preparedReloadAddress).also {
+        preparedReloadAddress = it
+    }
 
     /** Terminal A2DP disconnect marker to carry across a reload racing teardown. */
-    fun reloadPhysicalDisconnectAddress(): String? = physicalDisconnectAddress
+    fun reloadPhysicalDisconnectAddress(): String? =
+        (physicalDisconnectAddress ?: preparedReloadPhysicalDisconnectAddress).also {
+            preparedReloadPhysicalDisconnectAddress = it
+        }
 
     /**
      * Seeds the replacement generation before its first default repository snapshot
@@ -452,6 +478,8 @@ object SonyEngineHost {
      * disconnect must instead be allowed to clear all user-visible surfaces.
      */
     fun restoreHotReloadState(address: String?, physicalDisconnect: String?) {
+        preparedReloadAddress = null
+        preparedReloadPhysicalDisconnectAddress = null
         val physical = physicalDisconnect?.takeIf { it.isNotBlank() }
         if (physical != null) {
             physicalDisconnectAddress = physical
@@ -591,6 +619,7 @@ object SonyEngineHost {
      * storage. Republish once the user unlocks so the panels and notification catch up.
      */
     private fun registerUnlockReceiver(context: Context) {
+        if (unlockReceiver != null) return
         runCatching {
             val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -618,6 +647,11 @@ object SonyEngineHost {
             val listener = object : BluetoothProfile.ServiceListener {
                     override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                         if (profile == BluetoothProfile.A2DP) {
+                            if (!started || a2dpListener !== this) {
+                                runCatching { adapter.closeProfileProxy(BluetoothProfile.A2DP, proxy) }
+                                Log.d(TAG, "ignoring late A2DP proxy after engine generation ended")
+                                return
+                            }
                             a2dpProxy = proxy
                             Log.d(TAG, "A2DP proxy bound")
                             reconcileConnection()
@@ -625,16 +659,21 @@ object SonyEngineHost {
                     }
 
                     override fun onServiceDisconnected(profile: Int) {
-                        if (profile == BluetoothProfile.A2DP) a2dpProxy = null
+                        if (profile == BluetoothProfile.A2DP && a2dpListener === this) a2dpProxy = null
                     }
                 }
             a2dpContext = context
             a2dpListener = listener
-            adapter.getProfileProxy(
+            val requested = adapter.getProfileProxy(
                 context,
                 listener,
                 BluetoothProfile.A2DP,
             )
+            if (!requested && a2dpListener === listener) {
+                a2dpListener = null
+                a2dpContext = null
+                Log.w(TAG, "A2DP proxy request was rejected; will retry on next engine callback")
+            }
         }.onFailure { Log.w(TAG, "A2DP proxy bind failed", it) }
     }
 
@@ -693,6 +732,7 @@ object SonyEngineHost {
     // ── Commands ──
 
     private fun registerCommandReceiver(context: Context) {
+        if (commandReceiver != null) return
         runCatching {
             val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -739,7 +779,6 @@ object SonyEngineHost {
      */
     private fun registerConfigReceiver(context: Context) {
         if (configReceiverRegistered) return
-        configReceiverRegistered = true
         runCatching {
             val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -754,6 +793,7 @@ object SonyEngineHost {
                 Context.RECEIVER_EXPORTED,
             )
             configReceiver = receiver
+            configReceiverRegistered = true
             Log.d(TAG, "config push receiver registered")
         }.onFailure { Log.w(TAG, "config push receiver registration failed", it) }
     }
@@ -767,7 +807,6 @@ object SonyEngineHost {
      */
     private fun registerCapabilityCacheReceiver(context: Context) {
         if (capabilityCacheReceiverRegistered) return
-        capabilityCacheReceiverRegistered = true
         runCatching {
             val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -782,6 +821,7 @@ object SonyEngineHost {
                 Context.RECEIVER_EXPORTED,
             )
             capabilityCacheReceiver = receiver
+            capabilityCacheReceiverRegistered = true
             Log.d(TAG, "capability cache push receiver registered")
         }.onFailure { Log.w(TAG, "capability cache push receiver registration failed", it) }
     }

@@ -46,6 +46,14 @@ object FocusIslandUtil {
     private var islandVisible = false
     private var islandExpiresAtMillis = 0L
 
+    /** Cancel callbacks owned by the old hook generation without touching the record. */
+    fun onBeforeReload() {
+        dismissRunnable?.let(mainHandler::removeCallbacks)
+        dismissRunnable = null
+        repostRunnable?.let(mainHandler::removeCallbacks)
+        repostRunnable = null
+    }
+
     /** Immediately remove the island notification (device disconnected). */
     fun cancelBatteryIsland(context: Context) {
         dismissRunnable?.let(mainHandler::removeCallbacks)

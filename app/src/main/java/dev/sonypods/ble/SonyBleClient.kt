@@ -31,6 +31,7 @@ import dev.sonypods.protocol.hexString
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicLong
 
 data class DiscoveredSonyDevice(
     val name: String,
@@ -160,6 +161,10 @@ class SonyBleClient(
     private var determineMtuNotificationEnabled = false
     private var unsupportedProbe: UnsupportedEndpointProbe? = null
     private var sppTransport: SonySppTransport? = null
+    /** Invalidates an in-progress RFCOMM connect when this client is closed. */
+    private val sppConnectGeneration = AtomicLong(0L)
+    @Volatile private var sppConnectThread: Thread? = null
+    @Volatile private var pendingSppSocket: BluetoothSocket? = null
     private val writeQueue = ConcurrentLinkedQueue<PendingTandemWrite>()
     private val pendingNotifyEndpoints = ArrayDeque<GattTandemEndpoint>()
     private var handshakeTimeout: Runnable? = null
@@ -214,7 +219,7 @@ class SonyBleClient(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                if (this@SonyBleClient.gatt != null && this@SonyBleClient.gatt !== gatt) {
+                if (this@SonyBleClient.gatt !== gatt) {
                     log("Ignoring stale GATT connected callback")
                     return
                 }
@@ -647,7 +652,8 @@ class SonyBleClient(
         )
         disconnect()
         connectedDevice = connectedDevice?.copy(address = classicRemote.address)
-        Thread {
+        val generation = sppConnectGeneration.get()
+        val connectThread = Thread {
             try {
                 adapter?.cancelDiscovery()
                 log(
@@ -656,23 +662,50 @@ class SonyBleClient(
                 )
                 val spp = createSppSocket(classicRemote)
                 val socket = spp.socket
+                if (sppConnectThread !== Thread.currentThread()) {
+                    runCatching { socket.close() }
+                    return@Thread
+                }
+                pendingSppSocket = socket
+                if (sppConnectGeneration.get() != generation) {
+                    runCatching { socket.close() }
+                    return@Thread
+                }
                 socket.connect()
+                pendingSppSocket = null
+                if (sppConnectGeneration.get() != generation || Thread.currentThread().isInterrupted) {
+                    runCatching { socket.close() }
+                    return@Thread
+                }
                 val sppUuid = spp.uuid
+                if (sppConnectGeneration.get() != generation) {
+                    runCatching { socket.close() }
+                    return@Thread
+                }
                 // Publish the connected device BEFORE the read loop starts: the headphone
                 // pushes its first frame immediately, and onMessage() requires
                 // connectedDevice/connectedProfile to be present (ensureConnectedProfile
                 // throws otherwise, killing the SPP thread and the whole probe).
                 listener.onConnectionStateChanged(true, connectedDevice)
-                sppTransport = SonySppTransport(
+                var createdTransport: SonySppTransport? = null
+                val transport = SonySppTransport(
                     socket = socket,
                     onPayload = { payload -> listener.onMessage(TandemChannel.SPP_MDR, payload) },
                     onClosed = { reason ->
                         log(reason ?: "SPP transport closed")
-                        sppTransport = null
-                        listener.onConnectionStateChanged(false, connectedDevice)
+                        if (sppTransport === createdTransport) {
+                            sppTransport = null
+                            listener.onConnectionStateChanged(false, connectedDevice)
+                        }
                     },
                     log = ::log,
-                ).also { it.start() }
+                ).also { createdTransport = it }
+                if (sppConnectGeneration.get() != generation) {
+                    transport.close()
+                    return@Thread
+                }
+                sppTransport = transport
+                transport.start()
                 log("SPP connected")
                 listener.onConnectionStateChanged(true, connectedDevice)
                 listener.onReady(
@@ -685,14 +718,24 @@ class SonyBleClient(
                 )
             } catch (e: IOException) {
                 log("SPP connection failed: ${e.message}")
-                closeSpp(notify = true)
-                listener.onBluetoothUnavailable("SPP connection failed: ${e.message}")
+                val current = sppConnectGeneration.get() == generation
+                closeSpp(notify = current)
+                if (current) listener.onBluetoothUnavailable("SPP connection failed: ${e.message}")
             } catch (e: SecurityException) {
                 log("SPP permission failure: ${e.message}")
-                closeSpp(notify = true)
-                listener.onBluetoothUnavailable("Bluetooth connect permission failed for SPP")
+                val current = sppConnectGeneration.get() == generation
+                closeSpp(notify = current)
+                if (current) listener.onBluetoothUnavailable("Bluetooth connect permission failed for SPP")
+            } finally {
+                if (sppConnectThread === Thread.currentThread()) {
+                    sppConnectThread = null
+                    pendingSppSocket = null
+                }
             }
-        }.start()
+        }.also {
+            sppConnectThread = it
+            it.start()
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -733,6 +776,11 @@ class SonyBleClient(
     }
 
     private fun closeSpp(notify: Boolean) {
+        sppConnectGeneration.incrementAndGet()
+        sppConnectThread?.interrupt()
+        sppConnectThread = null
+        pendingSppSocket?.let { runCatching { it.close() } }
+        pendingSppSocket = null
         val transport = sppTransport
         sppTransport = null
         transport?.close()

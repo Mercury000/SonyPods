@@ -39,7 +39,14 @@ object HeadsetStateDispatcher : HookContext() {
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
-        receiverContext?.let { startAfterReload(it, snapshot.deviceAddress, snapshot.deviceName) }
+        receiverContext?.let {
+            startAfterReload(
+                context = it,
+                address = SonyEngineHost.reloadDeviceAddress() ?: snapshot.deviceAddress,
+                name = snapshot.deviceName,
+                physicalDisconnectAddress = SonyEngineHost.reloadPhysicalDisconnectAddress(),
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -70,12 +77,14 @@ object HeadsetStateDispatcher : HookContext() {
         )
         registerAppRequestReceiver(context)
         registerAclReceiver(context)
-        if (!address.isNullOrBlank()) {
+        if (!address.isNullOrBlank() && physicalDisconnectAddress.isNullOrBlank()) {
             runCatching {
                 context.getSystemService(android.bluetooth.BluetoothManager::class.java)
                     ?.adapter?.getRemoteDevice(address)
                     ?.let { SonyEngineHost.connectDevice(it, force = true) }
             }.onFailure { Log.w("SonyPods", "saved-address reconnect failed address=$address", it) }
+        } else if (!address.isNullOrBlank()) {
+            Log.d("SonyPods", "saved-address reconnect skipped after physical disconnect address=$address")
         }
     }
 

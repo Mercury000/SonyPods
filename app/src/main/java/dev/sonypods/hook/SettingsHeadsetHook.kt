@@ -20,6 +20,9 @@ import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import java.lang.ref.WeakReference
+import java.lang.reflect.Modifier
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.WeakHashMap
 
 @SuppressLint("MissingPermission")
@@ -324,7 +327,11 @@ object SettingsHeadsetHook : HookContext() {
 
         runCatching {
             hookBefore(findMethod("com.android.settings.bluetooth.tws.MiuiHeadsetBattery", "onBatteryChanged", String::class.java)) {
-                val device = batteryViews[instance]
+                val device = batteryViews[instance] ?: findBatteryDevice(instance).also { found ->
+                    if (instance != null && found != null && isSonyPod(found)) {
+                        batteryViews[instance!!] = found
+                    }
+                }
                 Log.d(TAG, "Battery.onBatteryChanged(String) original=${args[0]} mappedDevice=${device.describe()} isSony=${isSonyPod(device)} forced=${settingsBatteryString()}")
                 if (!isSonyPod(device)) return@hookBefore
                 result = null
@@ -450,6 +457,7 @@ object SettingsHeadsetHook : HookContext() {
                             currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
                             Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
                             saveState(context)
+                            rebindExistingBatteryViews()
                             applyBatteryLayouts()
                             updateBatteryViews()
                             updateFragments()
@@ -497,6 +505,7 @@ object SettingsHeadsetHook : HookContext() {
         context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         stateReceiver = receiver
         receiverRegistered = true
+        rebindExistingBatteryViews()
         requestBluetoothStatus("receiver-register")
         Log.d(TAG, "registered status receiver context=$context")
     }
@@ -529,6 +538,108 @@ object SettingsHeadsetHook : HookContext() {
             runCatching { updateBatteryView(view) }
                 .onFailure { Log.w(TAG, "update battery view failed", it) }
         }
+    }
+
+    /**
+     * MiuiHeadsetBattery instances survive a libxposed reload, but their
+     * WeakHashMap belongs to the old classloader. Re-discover the small set of
+     * live battery objects from ActivityThread so an already-open Settings page
+     * keeps receiving state immediately after the new generation starts.
+     */
+    private fun rebindExistingBatteryViews() {
+        runCatching {
+            val thread = Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentActivityThread")
+                .apply { isAccessible = true }
+                .invoke(null)
+                ?: return
+            var type: Class<*>? = thread.javaClass
+            var activities: Any? = null
+            while (type != null && activities == null) {
+                activities = runCatching {
+                    type!!.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
+                }.getOrNull()
+                type = type.superclass
+            }
+            val records = (activities as? Map<*, *>)?.values.orEmpty()
+            val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+            records.forEach { record ->
+                val activity = findFieldValue(record, "activity") ?: return@forEach
+                findObjectsByClassName(activity, "com.android.settings.bluetooth.tws.MiuiHeadsetBattery", seen)
+                    .forEach { battery ->
+                        val device = findBatteryDevice(battery) ?: return@forEach
+                        if (isSonyPod(device)) batteryViews[battery] = device
+                    }
+            }
+        }.onFailure { Log.d(TAG, "existing Settings battery rebind skipped", it) }
+    }
+
+    private fun findObjectsByClassName(
+        root: Any?,
+        className: String,
+        seen: MutableSet<Any>,
+        depth: Int = 0,
+    ): List<Any> {
+        if (root == null || depth > 7 || !seen.add(root)) return emptyList()
+        if (root.javaClass.name == className) return listOf(root)
+        if (root is String || root is Number || root is Boolean || root is Enum<*> ||
+            root is Class<*> || root is ClassLoader || (root is Context && depth > 0) ||
+                root is View
+        ) return emptyList()
+        val result = mutableListOf<Any>()
+        when (root) {
+            is Map<*, *> -> root.values.forEach {
+                result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
+            }
+            is Iterable<*> -> root.forEach {
+                result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
+            }
+            else -> {
+                var type: Class<*>? = root.javaClass
+                while (type != null) {
+                    type.declaredFields.forEach { field ->
+                        if (Modifier.isStatic(field.modifiers) || field.type.isPrimitive) return@forEach
+                        val value = runCatching {
+                            field.isAccessible = true
+                            field.get(root)
+                        }.getOrNull()
+                        result.addAll(findObjectsByClassName(value, className, seen, depth + 1))
+                    }
+                    type = type.superclass
+                }
+            }
+        }
+        return result
+    }
+
+    private fun findBatteryDevice(owner: Any?): BluetoothDevice? {
+        if (owner == null) return null
+        var type: Class<*>? = owner.javaClass
+        while (type != null) {
+            type.declaredFields.forEach { field ->
+                if (Modifier.isStatic(field.modifiers)) return@forEach
+                runCatching {
+                    field.isAccessible = true
+                    field.get(owner)
+                }.getOrNull()?.let { value ->
+                    if (value is BluetoothDevice) return value
+                }
+            }
+            type = type.superclass
+        }
+        return null
+    }
+
+    private fun findFieldValue(owner: Any?, fieldName: String): Any? {
+        if (owner == null) return null
+        var type: Class<*>? = owner.javaClass
+        while (type != null) {
+            runCatching {
+                return type!!.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
+            }
+            type = type.superclass
+        }
+        return null
     }
 
     private fun isOverEar(): Boolean = currentFormFactor == "HEADSET"

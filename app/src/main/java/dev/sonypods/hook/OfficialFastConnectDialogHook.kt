@@ -158,7 +158,8 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
         if (isUiProcess) {
-            activeActivity?.let { registerUiStateReceiver(it) }
+            currentApplicationContext()?.let { registerUiStateReceiver(it) }
+            findExistingManagedActivity()?.let(::onOfficialActivityCreated)
         } else {
             currentApplicationContext()?.let { registerMainStateReceiver(it) }
         }
@@ -166,7 +167,8 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     internal fun startAfterReload(context: Context) {
         if (isUiProcess) {
-            activeActivity?.let { registerUiStateReceiver(it) }
+            registerUiStateReceiver(context)
+            findExistingManagedActivity()?.let(::onOfficialActivityCreated)
         } else {
             registerMainStateReceiver(context)
         }
@@ -216,6 +218,10 @@ object OfficialFastConnectDialogHook : HookContext() {
         installHandlerDispatchGuard(appClassLoader)
         installActivityHooks(FAST_CONNECT_ACTIVITY, "root")
         installActivityHooks(FAST_CONNECT_ACTIVITY_VARIANT, "fast")
+        // Hot reload does not replay Activity.onCreate. Rebind the currently
+        // visible module-owned official dialog so its controller, view and
+        // concrete feature-class hooks are restored immediately.
+        findExistingManagedActivity()?.let(::onOfficialActivityCreated)
     }
 
     /**
@@ -685,6 +691,37 @@ object OfficialFastConnectDialogHook : HookContext() {
         return candidates.firstOrNull()
     }
 
+    /** Find a still-running module-owned fast-connect Activity after hot reload. */
+    private fun findExistingManagedActivity(): Activity? = runCatching {
+        val thread = Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentActivityThread")
+            .apply { isAccessible = true }
+            .invoke(null)
+            ?: return@runCatching null
+        var type: Class<*>? = thread.javaClass
+        var activities: Any? = null
+        while (type != null && activities == null) {
+            activities = runCatching {
+                type!!.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
+            }.getOrNull()
+            type = type.superclass
+        }
+        val records = (activities as? Map<*, *>)?.values.orEmpty()
+        records.asSequence()
+            .mapNotNull { record ->
+                var recordType: Class<*>? = record?.javaClass
+                var activity: Any? = null
+                while (recordType != null && activity == null) {
+                    activity = runCatching {
+                        recordType!!.getDeclaredField("activity").apply { isAccessible = true }.get(record)
+                    }.getOrNull()
+                    recordType = recordType.superclass
+                }
+                activity as? Activity
+            }
+            .firstOrNull(::isManagedOfficialActivity)
+    }.getOrNull()
+
     private fun findControllerView(controller: Any): View? {
         var type: Class<*>? = controller.javaClass
         val candidates = ArrayList<View>()
@@ -829,6 +866,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                     intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false),
                     physicalDisconnectAddress,
                 )
+                if (activeActivity == null) findExistingManagedActivity()?.let(::onOfficialActivityCreated)
                 uiCloudFallback?.onState(snapshot)
                 applySnapshot(snapshot, physicalDisconnectAddress)
             }
