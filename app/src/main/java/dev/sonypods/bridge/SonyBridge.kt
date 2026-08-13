@@ -2,37 +2,16 @@ package dev.sonypods.bridge
 
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
-import android.os.IBinder
-import android.os.Process
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.engine.AppEngineHost
 
-/**
- * Cross-process contract between the Sony engine (hosted in the `com.android.bluetooth`
- * hook process) and every consumer: the module UI and the HyperOS surfaces.
- *
- * State flows engine -> consumers as a [SonyStateSnapshot]; commands flow
- * consumers -> engine as [ACTION_COMMAND] broadcasts.
- */
+/** Contract for the application-hosted Sony engine and its UI/state consumers. */
 object SonyBridge {
     /** Engine -> consumers: full state snapshot. */
     const val ACTION_STATE = "dev.sonypods.action.state"
 
     /** Consumers -> engine: a control command, see [EXTRA_COMMAND]. */
     const val ACTION_COMMAND = "dev.sonypods.action.command"
-
-    /** Engine -> official app hook: reassert a live lease after bluetooth-process restart. */
-    const val ACTION_ENGINE_READY = "dev.sonypods.action.engine_ready"
-
-    /**
-     * Engine -> app (durable persistence) and app -> engine (value push):
-     * the encoded capability-probe cache. The payload is [EXTRA_CAPABILITY_JSON].
-     * The engine broadcasts it to the app, which persists it into the shared
-     * remote-prefs store (the only side where that store is writable) and echoes
-     * it back so the engine's in-process overlay stays current even when the
-     * hook-side remote-prefs read comes back empty.
-     */
-    const val ACTION_CAPABILITY_CACHE = "dev.sonypods.action.capability_cache"
 
     const val EXTRA_COMMAND = "command"
     const val EXTRA_INT = "value_int"
@@ -45,19 +24,9 @@ object SonyBridge {
     const val EXTRA_QUICK_ACCESS_ACTION_INDEX = "quick_access_action_index"
     const val EXTRA_QUICK_ACCESS_FUNCTION_CODE = "quick_access_function_code"
     const val EXTRA_PRESET_CODE = "gesture_preset_code"
-    const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
-    const val EXTRA_OFFICIAL_LEASE_ID = "official_lease_id"
-    const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
-    const val EXTRA_OFFICIAL_SENDER_PACKAGE = "official_sender_package"
-    const val EXTRA_OFFICIAL_SENDER_UID = "official_sender_uid"
-    /** Optional island animation override for a surface replay after an action click. */
-    const val EXTRA_ISLAND_FIRST_FLOAT = "island_first_float"
-    /** State-only flag: Sound Connect handoff reconnect must not open a connect popup. */
-    const val EXTRA_SUPPRESS_CONNECT_POPUP = "suppress_connect_popup"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
-    const val CMD_CYCLE_NOISE_CONTROL = "cycle_noise_control"
     const val CMD_SET_AMBIENT_LEVEL = "set_ambient_level"
     const val CMD_SET_AMBIENT_VOICE = "set_ambient_voice"
     const val CMD_SET_NOISE_ADAPTIVE = "set_noise_adaptive"
@@ -85,47 +54,25 @@ object SonyBridge {
     const val CMD_SET_PLAYBACK_VOLUME = "set_playback_volume"
     const val CMD_CONNECT = "connect"
     const val CMD_DISCONNECT = "disconnect"
-    const val CMD_OFFICIAL_APP_ACQUIRE = "official_app_acquire"
-    const val CMD_OFFICIAL_APP_RELEASE = "official_app_release"
+    const val CMD_START_SCAN = "start_scan"
     const val CMD_REFRESH = "refresh"
-    /** The app finished writing a model image; refresh system surfaces immediately. */
+    /** The app finished writing a model image; refresh app surfaces immediately. */
     const val CMD_IMAGE_READY = "image_ready"
-    /** The app finished publishing the cloud model catalog to Remote Files. */
+    /** The app finished updating the local cloud model catalog. */
     const val CMD_CLOUD_MODEL_INFO_READY = "cloud_model_info_ready"
     /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
     const val CMD_REPUBLISH = "republish"
 
-    /**
-     * Sent by the process that renders the HyperOS notification and island once its
-     * receiver is up. The engine then re-renders, because anything it pushed before
-     * that point was dropped on the floor.
-     */
-    const val CMD_SURFACES_READY = "surfaces_ready"
     const val CMD_DEBUG_RAW = "debug_raw"
 
-    /** The process that hosts the engine; all commands are addressed to it. */
-    const val ENGINE_PACKAGE = "com.android.bluetooth"
-    const val OFFICIAL_APP_PACKAGE = "com.sony.songpal.mdr"
+    /** The application process hosts the engine in the no-root build. */
+    const val ENGINE_PACKAGE = "com.mercury.sonypods.noroot"
 
     /** Processes that render headphone state in system surfaces, plus the module app. */
-    val STATE_CONSUMERS = listOf(
-        "com.mercury.sonypods",
-        "com.xiaomi.bluetooth",
-        "com.milink.service",
-        "com.android.settings",
-    )
+    val STATE_CONSUMERS = listOf("com.mercury.sonypods.noroot")
 
     fun sendCommand(context: Context, command: String, fill: Intent.() -> Unit = {}) {
-        runCatching {
-            context.sendBroadcast(
-                Intent(ACTION_COMMAND).apply {
-                    putExtra(EXTRA_COMMAND, command)
-                    fill()
-                    setPackage(ENGINE_PACKAGE)
-                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                }
-            )
-        }
+        runCatching { AppEngineHost.handle(Intent(ACTION_COMMAND).apply { putExtra(EXTRA_COMMAND, command); fill() }) }
     }
 
     fun imageReady(context: Context, address: String) =
@@ -220,45 +167,4 @@ object SonyBridge {
             putExtra("device_name", name)
         }
 
-    fun acquireOfficialAppLease(context: Context, leaseId: String, token: IBinder): Boolean =
-        sendOfficialAppLease(context, CMD_OFFICIAL_APP_ACQUIRE, leaseId, token)
-
-    fun releaseOfficialAppLease(context: Context, leaseId: String, token: IBinder): Boolean =
-        sendOfficialAppLease(context, CMD_OFFICIAL_APP_RELEASE, leaseId, token)
-
-    private fun sendOfficialAppLease(
-        context: Context,
-        command: String,
-        leaseId: String,
-        token: IBinder,
-    ): Boolean = runCatching {
-        context.sendBroadcast(
-            Intent(ACTION_COMMAND).apply {
-                putExtra(EXTRA_COMMAND, command)
-                putExtra(EXTRA_OFFICIAL_LEASE_ID, leaseId)
-                putExtra(EXTRA_OFFICIAL_SENDER_PACKAGE, OFFICIAL_APP_PACKAGE)
-                putExtra(EXTRA_OFFICIAL_SENDER_UID, Process.myUid())
-                putExtras(Bundle().apply { putBinder(EXTRA_OFFICIAL_LEASE_TOKEN, token) })
-                setPackage(ENGINE_PACKAGE)
-                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            }
-        )
-    }.isSuccess
-
-    /**
-     * Push the encoded capability-probe cache to the engine (app -> engine value
-     * push, mirroring the config broadcast; used by the app receiver to echo the
-     * engine's own write back so the in-process overlay stays current).
-     */
-    fun sendCapabilityCache(context: Context, json: String) {
-        runCatching {
-            context.sendBroadcast(
-                Intent(ACTION_CAPABILITY_CACHE).apply {
-                    putExtra(EXTRA_CAPABILITY_JSON, json)
-                    setPackage(ENGINE_PACKAGE)
-                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                }
-            )
-        }
-    }
 }

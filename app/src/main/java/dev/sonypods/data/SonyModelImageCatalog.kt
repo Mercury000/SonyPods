@@ -10,36 +10,18 @@ data class SonyModelImageMatch(
 )
 
 /**
- * Resolves model artwork from the catalog published by the module app.
- *
- * The catalog is deliberately supplied as a reader instead of a Context. A hooked
- * process cannot read the module app's ordinary SharedPreferences or private files;
- * the reader is backed by libxposed's openRemoteFile() and therefore works from
- * com.android.bluetooth as well as after a scope restart.
+ * Resolves model artwork from the catalog published by the app.
  */
 class SonyModelImageCatalog(
-    private var remoteJsonReader: (() -> String?)? = null,
+    private var jsonReader: (() -> String?)? = null,
 ) {
     @Volatile
     private var entries: List<Entry> = emptyList()
 
-    /** Replace the Remote File reader and load the latest published catalog. */
-    @Synchronized
-    fun attachRemoteReader(reader: (() -> String?)?): Boolean {
-        remoteJsonReader = reader
-        return refresh()
-    }
-
-    /**
-     * Reload the catalog from Remote Files.
-     *
-     * A failed or temporarily unavailable read leaves the last valid catalog in
-     * place. This matters during service binding and hot reload, where the Remote
-     * File bridge can become available slightly after the Hook process starts.
-     */
+    /** Reload the catalog. A transient read failure leaves the last valid catalog in place. */
     @Synchronized
     fun refresh(): Boolean {
-        val raw = runCatching { remoteJsonReader?.invoke() }
+        val raw = runCatching { jsonReader?.invoke() }
             .onFailure { /* Keep the last valid catalog on a transient read error. */ }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
@@ -58,9 +40,10 @@ class SonyModelImageCatalog(
      *  2. low-nibble fallback for 0x1x X-I variant codes;
      *  3. normalised colour-label equality for callers that have no numeric code.
      *
-     * There is no implicit Default fallback. If the device colour is not known yet,
-     * returning null prevents a reconnect from replacing a correctly cached image
-     * with an unrelated default image.
+     * When the protocol has not reported a colour yet, do not guess. The
+     * detail page keeps the device's existing cached artwork until the real
+     * colour arrives; guessing here would temporarily replace a correct cache
+     * with another colour and then replace it again a moment later.
      */
     fun resolve(modelName: String?, modelColor: String?, colorCode: Int? = null): SonyModelImageMatch? {
         val normalizedModel = normalizeModelName(modelName) ?: return null

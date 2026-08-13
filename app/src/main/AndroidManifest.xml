@@ -4,10 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
-        <package android:name="com.android.settings" />
         <!-- Required on Android 11+ so the About page can resolve a browser. -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -39,43 +37,23 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- Module settings entry remains enabled when the launcher alias is hidden. -->
         <activity android:name="dev.sonypods.MainActivity"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"
             android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
-            </intent-filter>
         </activity>
-        <activity android:name="dev.sonypods.PopupActivity"
-            android:theme="@style/Theme.SonyPods.Popup"
-            android:taskAffinity=""
-            android:excludeFromRecents="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="dev.sonypods.action.show_pods_ui" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-        <provider
-            android:name="dev.sonypods.config.PodImageProvider"
-            android:authorities="com.mercury.sonypods.podimages"
+        <receiver
+            android:name="dev.sonypods.engine.BluetoothConnectionReceiver"
+            android:enabled="true"
+            android:directBootAware="true"
             android:exported="true"
-            android:grantUriPermissions="false" />
-        <!-- Receives the capability-probe cache pushed by the engine so it can be
-             persisted into the shared remote-prefs store (the only writable side). -->
-        <receiver
-            android:name="dev.sonypods.config.CapabilityCacheReceiver"
-            android:exported="true" />
-<!-- Receives engine state while the app has no activity so catalog images
-             are downloaded immediately after a connection. -->
-        <receiver
-            android:name="dev.sonypods.bridge.ModelImageReceiver"
-            android:exported="true">
+            android:permission="android.permission.BLUETOOTH_CONNECT">
             <intent-filter>
-                <action android:name="dev.sonypods.action.state" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.device.action.BOND_STATE_CHANGED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
     </application>

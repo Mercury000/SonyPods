@@ -532,9 +532,8 @@ class SonyBleClient(
         timeoutHandler.removeCallbacksAndMessages(null)
         stopScan()
         closeGatt(notify = false)
-        // The client is retained by the repository singleton across a libxposed
-        // generation reload.  Do not carry the old target into the next generation;
-        // the next connect() call must publish a fresh target before any callbacks.
+        // Do not carry the old target into the next repository session; the next
+        // connect() call must publish a fresh target before any callbacks.
         connectedDevice = null
     }
 

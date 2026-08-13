@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.json.JSONObject
 
-/** Shared cloud transport used by the module process and Hook-host fallbacks. */
+/** Cloud transport used by the application-hosted engine. */
 object CloudModelInfoNetwork {
     private const val TAG = "SonyPods-CloudModelInfo"
     private const val CONNECT_TIMEOUT_MS = 15_000

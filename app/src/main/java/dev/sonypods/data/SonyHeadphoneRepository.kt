@@ -11,7 +11,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
-import android.content.SharedPreferences
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.ble.SonyBleClient
 import dev.sonypods.ble.SonyBleClientListener
@@ -35,7 +34,6 @@ import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheEntry
 import dev.sonypods.config.CapabilityValueCache
-import dev.sonypods.config.CapabilityProbeCache
 import dev.sonypods.config.EqBandInfoCache
 import dev.sonypods.config.FunctionCode
 import dev.sonypods.config.GeneralSettingCapabilityCache
@@ -418,15 +416,41 @@ data class SonyHeadphoneUiState(
 class SonyHeadphoneRepository private constructor(
     resourceContext: Context,
     systemContext: Context = resourceContext,
-    remoteModelInfoReader: (() -> String?)? = null,
+    modelInfoReader: (() -> String?)? = null,
 ) : SonyBleClientListener {
     private val appContext = systemContext.applicationContext ?: systemContext
     private val client = SonyBleClient(appContext, this)
     private val mediaController = MediaPlaybackController(appContext)
-    private val modelImageCatalog = SonyModelImageCatalog(remoteModelInfoReader)
+    private val modelImageCatalog = SonyModelImageCatalog(modelInfoReader)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
+    private var autoConnectInFlightAddress: String? = null
+    // A user-requested disconnect must not immediately reconnect. A later scan
+    // request (or a fresh app/service start) explicitly arms auto-connect again.
+    private var autoConnectSuppressed = false
+    private val autoConnectRunnable = Runnable {
+        if (_state.value.connectedDevice != null || autoConnectInFlightAddress != null) return@Runnable
+        val candidate = _state.value.knownDevices
+            .asSequence()
+            .filter { it.address.isNotBlank() }
+            .maxByOrNull(::autoConnectPriority)
+            ?: return@Runnable
+        autoConnectInFlightAddress = candidate.address
+        appendLog("Auto-connecting to ${candidate.name} (${candidate.address})")
+        client.connect(candidate)
+    }
+
+    /**
+     * Known devices from Bluetooth profile proxies arrive asynchronously. Keep
+     * the connection attempt tied to the latest discovery instead of relying
+     * only on the timer posted at scan start.
+     */
+    private fun scheduleAutoConnect() {
+        if (autoConnectSuppressed || _state.value.connectedDevice != null || autoConnectInFlightAddress != null) return
+        mainHandler.removeCallbacks(autoConnectRunnable)
+        mainHandler.postDelayed(autoConnectRunnable, AUTO_CONNECT_DELAY_MS)
+    }
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
     // whole playback block; 50ms debounce coalesces notification bursts.
     private val playbackMetadataRefetchRunnable = Runnable {
@@ -451,25 +475,8 @@ class SonyHeadphoneRepository private constructor(
         }
     }
 
-    // ── Capability-probe cache (SC `exchanged_capabilities` semantics) ──
-
-    /**
-     * Framework-backed remote-preference provider (hook-side, read-only). Wired by
-     * the host; null when the engine runs outside a hooked process (plain app).
-     */
-    @Volatile
-    private var prefsProvider: (() -> SharedPreferences?)? = null
-
-    /** Sink for the encoded cache map; the host broadcasts it to the app process,
-     * which is the only side allowed to write the shared remote-prefs store. */
-    @Volatile
-    private var cacheSink: ((String) -> Unit)? = null
-
-    /** Hook-host fallback invoked only when the current model has no catalog image. */
-    @Volatile
-    private var modelCatalogFallbackRequester: ((String?, String?, Int?) -> Unit)? = null
-
-    /** In-process cache overlay: consulted before the prefs store on every connect. */
+    // ── In-memory capability cache for reconnects in this app process ──
+    /** Connection capability cache retained while the app engine is alive. */
     private val capabilityCache = ConcurrentHashMap<String, CapabilityCacheEntry>()
 
     private var awaitingCapabilityInfo = false
@@ -497,6 +504,7 @@ class SonyHeadphoneRepository private constructor(
     val state: StateFlow<SonyHeadphoneUiState> = _state.asStateFlow()
 
     fun startScan() {
+        autoConnectSuppressed = false
         _state.update {
             it.copy(
                 permissionIssue = null,
@@ -507,7 +515,26 @@ class SonyHeadphoneRepository private constructor(
         }
         val strictFilter = _state.value.strictSonyScanFilter
         appendLog("Scan requested strictSonyScanFilter=$strictFilter")
+        autoConnectInFlightAddress = null
+        mainHandler.removeCallbacks(autoConnectRunnable)
         client.startScan(strictFilter)
+        mainHandler.postDelayed(autoConnectRunnable, AUTO_CONNECT_DELAY_MS)
+    }
+
+    /** Ensure the background engine is scanning after Bluetooth/profile state changes. */
+    fun ensureAutoConnect() {
+        if (autoConnectSuppressed || _state.value.connectedDevice != null) return
+        if (!_state.value.isScanning) {
+            startScan()
+        } else {
+            scheduleAutoConnect()
+        }
+    }
+
+    /** Re-arm auto-connect when Android reports a new Bluetooth connection event. */
+    fun rearmAutoConnect() {
+        autoConnectSuppressed = false
+        ensureAutoConnect()
     }
 
     fun stopScan() {
@@ -515,6 +542,8 @@ class SonyHeadphoneRepository private constructor(
     }
 
     fun connect(device: DiscoveredSonyDevice) {
+        mainHandler.removeCallbacks(autoConnectRunnable)
+        autoConnectInFlightAddress = device.address
         if (!device.isLikelyControlEndpoint && !device.source.startsWith("ble-scan")) {
             appendLog(
                 "Classic endpoint ${device.name} selected; trying direct GATT first. " +
@@ -542,6 +571,9 @@ class SonyHeadphoneRepository private constructor(
 
     fun disconnect() {
         appendLog("Disconnect requested")
+        autoConnectSuppressed = true
+        autoConnectInFlightAddress = null
+        mainHandler.removeCallbacks(autoConnectRunnable)
         client.disconnect()
     }
 
@@ -552,61 +584,13 @@ class SonyHeadphoneRepository private constructor(
         pendingMultipointToggle = null
         // SonyBleClient.close() intentionally does not notify its listener because
         // it is used for generation teardown.  The singleton repository is reused by
-        // the next libxposed generation, so explicitly clear every connection-scoped
-        // value here; otherwise protocolReady remains true while availableChannels()
+        // the repository can be reused after teardown, so explicitly clear every
+        // connection-scoped value here; otherwise protocolReady remains true while
+        // availableChannels()
         // is empty and the next generation will never reconnect.
         onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
         pendingQuickAccessFunctionCodes = null
-        prefsProvider = null
-        cacheSink = null
-        modelCatalogFallbackRequester = null
-    }
-
-    /**
-     * Wire the framework-backed remote-preference provider (hook-side read-only
-     * store). Called by the host once the LSPosed remote-prefs bridge is up.
-     */
-    fun attachPrefsProvider(provider: (() -> SharedPreferences?)?) {
-        prefsProvider = provider
-        // Seed the in-process overlay from whatever the store already has (e.g. a
-        // cache persisted before a scope restart), so a reconnect shortly after the
-        // bridge comes up benefits without waiting for a fresh probe.
-        refreshCapabilityCacheFromPrefs()
-    }
-
-    /** Wire the sink that carries the encoded cache to the app process for durable
-     * persistence into the shared remote-prefs store. */
-    fun attachCapabilityCacheSink(sink: ((String) -> Unit)?) {
-        cacheSink = sink
-    }
-
-    /**
-     * Wire the Hook-side Remote File reader for the cloud model catalog. The reader
-     * must be backed by XposedInterface.openRemoteFile(); ordinary module-app files
-     * and SharedPreferences are not visible from this process.
-     */
-    fun attachModelInfoReader(reader: (() -> String?)?) {
-        modelImageCatalog.attachRemoteReader(reader)
-        _state.update { current ->
-            current.copy(deviceInfo = current.deviceInfo.withResolvedModelImage(current.connectedDevice))
-        }
-    }
-
-    fun attachModelCatalogFallback(requester: ((String?, String?, Int?) -> Unit)?) {
-        modelCatalogFallbackRequester = requester
-    }
-
-    /** Ask the host-local fallback to fetch the catalog only when resolution failed. */
-    fun ensureModelImageCatalogIfNeeded() {
-        val info = _state.value.deviceInfo
-        if (info.modelImageUrl == null) {
-            modelCatalogFallbackRequester?.invoke(
-                info.modelName,
-                info.modelColor,
-                info.modelColorCode,
-            )
-        }
     }
 
     /** Reload the published cloud catalog and re-resolve the connected device image. */
@@ -620,29 +604,8 @@ class SonyHeadphoneRepository private constructor(
         return refreshed
     }
 
-    /** Re-read the cache map from the remote-prefs store into the in-process overlay. */
-    fun refreshCapabilityCacheFromPrefs() {
-        val entries = CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())
-        if (entries.isNotEmpty()) {
-            capabilityCache.putAll(entries)
-            appendLog("Capability cache loaded ${entries.size} entries from prefs", writeLogcat = false)
-        }
-    }
-
-    /** Install a cache map pushed from the app process by value (survives an empty
-     * remote-prefs read in the hook process). */
-    fun installCapabilityCache(json: String) {
-        val entries = CapabilityProbeCache.decode(json)
-        if (entries.isNotEmpty()) {
-            capabilityCache.clear()
-            capabilityCache.putAll(entries)
-            appendLog("Capability cache installed ${entries.size} entries via broadcast", writeLogcat = false)
-        }
-    }
-
     private fun readCapabilityCache(address: String): CapabilityCacheEntry? {
-        capabilityCache[address]?.let { return it }
-        return CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())[address]
+        return capabilityCache[address]
     }
 
     fun refreshBasics() {
@@ -947,7 +910,6 @@ class SonyHeadphoneRepository private constructor(
         )
         capabilityCache[address] = entry
         appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
     /** Update one device's persisted capability entry without losing fields from
@@ -957,7 +919,6 @@ class SonyHeadphoneRepository private constructor(
         val updated = transform(current).copy(savedAtMs = System.currentTimeMillis())
         if (updated == current) return
         capabilityCache[address] = updated
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
     /** Update the small amount of multipoint state that is useful before the
@@ -976,7 +937,6 @@ class SonyHeadphoneRepository private constructor(
         )
         if (updated == current) return
         capabilityCache[address] = updated
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
     private fun markProbeComplete() {
@@ -1789,10 +1749,19 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onBluetoothUnavailable(reason: String) {
+        // This callback is also used for early connect failures that happen
+        // before the transport can emit onConnectionStateChanged(false).
+        // Release the auto-connect guard here so a discovered device is not
+        // permanently marked as "in flight".
+        autoConnectInFlightAddress = null
         _state.update {
             it.copy(permissionIssue = reason, scanState = "Blocked", isScanning = false)
         }
         appendLog(reason)
+        // A failed GATT/SPP attempt clears the in-flight marker through the
+        // connection callback. If a candidate is still known, let the normal
+        // auto-connect path retry it after the transport has settled.
+        scheduleAutoConnect()
     }
 
     override fun onUnsupportedEndpoint(diagnostics: UnsupportedEndpointDiagnostics) {
@@ -1843,6 +1812,9 @@ class SonyHeadphoneRepository private constructor(
                 )
             }
         }
+        // Profile-proxy and BLE callbacks can arrive after the timer posted by
+        // startScan(). Re-arm the timer whenever a candidate is discovered.
+        scheduleAutoConnect()
     }
 
     override fun onScanStateChanged(scanning: Boolean) {
@@ -1852,6 +1824,12 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onConnectionStateChanged(connected: Boolean, device: DiscoveredSonyDevice?) {
+        // SonyBleClient emits a transient disconnected callback while replacing
+        // an old transport inside connect(). Keep the new attempt marked as in
+        // flight so the retry timer does not start a second connection beside it.
+        val replacingConnection = !connected && device != null &&
+            device.address.equals(autoConnectInFlightAddress, ignoreCase = true)
+        if (!connected && !replacingConnection) autoConnectInFlightAddress = null
         if (!connected) {
             clearPendingPlaybackTransition()
             pendingQuickAccessFunctionCodes = null
@@ -1974,6 +1952,13 @@ class SonyHeadphoneRepository private constructor(
                 supportedFeatures = featureStatusesFor(profile),
                 probeComplete = if (connected) it.probeComplete else false,
             )
+        }
+        if (!connected && !replacingConnection && !autoConnectSuppressed) {
+            // SonyBleClient stops scanning before a GATT attempt. Re-arm it
+            // after the stack has finished closing the old session; the delay
+            // also avoids racing the disconnect callback emitted while a new
+            // connection is replacing an old transport.
+            mainHandler.postDelayed({ ensureAutoConnect() }, AUTO_CONNECT_RETRY_DELAY_MS)
         }
     }
 
@@ -2140,19 +2125,17 @@ class SonyHeadphoneRepository private constructor(
                 batteryState = when (response.kind) {
                     PowerInquiredType.BATTERY ->
                         if (PowerInquiredType.BATTERY in supported) battery.copy(
-                            // A reported 0% for a bud means it is not on-link (disconnected);
-                            // map it to null so consumers render "disconnected" instead of a
-                            // misleading 0%. The charging case (CRADLE) keeps its raw value.
-                            single = response.values.firstOrNull().takeIf { it != 0 },
-                            left = null,
-                            right = null,
-                            cradle = null,
+                            single = response.values.firstOrNull() ?: battery.single,
                             raw = response.values.filterNotNull(),
                         ) else battery
                     PowerInquiredType.LEFT_RIGHT_BATTERY -> battery.copy(
                         single = null,
-                        left = response.values.getOrNull(0).takeIf { it != 0 },
-                        right = response.values.getOrNull(1).takeIf { it != 0 },
+                        // Keep the slot position and preserve a previously received
+                        // value when a headset reports one bud as temporarily absent.
+                        // Zero is a valid battery percentage and must not erase the
+                        // left ear reading.
+                        left = response.values.getOrNull(0) ?: battery.left,
+                        right = response.values.getOrNull(1) ?: battery.right,
                         raw = response.values.filterNotNull(),
                     )
                     PowerInquiredType.CRADLE_BATTERY -> battery.copy(
@@ -2250,6 +2233,10 @@ class SonyHeadphoneRepository private constructor(
                     },
                 )
             }
+        }
+        scheduleAutoConnect()
+        if (_state.value.connectedDevice == null && autoConnectInFlightAddress == null) {
+            scheduleAutoConnect()
         }
     }
 
@@ -2397,7 +2384,6 @@ class SonyHeadphoneRepository private constructor(
         val existing = capabilityCache[address] ?: return
         if (existing.playVolumeStep != response.musicVolumeStep) {
             capabilityCache[address] = existing.copy(playVolumeStep = response.musicVolumeStep)
-            cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
         }
         updateCapabilityCache(address) { entry ->
             entry.copy(
@@ -3163,6 +3149,17 @@ class SonyHeadphoneRepository private constructor(
         }
     }
 
+    private fun autoConnectPriority(device: DiscoveredSonyDevice): Int {
+        val sourceScore = when {
+            device.source.startsWith("connected-a2dp") || device.source.startsWith("connected-headset") -> 400
+            device.source.startsWith("connected-gatt") -> 300
+            device.source == "bonded" -> 200
+            device.source.startsWith("ble-scan") -> 100
+            else -> 0
+        }
+        return sourceScore + if (device.isLikelyControlEndpoint) 50 else 0 + device.rssi.coerceAtLeast(0)
+    }
+
     companion object {
         @Volatile
         private var instance: SonyHeadphoneRepository? = null
@@ -3170,13 +3167,13 @@ class SonyHeadphoneRepository private constructor(
         fun getInstance(
             resourceContext: Context,
             systemContext: Context = resourceContext,
-            remoteModelInfoReader: (() -> String?)? = null,
+            modelInfoReader: (() -> String?)? = null,
         ): SonyHeadphoneRepository {
             return instance ?: synchronized(this) {
                 instance ?: SonyHeadphoneRepository(
                     resourceContext,
                     systemContext,
-                    remoteModelInfoReader,
+                    modelInfoReader,
                 ).also { instance = it }
             }
         }
@@ -3184,6 +3181,8 @@ class SonyHeadphoneRepository private constructor(
         const val LOG_TAG = "OpenBuds"
         const val PLAY_NTFY_PARAM = 0xA9
         const val LEA_NTFY_STATUS = 0x45
+        private const val AUTO_CONNECT_DELAY_MS = 750L
+        private const val AUTO_CONNECT_RETRY_DELAY_MS = 1_500L
 
         fun mergeDevice(old: DiscoveredSonyDevice, new: DiscoveredSonyDevice): DiscoveredSonyDevice =
             old.copy(

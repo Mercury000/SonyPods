@@ -17,14 +17,12 @@ import dev.sonypods.protocol.PlaybackStatus
 /**
  * The full headphone state as carried across processes.
  *
- * The Sony Tandem engine lives in the `com.android.bluetooth` hook process so that
- * system-surface controls keep working when the module app is not running. Every
- * other process (module UI, com.xiaomi.bluetooth, com.milink.service,
- * com.android.settings) is a consumer that learns the state from this snapshot.
+ * The Sony Tandem engine and the UI live in the application process. This flat
+ * snapshot is used for state broadcasts between the app's engine and Compose UI.
  *
  * Kept as a flat [Bundle] rather than a Parcelable: the receiving processes load our
- * classes through LSPosed, and a Parcelable would have to be unmarshalled by a class
- * loader that may not be the one that wrote it.
+ * classes through the app package, and a Parcelable would add unnecessary coupling
+ * between the engine and UI layers.
  */
 data class SonyStateSnapshot(
     val connected: Boolean = false,
@@ -45,6 +43,9 @@ data class SonyStateSnapshot(
     val modelImageUrl: String? = null,
     /** Catalog accent colour (ARGB hex) for system surfaces. */
     val modelImageSourceColor: String? = null,
+    /** Device-reported artwork colour, used to gate catalog refreshes. */
+    val modelColor: String? = null,
+    val modelColorCode: Int? = null,
     val supportsPowerOff: Boolean = false,
     val supportsGestureOperations: Boolean = false,
     val supportsMultipoint: Boolean = false,
@@ -108,6 +109,8 @@ data class SonyStateSnapshot(
         formFactor?.let { putString(KEY_FORM_FACTOR, it) }
         modelImageUrl?.let { putString(KEY_MODEL_IMAGE, it) }
         modelImageSourceColor?.let { putString(KEY_MODEL_IMAGE_COLOR, it) }
+        modelColor?.let { putString(KEY_MODEL_COLOR, it) }
+        modelColorCode?.let { putInt(KEY_MODEL_COLOR_CODE, it) }
         putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
         putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
         putBoolean(KEY_SUPPORTS_MULTIPOINT, supportsMultipoint)
@@ -174,6 +177,8 @@ data class SonyStateSnapshot(
         private const val KEY_FORM_FACTOR = "form_factor"
         private const val KEY_MODEL_IMAGE = "model_image_url"
         private const val KEY_MODEL_IMAGE_COLOR = "model_image_source_color"
+        private const val KEY_MODEL_COLOR = "model_color"
+        private const val KEY_MODEL_COLOR_CODE = "model_color_code"
         private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
         private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
         private const val KEY_SUPPORTS_MULTIPOINT = "supports_multipoint"
@@ -243,6 +248,8 @@ data class SonyStateSnapshot(
             formFactor = bundle.getString(KEY_FORM_FACTOR),
             modelImageUrl = bundle.getString(KEY_MODEL_IMAGE),
             modelImageSourceColor = bundle.getString(KEY_MODEL_IMAGE_COLOR),
+            modelColor = bundle.getString(KEY_MODEL_COLOR),
+            modelColorCode = bundle.optInt(KEY_MODEL_COLOR_CODE),
             supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
             supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
             supportsMultipoint = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT, false),
@@ -313,6 +320,8 @@ data class SonyStateSnapshot(
                 formFactor = state.connectedProfile?.capabilities?.formFactor?.name,
                 modelImageUrl = state.deviceInfo.modelImageUrl,
                 modelImageSourceColor = state.deviceInfo.modelImageSourceColor,
+                modelColor = state.deviceInfo.modelColor,
+                modelColorCode = state.deviceInfo.modelColorCode,
                 supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
                 supportsGestureOperations = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.GESTURE_OPERATIONS) == true,
                 supportsMultipoint = state.multipointState.supported,

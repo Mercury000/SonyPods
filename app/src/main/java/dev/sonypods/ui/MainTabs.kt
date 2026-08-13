@@ -29,13 +29,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.EarphonePref
-import io.github.libxposed.service.XposedService
 import com.mercury.sonypods.R
-import dev.sonypods.ui.dialogs.RestartScope
-import dev.sonypods.ui.dialogs.RestartScopeDialog
 import dev.sonypods.ui.dialogs.PowerOffDialog
 import dev.sonypods.ui.pages.EarphonesTabPage
-import dev.sonypods.ui.pages.HomePage
 import dev.sonypods.ui.pages.SettingsPage
 import dev.sonypods.ui.components.AppIcons
 import top.yukonga.miuix.kmp.basic.Icon
@@ -51,9 +47,6 @@ import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.icon.extended.Months
-import top.yukonga.miuix.kmp.icon.extended.Refresh
-import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -69,12 +62,6 @@ internal fun MainTabsScaffold(
     backgroundColor: Color,
     overlayBottomBar: Boolean,
     pageBottomContentPadding: Dp,
-    xposedService: XposedService?,
-    bluetoothServiceResponsive: Boolean,
-    bluetoothEnabled: Boolean,
-    bondedDeviceCount: Int,
-    onBluetoothStatusClick: () -> Unit,
-    onPairedBluetoothClick: () -> Unit,
     showEarphoneDetail: Boolean,
     mainTitle: String,
     displayTitle: String,
@@ -88,44 +75,13 @@ internal fun MainTabsScaffold(
     onConnectedDeviceClick: () -> Unit,
     onDeviceDisconnect: (BluetoothDevice) -> Unit,
     onDismissConnectError: () -> Unit,
-    desktopIconHidden: MutableState<Boolean>,
-    onDesktopIconHiddenChange: (Boolean) -> Unit,
     logLevel: MutableState<Int>,
     onLogLevelChange: (Int) -> Unit,
-    islandMode: MutableState<Int>,
-    onIslandModeChange: (Int) -> Unit,
-    islandDurationSeconds: MutableState<Int>,
-    onIslandDurationSecondsChange: (Int) -> Unit,
-    ancCycleModes: MutableState<Set<String>>,
-    onAncCycleModesChange: (Set<String>) -> Unit,
-    startupTab: MutableState<Int>,
-    onStartupTabChange: (Int) -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
-    notificationClickAction: MutableState<Int>,
-    onNotificationClickActionChange: (Int) -> Unit,
-    popupOnConnect: MutableState<Boolean>,
-    onPopupOnConnectChange: (Boolean) -> Unit,
-    connectDialogMode: MutableState<Int>,
-    onConnectDialogModeChange: (Int) -> Unit,
-    suppressPopupOnConnectWhenForeground: MutableState<Boolean>,
-    onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit,
-    moreClickAction: MutableState<Int>,
-    onMoreClickActionChange: (Int) -> Unit,
-    fusionMoreClickAction: MutableState<Int>,
-    onFusionMoreClickActionChange: (Int) -> Unit,
-    onOpenTandemDebug: () -> Unit,
-    fakeDeviceId: MutableState<String>,
-    onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
-    showRestartScopeDialog: Boolean,
-    restartingScopes: Boolean,
-    onShowRestartScopeDialog: () -> Unit,
-    onDismissRestartScopeDialog: () -> Unit,
-    onRestartScopes: (List<String>) -> Unit,
     onBackToDevicePicker: () -> Unit,
-    onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     val pagerState = rememberPagerState(
         initialPage = selectedTab.ordinal,
@@ -225,21 +181,6 @@ internal fun MainTabsScaffold(
                 key = { page -> tabs[page] },
             ) { page ->
                 when (tabs[page]) {
-                    MainTab.Module -> ModuleTabPage(
-                        xposedService = xposedService,
-                        bluetoothServiceResponsive = bluetoothServiceResponsive,
-                        bluetoothEnabled = bluetoothEnabled,
-                        bondedDeviceCount = bondedDeviceCount,
-                        onBluetoothStatusClick = onBluetoothStatusClick,
-                        onPairedBluetoothClick = onPairedBluetoothClick,
-                        onOpenTandemDebug = onOpenTandemDebug,
-                        pageBottomContentPadding = pageBottomContentPadding,
-                        backgroundColor = backgroundColor,
-                        blurTopBar = blurTopBar.value,
-                        restartingScopes = restartingScopes,
-                        onShowRestartScopeDialog = onShowRestartScopeDialog,
-                    )
-
                     MainTab.Earphones -> EarphonesTabShell(
                         isLandscapeDetail = isLandscapeDetail,
                         showEarphoneDetail = showEarphoneDetail,
@@ -267,55 +208,23 @@ internal fun MainTabsScaffold(
                         onBackToDevicePicker = onBackToDevicePicker,
                         onPowerOff = { showPowerOffDialog = true },
                         powerOffEnabled = sonyState.supportsPowerOff,
-                        onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                     )
 
                     MainTab.Settings -> SettingsTabPage(
                         pageBottomContentPadding = pageBottomContentPadding,
                         backgroundColor = backgroundColor,
                          blurTopBar = blurTopBar.value,
-                        desktopIconHidden = desktopIconHidden,
-                        onDesktopIconHiddenChange = onDesktopIconHiddenChange,
                         logLevel = logLevel,
                         onLogLevelChange = onLogLevelChange,
-                        islandMode = islandMode,
-                        onIslandModeChange = onIslandModeChange,
-                        islandDurationSeconds = islandDurationSeconds,
-                        onIslandDurationSecondsChange = onIslandDurationSecondsChange,
-                        ancCycleModes = ancCycleModes,
-                        onAncCycleModesChange = onAncCycleModesChange,
-                        startupTab = startupTab,
-                        onStartupTabChange = onStartupTabChange,
-                        appLanguage = appLanguage,
-                        onAppLanguageChange = onAppLanguageChange,
-                        notificationClickAction = notificationClickAction,
-                        onNotificationClickActionChange = onNotificationClickActionChange,
-                        popupOnConnect = popupOnConnect,
-                        onPopupOnConnectChange = onPopupOnConnectChange,
-                        connectDialogMode = connectDialogMode,
-                        onConnectDialogModeChange = onConnectDialogModeChange,
-                        suppressPopupOnConnectWhenForeground = suppressPopupOnConnectWhenForeground,
-                        onSuppressPopupOnConnectWhenForegroundChange = onSuppressPopupOnConnectWhenForegroundChange,
-                        moreClickAction = moreClickAction,
-                        onMoreClickActionChange = onMoreClickActionChange,
-                        fusionMoreClickAction = fusionMoreClickAction,
-                        onFusionMoreClickActionChange = onFusionMoreClickActionChange,
-                        fakeDeviceId = fakeDeviceId,
-                        onFakeDeviceIdChange = onFakeDeviceIdChange,
-                        onOpenTheme = onOpenTheme,
-                        onOpenAbout = onOpenAbout,
-                    )
+                         appLanguage = appLanguage,
+                         onAppLanguageChange = onAppLanguageChange,
+                         onOpenTheme = onOpenTheme,
+                         onOpenAbout = onOpenAbout,
+                     )
                 }
             }
 
         }
-
-        RestartScopeDialog(
-            show = showRestartScopeDialog,
-            scopes = restartScopeOptions,
-            onDismissRequest = { if (!restartingScopes) onDismissRestartScopeDialog() },
-            onConfirm = onRestartScopes,
-        )
 
         PowerOffDialog(
             show = showPowerOffDialog,
@@ -326,83 +235,6 @@ internal fun MainTabsScaffold(
                 sonyActions.onPowerOff()
             },
         )
-    }
-}
-
-@Composable
-private fun ModuleTabPage(
-    xposedService: XposedService?,
-    bluetoothServiceResponsive: Boolean,
-    bluetoothEnabled: Boolean,
-    bondedDeviceCount: Int,
-    onBluetoothStatusClick: () -> Unit,
-    onPairedBluetoothClick: () -> Unit,
-    onOpenTandemDebug: () -> Unit,
-    pageBottomContentPadding: Dp,
-    backgroundColor: Color,
-    blurTopBar: Boolean,
-    restartingScopes: Boolean,
-    onShowRestartScopeDialog: () -> Unit,
-) {
-    val topBarBackdrop = if (blurTopBar) {
-        rememberLayerBackdrop {
-            drawRect(backgroundColor)
-            drawContent()
-        }
-    } else {
-        null
-    }
-    val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = stringResource(R.string.app_name),
-                largeTitle = stringResource(R.string.app_name),
-                modifier = if (topBarBackdrop != null) {
-                    Modifier.textureBlur(
-                        backdrop = topBarBackdrop,
-                        shape = RectangleShape,
-                    )
-                } else {
-                    Modifier
-                },
-                color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
-                scrollBehavior = scrollBehavior,
-                actions = {
-                    IconButton(onClick = onOpenTandemDebug) {
-                        Icon(imageVector = MiuixIcons.Months, contentDescription = "Tandem debug")
-                    }
-                    IconButton(
-                        onClick = {
-                            if (!restartingScopes) onShowRestartScopeDialog()
-                        }
-                    ) {
-                        Icon(imageVector = MiuixIcons.Refresh, contentDescription = "Restart scope")
-                    }
-                },
-            )
-        },
-    ) { pagePadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(backgroundColor)
-                .then(if (topBarBackdrop != null) Modifier.layerBackdrop(topBarBackdrop) else Modifier),
-        ) {
-            HomePage(
-                modifier = Modifier
-                    .overScrollVertical()
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
-                xposedService = xposedService,
-                bluetoothServiceResponsive = bluetoothServiceResponsive,
-                bluetoothEnabled = bluetoothEnabled,
-                bondedDeviceCount = bondedDeviceCount,
-                onBluetoothStatusClick = onBluetoothStatusClick,
-                onPairedBluetoothClick = onPairedBluetoothClick,
-                contentPadding = pagePadding,
-                bottomContentPadding = pageBottomContentPadding,
-            )
-        }
     }
 }
 
@@ -434,7 +266,6 @@ private fun EarphonesTabShell(
     onBackToDevicePicker: () -> Unit,
     onPowerOff: () -> Unit,
     powerOffEnabled: Boolean,
-    onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     val topBarBackdrop = if (blurTopBar) {
         rememberLayerBackdrop {
@@ -475,7 +306,6 @@ private fun EarphonesTabShell(
                         EarphoneDetailActions(
                             onPowerOff = onPowerOff,
                             powerOffEnabled = powerOffEnabled,
-                            onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                         )
                     },
                 )
@@ -509,7 +339,6 @@ private fun EarphonesTabShell(
                             EarphoneDetailActions(
                                 onPowerOff = onPowerOff,
                                 powerOffEnabled = powerOffEnabled,
-                                onOpenSystemHeadsetSettings = onOpenSystemHeadsetSettings,
                             )
                         }
                     },
@@ -555,34 +384,10 @@ private fun SettingsTabPage(
     pageBottomContentPadding: Dp,
     backgroundColor: Color,
     blurTopBar: Boolean,
-    desktopIconHidden: MutableState<Boolean>,
-    onDesktopIconHiddenChange: (Boolean) -> Unit,
     logLevel: MutableState<Int>,
     onLogLevelChange: (Int) -> Unit,
-    islandMode: MutableState<Int>,
-    onIslandModeChange: (Int) -> Unit,
-    islandDurationSeconds: MutableState<Int>,
-    onIslandDurationSecondsChange: (Int) -> Unit,
-    ancCycleModes: MutableState<Set<String>>,
-    onAncCycleModesChange: (Set<String>) -> Unit,
-    startupTab: MutableState<Int>,
-    onStartupTabChange: (Int) -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
-    notificationClickAction: MutableState<Int>,
-    onNotificationClickActionChange: (Int) -> Unit,
-    popupOnConnect: MutableState<Boolean>,
-    onPopupOnConnectChange: (Boolean) -> Unit,
-    connectDialogMode: MutableState<Int>,
-    onConnectDialogModeChange: (Int) -> Unit,
-    suppressPopupOnConnectWhenForeground: MutableState<Boolean>,
-    onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit,
-    moreClickAction: MutableState<Int>,
-    onMoreClickActionChange: (Int) -> Unit,
-    fusionMoreClickAction: MutableState<Int>,
-    onFusionMoreClickActionChange: (Int) -> Unit,
-    fakeDeviceId: MutableState<String>,
-    onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
@@ -627,34 +432,10 @@ private fun SettingsTabPage(
                     top = pagePadding.calculateTopPadding(),
                     bottom = pageBottomContentPadding,
                 ),
-                desktopIconHidden = desktopIconHidden,
-                onDesktopIconHiddenChange = onDesktopIconHiddenChange,
                 logLevel = logLevel,
                 onLogLevelChange = onLogLevelChange,
-                islandMode = islandMode,
-                onIslandModeChange = onIslandModeChange,
-                islandDurationSeconds = islandDurationSeconds,
-                onIslandDurationSecondsChange = onIslandDurationSecondsChange,
-                ancCycleModes = ancCycleModes,
-                onAncCycleModesChange = onAncCycleModesChange,
-                startupTab = startupTab,
-                onStartupTabChange = onStartupTabChange,
                 appLanguage = appLanguage,
                 onAppLanguageChange = onAppLanguageChange,
-                notificationClickAction = notificationClickAction,
-                onNotificationClickActionChange = onNotificationClickActionChange,
-                popupOnConnect = popupOnConnect,
-                onPopupOnConnectChange = onPopupOnConnectChange,
-                connectDialogMode = connectDialogMode,
-                onConnectDialogModeChange = onConnectDialogModeChange,
-                suppressPopupOnConnectWhenForeground = suppressPopupOnConnectWhenForeground,
-                onSuppressPopupOnConnectWhenForegroundChange = onSuppressPopupOnConnectWhenForegroundChange,
-                moreClickAction = moreClickAction,
-                onMoreClickActionChange = onMoreClickActionChange,
-                fusionMoreClickAction = fusionMoreClickAction,
-                onFusionMoreClickActionChange = onFusionMoreClickActionChange,
-                fakeDeviceId = fakeDeviceId,
-                onFakeDeviceIdChange = onFakeDeviceIdChange,
                 onOpenTheme = onOpenTheme,
                 onOpenAbout = onOpenAbout,
             )
@@ -666,7 +447,6 @@ private fun SettingsTabPage(
 private fun EarphoneDetailActions(
     onPowerOff: () -> Unit,
     powerOffEnabled: Boolean,
-    onOpenSystemHeadsetSettings: () -> Unit,
 ) {
     if (powerOffEnabled) {
         IconButton(onClick = onPowerOff) {
@@ -677,17 +457,4 @@ private fun EarphoneDetailActions(
             )
         }
     }
-    IconButton(onClick = onOpenSystemHeadsetSettings) {
-        Icon(
-            imageVector = MiuixIcons.Settings,
-            contentDescription = stringResource(R.string.click_action_system_settings),
-        )
-    }
 }
-private val restartScopeOptions = listOf(
-    RestartScope("com.android.bluetooth", "Bluetooth"),
-    RestartScope("com.android.settings", "Settings"),
-    RestartScope("com.milink.service", "MiLink Service"),
-    RestartScope("com.xiaomi.bluetooth", "Mi Bluetooth"),
-    RestartScope("com.sony.songpal.mdr", "Sony | Sound Connect"),
-)

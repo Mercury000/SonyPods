@@ -1,26 +1,7 @@
 plugins {
     alias(libs.plugins.agp.app)
-    alias(libs.plugins.lsplugin.apksign)
-    alias(libs.plugins.lsplugin.resopt)
     alias(libs.plugins.kotlinSerialization)
-    alias(libs.plugins.parcelize)
     alias(libs.plugins.compose.compiler)
-}
-
-val signingProperties = listOf(
-    "KEYSTORE_FILE",
-    "KEYSTORE_PASSWORD",
-    "KEY_ALIAS",
-    "KEY_PASSWORD",
-)
-
-if (signingProperties.all { providers.gradleProperty(it).isPresent }) {
-    apksign {
-        storeFileProperty = "KEYSTORE_FILE"
-        storePasswordProperty = "KEYSTORE_PASSWORD"
-        keyAliasProperty = "KEY_ALIAS"
-        keyPasswordProperty = "KEY_PASSWORD"
-    }
 }
 
 android {
@@ -28,7 +9,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.mercury.sonypods"
+        applicationId = "com.mercury.sonypods.noroot"
         minSdk = 34
         targetSdk = 36
         versionCode = 14
@@ -98,8 +79,6 @@ configurations.configureEach {
 
 dependencies {
     implementation(libs.coreKtx)
-    compileOnly(libs.libxposedApi)
-    implementation(libs.libxposedService)
     implementation(libs.kotlinx.serialization.json)
 
     // Compose
@@ -119,9 +98,6 @@ dependencies {
 
     // Navigation3
     implementation(libs.navigation3.runtime)
-
-    // HyperOS Focus Island API
-    implementation(libs.focus.api)
 
     testImplementation(libs.junit)
 }

@@ -1,7 +1,5 @@
 package dev.sonypods.config
 
-import android.content.SharedPreferences
-import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -117,21 +115,8 @@ data class GeneralSettingCapabilityCache(
     val description: String = "",
 )
 
-/**
- * Serialization and persistence of the capability-probe cache.
- *
- * The engine runs in the `com.android.bluetooth` hook process, where
- * `XposedModule.getRemotePreferences(...)` is **read-only**, so durable writes
- * must go through the module app process: the engine broadcasts the encoded
- * map to the app, and the app persists it into the shared remote-prefs store
- * via the writable `XposedService.getRemotePreferences` (buffering if the
- * LSPosed service is not yet bound, flushed from `SonyPodsApp.onServiceBind`).
- * The engine reads the same key back through its read-only remote prefs, which
- * reflects the app-persisted data across a scope restart.
- */
+/** JSON codec for the in-memory capability cache and its unit-test format. */
 object CapabilityProbeCache {
-    const val PREFS_KEY = "capability_probe_cache"
-
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -146,50 +131,4 @@ object CapabilityProbeCache {
             json.decodeFromString<Map<String, CapabilityCacheEntry>>(encoded)
         }.getOrDefault(emptyMap())
     }
-
-    /** Read the whole map from a SharedPreferences store (engine-side, read-only). */
-    fun readAll(prefs: SharedPreferences?): Map<String, CapabilityCacheEntry> {
-        if (prefs == null) return emptyMap()
-        val encoded = runCatching { prefs.getString(PREFS_KEY, null) }.getOrNull()
-        return decode(encoded)
-    }
-
-    // ── App-process persistence (the only side where the remote-prefs store is writable) ──
-
-    @Volatile
-    private var pendingJson: String? = null
-
-    /**
-     * Persist the engine-sent cache map into the shared remote-prefs store.
-     * Returns true when written; when the LSPosed service is not bound yet the
-     * value is buffered and flushed from [flushPending] once it binds.
-     */
-    fun persistFromApp(encoded: String, service: XposedService?): Boolean {
-        if (service != null) {
-            val ok = runCatching {
-                val remotePrefs = service.getRemotePreferences(ConfigManager.PREFS_NAME)
-                remotePrefs.edit().putString(PREFS_KEY, encoded).apply()
-                true
-            }.getOrElse {
-                android.util.Log.w(TAG, "persistFromApp failed", it)
-                false
-            }
-            if (ok) {
-                pendingJson = null
-                android.util.Log.d(TAG, "persisted capability cache (${encoded.length} bytes) into ${ConfigManager.PREFS_NAME}")
-            }
-            return ok
-        }
-        android.util.Log.d(TAG, "persistFromApp buffered (${encoded.length} bytes), XposedService not bound")
-        pendingJson = encoded
-        return false
-    }
-
-    /** Write any cache buffered because the LSPosed service was null. */
-    fun flushPending(service: XposedService?): Boolean {
-        val encoded = pendingJson ?: return false
-        return persistFromApp(encoded, service)
-    }
-
-    private const val TAG = "SonyPods-CapabilityCache"
 }

@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
@@ -65,6 +66,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.VolumeUp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 @Composable
 fun PodDetailPage(
@@ -173,14 +177,42 @@ private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
     // The downloader intentionally reuses the per-device path. The revision is
     // persisted together with the image record and changes after every completed
     // replacement, so Compose does not keep a Bitmap decoded from the old bytes.
-    return remember(path, revision) {
-        path?.let {
-            runCatching { BitmapFactory.decodeFile(it) }
-                .getOrNull()
-                ?.let { bitmap -> BitmapPainter(bitmap.asImageBitmap()) }
+    val fileKey = path?.let {
+        val file = File(it)
+        "$it:${file.lastModified()}:${file.length()}"
+    }
+    // Keep the last successfully decoded bitmap for this device while a new
+    // revision is being decoded. This means a cached image stays visible until
+    // its replacement is ready instead of flashing the stock placeholder.
+    var imageBitmap by remember(path) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(fileKey, revision) {
+        val loaded = withContext(Dispatchers.IO) {
+            path?.let(::decodePodImage)
         }
-    } ?: painterResource(R.drawable.img_box)
+        if (loaded != null) imageBitmap = loaded
+    }
+    val loadedPainter = remember(imageBitmap) {
+        imageBitmap?.let(::BitmapPainter)
+    }
+    return loadedPainter ?: painterResource(R.drawable.img_box)
 }
+
+private fun decodePodImage(path: String): ImageBitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+    // Keep large catalog artwork from causing a native allocation/GC pause
+    // when the image becomes visible. The detail card never needs more than
+    // this display-sized bitmap.
+    val longestSide = maxOf(bounds.outWidth, bounds.outHeight)
+    var sample = 1
+    while (longestSide / sample > MAX_IMAGE_SIDE_PX) sample *= 2
+    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+    BitmapFactory.decodeFile(path, options)?.asImageBitmap()
+}.getOrNull()
+
+private const val MAX_IMAGE_SIDE_PX = 1600
 
 private fun LazyListScope.podControlItems(
     uiState: SonyStateSnapshot,

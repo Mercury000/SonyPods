@@ -938,10 +938,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         val type = payload.firstOrNull()?.toInt()?.and(0xFF) ?: return false
         return when (type) {
             0x00, 0x02 -> {
-                payload.size == 2 && payload[1].isBatteryPercentage()
+                payload.size >= 2 && payload[1].isBatteryPercentage()
             }
             0x01 -> {
-                payload.size == 4 &&
+                payload.size >= 4 &&
                     payload[1].isBatteryPercentage() &&
                     payload[2].toInt().and(0xFF) == 0x00 &&
                     payload[3].isBatteryPercentage()

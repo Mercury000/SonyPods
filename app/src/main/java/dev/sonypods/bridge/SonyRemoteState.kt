@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import dev.sonypods.config.CloudModelInfoSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,7 +39,6 @@ object SonyRemoteState {
             android.util.Log.i("OpenBuds", "remote state pendingAlert=${snapshot.multipoint.pendingAlertMessageType}")
             _state.value = snapshot
             val appContext = context ?: return
-            CloudModelInfoSync.onState(appContext, snapshot)
             ModelImageSync.onState(appContext, snapshot)
         }
     }

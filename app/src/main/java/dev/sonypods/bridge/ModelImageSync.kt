@@ -2,7 +2,6 @@ package dev.sonypods.bridge
 
 import android.content.Context
 import android.util.Log
-import dev.sonypods.SonyPodsApp
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
@@ -10,14 +9,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.io.File
+import java.net.HttpURLConnection
 import java.net.URL
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Downloads the cloud model image for the module detail page and publishes it to Remote File
- * when the service is available. Notification/island rendering is owned by the Hook host and
- * has its own temporary cache path.
+ * Downloads the cloud model image for the module detail page and stores it in the
+ * application-owned image cache used by the detail page.
  *
  * This stays in the app process: the image lives in our private files dir, which the
  * bluetooth process cannot write to. The engine only reports the URL.
@@ -27,59 +26,68 @@ object ModelImageSync {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlightKeys = ConcurrentHashMap.newKeySet<String>()
-    private val failedKeys = ConcurrentHashMap.newKeySet<String>()
+    private val failedAtMs = ConcurrentHashMap<String, Long>()
     private val connectionLock = Any()
     private var connectionActive = false
     private var activeAddress: String? = null
 
-    fun onState(
-        context: Context,
-        snapshot: SonyStateSnapshot,
-        onComplete: () -> Unit = {},
-    ) {
+    fun onState(context: Context, snapshot: SonyStateSnapshot) {
         updateConnection(snapshot)
         if (!snapshot.connected) {
-            onComplete()
             return
         }
         val address = snapshot.deviceAddress ?: run {
-            onComplete()
             return
         }
         val url = snapshot.modelImageUrl ?: run {
-            onComplete()
             return
         }
         val key = "$address|$url"
 
+        val failedAt = failedAtMs[key]
+        if (failedAt != null && System.currentTimeMillis() - failedAt < RETRY_DELAY_MS) {
+            return
+        }
+        if (!inFlightKeys.add(key)) {
+            return
+        }
+
         val appContext = context.applicationContext ?: context
-        val prefs = appContext.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val existing = PodImagePrefs.find(prefs, address)
-        val upToDate = existing?.autoImageUrl == url &&
-            existing.boxImagePath?.let { File(it).isFile && File(it).length() > 0L } == true
-        if (upToDate) {
-            failedKeys.remove(key)
-            onComplete()
-            return
-        }
-
-        if (failedKeys.contains(key) || !inFlightKeys.add(key)) {
-            onComplete()
-            return
-        }
-
         scope.launch {
             try {
+                // SharedPreferences JSON parsing and file checks are kept off
+                // the state collector's main thread. State updates can be very
+                // frequent while the headset is probing.
+                val prefs = appContext.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+                // A device address owns its cached artwork. Once a valid image
+                // exists, keep using it permanently and do not replace it just
+                // because the catalog URL or a later state snapshot changed.
+                // This also prevents a transient/incorrect colour resolution
+                // from overwriting the known-good cached image.
+                val hasCachedImage = PodImagePrefs.hasCachedBoxImage(prefs, address)
+                if (hasCachedImage) {
+                    failedAtMs.remove(key)
+                    return@launch
+                }
+
                 val bytes = runCatching {
-                    URL(url).openConnection().apply {
-                        connectTimeout = DOWNLOAD_TIMEOUT_MS
-                        readTimeout = DOWNLOAD_TIMEOUT_MS
-                    }.getInputStream().use { it.readBytes() }
+                    val connection = URL(url).openConnection() as? HttpURLConnection
+                        ?: throw IOException("model image URL is not HTTP: $url")
+                    try {
+                        connection.connectTimeout = DOWNLOAD_TIMEOUT_MS
+                        connection.readTimeout = DOWNLOAD_TIMEOUT_MS
+                        connection.instanceFollowRedirects = true
+                        val status = connection.responseCode
+                        check(status in 200..299) { "model image HTTP $status" }
+                        connection.inputStream.use { it.readBytes() }
+                    } finally {
+                        connection.disconnect()
+                    }
                 }
                     .onFailure { Log.w(TAG, "model image download failed url=$url", it) }
                     .getOrNull()
                 if (bytes == null || bytes.isEmpty()) {
-                    failedKeys.add(key)
+                    failedAtMs[key] = System.currentTimeMillis()
                     return@launch
                 }
 
@@ -87,7 +95,6 @@ object ModelImageSync {
                     PodImagePrefs.saveImageBytes(
                         context = appContext,
                         prefs = prefs,
-                        service = SonyPodsApp.xposedService,
                         address = address,
                         name = snapshot.deviceName.orEmpty(),
                         images = mapOf(PodImageResource.BOX to bytes),
@@ -98,20 +105,17 @@ object ModelImageSync {
                 }.onFailure { Log.w(TAG, "model image store failed", it) }.getOrDefault(false)
 
                 if (stored) {
-                    failedKeys.remove(key)
-                    // Surface images are owned by the Hook host. Its temporary
-                    // cache downloader is the only side that sends CMD_IMAGE_READY
-                    // after it has actually produced a bitmap for notification/island
-                    // rendering. The module-side download only updates the detail-page
-                    // cache and publishes Remote File; notifying here would make opening
-                    // the module re-submit an island that Hook already displayed.
-                    Log.d(TAG, "module image cache ready; hook surfaces unchanged address=$address")
+                    failedAtMs.remove(key)
+                    Log.d(TAG, "application image cache ready address=$address")
+                    // The download finishes after the connection snapshot that
+                    // opened the detail page. Re-publish that snapshot so the UI
+                    // reloads the completed cache even if it was already composed.
+                    SonyBridge.sendCommand(appContext, SonyBridge.CMD_REPUBLISH)
                 } else {
-                    failedKeys.add(key)
+                    failedAtMs[key] = System.currentTimeMillis()
                 }
             } finally {
                 inFlightKeys.remove(key)
-                onComplete()
             }
         }
     }
@@ -122,11 +126,11 @@ object ModelImageSync {
             if (!snapshot.connected) {
                 connectionActive = false
                 activeAddress = null
-                failedKeys.clear()
+                failedAtMs.clear()
                 return
             }
             if (!connectionActive || activeAddress != address) {
-                failedKeys.clear()
+                failedAtMs.clear()
                 connectionActive = true
                 activeAddress = address
             }
@@ -134,4 +138,5 @@ object ModelImageSync {
     }
 
     private const val DOWNLOAD_TIMEOUT_MS = 15_000
+    private const val RETRY_DELAY_MS = 10_000L
 }

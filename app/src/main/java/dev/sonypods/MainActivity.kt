@@ -17,16 +17,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.ui.App
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
+import dev.sonypods.engine.AppEngineHost
 
 class MainActivity : ComponentActivity() {
     private val openEarphoneDetailAddress = mutableStateOf<String?>(null)
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            // Permissions only gate the UI; the engine runs in the bluetooth process.
+            // Application.onCreate may have tried to scan before runtime permissions
+            // were granted. Start the scan again once the user has answered.
+            if (result.values.any { it }) {
+                AppEngineHost.start(applicationContext)
+                SonyBridge.sendCommand(applicationContext, SonyBridge.CMD_START_SCAN)
+            }
         }
 
     override fun attachBaseContext(newBase: Context) {
@@ -50,6 +57,9 @@ class MainActivity : ComponentActivity() {
         }
         if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
+        } else {
+            AppEngineHost.start(applicationContext)
+            SonyBridge.sendCommand(applicationContext, SonyBridge.CMD_START_SCAN)
         }
 
         setContent {

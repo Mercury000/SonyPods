@@ -1,0 +1,73 @@
+name: noroot version build
+
+on:
+  push:
+    branches: [ "noroot" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 22
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build noroot release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Sign noroot release APK
+        id: sign
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          set -e
+          UNSIGNED_APK=$(find app/build/outputs/apk/release -maxdepth 2 -name '*.apk' | head -1)
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "No release APK found." >&2
+            exit 1
+          fi
+
+          VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unversioned")
+          OUT_NAME="SonyPods-noroot-${VERSION_NAME}-release.apk"
+
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "$SIGNING_KEY" | base64 -d > /tmp/keystore.jks
+            "${BUILD_TOOLS}zipalign" -f 4 "$UNSIGNED_APK" "./$OUT_NAME"
+            "${BUILD_TOOLS}apksigner" sign \
+              --ks /tmp/keystore.jks \
+              --ks-key-alias "${{ secrets.ALIAS }}" \
+              --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+              --key-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+              "./$OUT_NAME"
+            rm /tmp/keystore.jks
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            # No signing key: upload the Gradle-produced APK as-is (may be unsigned)
+            cp "$UNSIGNED_APK" "./$OUT_NAME"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload noroot APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.sign.outputs.apk }}
+          path: ./${{ steps.sign.outputs.apk }}
+          archive: false
+          if-no-files-found: error

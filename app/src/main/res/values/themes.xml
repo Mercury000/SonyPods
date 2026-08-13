@@ -1,13 +1,4 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
     <style name="Theme.SonyPods" parent="android:Theme.Material.Light.NoActionBar">
     </style>
-
-    <style name="Theme.SonyPods.Popup" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:backgroundDimEnabled">false</item>
-        <item name="android:colorBackgroundCacheHint">@null</item>
-    </style>
-
 </resources>
