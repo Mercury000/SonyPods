@@ -276,7 +276,7 @@ private fun homeSystemInfo(context: Context): HomeSystemInfo {
     val versionCode = PackageInfoCompat.getLongVersionCode(packageInfo)
     val versionName = packageInfo.versionName ?: "unknown"
     return HomeSystemInfo(
-        systemVersion = Build.DISPLAY,
+        systemVersion = Build.VERSION.INCREMENTAL,
         appVersion = "$versionName ($versionCode)",
         androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
         buildDate = buildDate(BuildConfig.BUILD_TIMESTAMP),
