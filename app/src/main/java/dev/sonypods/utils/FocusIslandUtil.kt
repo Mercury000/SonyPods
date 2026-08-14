@@ -43,6 +43,11 @@ object FocusIslandUtil {
     // consumed notification. Keep it cancellable so a disconnect cannot resurrect
     // the island after the device is gone.
     private var repostRunnable: Runnable? = null
+    // Payload and first-float flag of the submission [repostRunnable] will deliver.
+    // A battery tick arriving inside the delay window refreshes these instead of
+    // restarting the timer, so a burst of ticks cannot starve the repost.
+    private var pendingNotification: Notification? = null
+    private var pendingFirstFloat: Boolean? = null
     private var islandVisible = false
     private var islandExpiresAtMillis = 0L
 
@@ -50,16 +55,14 @@ object FocusIslandUtil {
     fun onBeforeReload() {
         dismissRunnable?.let(mainHandler::removeCallbacks)
         dismissRunnable = null
-        repostRunnable?.let(mainHandler::removeCallbacks)
-        repostRunnable = null
+        clearPendingRepost()
     }
 
     /** Immediately remove the island notification (device disconnected). */
     fun cancelBatteryIsland(context: Context) {
         dismissRunnable?.let(mainHandler::removeCallbacks)
         dismissRunnable = null
-        repostRunnable?.let(mainHandler::removeCallbacks)
-        repostRunnable = null
+        clearPendingRepost()
         islandVisible = false
         islandExpiresAtMillis = 0L
         runCatching {
@@ -67,6 +70,13 @@ object FocusIslandUtil {
             nm.cancel(NOTIFICATION_ID)
         }
         Log.d(TAG, "Focus Island cancelled")
+    }
+
+    private fun clearPendingRepost() {
+        repostRunnable?.let(mainHandler::removeCallbacks)
+        repostRunnable = null
+        pendingNotification = null
+        pendingFirstFloat = null
     }
 
     fun showBatteryIsland(
@@ -116,6 +126,25 @@ object FocusIslandUtil {
             manager.activeNotifications.any { it.id == NOTIFICATION_ID }
         }.getOrDefault(false)
         if (!notificationStillExists) {
+            // A first-float submission removes the record and reposts it after a
+            // short delay, so inside that window the record is missing because of
+            // us. Reading that as an external cancellation cancelled our own queued
+            // submission and downgraded every first connection to a collapsed
+            // island, so refresh the queued payload instead.
+            if (repostRunnable != null) {
+                return renderBatteryIsland(
+                    context = context,
+                    prefs = prefs,
+                    batteryParams = batteryParams,
+                    address = address,
+                    singleBattery = singleBattery,
+                    deviceName = deviceName,
+                    device = device,
+                    durationSeconds = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+                    timeoutAtMillis = deadline,
+                    firstFloatOverride = pendingFirstFloat,
+                )
+            }
             // Externally cancelled while still valid: not a disconnect (a real
             // disconnect goes through cancelBatteryIsland, which clears the
             // deadline) and not an expiry. Rebuild silently with the original
@@ -399,14 +428,26 @@ object FocusIslandUtil {
             // NotificationRecord alive. A direct notify() then only updates that
             // hidden record and the island never returns. For a replay, make it a
             // real remove -> add cycle; ordinary battery updates must stay in-place.
-            repostRunnable?.let(mainHandler::removeCallbacks)
-            repostRunnable = null
-            if (firstFloatOverride != null) {
+            val queuedForRepost = repostRunnable != null
+            if (queuedForRepost) {
+                // A delayed submission is already waiting. Swap in the fresh payload
+                // rather than restarting its timer: a burst of battery ticks would
+                // otherwise keep pushing the island back, and cancelling the timer
+                // outright would drop the first-float the queued submission carries.
+                pendingNotification = notification
+            } else if (firstFloatOverride != null) {
                 nm.cancel(NOTIFICATION_ID)
+                pendingNotification = notification
+                pendingFirstFloat = firstFloatOverride
                 val repost = Runnable {
                     repostRunnable = null
-                    runCatching { nm.notify(NOTIFICATION_ID, notification) }
-                        .onFailure { Log.e(TAG, "Failed to repost Focus Island", it) }
+                    val queued = pendingNotification
+                    pendingNotification = null
+                    pendingFirstFloat = null
+                    if (queued != null) {
+                        runCatching { nm.notify(NOTIFICATION_ID, queued) }
+                            .onFailure { Log.e(TAG, "Failed to repost Focus Island", it) }
+                    }
                 }
                 repostRunnable = repost
                 mainHandler.postDelayed(repost, 150L)
@@ -427,7 +468,11 @@ object FocusIslandUtil {
             islandExpiresAtMillis = deadline
             mainHandler.postDelayed(dismiss, (deadline - System.currentTimeMillis()).coerceAtLeast(1L))
 
-            val verb = if (timeoutAtMillis == null) "shown" else "updated"
+            val verb = when {
+                queuedForRepost -> "requeued"
+                timeoutAtMillis == null -> "shown"
+                else -> "updated"
+            }
             Log.d(TAG, "Focus Island $verb: L=$leftText% R=$rightText% single=$singleBattery duration=${islandDurationSeconds}s")
             return true
         } catch (e: Exception) {
