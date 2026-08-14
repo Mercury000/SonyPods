@@ -222,9 +222,13 @@ object SoundConnectHandoverHook : HookContext() {
                             startedActivities += activity
                         }
                     }
-                    (findFieldValue(thread, "mServices") as? Map<*, *>)?.values
+                    val liveServices = (findFieldValue(thread, "mServices") as? Map<*, *>)?.values
                         ?.filterNotNull()
-                        ?.let(roots::addAll)
+                        .orEmpty()
+                    liveServices.let(roots::addAll)
+                    if (liveServices.any { it.javaClass.name == KEEP_CONNECTION_SERVICE }) {
+                        activeKeepConnectionServices += restoredServiceMarker
+                    }
                     val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
                     roots.flatMap { root ->
                         findObjectsByClassName(root, MDR_CONNECTION_CONTROLLER, seen)
@@ -232,18 +236,6 @@ object SoundConnectHandoverHook : HookContext() {
                         refreshMdrSession(controller, "hot-reload-existing-mdr")
                     }
                 }.onFailure { Log.w(TAG, "existing Sound Connect Activity scan failed", it) }
-
-                runCatching {
-                    val manager = application.getSystemService(ActivityManager::class.java)
-                    val running = manager?.getRunningServices(100).orEmpty()
-                    if (running.any {
-                            it.service?.className == KEEP_CONNECTION_SERVICE &&
-                                (it.pid <= 0 || it.pid == Process.myPid())
-                        }
-                    ) {
-                        activeKeepConnectionServices += restoredServiceMarker
-                    }
-                }.onFailure { Log.d(TAG, "existing Sound Connect service scan skipped", it) }
                 reconcileLocked("hot-reload-existing-ownership")
             }
         }
@@ -403,7 +395,7 @@ object SoundConnectHandoverHook : HookContext() {
             var type: Class<*>? = owner.javaClass
             while (type != null) {
                 runCatching {
-                    return type!!.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
+                    return type.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
                 }
                 type = type.superclass
             }
