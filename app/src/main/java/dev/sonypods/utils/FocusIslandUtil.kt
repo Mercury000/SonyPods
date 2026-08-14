@@ -104,6 +104,43 @@ object FocusIslandUtil {
     ): Boolean {
         val now = System.currentTimeMillis()
         var deadline = islandExpiresAtMillis
+        // Always confirm the notification record still exists. HyperOS closes the
+        // dynamic island (and cancels the notification) when the A2DP playback
+        // state changes even though the island is still within its configured
+        // lifetime; a blind in-place update would then create a brand-new
+        // notification and re-trigger the connection animation. Detect that
+        // external cancellation and rebuild without the first-float instead.
+        val notificationStillExists = runCatching {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                as NotificationManager
+            manager.activeNotifications.any { it.id == NOTIFICATION_ID }
+        }.getOrDefault(false)
+        if (!notificationStillExists) {
+            // Externally cancelled while still valid: not a disconnect (a real
+            // disconnect goes through cancelBatteryIsland, which clears the
+            // deadline) and not an expiry. Rebuild silently with the original
+            // deadline, skipping the first-float animation.
+            val externallyCancelled = islandVisible && deadline > now
+            islandVisible = false
+            islandExpiresAtMillis = 0L
+            if (!externallyCancelled) {
+                // A genuine expiry or disconnect: the island stays gone.
+                return false
+            }
+            Log.d(TAG, "Focus Island externally cancelled; rebuilding without first-float")
+            return renderBatteryIsland(
+                context = context,
+                prefs = prefs,
+                batteryParams = batteryParams,
+                address = address,
+                singleBattery = singleBattery,
+                deviceName = deviceName,
+                device = device,
+                durationSeconds = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
+                timeoutAtMillis = deadline,
+                firstFloatOverride = false,
+            )
+        }
         if (!islandVisible || deadline <= now) {
             // The island lifecycle fields belong to this classloader. During a
             // hot reload they reset even though HyperOS still owns the existing
@@ -111,16 +148,6 @@ object FocusIslandUtil {
             // as "not visible" and the old island would stop receiving battery
             // updates. Rehydrate the short-lived state from our own notification
             // record before deciding that the island has really disappeared.
-            val notificationStillExists = runCatching {
-                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE)
-                    as NotificationManager
-                manager.activeNotifications.any { it.id == NOTIFICATION_ID }
-            }.getOrDefault(false)
-            if (!notificationStillExists) {
-                islandVisible = false
-                islandExpiresAtMillis = 0L
-                return false
-            }
             islandVisible = true
             islandExpiresAtMillis = now +
                 ConfigManager.islandDurationSeconds().coerceIn(
