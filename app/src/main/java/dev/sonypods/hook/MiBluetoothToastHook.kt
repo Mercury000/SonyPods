@@ -316,21 +316,24 @@ object MiBluetoothToastHook : HookContext() {
         // the whole Xiaomi scope, otherwise the upstream hook and every
         // notification/island receiver disappear together.
         runCatching {
-            hookConstructorAfter(
-                findConstructorByParamCount(
-                    "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
-                    2,
-                ),
-            ) {
+            // Build 17 declares two two-argument constructors: MiuiApplication uses
+            // (Context, Looper) when the mibt_memory_trim setting is on, otherwise
+            // BluetoothHeadsetService uses (Looper, BluetoothHeadsetService). Hooking
+            // one of them left the receiver unregistered on every cold start.
+            val constructors = findConstructorsByParamCount(
+                "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
+                2,
+            )
+            hookConstructorAfterAll(constructors, logicalRole = "toast-notification-constructor") {
                 val context = getObjectField(instance, "mContext") as? Context
-                    ?: return@hookConstructorAfter
+                    ?: return@hookConstructorAfterAll
                 registerNotificationReceiver(context)
-                // This class is constructed well after boot, so anything the engine
-                // rendered before now was lost; ask it to render again.
+                // This class is constructed well after package-ready, so anything the
+                // engine rendered before now was lost; ask it to render again.
                 announceSurfacesReady(context)
                 registerUnlockReceiver(context)
             }
-            Log.i("SonyPods", "MiuiBluetoothNotification constructor hook installed")
+            Log.i("SonyPods", "MiuiBluetoothNotification constructor hook installed on ${constructors.size} overloads")
         }.onFailure {
             Log.w("SonyPods", "MiuiBluetoothNotification constructor hook skipped", it)
         }

@@ -129,13 +129,37 @@ abstract class HookContext {
             ?.apply { isAccessible = true }
             ?: throw NoSuchMethodException("$className.$methodName/$paramCount")
 
-    fun findConstructorByParamCount(className: String, paramCount: Int): Constructor<*> =
-        findClass(className).declaredConstructors
+    /**
+     * Every constructor taking [paramCount] parameters, in a deterministic order.
+     *
+     * The number of overloads is not stable across ROM releases: Bluetooth Extension
+     * 17 added a second two-argument `MiuiBluetoothNotification` constructor, and
+     * which of the two actually runs depends on a device setting. A caller that needs
+     * its callback to fire either way has to hook all of them.
+     */
+    fun findConstructorsByParamCount(className: String, paramCount: Int): List<Constructor<*>> {
+        val matches = findClass(className).declaredConstructors
             .filter { it.parameterTypes.size == paramCount }
             .sortedBy { it.parameterTypes.joinToString(",") { type -> type.name } }
-            .firstOrNull()
-            ?.apply { isAccessible = true }
-            ?: throw NoSuchMethodException("$className constructor/$paramCount")
+            .onEach { it.isAccessible = true }
+        if (matches.isEmpty()) throw NoSuchMethodException("$className constructor/$paramCount")
+        return matches
+    }
+
+    fun findConstructorByParamCount(className: String, paramCount: Int): Constructor<*> {
+        val matches = findConstructorsByParamCount(className, paramCount)
+        if (matches.size > 1) {
+            Log.w(
+                "SonyPods-Hook",
+                "$className declares ${matches.size} constructors taking $paramCount arguments; " +
+                    "using ${describeParams(matches.first())} and ignoring the rest",
+            )
+        }
+        return matches.first()
+    }
+
+    private fun describeParams(executable: java.lang.reflect.Executable): String =
+        executable.parameterTypes.joinToString(",") { it.name }
 
     fun hookAfter(method: Method, logicalRole: String? = null, required: Boolean = false, block: HookParam.() -> Unit) {
         hookRegistry.install(method, "after", logicalRole, required) { chain ->
@@ -157,6 +181,24 @@ abstract class HookContext {
         hookRegistry.install(constructor, "constructor-after", logicalRole, required) { chain ->
             if (!runtime.acceptingEvents) return@install chain.proceed()
             chain.proceed().also { HookParam(chain, it).apply(block) }
+        }
+    }
+
+    /**
+     * Installs [block] on every constructor in [constructors].
+     *
+     * Each one gets its own stable ID derived from its parameter types; [logicalRole]
+     * on its own would collide in `HookRegistry` the moment a build declares more
+     * than one overload.
+     */
+    fun hookConstructorAfterAll(
+        constructors: List<Constructor<*>>,
+        logicalRole: String,
+        required: Boolean = false,
+        block: HookParam.() -> Unit,
+    ) {
+        constructors.forEach { constructor ->
+            hookConstructorAfter(constructor, "$logicalRole:${describeParams(constructor)}", required, block)
         }
     }
 }

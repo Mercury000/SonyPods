@@ -182,12 +182,12 @@ object OfficialFastConnectDialogHook : HookContext() {
         // builds. Its context is a reliable second chance for registering the
         // receiver and requesting a state replay.
         runCatching {
-            hookConstructorAfter(
-                findConstructorByParamCount(
+            hookConstructorAfterAll(
+                findConstructorsByParamCount(
                     "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
                     2,
                 ),
-                // MiBluetoothToastHook also observes this constructor to bring
+                // MiBluetoothToastHook also observes these constructors to bring
                 // up the notification/island receiver.  Constructor identity
                 // alone is therefore not a sufficient stable ID: without a
                 // distinct role HookRegistry rejects the second spec and the
@@ -196,7 +196,7 @@ object OfficialFastConnectDialogHook : HookContext() {
             ) {
                 val context = runCatching { getObjectField(instance, "mContext") as? Context }
                     .getOrNull()
-                    ?: return@hookConstructorAfter
+                    ?: return@hookConstructorAfterAll
                 registerMainStateReceiver(context)
             }
         }.onFailure { Log.w(TAG, "MiuiBluetoothNotification hook unavailable", it) }
