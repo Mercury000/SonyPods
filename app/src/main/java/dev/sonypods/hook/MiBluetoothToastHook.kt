@@ -55,6 +55,9 @@ object MiBluetoothToastHook : HookContext() {
     private var notificationRenderer: ((Context, BluetoothDevice?, BatteryParams, String?, Boolean) -> Unit)? = null
     private var notificationCanceller: ((Context, BluetoothDevice) -> Unit)? = null
     private val surfaceHandler = Handler(Looper.getMainLooper())
+    /** Tracks which battery sides (left, right, case) were non-null in the last
+     *  official island render so we can detect single-earbud disconnect/reconnect. */
+    private var lastOfficialIslandShape: Triple<Boolean, Boolean, Boolean>? = null
 
     override fun onBeforeReload() {
         surfaceHandler.removeCallbacksAndMessages(null)
@@ -474,6 +477,7 @@ object MiBluetoothToastHook : HookContext() {
                                 ConfigManager.ISLAND_MODE_OFFICIAL ->
                                     if (!transportRecovery) {
                                         MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                                        lastOfficialIslandShape = batteryShape(batteryParams)
                                     } else {
                                         Log.d("SonyPods", "official island suppressed during Tandem recovery")
                                     }
@@ -494,6 +498,16 @@ object MiBluetoothToastHook : HookContext() {
                                     device = device,
                                 )
                             }
+                        } else if (ConfigManager.islandMode() == ConfigManager.ISLAND_MODE_OFFICIAL) {
+                            // Re-show the official island when the connectivity
+                            // structure changed (a side went null↔non-null, i.e.
+                            // single-earbud disconnect/reconnect). Regular battery
+                            // percentage updates keep the same shape and are skipped.
+                            val shape = batteryShape(batteryParams)
+                            if (lastOfficialIslandShape != null && shape != lastOfficialIslandShape) {
+                                MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
+                            }
+                            lastOfficialIslandShape = shape
                         }
                     }
                     SonyPodsAction.ACTION_UPDATE_PODS_NOTIFICATION -> {
@@ -583,4 +597,8 @@ object MiBluetoothToastHook : HookContext() {
 
     private const val SURFACES_READY_ATTEMPTS = 4
     private const val SURFACES_READY_INTERVAL_MS = 4_000L
+
+    /** Returns which battery sides are present (non-null) as a comparable triple. */
+    private fun batteryShape(battery: BatteryParams): Triple<Boolean, Boolean, Boolean> =
+        Triple(battery.left != null, battery.right != null, battery.case != null)
 }
