@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import dev.sonypods.device.SonyDeviceService
 
 /**
  * Keeps a hooked system process in sync with the engine's state.
@@ -43,6 +44,7 @@ class HookStateMirror(private val onChanged: (SonyStateSnapshot) -> Unit = {}) {
                         val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
                         received = true
                         snapshot = SonyStateSnapshot.fromBundle(bundle)
+                        SonyDeviceService.rememberAddress(snapshot.deviceAddress)
                         onChanged(snapshot)
                     }
                 }

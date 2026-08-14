@@ -16,6 +16,7 @@ import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.device.SonyDeviceService
 
 /**
  * Bluetooth-process entry point. Boots [SonyEngineHost] — which owns the Sony Tandem
@@ -56,6 +57,7 @@ object HeadsetStateDispatcher : HookContext() {
         name: String?,
         physicalDisconnectAddress: String? = null,
     ) {
+        SonyDeviceService.rememberAddress(address)
         // AdapterService.onCreate will not fire again in a live bluetooth process,
         // so the reloaded generation must re-resolve the running instance itself.
         val adapterService = runCatching {
@@ -214,18 +216,9 @@ object HeadsetStateDispatcher : HookContext() {
         appRequestReceiverRegistered = true
     }
 
-    /**
-     * Detect Sony audio devices by name (mirrors SonyBleClient.isSonyCandidate).
-     */
+    /** Detect Sony devices through the shared identity service. */
     @SuppressLint("MissingPermission")
     fun isSonyPod(device: BluetoothDevice): Boolean {
-        val name = device.name?.trim()?.lowercase() ?: return false
-        return name.contains("sony") ||
-            name.contains("linkbuds") ||
-            name.startsWith("wf-") ||
-            name.startsWith("wh-") ||
-            name.startsWith("wi-") ||
-            name.startsWith("xba-") ||
-            name.startsWith("mdr-")
+        return SonyDeviceService.isSony(device)
     }
 }

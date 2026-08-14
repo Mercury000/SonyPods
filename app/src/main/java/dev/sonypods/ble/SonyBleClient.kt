@@ -25,6 +25,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.protocol.SonyGatt
 import dev.sonypods.protocol.hexString
@@ -203,7 +204,13 @@ class SonyBleClient(
                     "rssi=${found.rssi} services=[$serviceUuids] manufacturer=[$manufacturerData] " +
                     "serviceData=[$serviceData] sonyAd=${sonyAd?.summary.orEmpty()} raw=${sonyAd?.raw.orEmpty()}"
             )
-            if (isSonyCandidate(name) || found.isLikelyControlEndpoint || sonyAd != null) {
+            if (SonyDeviceService.isSony(
+                    address = device.address,
+                    name = name,
+                    serviceUuids = result.scanRecord?.serviceUuids?.map { it.uuid }.orEmpty(),
+                    hasSonyAdvertisement = sonyAd != null,
+                )
+            ) {
                 listener.onDeviceFound(found)
             }
         }
@@ -753,7 +760,7 @@ class SonyBleClient(
             .firstOrNull { device ->
                 val name = safeDeviceName(device).orEmpty()
                 device.type != BluetoothDevice.DEVICE_TYPE_LE &&
-                    (name.equals(targetName, ignoreCase = true) || isSonyCandidate(name))
+                    (name.equals(targetName, ignoreCase = true) || SonyDeviceService.isSony(device))
             }
     }
 
@@ -1410,7 +1417,7 @@ class SonyBleClient(
             "Known device source=$source name=${name ?: "<unknown>"} address=${device.address} " +
                 "type=${device.type} bond=${device.bondState} uuids=[$uuids]"
         )
-        if (!isSonyCandidate(name)) return
+        if (!SonyDeviceService.isSony(device)) return
 
         listener.onDeviceFound(
             DiscoveredSonyDevice(
@@ -1425,17 +1432,6 @@ class SonyBleClient(
                     name?.startsWith("LE_", ignoreCase = true) == true,
             )
         )
-    }
-
-    private fun isSonyCandidate(name: String?): Boolean {
-        val normalized = name?.trim()?.lowercase().orEmpty()
-        return normalized.contains("sony") ||
-            normalized.contains("linkbuds") ||
-            normalized.startsWith("wf-") ||
-            normalized.startsWith("wh-") ||
-            normalized.startsWith("wi-") ||
-            normalized.startsWith("xba-") ||
-            normalized.startsWith("mdr-")
     }
 
     @SuppressLint("MissingPermission")

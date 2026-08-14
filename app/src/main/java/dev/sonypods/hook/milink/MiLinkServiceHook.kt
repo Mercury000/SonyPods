@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import dev.sonypods.bridge.HookStateMirror
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
@@ -38,7 +39,6 @@ object MiLinkServiceHook : HookContext() {
     /** headsetPropertyChangeListener update types observed in the MiUI headset runtime. */
     private const val UPDATE_TYPE_BATTERY = 4
     private const val UPDATE_TYPE_ANC = 8
-    private val knownSonyAddresses = linkedSetOf<String>()
     internal var context: Context? = null
     private var receiverRegistered = false
     private var configReceiver: BroadcastReceiver? = null
@@ -335,7 +335,7 @@ object MiLinkServiceHook : HookContext() {
     private fun applySnapshot(snapshot: SonyStateSnapshot) {
         snapshot.deviceAddress?.let {
             currentAddress = it
-            knownSonyAddresses.add(it.uppercase())
+            SonyDeviceService.rememberAddress(it)
         }
         snapshot.deviceName?.let { currentName = it }
         snapshot.formFactor?.let { currentFormFactor = it }
@@ -376,28 +376,17 @@ object MiLinkServiceHook : HookContext() {
     }
 
     internal fun isSonyPod(device: BluetoothDevice): Boolean {
-        val address = runCatching { device.address }.getOrNull()
-        if (address != null && isSonyAddress(address)) return true
-        val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val normalized = name.trim().lowercase()
-        val result = normalized.contains("sony") ||
-            normalized.contains("linkbuds") ||
-            normalized.startsWith("wf-") ||
-            normalized.startsWith("wh-") ||
-            normalized.startsWith("wi-") ||
-            normalized.startsWith("xba-") ||
-            normalized.startsWith("mdr-")
-        if (result && address != null) {
-            knownSonyAddresses.add(address.uppercase())
-            currentAddress = address
-            currentName = name
+        val result = SonyDeviceService.isSony(device)
+        if (result) {
+            currentAddress = runCatching { device.address }.getOrNull() ?: currentAddress
+            currentName = runCatching { device.name ?: device.alias }.getOrNull() ?: currentName
         }
         return result
     }
 
     internal fun isSonyAddress(address: String): Boolean {
-        val normalized = address.uppercase()
-        return normalized == currentAddress?.uppercase() || normalized in knownSonyAddresses
+        return SonyDeviceService.isKnownSonyAddress(address) ||
+            address.equals(currentAddress, ignoreCase = true)
     }
 
     private fun isTargetHeadsetInfo(info: Any?): Boolean {
@@ -697,7 +686,7 @@ object MiLinkServiceHook : HookContext() {
         currentAnc = prefs.getInt("anc", currentAnc)
         currentSpatialAudioMode = prefs.getInt("spatial_audio_mode", currentSpatialAudioMode)
             .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)
-        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+        SonyDeviceService.rememberAddress(currentAddress)
         currentBattery = BatteryParams(
             left = PodParams(
                 prefs.getInt("left_battery", currentBattery.left?.battery ?: 0),

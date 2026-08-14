@@ -16,6 +16,7 @@ import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -27,7 +28,6 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private val TAG = "SonyPods-Upstream"
     private val reloadCallbackBinders = mutableListOf<IBinder>()
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
-    private val knownSonyAddresses = linkedSetOf<String>()
     private val callbacks = linkedMapOf<IBinder, Any>()
     private val handler = Handler(Looper.getMainLooper())
     private val hookedBinderClasses = linkedSetOf<String>()
@@ -46,7 +46,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private val stateMirror = HookStateMirror { snapshot ->
         snapshot.deviceAddress?.let {
             currentAddress = it
-            knownSonyAddresses.add(it.uppercase())
+            SonyDeviceService.rememberAddress(it)
         }
         snapshot.deviceName?.let { currentName = it }
         snapshot.formFactor?.let { currentFormFactor = it }
@@ -666,23 +666,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun isSonyPod(device: BluetoothDevice?): Boolean {
-        if (device == null) return false
-        val address = runCatching { device.address }.getOrNull()
-        val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val result = isSonyName(name) || (address != null && isSonyAddress(address))
-        if (result && address != null) knownSonyAddresses.add(address.uppercase())
-        return result
-    }
-
-    private fun isSonyName(rawName: String): Boolean {
-        val name = rawName.trim().lowercase()
-        return name.contains("sony") ||
-            name.contains("linkbuds") ||
-            name.startsWith("wf-") ||
-            name.startsWith("wh-") ||
-            name.startsWith("wi-") ||
-            name.startsWith("xba-") ||
-            name.startsWith("mdr-")
+        return SonyDeviceService.isSony(device)
     }
 
     private fun notifyRealStatus(reason: String) {
@@ -945,7 +929,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun isSonyAddress(address: String): Boolean {
-        return address.uppercase() in knownSonyAddresses
+        return SonyDeviceService.isKnownSonyAddress(address)
     }
 
     private fun BluetoothDevice?.describe(): String {

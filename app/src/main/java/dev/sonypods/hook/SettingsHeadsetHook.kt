@@ -15,6 +15,7 @@ import android.widget.TextView
 import com.mercury.sonypods.BuildConfig
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -31,7 +32,6 @@ object SettingsHeadsetHook : HookContext() {
     private const val PREFS_NAME = "sonypods_milink_state"
     private const val REPUBLISH_DEBOUNCE_MS = 600L
     private const val PKG_SETTINGS = "com.android.settings"
-    private val knownSonyAddresses = linkedSetOf<String>()
     private val batteryViews = WeakHashMap<Any, BluetoothDevice>()
     private val batteryValuesCache = WeakHashMap<Any, String>()
     private val headsetFragments = WeakHashMap<Any, Boolean>()
@@ -104,7 +104,7 @@ object SettingsHeadsetHook : HookContext() {
                 registerStatusReceiver(activity)
                 val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
                 val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-                Log.d(TAG, "Activity.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=$knownSonyAddresses current=$currentAddress")
+                Log.d(TAG, "Activity.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
                 if (!isSonyPod(device)) return@hookBefore
                 intent.putExtra("MIUI_HEADSET_SUPPORT", fakeSupport())
                 intent.putExtra("COME_FROM", intent.getStringExtra("COME_FROM") ?: "MIUI_BLUETOOTH_SETTINGS")
@@ -121,7 +121,7 @@ object SettingsHeadsetHook : HookContext() {
                 registerStatusReceiver(activity)
                 val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
                 val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-                Log.d(TAG, "Plugin.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=$knownSonyAddresses current=$currentAddress")
+                Log.d(TAG, "Plugin.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
                 if (!isSonyPod(device)) return@hookBefore
                 intent.putExtra("MIUI_HEADSET_SUPPORT", fakeSupport())
                 intent.putExtra("DEVICE_ID", fakeDeviceId())
@@ -257,7 +257,7 @@ object SettingsHeadsetHook : HookContext() {
             hookBefore(findMethod(className, methodName, String::class.java)) {
                 val address = args[0] as? String ?: return@hookBefore
                 val isSony = isSonyAddress(address)
-                Log.d(TAG, "$methodName proxy string call address=$address isSony=$isSony oldKnown=$knownSonyAddresses current=$currentAddress")
+                Log.d(TAG, "$methodName proxy string call address=$address isSony=$isSony oldKnown=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
                 if (!isSony) return@hookBefore
                 this.result = result()
                 Log.d(TAG, "$methodName proxy forced result=${this.result} address=$address")
@@ -437,6 +437,7 @@ object SettingsHeadsetHook : HookContext() {
                         if (snapshot != null && snapshot.deviceAddress != null) {
                             hasLiveSnapshot = true
                             currentAddress = snapshot.deviceAddress
+                            SonyDeviceService.rememberAddress(snapshot.deviceAddress)
                             currentName = snapshot.deviceName
                             currentFormFactor = snapshot.formFactor
                             currentBattery = snapshotBattery(snapshot)
@@ -454,7 +455,7 @@ object SettingsHeadsetHook : HookContext() {
                             }
                             currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
                             hasAncState = true
-                            currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+                            SonyDeviceService.rememberAddress(currentAddress)
                             Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
                             saveState(context)
                             rebindExistingBatteryViews()
@@ -471,13 +472,13 @@ object SettingsHeadsetHook : HookContext() {
                         hasLiveSnapshot = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+                        SonyDeviceService.rememberAddress(currentAddress)
                     }
                     SonyPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         hasLiveSnapshot = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+                        SonyDeviceService.rememberAddress(currentAddress)
                         saveState(context)
                         updateBatteryViews()
                         updateFragments()
@@ -486,7 +487,7 @@ object SettingsHeadsetHook : HookContext() {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentAnc = intent.getIntExtra("status", currentAnc)
                         hasAncState = true
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+                        SonyDeviceService.rememberAddress(currentAddress)
                         saveState(context)
                         updateFragments()
                     }
@@ -494,7 +495,7 @@ object SettingsHeadsetHook : HookContext() {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentTransparencyVocalEnhancement = intent.getBooleanExtra("enabled", currentTransparencyVocalEnhancement)
                         hasAncState = true
-                        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+                        SonyDeviceService.rememberAddress(currentAddress)
                         saveState(context)
                         updateFragments()
                     }
@@ -801,22 +802,10 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     internal fun isSonyPod(device: BluetoothDevice?): Boolean {
-        if (device == null) return false
-        val address = runCatching { device.address }.getOrNull()
-        if (address != null && isSonyAddress(address)) return true
-        val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val normalized = name.trim().lowercase()
-        val result = normalized.contains("sony") ||
-            normalized.contains("linkbuds") ||
-            normalized.startsWith("wf-") ||
-            normalized.startsWith("wh-") ||
-            normalized.startsWith("wi-") ||
-            normalized.startsWith("xba-") ||
-            normalized.startsWith("mdr-")
-        if (result && address != null) {
-            knownSonyAddresses.add(address.uppercase())
-            currentAddress = address
-            currentName = name
+        val result = SonyDeviceService.isSony(device)
+        if (result) {
+            currentAddress = runCatching { device?.address }.getOrNull() ?: currentAddress
+            currentName = runCatching { device?.name ?: device?.alias }.getOrNull() ?: currentName
         }
         return result
     }
@@ -853,8 +842,8 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun isSonyAddress(address: String): Boolean {
-        val normalized = address.uppercase()
-        return normalized == currentAddress?.uppercase() || normalized in knownSonyAddresses
+        return SonyDeviceService.isKnownSonyAddress(address) ||
+            address.equals(currentAddress, ignoreCase = true)
     }
 
     private fun settingsBatteryString(): String {
@@ -1098,7 +1087,7 @@ object SettingsHeadsetHook : HookContext() {
         if (currentFormFactor == null) {
             currentFormFactor = prefs.getString("form_factor", null)
         }
-        currentAddress?.let { knownSonyAddresses.add(it.uppercase()) }
+        SonyDeviceService.rememberAddress(currentAddress)
         // Live snapshot data wins; persisted ANC/voice are only a bootstrap until the
         // first live state arrives. Overwriting here reverted the UI after every tap
         // (vocal-enhancement looked unclickable) because settingsAncLevel() calls
