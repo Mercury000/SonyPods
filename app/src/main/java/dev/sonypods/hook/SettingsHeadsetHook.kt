@@ -329,7 +329,7 @@ object SettingsHeadsetHook : HookContext() {
             hookBefore(findMethod("com.android.settings.bluetooth.tws.MiuiHeadsetBattery", "onBatteryChanged", String::class.java)) {
                 val device = batteryViews[instance] ?: findBatteryDevice(instance).also { found ->
                     if (instance != null && found != null && isSonyPod(found)) {
-                        batteryViews[instance!!] = found
+                        batteryViews[instance] = found
                     }
                 }
                 Log.d(TAG, "Battery.onBatteryChanged(String) original=${args[0]} mappedDevice=${device.describe()} isSony=${isSonyPod(device)} forced=${settingsBatteryString()}")
@@ -558,7 +558,7 @@ object SettingsHeadsetHook : HookContext() {
             var activities: Any? = null
             while (type != null && activities == null) {
                 activities = runCatching {
-                    type!!.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
+                    type.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
                 }.getOrNull()
                 type = type.superclass
             }
@@ -636,7 +636,7 @@ object SettingsHeadsetHook : HookContext() {
         var type: Class<*>? = owner.javaClass
         while (type != null) {
             runCatching {
-                return type!!.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
+                return type.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
             }
             type = type.superclass
         }

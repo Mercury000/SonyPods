@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -702,7 +703,7 @@ object OfficialFastConnectDialogHook : HookContext() {
         var activities: Any? = null
         while (type != null && activities == null) {
             activities = runCatching {
-                type!!.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
+                type.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
             }.getOrNull()
             type = type.superclass
         }
@@ -713,7 +714,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 var activity: Any? = null
                 while (recordType != null && activity == null) {
                     activity = runCatching {
-                        recordType!!.getDeclaredField("activity").apply { isAccessible = true }.get(record)
+                        recordType.getDeclaredField("activity").apply { isAccessible = true }.get(record)
                     }.getOrNull()
                     recordType = recordType.superclass
                 }
@@ -930,7 +931,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     private fun launchOfficialActivity(context: Context, snapshot: SonyStateSnapshot): Boolean {
         val address = snapshot.deviceAddress ?: return false
         val device = runCatching {
-            BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(address)
+            context.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
         }.getOrNull() ?: run {
             Log.w(TAG, "cannot create BluetoothDevice for official dialog address=$address")
             return false
