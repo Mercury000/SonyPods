@@ -47,6 +47,10 @@ Theoretically supports all released Sony headphones
 2. Restart the scopes (one-tap root restart inside the app)
 3. Open the app, grant Bluetooth / notification permissions, connect your Sony headphones
 
+### For non-root or other phone usage
+
+For users without root access or users of other phone models, you can download the noroot version from [actions](https://github.com/Mercury000/SonyPods/actions/workflows/build-noroot.yml) as a third-party control app, but it lacks system integration and other features.
+
 ### Requirements
 
 - HyperOS (Android 14+)

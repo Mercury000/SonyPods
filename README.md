@@ -48,6 +48,10 @@
 2. 重启作用域（App 内可一键 root 重启）
 3. 打开 App 授予蓝牙 / 通知权限，连接 Sony 耳机
 
+### 无ROOT或其他手机使用
+
+对于无ROOT或其他手机用户，你可以在[actions](https://github.com/Mercury000/SonyPods/actions/workflows/build-noroot.yml)中下载noroot版本作为第三方控制软件，但没有系统集成等功能
+
 ### 环境
 
 - HyperOS（Android 14+）
