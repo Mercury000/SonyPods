@@ -2,10 +2,27 @@ name: Build Release APK
 
 on:
   push:
-    tags: [ "v*" ]
     branches: [ "master", "main" ]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".github/workflows/build.yml"
   pull_request:
     branches: [ "master", "main" ]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 jobs:
@@ -13,9 +30,94 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version and detect version update
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          read_version_code() {
+            sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' | head -n 1
+          }
+
+          read_version_name() {
+            sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n 1
+          }
+
+          VERSION_CODE=$(read_version_code < app/build.gradle.kts)
+          VERSION_NAME=$(read_version_name < app/build.gradle.kts)
+
+          if [ -z "$VERSION_CODE" ] || [ -z "$VERSION_NAME" ]; then
+            echo "Unable to read versionCode/versionName from app/build.gradle.kts." >&2
+            exit 1
+          fi
+
+          VERSION_CHANGED=false
+          if [ "$EVENT_NAME" = "push" ] &&
+             [ -n "$BEFORE_SHA" ] &&
+             [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] &&
+             git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            PREVIOUS_FILE=$(git show "${BEFORE_SHA}:app/build.gradle.kts" 2>/dev/null || true)
+            PREVIOUS_VERSION_CODE=$(printf '%s\n' "$PREVIOUS_FILE" | read_version_code)
+            PREVIOUS_VERSION_NAME=$(printf '%s\n' "$PREVIOUS_FILE" | read_version_name)
+
+            if [ "$VERSION_CODE" != "$PREVIOUS_VERSION_CODE" ] ||
+               [ "$VERSION_NAME" != "$PREVIOUS_VERSION_NAME" ]; then
+              VERSION_CHANGED=true
+            fi
+          fi
+
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "changed=$VERSION_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t VERSION_COMMITS < <(
+            git log \
+              --format='%H' \
+              --extended-regexp \
+              -G '^[[:space:]]*version(Code|Name)[[:space:]]*=' \
+              -- app/build.gradle.kts
+          )
+
+          CURRENT_VERSION_COMMIT="${VERSION_COMMITS[0]:-}"
+          PREVIOUS_VERSION_COMMIT="${VERSION_COMMITS[1]:-}"
+
+          if [ -z "$CURRENT_VERSION_COMMIT" ]; then
+            echo "No commit changing versionCode/versionName was found." >&2
+            exit 1
+          fi
+
+          if [ -n "$PREVIOUS_VERSION_COMMIT" ]; then
+            RELEASE_RANGE="${PREVIOUS_VERSION_COMMIT}..${CURRENT_VERSION_COMMIT}"
+          else
+            RELEASE_RANGE="$CURRENT_VERSION_COMMIT"
+          fi
+
+          git log \
+            --reverse \
+            --format='- %s' \
+            "$RELEASE_RANGE" > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "No commit messages were found for release notes." >&2
+            exit 1
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -37,37 +139,35 @@ jobs:
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
         run: |
-          set -e
-          UNSIGNED_APK=$(find app/build/outputs/apk/release -maxdepth 2 -name '*.apk' | head -1)
+          set -euo pipefail
+
+          UNSIGNED_APK=$(find app/build/outputs/apk/release -maxdepth 2 -name '*.apk' | head -n 1)
           if [ -z "$UNSIGNED_APK" ]; then
             echo "No release APK found." >&2
             exit 1
           fi
 
-          VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "unversioned")
-          OUT_NAME="SonyPods-${VERSION_NAME}-release.apk"
-
-          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          OUT_NAME="SonyPods-${{ steps.version.outputs.version_name }}-release.apk"
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
 
           if [ -n "$SIGNING_KEY" ]; then
             echo "$SIGNING_KEY" | base64 -d > /tmp/keystore.jks
-            "${BUILD_TOOLS}zipalign" -f 4 "$UNSIGNED_APK" "./$OUT_NAME"
-            "${BUILD_TOOLS}apksigner" sign \
+            "$BUILD_TOOLS/zipalign" -f 4 "$UNSIGNED_APK" "./$OUT_NAME"
+            "$BUILD_TOOLS/apksigner" sign \
               --ks /tmp/keystore.jks \
               --ks-key-alias "${{ secrets.ALIAS }}" \
               --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
               --key-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
               "./$OUT_NAME"
-            rm /tmp/keystore.jks
+            rm -f /tmp/keystore.jks
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
-            # No signing key: upload the gradle-produced APK as-is (may be unsigned)
             cp "$UNSIGNED_APK" "./$OUT_NAME"
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
+
           echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
-      # Non-zipped artifact upload — GitHub Actions 2026-02 feature
       - name: Upload Release APK
         uses: actions/upload-artifact@v7
         with:
@@ -77,10 +177,14 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') && steps.sign.outputs.signed == 'true' }}
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true' && steps.sign.outputs.signed == 'true'
         uses: ncipollo/release-action@v1
         with:
           token: ${{ github.token }}
-          artifacts: "./${{ steps.sign.outputs.apk }}"
-          generateReleaseNotes: true
+          tag: ${{ steps.version.outputs.version_code }}
+          commit: ${{ github.sha }}
+          name: ${{ steps.version.outputs.version_name }}
+          bodyFile: release-notes.md
+          artifacts: ./${{ steps.sign.outputs.apk }}
+          artifactErrorsFailBuild: true
           makeLatest: true
