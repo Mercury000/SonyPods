@@ -2,6 +2,7 @@ package dev.sonypods.config
 
 import android.content.SharedPreferences
 import android.util.Log
+import com.mercury.sonypods.BuildConfig
 import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -17,13 +18,15 @@ data class AppConfig(
     val popupOnConnect: Boolean = false,
     /** Connection dialog renderer: module-owned popup or Bluetooth Extension's PairingDialog. */
     val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL,
-    /** Skip the auto popup on connect while the module UI is the foreground app. */
-    val suppressPopupOnConnectWhenForeground: Boolean = true,
     /**
      * Follow Bluetooth Extension's own connect-popup precondition: stay silent while a
      * game is running, and while a phone (not a tablet) is in landscape.
      */
     val suppressPopupInGameOrLandscape: Boolean = true,
+    /** Packages exempt from [suppressPopupInGameOrLandscape] while in the foreground. */
+    val popupAllowlist: Set<String> = emptySet(),
+    /** Packages that suppress the popup while in the foreground, whatever else holds. */
+    val popupDenylist: Set<String> = ConfigManager.DEFAULT_POPUP_DENYLIST,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
     val fusionMoreClickAction: Int = ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS,
     val adaptiveCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
@@ -48,8 +51,14 @@ object ConfigManager {
     const val PREF_KEY_NOTIFICATION_CLICK_ACTION = "notification_click_action"
     const val PREF_KEY_POPUP_ON_CONNECT = "popup_on_connect"
     const val PREF_KEY_CONNECT_DIALOG_MODE = "connect_dialog_mode"
+    /**
+     * Read only for the one-time migration in [readConfig]. The switch this key backed
+     * became "the module's own package sits in [PREF_KEY_POPUP_DENYLIST]".
+     */
     const val PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND = "suppress_popup_on_connect_when_foreground"
     const val PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE = "suppress_popup_in_game_or_landscape"
+    const val PREF_KEY_POPUP_ALLOWLIST = "popup_allowlist"
+    const val PREF_KEY_POPUP_DENYLIST = "popup_denylist"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_FUSION_MORE_CLICK_ACTION = "fusion_more_click_action"
     const val PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE = "adaptive_capability_override"
@@ -95,6 +104,13 @@ object ConfigManager {
      * contains no valid mode names — i.e. never to override a valid subset the user chose.
      */
     val DEFAULT_ANC_CYCLE_MODES: Set<String> = ANC_CYCLE_MODE_ORDER.toSet()
+
+    /**
+     * The module's own UI starts out on the deny list: an auto popup over the app the
+     * user is already reading the headphone state in has never been wanted. This
+     * replaces a dedicated switch, so it must stay the default for existing installs.
+     */
+    val DEFAULT_POPUP_DENYLIST: Set<String> = setOf(BuildConfig.APPLICATION_ID)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -169,9 +185,11 @@ object ConfigManager {
         CONNECT_DIALOG_MODE_OFFICIAL,
     )
 
-    fun suppressPopupOnConnectWhenForeground(): Boolean = current().suppressPopupOnConnectWhenForeground
-
     fun suppressPopupInGameOrLandscape(): Boolean = current().suppressPopupInGameOrLandscape
+
+    fun popupAllowlist(): Set<String> = current().popupAllowlist
+
+    fun popupDenylist(): Set<String> = current().popupDenylist
 
     fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
 
@@ -236,13 +254,18 @@ object ConfigManager {
         save(prefs, service, config)
     }
 
-    fun updateSuppressPopupOnConnectWhenForeground(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
-        val config = current().copy(suppressPopupOnConnectWhenForeground = enabled)
+    fun updateSuppressPopupInGameOrLandscape(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
+        val config = current().copy(suppressPopupInGameOrLandscape = enabled)
         save(prefs, service, config)
     }
 
-    fun updateSuppressPopupInGameOrLandscape(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
-        val config = current().copy(suppressPopupInGameOrLandscape = enabled)
+    fun updatePopupAllowlist(prefs: SharedPreferences, service: XposedService?, packages: Set<String>) {
+        val config = current().copy(popupAllowlist = packages.normalizedPackageSet())
+        save(prefs, service, config)
+    }
+
+    fun updatePopupDenylist(prefs: SharedPreferences, service: XposedService?, packages: Set<String>) {
+        val config = current().copy(popupDenylist = packages.normalizedPackageSet())
         save(prefs, service, config)
     }
 
@@ -365,8 +388,10 @@ object ConfigManager {
             .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
             .putBoolean(PREF_KEY_POPUP_ON_CONNECT, config.popupOnConnect)
             .putInt(PREF_KEY_CONNECT_DIALOG_MODE, config.connectDialogMode)
-            .putBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, config.suppressPopupOnConnectWhenForeground)
             .putBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, config.suppressPopupInGameOrLandscape)
+            .putStringSet(PREF_KEY_POPUP_ALLOWLIST, config.popupAllowlist)
+            .putStringSet(PREF_KEY_POPUP_DENYLIST, config.popupDenylist)
+            .remove(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, config.fusionMoreClickAction)
             .putInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, config.adaptiveCapabilityOverride)
@@ -406,16 +431,24 @@ object ConfigManager {
             null
         }
         val directConnectDialogMode = prefs.getInt(PREF_KEY_CONNECT_DIALOG_MODE, Int.MIN_VALUE)
-        val directSuppressPopupOnConnectWhenForeground = if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND)) {
-            prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, true)
-        } else {
-            null
-        }
         val directSuppressPopupInGameOrLandscape = if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE)) {
             prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, true)
         } else {
             null
         }
+        val directPopupAllowlist = prefs.getStringSet(PREF_KEY_POPUP_ALLOWLIST, null)?.toSet()
+        // One-time migration off the "suppress popup while the module is open" switch,
+        // whose meaning is now "the module's own package is on the deny list". Only a
+        // user who explicitly turned it OFF needs carrying over; everyone else lands on
+        // DEFAULT_POPUP_DENYLIST, which already holds that package.
+        val directPopupDenylist = prefs.getStringSet(PREF_KEY_POPUP_DENYLIST, null)?.toSet()
+            ?: if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND) &&
+                !prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, true)
+            ) {
+                emptySet()
+            } else {
+                null
+            }
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directFusionMoreClickAction = prefs.getInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directAdaptiveCapabilityOverride = prefs.getInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
@@ -439,8 +472,9 @@ object ConfigManager {
                 notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
                 popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
                 connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
-                suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
                 suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
+                popupAllowlist = directPopupAllowlist ?: config.popupAllowlist,
+                popupDenylist = directPopupDenylist ?: config.popupDenylist,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
                 adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -458,8 +492,9 @@ object ConfigManager {
             notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
             popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
             connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
-            suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
             suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
+            popupAllowlist = directPopupAllowlist ?: config.popupAllowlist,
+            popupDenylist = directPopupDenylist ?: config.popupDenylist,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
             adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -485,6 +520,8 @@ object ConfigManager {
         spatialSoundSwitchCapabilityOverride = spatialSoundSwitchCapabilityOverride.normalizedCapabilityOverride(),
         ancImplementationCapabilityOverride = ancImplementationCapabilityOverride.normalizedCapabilityOverride(),
         ancCycleModes = ancCycleModes.normalizedAncCycleModes(),
+        popupAllowlist = popupAllowlist.normalizedPackageSet(),
+        popupDenylist = popupDenylist.normalizedPackageSet(),
         startupTab = startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES),
     )
 
@@ -508,6 +545,17 @@ object ConfigManager {
      */
     private fun Set<String>.normalizedAncCycleModes(): Set<String> =
         filterTo(mutableSetOf()) { it in ANC_CYCLE_MODE_ORDER }
+
+    /**
+     * Trims blanks out of a package-name list and nothing else.
+     *
+     * Deliberately does not check the names against PackageManager: an entry for an app
+     * the user has uninstalled — or has not installed yet on a restored config — must
+     * survive rather than be silently dropped, and the hooked processes that read these
+     * lists cannot see the full package list anyway.
+     */
+    private fun Set<String>.normalizedPackageSet(): Set<String> =
+        mapNotNullTo(mutableSetOf()) { it.trim().takeIf(String::isNotEmpty) }
 
     private fun logConfigChange(source: String, oldConfig: AppConfig, newConfig: AppConfig) {
         val changes = changedFields(oldConfig, newConfig)
@@ -550,11 +598,14 @@ object ConfigManager {
             if (oldConfig.connectDialogMode != newConfig.connectDialogMode) {
                 add("connectDialogMode=${oldConfig.connectDialogMode}->${newConfig.connectDialogMode}")
             }
-            if (oldConfig.suppressPopupOnConnectWhenForeground != newConfig.suppressPopupOnConnectWhenForeground) {
-                add("suppressPopupOnConnectWhenForeground=${oldConfig.suppressPopupOnConnectWhenForeground}->${newConfig.suppressPopupOnConnectWhenForeground}")
-            }
             if (oldConfig.suppressPopupInGameOrLandscape != newConfig.suppressPopupInGameOrLandscape) {
                 add("suppressPopupInGameOrLandscape=${oldConfig.suppressPopupInGameOrLandscape}->${newConfig.suppressPopupInGameOrLandscape}")
+            }
+            if (oldConfig.popupAllowlist != newConfig.popupAllowlist) {
+                add("popupAllowlist=${oldConfig.popupAllowlist}->${newConfig.popupAllowlist}")
+            }
+            if (oldConfig.popupDenylist != newConfig.popupDenylist) {
+                add("popupDenylist=${oldConfig.popupDenylist}->${newConfig.popupDenylist}")
             }
             if (oldConfig.moreClickAction != newConfig.moreClickAction) {
                 add("moreClickAction=${oldConfig.moreClickAction}->${newConfig.moreClickAction}")

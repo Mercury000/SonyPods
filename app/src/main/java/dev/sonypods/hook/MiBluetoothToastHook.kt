@@ -1,7 +1,6 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
-import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
@@ -31,7 +30,6 @@ import dev.sonypods.utils.SystemApisUtils.notifyAsUser
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
-import com.mercury.sonypods.BuildConfig
 import com.mercury.sonypods.R
 
 @SuppressLint("MissingPermission")
@@ -339,27 +337,6 @@ object MiBluetoothToastHook : HookContext() {
         }
     }
 
-    /**
-     * Query whether the module app currently owns the foreground. Uses the hidden
-     * ActivityManager.getUidProcessState (unavailable in the public SDK jar, but
-     * present at runtime) so the answer is the live process-scheduler state: no
-     * broadcast round trip, and a killed module process reads as not-foreground.
-     * Fails open (not-foreground) if the hidden API is unavailable.
-     */
-    private fun isModuleUiForeground(context: Context): Boolean = runCatching {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val uid = context.packageManager
-            .getApplicationInfo(BuildConfig.APPLICATION_ID, 0)
-            .uid
-        val state = ActivityManager::class.java
-            .getMethod("getUidProcessState", Int::class.javaPrimitiveType)
-            .invoke(am, uid) as Int
-        val topState = ActivityManager::class.java
-            .getField("PROCESS_STATE_TOP")
-            .getInt(null)
-        state == topState
-    }.getOrDefault(false)
-
     /** Rebind receivers and request a surface replay when package callbacks are not replayed. */
     internal fun startAfterReload(context: Context) {
         registerNotificationReceiver(context)
@@ -450,21 +427,17 @@ object MiBluetoothToastHook : HookContext() {
                             // EXTRA_ISLAND_FIRST_FLOAT=false) after the popup closes so the
                             // island reappears. That replay is not a new connection and must
                             // not relaunch the popup; only a genuine first render (no extra)
-                            // may trigger it. While the module UI is the foreground app the
-                            // auto popup is suppressed too (the user is already in the app).
+                            // may trigger it.
                             if (ConfigManager.popupOnConnect() &&
                                 ConfigManager.connectDialogMode() == ConfigManager.CONNECT_DIALOG_MODE_MODULE &&
                                 islandFirstFloat == null &&
-                                !transportRecovery &&
-                                !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
+                                !transportRecovery
                             ) {
-                                // Match what the official dialog does in games and in
-                                // phone landscape instead of interrupting them.
-                                val dndReason = if (ConfigManager.suppressPopupInGameOrLandscape()) {
-                                    PopupDndPolicy.suppressReason(context)
-                                } else {
-                                    null
-                                }
+                                // Games, phone landscape and the user's allow/deny lists all
+                                // live in PopupDndPolicy. The module's own package is on the
+                                // deny list by default, which is what keeps the popup from
+                                // firing over the app the user is already reading.
+                                val dndReason = PopupDndPolicy.suppressReason(context)
                                 if (dndReason != null) {
                                     Log.d("SonyPods", "popup on connect skipped: $dndReason")
                                 } else {

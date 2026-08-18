@@ -151,7 +151,8 @@ fun MainUI(
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
     val connectDialogMode = remember { mutableStateOf(appConfig.connectDialogMode) }
-    val suppressPopupOnConnectWhenForeground = remember { mutableStateOf(appConfig.suppressPopupOnConnectWhenForeground) }
+    val popupAllowlist = remember { mutableStateOf(appConfig.popupAllowlist) }
+    val popupDenylist = remember { mutableStateOf(appConfig.popupDenylist) }
     val suppressPopupInGameOrLandscape = remember { mutableStateOf(appConfig.suppressPopupInGameOrLandscape) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
@@ -632,10 +633,17 @@ fun MainUI(
                     ConfigManager.updateConnectDialogMode(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
-                suppressPopupOnConnectWhenForeground = suppressPopupOnConnectWhenForeground,
-                onSuppressPopupOnConnectWhenForegroundChange = {
-                    suppressPopupOnConnectWhenForeground.value = it
-                    ConfigManager.updateSuppressPopupOnConnectWhenForeground(prefs, xposedService, it)
+                popupAllowlist = popupAllowlist,
+                onPopupAllowlistChange = {
+                    popupAllowlist.value = it
+                    ConfigManager.updatePopupAllowlist(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.android.bluetooth")
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                },
+                popupDenylist = popupDenylist,
+                onPopupDenylistChange = {
+                    popupDenylist.value = it
+                    ConfigManager.updatePopupDenylist(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.android.bluetooth")
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },

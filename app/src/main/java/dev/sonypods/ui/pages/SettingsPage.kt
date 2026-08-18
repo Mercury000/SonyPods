@@ -16,6 +16,7 @@ import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.ui.dialogs.AncCycleModesDialog
+import dev.sonypods.ui.dialogs.AppPickerDialog
 import dev.sonypods.ui.dialogs.IslandDurationDialog
 import dev.sonypods.ui.dialogs.decomposeIslandDuration
 import androidx.compose.ui.unit.sp
@@ -26,6 +27,8 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+private enum class PopupAppList { Allow, Deny }
 
 @Composable
 fun SettingsPage(
@@ -51,8 +54,10 @@ fun SettingsPage(
     onPopupOnConnectChange: (Boolean) -> Unit = {},
     connectDialogMode: MutableState<Int> = mutableStateOf(ConfigManager.CONNECT_DIALOG_MODE_MODULE),
     onConnectDialogModeChange: (Int) -> Unit = {},
-    suppressPopupOnConnectWhenForeground: MutableState<Boolean> = mutableStateOf(true),
-    onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit = {},
+    popupAllowlist: MutableState<Set<String>> = mutableStateOf(emptySet()),
+    onPopupAllowlistChange: (Set<String>) -> Unit = {},
+    popupDenylist: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_POPUP_DENYLIST),
+    onPopupDenylistChange: (Set<String>) -> Unit = {},
     suppressPopupInGameOrLandscape: MutableState<Boolean> = mutableStateOf(true),
     onSuppressPopupInGameOrLandscapeChange: (Boolean) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
@@ -123,6 +128,7 @@ fun SettingsPage(
         .joinToString(" → ") { (_, label) -> label }
         .ifEmpty { stringResource(R.string.anc_cycle_modes_summary) }
     val showAncCycleModesDialog = remember { mutableStateOf(false) }
+    val popupAppList = remember { mutableStateOf<PopupAppList?>(null) }
     val moreClickActionValues = listOf(
         ConfigManager.MORE_CLICK_SYSTEM_SETTINGS,
         ConfigManager.MORE_CLICK_MODULE,
@@ -240,12 +246,18 @@ fun SettingsPage(
                         selectedIndex = connectDialogModeValues.indexOf(connectDialogMode.value).coerceAtLeast(0),
                         onSelectedIndexChange = { onConnectDialogModeChange(connectDialogModeValues[it]) },
                     )
-                    SwitchPreference(
-                        title = stringResource(R.string.suppress_popup_on_connect_when_foreground),
-                        summary = stringResource(R.string.suppress_popup_on_connect_when_foreground_summary),
-                        checked = suppressPopupOnConnectWhenForeground.value,
-                        onCheckedChange = { onSuppressPopupOnConnectWhenForegroundChange(it) }
+                    BasicComponent(
+                        title = stringResource(R.string.popup_denylist_title),
+                        summary = stringResource(R.string.popup_denylist_summary, popupDenylist.value.size),
+                        onClick = { popupAppList.value = PopupAppList.Deny },
                     )
+                    if (suppressPopupInGameOrLandscape.value) {
+                        BasicComponent(
+                            title = stringResource(R.string.popup_allowlist_title),
+                            summary = stringResource(R.string.popup_allowlist_summary, popupAllowlist.value.size),
+                            onClick = { popupAppList.value = PopupAppList.Allow },
+                        )
+                    }
                     SwitchPreference(
                         title = stringResource(R.string.suppress_popup_in_game_or_landscape),
                         summary = stringResource(R.string.suppress_popup_in_game_or_landscape_summary),
@@ -301,6 +313,28 @@ fun SettingsPage(
         onConfirm = {
             onAncCycleModesChange(it)
             showAncCycleModesDialog.value = false
+        },
+    )
+
+    AppPickerDialog(
+        show = popupAppList.value != null,
+        title = stringResource(
+            if (popupAppList.value == PopupAppList.Allow) {
+                R.string.popup_allowlist_title
+            } else {
+                R.string.popup_denylist_title
+            },
+        ),
+        selectedPackages = if (popupAppList.value == PopupAppList.Allow) {
+            popupAllowlist.value
+        } else {
+            popupDenylist.value
+        },
+        onDismissRequest = { popupAppList.value = null },
+        onConfirm = { selected ->
+            if (popupAppList.value == PopupAppList.Allow) onPopupAllowlistChange(selected)
+            else onPopupDenylistChange(selected)
+            popupAppList.value = null
         },
     )
 

@@ -2,7 +2,6 @@ package dev.sonypods.hook
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -943,15 +942,14 @@ object OfficialFastConnectDialogHook : HookContext() {
         ) {
             return false
         }
-        // Bluetooth Extension gates its own dialog on this; the module launches the
-        // dialog through a path that skips that gate, so it has to repeat the check.
-        if (ConfigManager.suppressPopupInGameOrLandscape()) {
-            PopupDndPolicy.suppressReason(context)?.let { reason ->
-                Log.d(TAG, "official dialog skipped: $reason")
-                return false
-            }
+        // Bluetooth Extension gates its own dialog on the game/landscape rules; the
+        // module launches the dialog through a path that skips that gate, so it has to
+        // repeat the check. PopupDndPolicy also owns the user's allow/deny lists.
+        PopupDndPolicy.suppressReason(context)?.let { reason ->
+            Log.d(TAG, "official dialog skipped: $reason")
+            return false
         }
-        return !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
+        return true
     }
 
     private fun launchOfficialActivity(context: Context, snapshot: SonyStateSnapshot): Boolean {
@@ -1836,19 +1834,5 @@ object OfficialFastConnectDialogHook : HookContext() {
             .apply { isAccessible = true }
             .invoke(null) as? Context
     }.getOrNull()
-
-    private fun isModuleUiForeground(context: Context): Boolean = runCatching {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val uid = context.packageManager
-            .getApplicationInfo("com.mercury.sonypods", 0)
-            .uid
-        val state = ActivityManager::class.java
-            .getMethod("getUidProcessState", Int::class.javaPrimitiveType)
-            .invoke(am, uid) as Int
-        val topState = ActivityManager::class.java
-            .getField("PROCESS_STATE_TOP")
-            .getInt(null)
-        state == topState
-    }.getOrDefault(false)
 
 }

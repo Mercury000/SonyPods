@@ -5,19 +5,26 @@ import android.content.IntentFilter
 import android.hardware.display.DisplayManager
 import android.view.Display
 import android.view.Surface
+import dev.sonypods.config.ConfigManager
 
 /**
- * Bluetooth Extension's own precondition for the connect popup, reproduced.
+ * Whether the connect popup may interrupt the user right now.
  *
+ * The two ROM-derived rules reproduce Bluetooth Extension's own precondition:
  * `MiuiFastConnectService.preCheckStartProductActivity` refuses to show the official
  * dialog while a game is running, and — on phones only — while the display is rotated
  * to landscape. The module starts both the official dialog and its own popup through
  * paths that never reach that check, so without repeating it here the module
  * interrupts exactly the situations the system deliberately leaves alone.
  *
- * The order matters and mirrors the original: the game test runs first, so a tablet is
- * not exempt from it; only the orientation test is skipped on tablets, whose natural
- * orientation may itself be landscape.
+ * The ROM rules still preserve the original order: game is checked before tablet
+ * orientation handling, so a tablet is not exempt from the game rule; only the
+ * orientation test is skipped on tablets, whose natural orientation may itself be
+ * landscape.
+ *
+ * On top of those sit two user-managed lists, keyed on which app holds the
+ * foreground — see [suppressReason] for why the deny list outranks the switch that
+ * owns the ROM rules.
  */
 object PopupDndPolicy {
     private const val ACTION_GAME_START = "com.xiaomi.joyose.GAME_START"
@@ -25,10 +32,22 @@ object PopupDndPolicy {
     private const val TABLET_MIN_SMALLEST_WIDTH_DP = 600
 
     /** A short reason to suppress the popup, or null when it may be shown. */
-    fun suppressReason(context: Context): String? = when {
-        isGameRunning(context) -> "game"
-        isPhoneLandscape(context) -> "landscape"
-        else -> null
+    fun suppressReason(context: Context): String? {
+        // The deny list is deliberately checked before the master switch: it carries
+        // the module's own package by default, which used to be a switch of its own,
+        // and turning the game/landscape rules off must not silently re-enable a
+        // popup over the module's own UI.
+        ForegroundQuery.firstForegroundIn(context, ConfigManager.popupDenylist())
+            ?.let { return "denylist:$it" }
+        if (!ConfigManager.suppressPopupInGameOrLandscape()) return null
+        // The allow list only exempts from the two rules below, so it is evaluated
+        // after the switch that owns them.
+        if (ForegroundQuery.firstForegroundIn(context, ConfigManager.popupAllowlist()) != null) {
+            return null
+        }
+        if (isGameRunning(context)) return "game"
+        if (isPhoneLandscape(context)) return "landscape"
+        return null
     }
 
     /**
