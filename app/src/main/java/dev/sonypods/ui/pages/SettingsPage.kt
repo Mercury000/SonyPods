@@ -55,7 +55,7 @@ fun SettingsPage(
     onPopupOnConnectChange: (Boolean) -> Unit = {},
     connectDialogMode: MutableState<Int> = mutableStateOf(ConfigManager.CONNECT_DIALOG_MODE_MODULE),
     onConnectDialogModeChange: (Int) -> Unit = {},
-    popupAllowlist: MutableState<Set<String>> = mutableStateOf(emptySet()),
+    popupAllowlist: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_POPUP_ALLOWLIST),
     onPopupAllowlistChange: (Set<String>) -> Unit = {},
     popupDenylist: MutableState<Set<String>> = mutableStateOf(ConfigManager.DEFAULT_POPUP_DENYLIST),
     onPopupDenylistChange: (Set<String>) -> Unit = {},

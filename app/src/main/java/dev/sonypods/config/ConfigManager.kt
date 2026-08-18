@@ -24,7 +24,7 @@ data class AppConfig(
      */
     val suppressPopupInGameOrLandscape: Boolean = true,
     /** Packages exempt from [suppressPopupInGameOrLandscape] while in the foreground. */
-    val popupAllowlist: Set<String> = emptySet(),
+    val popupAllowlist: Set<String> = ConfigManager.DEFAULT_POPUP_ALLOWLIST,
     /** Packages that suppress the popup while in the foreground, whatever else holds. */
     val popupDenylist: Set<String> = ConfigManager.DEFAULT_POPUP_DENYLIST,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
@@ -104,6 +104,8 @@ object ConfigManager {
      * contains no valid mode names — i.e. never to override a valid subset the user chose.
      */
     val DEFAULT_ANC_CYCLE_MODES: Set<String> = ANC_CYCLE_MODE_ORDER.toSet()
+
+    val DEFAULT_POPUP_ALLOWLIST: Set<String> = setOf("com.miui.home")
 
     /**
      * The module's own UI starts out on the deny list: an auto popup over the app the
