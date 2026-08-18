@@ -217,8 +217,18 @@ object OfficialFastConnectDialogHook : HookContext() {
         installFrameworkActivityHooks()
         installBatteryTextGuard(appClassLoader)
         installHandlerDispatchGuard(appClassLoader)
-        installActivityHooks(FAST_CONNECT_ACTIVITY, "root")
-        installActivityHooks(FAST_CONNECT_ACTIVITY_VARIANT, "fast")
+        val rootHooked = installActivityHooks(FAST_CONNECT_ACTIVITY, "root")
+        val variantHooked = installActivityHooks(FAST_CONNECT_ACTIVITY_VARIANT, "fast")
+        // One of the two names missing is normal — the variant ships in a Qigsaw
+        // feature on some builds. Only neither resolving is worth reporting, and
+        // even then the framework lifecycle hook still observes the dialog.
+        if (!rootHooked && !variantHooked) {
+            Log.w(
+                TAG,
+                "no official Activity class hooked ($FAST_CONNECT_ACTIVITY, " +
+                    "$FAST_CONNECT_ACTIVITY_VARIANT); using the framework Activity lifecycle",
+            )
+        }
         // Hot reload does not replay Activity.onCreate. Rebind the currently
         // visible module-owned official dialog so its controller, view and
         // concrete feature-class hooks are restored immediately.
@@ -453,7 +463,8 @@ object OfficialFastConnectDialogHook : HookContext() {
     private fun isBluetoothAddress(value: String): Boolean =
         value.matches(Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"))
 
-    private fun installActivityHooks(className: String, role: String) {
+    /** Returns true when the concrete Activity class was visible and hooked. */
+    private fun installActivityHooks(className: String, role: String): Boolean =
         runCatching {
             hookAfter(
                 findMethod(className, "onCreate", Bundle::class.java),
@@ -471,8 +482,15 @@ object OfficialFastConnectDialogHook : HookContext() {
                 if (isManagedOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
             }
             Log.i(TAG, "official Activity hooks installed class=$className")
-        }.onFailure { Log.w(TAG, "official Activity hooks unavailable class=$className", it) }
-    }
+            true
+        }.getOrElse {
+            // Expected on builds that ship this Activity in a Qigsaw feature: its
+            // class is not visible until the split loads, well after package-ready.
+            // installFrameworkActivityHooks observes it either way, so this is not
+            // worth a stack trace.
+            Log.d(TAG, "official Activity hooks unavailable class=$className: ${it.message}")
+            false
+        }
 
     private fun onOfficialActivityCreated(activity: Activity) {
         val dialogAddress = managedOfficialAddress(activity) ?: run {
