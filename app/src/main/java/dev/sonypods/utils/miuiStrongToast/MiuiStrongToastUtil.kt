@@ -281,7 +281,7 @@ object MiuiStrongToastUtil {
         val bundle = StringToastBundle.Builder()
             .setPackageName("com.xiaomi.bluetooth")
             .setStrongToastCategory(category)
-            .setDuration(5000)
+            .setDuration(OFFICIAL_TOAST_DURATION_MS)
             .setTarget(null)
             .setParam(toastPayload)
             .setIslandParam(islandPayload)
@@ -293,9 +293,44 @@ object MiuiStrongToastUtil {
                 "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
             ).invoke(service, 1, "strong_toast_action", bundle)
             lastPodsTimestamp = System.currentTimeMillis()
+            officialToastPostedAt = lastPodsTimestamp
             Log.d("SonyPods", "official strong toast shown category=$category")
         }.onFailure { Log.e("SonyPods", "Failed to show strong toast", it) }
     }
+
+    /**
+     * Withdraw the official strong toast the way HyperOS does it
+     * (`com.xiaomi.dist.statusbar.StatusBarController.hideStrongToast`): the same
+     * setStatus channel, with the payload replaced by a hide request.
+     *
+     * The request identifies the toast only by package name, so it withdraws whatever
+     * strong toast com.xiaomi.bluetooth currently owns. Ours expires on its own after
+     * [OFFICIAL_TOAST_DURATION_MS]; past that point the visible toast is somebody
+     * else's, so this becomes a no-op rather than taking theirs down.
+     */
+    fun hideOfficialToast(context: Context) {
+        if (!isHyperOS) return
+        val postedAt = officialToastPostedAt
+        if (postedAt == 0L || System.currentTimeMillis() - postedAt > OFFICIAL_TOAST_DURATION_MS) return
+        officialToastPostedAt = 0L
+        val bundle = Bundle().apply {
+            putString("package_name", "com.xiaomi.bluetooth")
+            putString("status_bar_strong_toast", "hide_strong_toast")
+        }
+        runCatching {
+            val service = context.getSystemService(Context.STATUS_BAR_SERVICE)
+            service.javaClass.getMethod(
+                "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
+            ).invoke(service, 1, "strong_toast_action", bundle)
+            Log.d("SonyPods", "official strong toast hidden")
+        }.onFailure { Log.w("SonyPods", "Failed to hide strong toast", it) }
+    }
+
+    /** How long HyperOS keeps our connect toast on screen before retiring it itself. */
+    private const val OFFICIAL_TOAST_DURATION_MS = 5_000L
+
+    /** When [showToast] last posted; 0 once the toast has been withdrawn. */
+    private var officialToastPostedAt = 0L
 
     fun showPodsNotificationByMiuiBt(
         context: Context,

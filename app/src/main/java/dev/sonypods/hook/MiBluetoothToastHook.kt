@@ -534,8 +534,20 @@ object MiBluetoothToastHook : HookContext() {
                         val singleBattery = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
                         render(context, device, batteryParams, sourceColor, singleBattery)
                     }
-                    SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND ->
+                    SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND -> {
+                        // Unconditional: the module island is a notification, so
+                        // cancelling it is a no-op when the current mode never posted
+                        // one, and it still cleans up after a mid-session mode change.
                         FocusIslandUtil.cancelBatteryIsland(context)
+                        // The official island is a strong toast instead, which nothing
+                        // above withdraws. It normally outlives the disconnect on its
+                        // own, but a disconnect inside its 5s window would otherwise
+                        // leave the old battery on screen.
+                        MiuiStrongToastUtil.hideOfficialToast(context)
+                        // A later connect must count as a fresh island rather than a
+                        // shape change against the shape this connection ended on.
+                        lastOfficialIslandShape = null
+                    }
                     SonyPodsAction.ACTION_CANCEL_PODS_NOTIFICATION -> {
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java) ?: return
                         cancel(context, device)
