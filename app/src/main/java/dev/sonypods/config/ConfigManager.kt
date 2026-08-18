@@ -15,6 +15,7 @@ data class AppConfig(
     val superIslandMode: Int = ConfigManager.ISLAND_MODE_MODULE,
     val islandDurationSeconds: Int = ConfigManager.DEFAULT_ISLAND_DURATION_SECONDS,
     val notificationClickAction: Int = ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP,
+    val notificationEnabled: Boolean = true,
     val popupOnConnect: Boolean = false,
     /** Connection dialog renderer: module-owned popup or Bluetooth Extension's PairingDialog. */
     val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL,
@@ -189,6 +190,8 @@ object ConfigManager {
 
     fun suppressPopupInGameOrLandscape(): Boolean = current().suppressPopupInGameOrLandscape
 
+    fun notificationEnabled(): Boolean = current().notificationEnabled
+
     fun popupAllowlist(): Set<String> = current().popupAllowlist
 
     fun popupDenylist(): Set<String> = current().popupDenylist
@@ -241,6 +244,11 @@ object ConfigManager {
 
     fun updateNotificationClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
         val config = current().copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
+        save(prefs, service, config)
+    }
+
+    fun updateNotificationEnabled(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
+        val config = current().copy(notificationEnabled = enabled)
         save(prefs, service, config)
     }
 
@@ -596,6 +604,9 @@ object ConfigManager {
             }
             if (oldConfig.popupOnConnect != newConfig.popupOnConnect) {
                 add("popupOnConnect=${oldConfig.popupOnConnect}->${newConfig.popupOnConnect}")
+            }
+            if (oldConfig.notificationEnabled != newConfig.notificationEnabled) {
+                add("notificationEnabled=${oldConfig.notificationEnabled}->${newConfig.notificationEnabled}")
             }
             if (oldConfig.connectDialogMode != newConfig.connectDialogMode) {
                 add("connectDialogMode=${oldConfig.connectDialogMode}->${newConfig.connectDialogMode}")

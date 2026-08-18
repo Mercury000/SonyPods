@@ -10,6 +10,8 @@
     <string name="based_on">Based on</string>
     <string name="notification_click_action">Notification tap behavior</string>
     <string name="notification_click_action_summary">Choose where tapping the headset notification opens</string>
+    <string name="notification_enabled">Connect notification</string>
+    <string name="notification_enabled_summary">When off, no notification is shown when the headphones connect</string>
     <string name="popup_on_connect">Popup on connect</string>
     <string name="popup_on_connect_summary">Automatically open the control panel when the headphones connect</string>
     <string name="connect_dialog_mode">Connection dialog style</string>

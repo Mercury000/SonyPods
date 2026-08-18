@@ -51,6 +51,8 @@ fun SettingsPage(
     onAppLanguageChange: (Int) -> Unit = {},
     notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
     onNotificationClickActionChange: (Int) -> Unit = {},
+    notificationEnabled: MutableState<Boolean> = mutableStateOf(true),
+    onNotificationEnabledChange: (Boolean) -> Unit = {},
     popupOnConnect: MutableState<Boolean> = mutableStateOf(false),
     onPopupOnConnectChange: (Boolean) -> Unit = {},
     connectDialogMode: MutableState<Int> = mutableStateOf(ConfigManager.CONNECT_DIALOG_MODE_MODULE),
@@ -237,25 +239,33 @@ fun SettingsPage(
                 insideMargin = sectionTitleInsideMargin,
             )
             Card {
-                BasicComponent(
-                    title = stringResource(R.string.anc_cycle_modes_title),
-                    summary = stringResource(R.string.anc_cycle_modes_summary),
-                    endActions = {
-                        Text(
-                            text = ancCycleModesSummary,
-                            fontSize = 14.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                        )
-                    },
-                    onClick = { showAncCycleModesDialog.value = true },
+                SwitchPreference(
+                    title = stringResource(R.string.notification_enabled),
+                    summary = stringResource(R.string.notification_enabled_summary),
+                    checked = notificationEnabled.value,
+                    onCheckedChange = { onNotificationEnabledChange(it) }
                 )
-                OverlayDropdownPreference(
-                    title = stringResource(R.string.notification_click_action),
-                    summary = stringResource(R.string.notification_click_action_summary),
-                    items = notificationClickActionOptions,
-                    selectedIndex = notificationClickActionValues.indexOf(notificationClickAction.value).coerceAtLeast(0),
-                    onSelectedIndexChange = { onNotificationClickActionChange(notificationClickActionValues[it]) }
-                )
+                if (notificationEnabled.value) {
+                    BasicComponent(
+                        title = stringResource(R.string.anc_cycle_modes_title),
+                        summary = stringResource(R.string.anc_cycle_modes_summary),
+                        endActions = {
+                            Text(
+                                text = ancCycleModesSummary,
+                                fontSize = 14.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                            )
+                        },
+                        onClick = { showAncCycleModesDialog.value = true },
+                    )
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.notification_click_action),
+                        summary = stringResource(R.string.notification_click_action_summary),
+                        items = notificationClickActionOptions,
+                        selectedIndex = notificationClickActionValues.indexOf(notificationClickAction.value).coerceAtLeast(0),
+                        onSelectedIndexChange = { onNotificationClickActionChange(notificationClickActionValues[it]) }
+                    )
+                }
             }
         }
 

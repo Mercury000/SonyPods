@@ -149,6 +149,7 @@ fun MainUI(
     val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
     val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
+    val notificationEnabled = remember { mutableStateOf(appConfig.notificationEnabled) }
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
     val connectDialogMode = remember { mutableStateOf(appConfig.connectDialogMode) }
     val popupAllowlist = remember { mutableStateOf(appConfig.popupAllowlist) }
@@ -618,6 +619,12 @@ fun MainUI(
                 onNotificationClickActionChange = {
                     notificationClickAction.value = it
                     ConfigManager.updateNotificationClickAction(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                },
+                notificationEnabled = notificationEnabled,
+                onNotificationEnabledChange = {
+                    notificationEnabled.value = it
+                    ConfigManager.updateNotificationEnabled(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },
                 popupOnConnect = popupOnConnect,

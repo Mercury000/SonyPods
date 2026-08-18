@@ -11,6 +11,8 @@
     <string name="based_on">基于</string>
     <string name="notification_click_action">点击通知时行为</string>
     <string name="notification_click_action_summary">选择点击耳机通知时打开的位置</string>
+    <string name="notification_enabled">连接通知</string>
+    <string name="notification_enabled_summary">关闭后连接耳机时不再显示通知</string>
     <string name="popup_on_connect">连接时弹窗</string>
     <string name="popup_on_connect_summary">耳机连接时自动弹出控制面板</string>
     <string name="connect_dialog_mode">连接弹窗样式</string>

@@ -505,6 +505,12 @@ object MiBluetoothToastHook : HookContext() {
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
                         val sourceColor = intent.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
                         val singleBattery = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
+                        val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
+                        runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
+                        if (!ConfigManager.notificationEnabled()) {
+                            device?.let { cancel(context, it) }
+                            return
+                        }
                         render(context, device, batteryParams, sourceColor, singleBattery)
                     }
                     SonyPodsAction.ACTION_CANCEL_BATTERY_ISLAND -> {
