@@ -178,7 +178,24 @@ object SonyEngineHost {
         }
         cloudFallback = fallback
         val catalogReader = fallback?.let { { it.catalogReader() } } ?: remoteModelInfoReader
-        val repo = SonyHeadphoneRepository.getInstance(ctx, ctx, catalogReader)
+        val repo = SonyHeadphoneRepository.getInstance(
+            ctx,
+            ctx,
+            catalogReader,
+            debugLogForwarder = { line ->
+                if (ConfigManager.logLevel() == ConfigManager.LOG_LEVEL_DEBUG) {
+                    runCatching {
+                        ctx.sendBroadcast(
+                            Intent(SonyBridge.ACTION_DEBUG_LOG).apply {
+                                putExtra(SonyBridge.EXTRA_STRING, line)
+                                setPackage("com.mercury.sonypods")
+                                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                            }
+                        )
+                    }.onFailure { Log.w(TAG, "debug log broadcast to app failed", it) }
+                }
+            },
+        )
         catalogReader?.let { reader -> repo.attachModelInfoReader(reader) }
         repo.attachModelCatalogFallback { modelName, _, _ ->
             fallback?.ensureCatalogFor(modelName)

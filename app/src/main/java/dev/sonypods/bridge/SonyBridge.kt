@@ -34,6 +34,8 @@ object SonyBridge {
      */
     const val ACTION_CAPABILITY_CACHE = "dev.sonypods.action.capability_cache"
 
+    const val ACTION_DEBUG_LOG = "dev.sonypods.action.debug_log"
+
     const val EXTRA_COMMAND = "command"
     const val EXTRA_INT = "value_int"
     const val EXTRA_BOOL = "value_bool"

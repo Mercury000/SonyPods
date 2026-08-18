@@ -419,6 +419,7 @@ class SonyHeadphoneRepository private constructor(
     resourceContext: Context,
     systemContext: Context = resourceContext,
     remoteModelInfoReader: (() -> String?)? = null,
+    private val debugLogForwarder: ((String) -> Unit)? = null,
 ) : SonyBleClientListener {
     private val appContext = systemContext.applicationContext ?: systemContext
     private val client = SonyBleClient(appContext, this)
@@ -3157,10 +3158,17 @@ class SonyHeadphoneRepository private constructor(
             Log.i(LOG_TAG, message)
         }
         _state.update { current ->
-            if (!current.debugLogging) current else current.copy(
-                debugLogs = (listOf(message) + current.debugLogs).take(80)
-            )
+            if (!current.debugLogging) current else {
+                debugLogForwarder?.invoke(message)
+                current.copy(
+                    debugLogs = (listOf(message) + current.debugLogs).take(80)
+                )
+            }
         }
+    }
+
+    fun ingestRemoteDebugLog(message: String) {
+        appendLog(message, writeLogcat = false)
     }
 
     companion object {
@@ -3171,12 +3179,14 @@ class SonyHeadphoneRepository private constructor(
             resourceContext: Context,
             systemContext: Context = resourceContext,
             remoteModelInfoReader: (() -> String?)? = null,
+            debugLogForwarder: ((String) -> Unit)? = null,
         ): SonyHeadphoneRepository {
             return instance ?: synchronized(this) {
                 instance ?: SonyHeadphoneRepository(
                     resourceContext,
                     systemContext,
                     remoteModelInfoReader,
+                    debugLogForwarder,
                 ).also { instance = it }
             }
         }

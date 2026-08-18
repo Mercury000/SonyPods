@@ -28,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.EarphonePref
 import io.github.libxposed.service.XposedService
 import com.mercury.sonypods.R
@@ -237,6 +238,7 @@ internal fun MainTabsScaffold(
                         onBluetoothStatusClick = onBluetoothStatusClick,
                         onPairedBluetoothClick = onPairedBluetoothClick,
                         onOpenTandemDebug = onOpenTandemDebug,
+                        logLevel = logLevel.value,
                         pageBottomContentPadding = pageBottomContentPadding,
                         backgroundColor = backgroundColor,
                         blurTopBar = blurTopBar.value,
@@ -346,6 +348,7 @@ private fun ModuleTabPage(
     onBluetoothStatusClick: () -> Unit,
     onPairedBluetoothClick: () -> Unit,
     onOpenTandemDebug: () -> Unit,
+    logLevel: Int,
     pageBottomContentPadding: Dp,
     backgroundColor: Color,
     blurTopBar: Boolean,
@@ -377,8 +380,10 @@ private fun ModuleTabPage(
                 color = if (topBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
                 scrollBehavior = scrollBehavior,
                 actions = {
-                    IconButton(onClick = onOpenTandemDebug) {
-                        Icon(imageVector = MiuixIcons.Months, contentDescription = "Tandem debug")
+                    if (logLevel == ConfigManager.LOG_LEVEL_DEBUG) {
+                        IconButton(onClick = onOpenTandemDebug) {
+                            Icon(imageVector = MiuixIcons.Months, contentDescription = "Tandem debug")
+                        }
                     }
                     IconButton(
                         onClick = {

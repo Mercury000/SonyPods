@@ -323,17 +323,24 @@ fun SettingsPage(
                     selectedIndex = fusionMoreClickActionValues.indexOf(fusionMoreClickAction.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onFusionMoreClickActionChange(fusionMoreClickActionValues[it]) },
                 )
-                BasicComponent(
-                    title = stringResource(R.string.fake_device_id),
-                    summary = stringResource(R.string.fake_device_id_summary)
-                )
-                TextField(
-                    value = fakeDeviceId.value,
-                    onValueChange = { onFakeDeviceIdChange(it.trim()) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-                )
+            }
+        }
+
+        if (logLevel.value == ConfigManager.LOG_LEVEL_DEBUG) {
+            item {
+                Card(modifier = Modifier.padding(top = 12.dp)) {
+                    BasicComponent(
+                        title = stringResource(R.string.fake_device_id),
+                        summary = stringResource(R.string.fake_device_id_summary)
+                    )
+                    TextField(
+                        value = fakeDeviceId.value,
+                        onValueChange = { onFakeDeviceIdChange(it.trim()) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    )
+                }
             }
         }
 

@@ -1,7 +1,11 @@
 package dev.sonypods.ui.pages
 
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.widget.Toast
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -21,6 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.data.SonyHeadphoneRepository
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -58,6 +64,23 @@ fun TandemDebugPage(
     var hexInput by remember { mutableStateOf("") }
     // Local "clear": hide log entries produced before the last clear request.
     var hiddenCount by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action != SonyBridge.ACTION_DEBUG_LOG) return
+                intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repository::ingestRemoteDebugLog)
+            }
+        }
+        context.registerReceiver(
+            receiver,
+            IntentFilter(SonyBridge.ACTION_DEBUG_LOG),
+            Context.RECEIVER_EXPORTED,
+        )
+        onDispose {
+            runCatching { context.unregisterReceiver(receiver) }
+        }
+    }
 
     LaunchedEffect(clearRequest) {
         if (clearRequest > 0) {
@@ -115,7 +138,9 @@ fun TandemDebugPage(
             TextButton(
                 text = "发送",
                 onClick = {
-                    repository.runDebugAction("raw", hexInput)
+                    SonyBridge.sendCommand(context, SonyBridge.CMD_DEBUG_RAW) {
+                        putExtra(SonyBridge.EXTRA_STRING, hexInput)
+                    }
                     hexInput = ""
                 },
                 colors = ButtonDefaults.textButtonColorsPrimary(),
