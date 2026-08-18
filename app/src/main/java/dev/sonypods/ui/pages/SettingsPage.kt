@@ -22,6 +22,7 @@ import dev.sonypods.ui.dialogs.decomposeIslandDuration
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
@@ -145,6 +146,7 @@ fun SettingsPage(
         stringResource(R.string.click_action_system_settings),
         stringResource(R.string.click_action_module),
     )
+    val sectionTitleInsideMargin = PaddingValues(start = 14.dp, top = 14.dp, end = 28.dp, bottom = 6.dp)
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -156,17 +158,17 @@ fun SettingsPage(
         ),
     ) {
         item {
+            SmallTitle(
+                text = stringResource(R.string.settings_section_module),
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = sectionTitleInsideMargin,
+            )
             Card {
                 BasicComponent(
                     title = stringResource(R.string.theme_title),
                     summary = stringResource(R.string.theme_color_summary),
                     onClick = onOpenTheme,
                 )
-            }
-        }
-
-        item {
-            Card(modifier = Modifier.padding(top = 12.dp)) {
                 OverlayDropdownPreference(
                     title = stringResource(R.string.language),
                     summary = stringResource(R.string.language_summary),
@@ -198,7 +200,12 @@ fun SettingsPage(
         }
 
         item {
-            Card(modifier = Modifier.padding(top = 12.dp)) {
+            SmallTitle(
+                text = stringResource(R.string.settings_section_island),
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = sectionTitleInsideMargin,
+            )
+            Card {
                 OverlayDropdownPreference(
                     title = stringResource(R.string.island_mode),
                     summary = stringResource(R.string.island_mode_summary),
@@ -220,9 +227,26 @@ fun SettingsPage(
                         onClick = { showIslandDurationDialog.value = true },
                     )
                 }
+            }
+        }
+
+        item {
+            SmallTitle(
+                text = stringResource(R.string.settings_section_notification),
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = sectionTitleInsideMargin,
+            )
+            Card {
                 BasicComponent(
                     title = stringResource(R.string.anc_cycle_modes_title),
-                    summary = ancCycleModesSummary,
+                    summary = stringResource(R.string.anc_cycle_modes_summary),
+                    endActions = {
+                        Text(
+                            text = ancCycleModesSummary,
+                            fontSize = 14.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                        )
+                    },
                     onClick = { showAncCycleModesDialog.value = true },
                 )
                 OverlayDropdownPreference(
@@ -232,6 +256,16 @@ fun SettingsPage(
                     selectedIndex = notificationClickActionValues.indexOf(notificationClickAction.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onNotificationClickActionChange(notificationClickActionValues[it]) }
                 )
+            }
+        }
+
+        item {
+            SmallTitle(
+                text = stringResource(R.string.settings_section_popup),
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = sectionTitleInsideMargin,
+            )
+            Card {
                 SwitchPreference(
                     title = stringResource(R.string.popup_on_connect),
                     summary = stringResource(R.string.popup_on_connect_summary),
@@ -251,6 +285,12 @@ fun SettingsPage(
                         summary = stringResource(R.string.popup_denylist_summary, popupDenylist.value.size),
                         onClick = { popupAppList.value = PopupAppList.Deny },
                     )
+                    SwitchPreference(
+                        title = stringResource(R.string.suppress_popup_in_game_or_landscape),
+                        summary = stringResource(R.string.suppress_popup_in_game_or_landscape_summary),
+                        checked = suppressPopupInGameOrLandscape.value,
+                        onCheckedChange = { onSuppressPopupInGameOrLandscapeChange(it) }
+                    )
                     if (suppressPopupInGameOrLandscape.value) {
                         BasicComponent(
                             title = stringResource(R.string.popup_allowlist_title),
@@ -258,17 +298,20 @@ fun SettingsPage(
                             onClick = { popupAppList.value = PopupAppList.Allow },
                         )
                     }
-                    SwitchPreference(
-                        title = stringResource(R.string.suppress_popup_in_game_or_landscape),
-                        summary = stringResource(R.string.suppress_popup_in_game_or_landscape_summary),
-                        checked = suppressPopupInGameOrLandscape.value,
-                        onCheckedChange = { onSuppressPopupInGameOrLandscapeChange(it) }
-                    )
                 }
+            }
+        }
+
+        item {
+            SmallTitle(
+                text = stringResource(R.string.settings_section_click),
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = sectionTitleInsideMargin,
+            )
+            Card {
                 if (notificationClickAction.value == ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
                     OverlayDropdownPreference(
                         title = stringResource(R.string.more_click_action),
-                        summary = stringResource(R.string.more_click_action_summary),
                         items = moreClickActionOptions,
                         selectedIndex = moreClickActionValues.indexOf(moreClickAction.value).coerceAtLeast(0),
                         onSelectedIndexChange = { onMoreClickActionChange(moreClickActionValues[it]) }
@@ -276,7 +319,6 @@ fun SettingsPage(
                 }
                 OverlayDropdownPreference(
                     title = stringResource(R.string.fusion_more_click_action),
-                    summary = stringResource(R.string.fusion_more_click_action_summary),
                     items = fusionMoreClickActionOptions,
                     selectedIndex = fusionMoreClickActionValues.indexOf(fusionMoreClickAction.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onFusionMoreClickActionChange(fusionMoreClickActionValues[it]) },

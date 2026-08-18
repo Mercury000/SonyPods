@@ -29,10 +29,8 @@
     <string name="popup_app_loading">正在加载应用列表…</string>
     <string name="popup_show_system_apps">显示系统应用</string>
     <string name="popup_show_system_apps_summary">将预装系统应用加入选择列表</string>
-    <string name="more_click_action">点击更多时行为</string>
-    <string name="more_click_action_summary">选择点击模块弹窗“更多”按钮时打开的位置</string>
+    <string name="more_click_action">点击模块弹窗中更多时的行为</string>
     <string name="fusion_more_click_action">点击融合设备中心更多设置行为</string>
-    <string name="fusion_more_click_action_summary">选择 Sony 耳机在融合设备中心点击“更多设置”时打开的位置</string>
     <string name="notification_click_module_popup">模块弹窗</string>
     <string name="click_action_system_settings">系统设置</string>
     <string name="click_action_module">模块</string>
@@ -79,6 +77,11 @@
     <string name="blur_bottom_bar_summary">使用半透明底部导航背景</string>
     <string name="blur_top_bar">顶栏模糊</string>
     <string name="blur_top_bar_summary">使用半透明顶部栏背景</string>
+    <string name="settings_section_module">模块设置</string>
+    <string name="settings_section_island">超级岛</string>
+    <string name="settings_section_notification">通知</string>
+    <string name="settings_section_popup">弹窗</string>
+    <string name="settings_section_click">点击行为</string>
     <string name="language">语言</string>
     <string name="language_summary">切换应用显示语言</string>
     <string name="language_system">跟随系统</string>
@@ -95,7 +98,7 @@
     <string name="hide_desktop_icon_summary">隐藏启动器图标；隐藏后请从模块管理器打开</string>
     <string name="cycle_anc">切换降噪</string>
     <string name="anc_cycle_modes_title">降噪按钮循环模式</string>
-    <string name="anc_cycle_modes_summary">选择通知与超级岛按钮循环切换的模式</string>
+    <string name="anc_cycle_modes_summary">选择点击耳机通知上的"切换降噪"时循环切换的模式</string>
     <string name="anc_cycle_modes_dialog_summary">选择参与循环切换的模式，至少保留一个</string>
     <string name="anc_cycle_mode_noise_cancelling">降噪</string>
     <string name="anc_cycle_mode_ambient">通透</string>

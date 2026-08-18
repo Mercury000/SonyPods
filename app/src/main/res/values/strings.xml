@@ -28,10 +28,8 @@
     <string name="popup_app_loading">Loading applications…</string>
     <string name="popup_show_system_apps">Show system applications</string>
     <string name="popup_show_system_apps_summary">Include preinstalled system apps in the list</string>
-    <string name="more_click_action">\"More\" button behavior</string>
-    <string name="more_click_action_summary">Choose where tapping \"More\" in the module popup opens</string>
+    <string name="more_click_action">Tapping \"More\" in the module popup</string>
     <string name="fusion_more_click_action">Fusion device center \"More settings\" behavior</string>
-    <string name="fusion_more_click_action_summary">Choose where Sony headset \"More settings\" opens</string>
     <string name="notification_click_module_popup">Module popup</string>
     <string name="click_action_system_settings">System Settings</string>
     <string name="click_action_module">Module</string>
@@ -78,6 +76,11 @@
     <string name="blur_bottom_bar_summary">Use a translucent bottom navigation background</string>
     <string name="blur_top_bar">Blur Top Bar</string>
     <string name="blur_top_bar_summary">Use a translucent top app bar background</string>
+    <string name="settings_section_module">Module settings</string>
+    <string name="settings_section_island">Super Island</string>
+    <string name="settings_section_notification">Notifications</string>
+    <string name="settings_section_popup">Popup</string>
+    <string name="settings_section_click">Click behavior</string>
     <string name="language">Language</string>
     <string name="language_summary">Switch the app display language</string>
     <string name="language_system">Follow System</string>
@@ -94,7 +97,7 @@
     <string name="hide_desktop_icon_summary">Hide the launcher icon; open from module manager after hiding</string>
     <string name="cycle_anc">Cycle ANC</string>
     <string name="anc_cycle_modes_title">ANC button cycle</string>
-    <string name="anc_cycle_modes_summary">Choose which modes the notification/island button cycles through</string>
+    <string name="anc_cycle_modes_summary">Choose which modes the "Cycle ANC" button on the notification cycles through</string>
     <string name="anc_cycle_modes_dialog_summary">Select the modes to cycle through; at least one must stay selected</string>
     <string name="anc_cycle_mode_noise_cancelling">Noise Canceling</string>
     <string name="anc_cycle_mode_ambient">Ambient Sound</string>
