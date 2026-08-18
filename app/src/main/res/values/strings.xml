@@ -18,6 +18,8 @@
     <string name="connect_dialog_mode_official">Official</string>
     <string name="suppress_popup_on_connect_when_foreground">Suppress popup while module is open</string>
     <string name="suppress_popup_on_connect_when_foreground_summary">Do not auto-open the popup while the module app is in the foreground</string>
+    <string name="suppress_popup_in_game_or_landscape">Suppress popup in games and landscape</string>
+    <string name="suppress_popup_in_game_or_landscape_summary">Match the system rule: no connect popup while a game is running, or while a phone is in landscape. Tablets are not affected by orientation.</string>
     <string name="more_click_action">\"More\" button behavior</string>
     <string name="more_click_action_summary">Choose where tapping \"More\" in the module popup opens</string>
     <string name="fusion_more_click_action">Fusion device center \"More settings\" behavior</string>

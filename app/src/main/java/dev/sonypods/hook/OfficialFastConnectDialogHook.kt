@@ -925,6 +925,14 @@ object OfficialFastConnectDialogHook : HookContext() {
         ) {
             return false
         }
+        // Bluetooth Extension gates its own dialog on this; the module launches the
+        // dialog through a path that skips that gate, so it has to repeat the check.
+        if (ConfigManager.suppressPopupInGameOrLandscape()) {
+            PopupDndPolicy.suppressReason(context)?.let { reason ->
+                Log.d(TAG, "official dialog skipped: $reason")
+                return false
+            }
+        }
         return !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
     }
 

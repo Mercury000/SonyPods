@@ -53,6 +53,8 @@ fun SettingsPage(
     onConnectDialogModeChange: (Int) -> Unit = {},
     suppressPopupOnConnectWhenForeground: MutableState<Boolean> = mutableStateOf(true),
     onSuppressPopupOnConnectWhenForegroundChange: (Boolean) -> Unit = {},
+    suppressPopupInGameOrLandscape: MutableState<Boolean> = mutableStateOf(true),
+    onSuppressPopupInGameOrLandscapeChange: (Boolean) -> Unit = {},
     moreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.MORE_CLICK_MODULE),
     onMoreClickActionChange: (Int) -> Unit = {},
     fusionMoreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS),
@@ -243,6 +245,12 @@ fun SettingsPage(
                         summary = stringResource(R.string.suppress_popup_on_connect_when_foreground_summary),
                         checked = suppressPopupOnConnectWhenForeground.value,
                         onCheckedChange = { onSuppressPopupOnConnectWhenForegroundChange(it) }
+                    )
+                    SwitchPreference(
+                        title = stringResource(R.string.suppress_popup_in_game_or_landscape),
+                        summary = stringResource(R.string.suppress_popup_in_game_or_landscape_summary),
+                        checked = suppressPopupInGameOrLandscape.value,
+                        onCheckedChange = { onSuppressPopupInGameOrLandscapeChange(it) }
                     )
                 }
                 if (notificationClickAction.value == ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {

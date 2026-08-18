@@ -458,7 +458,18 @@ object MiBluetoothToastHook : HookContext() {
                                 !transportRecovery &&
                                 !(ConfigManager.suppressPopupOnConnectWhenForeground() && isModuleUiForeground(context))
                             ) {
-                                launchConnectPopup(context, device, address, deviceName)
+                                // Match what the official dialog does in games and in
+                                // phone landscape instead of interrupting them.
+                                val dndReason = if (ConfigManager.suppressPopupInGameOrLandscape()) {
+                                    PopupDndPolicy.suppressReason(context)
+                                } else {
+                                    null
+                                }
+                                if (dndReason != null) {
+                                    Log.d("SonyPods", "popup on connect skipped: $dndReason")
+                                } else {
+                                    launchConnectPopup(context, device, address, deviceName)
+                                }
                             }
                             when (ConfigManager.islandMode()) {
                                 ConfigManager.ISLAND_MODE_MODULE ->

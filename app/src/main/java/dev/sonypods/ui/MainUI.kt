@@ -152,6 +152,7 @@ fun MainUI(
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
     val connectDialogMode = remember { mutableStateOf(appConfig.connectDialogMode) }
     val suppressPopupOnConnectWhenForeground = remember { mutableStateOf(appConfig.suppressPopupOnConnectWhenForeground) }
+    val suppressPopupInGameOrLandscape = remember { mutableStateOf(appConfig.suppressPopupInGameOrLandscape) }
     val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
@@ -635,6 +636,13 @@ fun MainUI(
                 onSuppressPopupOnConnectWhenForegroundChange = {
                     suppressPopupOnConnectWhenForeground.value = it
                     ConfigManager.updateSuppressPopupOnConnectWhenForeground(prefs, xposedService, it)
+                    broadcastConfigChanged(context, "com.android.bluetooth")
+                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                },
+                suppressPopupInGameOrLandscape = suppressPopupInGameOrLandscape,
+                onSuppressPopupInGameOrLandscapeChange = {
+                    suppressPopupInGameOrLandscape.value = it
+                    ConfigManager.updateSuppressPopupInGameOrLandscape(prefs, xposedService, it)
                     broadcastConfigChanged(context, "com.android.bluetooth")
                     broadcastConfigChanged(context, "com.xiaomi.bluetooth")
                 },

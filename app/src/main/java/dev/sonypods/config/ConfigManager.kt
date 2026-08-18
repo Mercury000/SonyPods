@@ -19,6 +19,11 @@ data class AppConfig(
     val connectDialogMode: Int = ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL,
     /** Skip the auto popup on connect while the module UI is the foreground app. */
     val suppressPopupOnConnectWhenForeground: Boolean = true,
+    /**
+     * Follow Bluetooth Extension's own connect-popup precondition: stay silent while a
+     * game is running, and while a phone (not a tablet) is in landscape.
+     */
+    val suppressPopupInGameOrLandscape: Boolean = true,
     val moreClickAction: Int = ConfigManager.MORE_CLICK_MODULE,
     val fusionMoreClickAction: Int = ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS,
     val adaptiveCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
@@ -44,6 +49,7 @@ object ConfigManager {
     const val PREF_KEY_POPUP_ON_CONNECT = "popup_on_connect"
     const val PREF_KEY_CONNECT_DIALOG_MODE = "connect_dialog_mode"
     const val PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND = "suppress_popup_on_connect_when_foreground"
+    const val PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE = "suppress_popup_in_game_or_landscape"
     const val PREF_KEY_MORE_CLICK_ACTION = "more_click_action"
     const val PREF_KEY_FUSION_MORE_CLICK_ACTION = "fusion_more_click_action"
     const val PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE = "adaptive_capability_override"
@@ -165,6 +171,8 @@ object ConfigManager {
 
     fun suppressPopupOnConnectWhenForeground(): Boolean = current().suppressPopupOnConnectWhenForeground
 
+    fun suppressPopupInGameOrLandscape(): Boolean = current().suppressPopupInGameOrLandscape
+
     fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
 
     fun fusionMoreClickAction(): Int = current().fusionMoreClickAction.coerceIn(
@@ -230,6 +238,11 @@ object ConfigManager {
 
     fun updateSuppressPopupOnConnectWhenForeground(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
         val config = current().copy(suppressPopupOnConnectWhenForeground = enabled)
+        save(prefs, service, config)
+    }
+
+    fun updateSuppressPopupInGameOrLandscape(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
+        val config = current().copy(suppressPopupInGameOrLandscape = enabled)
         save(prefs, service, config)
     }
 
@@ -353,6 +366,7 @@ object ConfigManager {
             .putBoolean(PREF_KEY_POPUP_ON_CONNECT, config.popupOnConnect)
             .putInt(PREF_KEY_CONNECT_DIALOG_MODE, config.connectDialogMode)
             .putBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, config.suppressPopupOnConnectWhenForeground)
+            .putBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, config.suppressPopupInGameOrLandscape)
             .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
             .putInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, config.fusionMoreClickAction)
             .putInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, config.adaptiveCapabilityOverride)
@@ -397,6 +411,11 @@ object ConfigManager {
         } else {
             null
         }
+        val directSuppressPopupInGameOrLandscape = if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE)) {
+            prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, true)
+        } else {
+            null
+        }
         val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directFusionMoreClickAction = prefs.getInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, Int.MIN_VALUE)
         val directAdaptiveCapabilityOverride = prefs.getInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
@@ -421,6 +440,7 @@ object ConfigManager {
                 popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
                 connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
                 suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
+                suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
                 moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
                 fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
                 adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -439,6 +459,7 @@ object ConfigManager {
             popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
             connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
             suppressPopupOnConnectWhenForeground = directSuppressPopupOnConnectWhenForeground ?: config.suppressPopupOnConnectWhenForeground,
+            suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
             moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
             fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
             adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
@@ -531,6 +552,9 @@ object ConfigManager {
             }
             if (oldConfig.suppressPopupOnConnectWhenForeground != newConfig.suppressPopupOnConnectWhenForeground) {
                 add("suppressPopupOnConnectWhenForeground=${oldConfig.suppressPopupOnConnectWhenForeground}->${newConfig.suppressPopupOnConnectWhenForeground}")
+            }
+            if (oldConfig.suppressPopupInGameOrLandscape != newConfig.suppressPopupInGameOrLandscape) {
+                add("suppressPopupInGameOrLandscape=${oldConfig.suppressPopupInGameOrLandscape}->${newConfig.suppressPopupInGameOrLandscape}")
             }
             if (oldConfig.moreClickAction != newConfig.moreClickAction) {
                 add("moreClickAction=${oldConfig.moreClickAction}->${newConfig.moreClickAction}")
