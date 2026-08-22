@@ -25,6 +25,7 @@ import dev.sonypods.protocol.AssignableSettingsMapping
 import dev.sonypods.protocol.AssignableSettingsPreset
 import dev.sonypods.protocol.AssignableSettingsType
 import dev.sonypods.protocol.SonySupportedFunction
+import dev.sonypods.protocol.SonyTable
 import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
 import org.junit.Assert.assertEquals
@@ -406,8 +407,8 @@ class SonyCapabilityProbeTest {
         )
         assertTrue(applied.protocolEvidence.any { it.startsWith("static-profile:") })
         assertTrue(applied.protocolEvidence.any { it == "probe:ret-support-function(2)" })
-        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:NCASM:") })
-        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:EQEBB:") })
+        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:NO_1:NCASM:") })
+        assertTrue(applied.protocolEvidence.any { it.startsWith("probe:NO_1:EQEBB:") })
         assertTrue(HeadphoneFeature.NOISE_CONTROL in applied.capabilities.features)
         assertTrue(HeadphoneFeature.EQ in applied.capabilities.features)
     }

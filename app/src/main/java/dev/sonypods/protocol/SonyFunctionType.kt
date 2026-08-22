@@ -331,4 +331,5 @@ enum class SonyTable {
 data class SonySupportedFunction(
     val code: Byte,
     val order: Int,
+    val table: SonyTable = SonyTable.INVALID,
 )

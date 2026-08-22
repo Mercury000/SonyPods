@@ -227,6 +227,9 @@ object SonyTandemV2Table2Protocol {
     fun buildGetLeaStatus(type: LeaInquiredTypeTable2): ByteArray =
         TandemMessage(DT, LEA_GET_STATUS, byteArrayOf(type.code)).toByteArray()
 
+    fun buildGetLeaCapability(type: LeaInquiredTypeTable2): ByteArray =
+        TandemMessage(DT, LEA_GET_CAPABILITY, byteArrayOf(type.code)).toByteArray()
+
     fun buildGetLeaParam(type: LeaInquiredTypeTable2): ByteArray =
         TandemMessage(DT, LEA_GET_PARAM, byteArrayOf(type.code)).toByteArray()
 
@@ -264,6 +267,7 @@ object SonyTandemV2Table2Protocol {
         return when (command) {
             CONNECT_RET_SUPPORT_FUNCTION -> ParsedTandemResponse.SupportFunction(
                 functions = parseSupportFunction(payload),
+                table = SonyTable.NO_2,
                 raw = raw,
             )
             POWER_RET_CAPABILITY, POWER_RET_STATUS, POWER_NTFY_STATUS,
@@ -277,7 +281,7 @@ object SonyTandemV2Table2Protocol {
             SL_RET_CAPABILITY, SL_RET_STATUS, SL_NTFY_STATUS,
             SL_RET_PARAM, SL_NTFY_PARAM -> parseSafeListening(payload, raw)
             LEA_RET_CAPABILITY, LEA_RET_STATUS, LEA_NTFY_STATUS,
-            LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLea(payload, raw)
+            LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLea(command, payload, raw)
             PARTY_RET_CAPABILITY, PARTY_RET_STATUS, PARTY_NTFY_STATUS,
             PARTY_RET_PARAM, PARTY_NTFY_PARAM -> parseParty(payload, raw)
             SYS_RET_CAPABILITY, SYS_RET_STATUS, SYS_NTFY_STATUS,
@@ -304,7 +308,7 @@ object SonyTandemV2Table2Protocol {
                     val order = payload.getOrNull(3 + i * 2)?.toInt()?.and(0xFF) ?: break
                     val resolved = SonyV2FunctionType.fromByteCode(SonyTable.NO_2, code)
                     if (resolved != SonyV2FunctionType.OUT_OF_RANGE) {
-                        add(SonySupportedFunction(code, order))
+                        add(SonySupportedFunction(code, order, SonyTable.NO_2))
                     }
                 }
             }.sortedBy { it.order }
@@ -453,15 +457,95 @@ object SonyTandemV2Table2Protocol {
         )
     }
 
-    private fun parseLea(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+    private fun parseLea(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val typeCode = payload.firstOrNull()?.unsigned
         val type = payload.firstOrNull()?.let { LeaInquiredTypeTable2.fromCode(it) }
-        return ParsedTandemResponse.Table2Generic(
-            family = Table2Family.LEA.name,
-            inquiredType = type?.code?.unsigned,
-            values = payload.drop(1).map { it.unsigned },
-            raw = raw,
-        )
+        return when {
+            command == LEA_RET_CAPABILITY -> when (typeCode) {
+                0x01 -> ParsedTandemResponse.LeaCapability(
+                    inquiredTypeCode = typeCode,
+                    compatibility = payload.getOrNull(1)?.unsigned,
+                    table = SonyTable.NO_2,
+                    raw = raw,
+                )
+                0x02 -> ParsedTandemResponse.LeaCapability(
+                    inquiredTypeCode = typeCode,
+                    connectionModes = payload.drop(1).map { it.unsigned },
+                    table = SonyTable.NO_2,
+                    raw = raw,
+                )
+                0x04 -> ParsedTandemResponse.LeaCapability(
+                    inquiredTypeCode = typeCode,
+                    addresses = payload.drop(1)
+                        .chunked(17)
+                        .filter { it.size == 17 }
+                        .map { bytes -> String(bytes.toByteArray(), Charsets.US_ASCII).trimEnd('\u0000') },
+                    table = SonyTable.NO_2,
+                    raw = raw,
+                )
+                else -> table2LeaGeneric(type, payload, raw)
+            }
+            command == LEA_RET_STATUS || command == LEA_NTFY_STATUS -> when (typeCode) {
+                0x02 -> ParsedTandemResponse.LeaConnectionMode(
+                    inquiredTypeCode = typeCode,
+                    mode = payload.getOrNull(1)?.unsigned,
+                    table = SonyTable.NO_2,
+                    raw = raw,
+                )
+                0x04 -> ParsedTandemResponse.LeaStatus(
+                    type = null,
+                    values = payload.unsignedList(),
+                    enabled = payload.getOrNull(1)?.let { code ->
+                        LeaEnableDisable.entries.firstOrNull { it.code == code }
+                    },
+                    streamingStatusL = payload.getOrNull(2)?.let { code ->
+                        LeaStreamingStatus.entries.firstOrNull { it.code == code }
+                    },
+                    streamingStatusR = null,
+                    inquiredTypeCode = typeCode,
+                    table = SonyTable.NO_2,
+                    raw = raw,
+                )
+                else -> table2LeaGeneric(type, payload, raw)
+            }
+            command == LEA_RET_PARAM && typeCode == 0x02 -> ParsedTandemResponse.LeaConnectionMode(
+                inquiredTypeCode = typeCode,
+                mode = payload.getOrNull(1)?.unsigned,
+                table = SonyTable.NO_2,
+                raw = raw,
+            )
+            command == LEA_RET_PARAM && typeCode == 0x03 -> table2LeaGeneric(type, payload, raw)
+            command == LEA_RET_PARAM && typeCode == 0x04 -> ParsedTandemResponse.LeaPairedHistoryStatus(
+                type = null,
+                values = payload.unsignedList(),
+                pairedHistory = payload.getOrNull(1)?.let { code ->
+                    LeaPairedHistory.entries.firstOrNull { it.code == code }
+                },
+                inquiredTypeCode = typeCode,
+                table = SonyTable.NO_2,
+                raw = raw,
+            )
+            command == LEA_NTFY_PARAM && typeCode == 0x02 -> ParsedTandemResponse.LeaConnectionMode(
+                inquiredTypeCode = typeCode,
+                mode = payload.getOrNull(1)?.unsigned,
+                result = payload.getOrNull(2)?.unsigned,
+                table = SonyTable.NO_2,
+                raw = raw,
+            )
+            else -> table2LeaGeneric(type, payload, raw)
+        }
     }
+
+    private fun table2LeaGeneric(
+        type: LeaInquiredTypeTable2?,
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse = ParsedTandemResponse.Table2Generic(
+        family = Table2Family.LEA.name,
+        inquiredType = type?.code?.unsigned,
+        values = payload.drop(1).map { it.unsigned },
+        raw = raw,
+    )
 
     private fun parseParty(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val type = payload.firstOrNull()?.let { PartyInquiredTypeTable2.fromCode(it) }

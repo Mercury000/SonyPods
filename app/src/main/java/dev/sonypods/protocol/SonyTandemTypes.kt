@@ -204,6 +204,8 @@ sealed interface ParsedTandemResponse {
         val enabled: LeaEnableDisable? = null,
         val streamingStatusL: LeaStreamingStatus? = null,
         val streamingStatusR: LeaStreamingStatus? = null,
+        val inquiredTypeCode: Int? = null,
+        val table: SonyTable = SonyTable.NO_1,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
@@ -211,6 +213,42 @@ sealed interface ParsedTandemResponse {
         val type: LeaInquiredType?,
         val values: List<Int>,
         val pairedHistory: LeaPairedHistory? = null,
+        val inquiredTypeCode: Int? = null,
+        val table: SonyTable = SonyTable.NO_1,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** Table2 LEA_RET_CAPABILITY (0x61); its shape depends on the inquired type. */
+    data class LeaCapability(
+        val inquiredTypeCode: Int,
+        val compatibility: Int? = null,
+        val connectionModes: List<Int> = emptyList(),
+        val addresses: List<String> = emptyList(),
+        val table: SonyTable = SonyTable.NO_2,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** Table2 LE Audio connection-mode state/result. This is not paired history. */
+    data class LeaConnectionMode(
+        val inquiredTypeCode: Int,
+        val mode: Int?,
+        val result: Int? = null,
+        val table: SonyTable = SonyTable.NO_2,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** V2 Table1 LEA_RET/NTFY_STATUS for CLASSIC_ONLY_LE_CLASSIC_SETTING (0x0C). */
+    data class LeaSettingAvailability(
+        val available: Boolean,
+        val isNotification: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** LEA_RET/NTFY_PARAM for CLASSIC_ONLY_LE_CLASSIC_SETTING: [0x0C][OnOff]. */
+    data class LeaParameterNotification(
+        val setting: Int?,
+        val enabled: LeaEnableDisable?,
+        val values: List<Int>,
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
@@ -330,6 +368,7 @@ sealed interface ParsedTandemResponse {
     /** CONNECT_RET_SUPPORT_FUNCTION: the authoritative per-model FunctionType list. */
     data class SupportFunction(
         val functions: List<SonySupportedFunction>,
+        val table: SonyTable = SonyTable.INVALID,
         override val raw: ByteArray,
     ) : ParsedTandemResponse {
         override fun equals(other: Any?): Boolean {
@@ -538,6 +577,37 @@ sealed interface ParsedTandemResponse {
      * same messageType; see [dev.sonypods.protocol.SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage]. */
     data class AlertFixedMessage(
         val messageType: Int,
+        val actionType: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** ALERT_NTFY_PARAM FIXED_MESSAGE sent while the app is foreground. */
+    data class AlertForegroundMessage(
+        val messageType: Int,
+        val actionType: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class AlertFixedMessageWithLeftRightSelection(
+        val messageType: Int,
+        val defaultSelectedSide: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    data class AlertLeAudioNotification(
+        val confirmationType: Int,
+        val isNotification: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /**
+     * ALERT_NTFY_PARAM FLEXIBLE_MESSAGE. The item list is device supplied;
+     * unknown item ids are retained so every model can be displayed and
+     * acknowledged without a model-specific table.
+     */
+    data class AlertFlexibleMessage(
+        val messageType: Int,
+        val itemCodes: List<Int>,
         val actionType: Int,
         override val raw: ByteArray,
     ) : ParsedTandemResponse

@@ -243,6 +243,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     override fun canWrite(profile: ConnectedHeadphoneProfile, feature: HeadphoneFeature): Boolean =
         when (feature) {
+            HeadphoneFeature.LEA_STATUS ->
+                profile.supports(feature) &&
+                    profile.capabilities.lea?.controlSupported == true &&
+                    runCatching { profile.channelFor(HeadphoneFeature.DEVICE_INFO) }.isSuccess
             HeadphoneFeature.NOISE_CONTROL,
             HeadphoneFeature.AMBIENT_LEVEL,
             HeadphoneFeature.AMBIENT_VOICE_MODE,
@@ -710,6 +714,11 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 SonyTandemV2Table1Codec.buildSetAlertFixedMessage(true),
                 channel,
             ),
+            HeadphoneCommand(
+                "SET alert status LE_AUDIO ENABLE",
+                SonyTandemV2Table1Codec.buildSetAlertLeAudioNotification(true),
+                channel,
+            ),
         )
     }
 
@@ -730,6 +739,100 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 listOf(command(profile, HeadphoneFeature.POWER_OFF, "POWER OFF", it))
             }.orEmpty()
         }
+
+    override fun buildSetLeAudioEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+        changeConnectionMethod: Boolean,
+    ): List<HeadphoneCommand> {
+        if (!profile.supports(HeadphoneFeature.LEA_STATUS)) return emptyList()
+        val lea = profile.capabilities.lea ?: return emptyList()
+        if (!lea.controlSupported) return emptyList()
+        // The Classic-only setting sender is attached to the main Table1
+        // endpoint. LEA history can use Table2/MC for PAS and is independent.
+        val controlChannel = runCatching {
+            profile.channelFor(HeadphoneFeature.DEVICE_INFO)
+        }.getOrNull() ?: return emptyList()
+
+        // Query and control are separate official flows. PAS reads LEA through
+        // Table2/MC, while the persistent switch is still Table1 0x48/0x0C.
+        return listOf(
+            HeadphoneCommand(
+                label = "SET LE Audio ${if (enabled) "ENABLE" else "DISABLE"}",
+                bytes = SonyTandemV2Table1Codec.buildSetLeAudioEnabled(
+                    enabled = enabled,
+                    changeConnectionMethod = changeConnectionMethod,
+                ),
+                channel = controlChannel,
+            )
+        )
+    }
+
+    override fun buildReplyAlertCommand(
+        profile: ConnectedHeadphoneProfile,
+        alert: ParsedTandemResponse,
+        positive: Boolean,
+    ): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        val bytes = when (alert) {
+            is ParsedTandemResponse.AlertFixedMessage ->
+                SonyTandemV2Table1Codec.buildReplyAlertFixingMessage(alert.messageType, positive)
+            is ParsedTandemResponse.AlertForegroundMessage ->
+                SonyTandemV2Table1Codec.buildReplyAlertForegroundMessage(alert.messageType, positive)
+            is ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection ->
+                SonyTandemV2Table1Codec.buildReplyAlertFixedMessageWithLeftRightSelection(
+                    alert.messageType,
+                    if (positive) alert.defaultSelectedSide else 0,
+                )
+            is ParsedTandemResponse.AlertFlexibleMessage ->
+                SonyTandemV2Table1Codec.buildReplyAlertFlexibleMessage(alert.messageType, positive)
+            else -> return emptyList()
+        }
+        return listOf(HeadphoneCommand("REPLY Sony alert", bytes, profile.channelFor(HeadphoneFeature.DEVICE_INFO)))
+    }
+
+    override fun buildRefreshLeaPairedHistoryCommands(
+        profile: ConnectedHeadphoneProfile,
+    ): List<HeadphoneCommand> {
+        if (!profile.supports(HeadphoneFeature.LEA_STATUS)) return emptyList()
+        val lea = profile.capabilities.lea ?: return emptyList()
+        if (lea.kind == LeaDeviceKind.PAS_CTKD) {
+            return listOf(
+                command(
+                    profile,
+                    HeadphoneFeature.LEA_STATUS,
+                    "GET LEA endpoint addresses PAS",
+                    SonyTandemV2Table2Protocol.buildGetLeaCapability(
+                        dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                    ),
+                ).copy(channel = lea.historyChannel),
+                command(
+                    profile,
+                    HeadphoneFeature.LEA_STATUS,
+                    "GET LEA paired history PAS",
+                    SonyTandemV2Table2Protocol.buildGetLeaParam(
+                        dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                    ),
+                ).copy(channel = lea.historyChannel)
+            )
+        }
+        val codec = codecFor(profile, HeadphoneFeature.LEA_STATUS)
+        val type = LeaInquiredType.entries.firstOrNull {
+            it.code.toInt().and(0xFF) == lea.historyInquiredTypeCode
+        } ?: return emptyList()
+        return codec.buildGetLeaPairedHistory(type)?.let { bytes ->
+            listOf(
+                command(
+                    profile,
+                    HeadphoneFeature.LEA_STATUS,
+                    "GET LEA paired history $type",
+                    bytes,
+                ).copy(channel = lea.historyChannel)
+            )
+        }.orEmpty()
+    }
 
     override fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
         if (!profile.supports(HeadphoneFeature.PLAYBACK_CONTROL)) return emptyList()
@@ -771,18 +874,54 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             PlayInquiredType.MUSIC_VOLUME
         }
 
-    private fun buildRefreshLeaCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
-        LeaInquiredType.entries.flatMap { type ->
+    private fun buildRefreshLeaCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        val lea = profile.capabilities.lea ?: return emptyList()
+        val historyCommands = if (lea.kind == LeaDeviceKind.PAS_CTKD) {
+            listOf(
+                command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA status PAS",
+                    SonyTandemV2Table2Protocol.buildGetLeaStatus(
+                        dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                    )).copy(channel = lea.historyChannel),
+                command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA paired history PAS",
+                    SonyTandemV2Table2Protocol.buildGetLeaParam(
+                        dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                    )).copy(channel = lea.historyChannel),
+            )
+        } else {
+            val type = LeaInquiredType.entries.firstOrNull {
+                it.code.toInt().and(0xFF) == lea.historyInquiredTypeCode
+            } ?: return emptyList()
             val codec = codecFor(profile, HeadphoneFeature.LEA_STATUS)
             listOf(
                 codec.buildGetLeaStatus(type)?.let {
                     command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA status $type", it)
+                        .copy(channel = lea.historyChannel)
                 },
                 codec.buildGetLeaPairedHistory(type)?.let {
                     command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA paired history $type", it)
+                        .copy(channel = lea.historyChannel)
                 },
             ).filterNotNull()
         }
+
+        if (!lea.controlSupported) return historyCommands
+        val controlChannel = lea.controlChannel
+            ?: runCatching { profile.channelFor(HeadphoneFeature.DEVICE_INFO) }.getOrNull()
+            ?: return historyCommands
+        val controlCodec = TandemCodecRegistry.codecFor(HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1)
+        return historyCommands + listOf(
+            HeadphoneCommand(
+                "GET LE Audio setting availability",
+                controlCodec.buildGetLeAudioSettingAvailability() ?: return historyCommands,
+                controlChannel,
+            ),
+            HeadphoneCommand(
+                "GET LE Audio setting",
+                controlCodec.buildGetLeAudioSetting() ?: return historyCommands,
+                controlChannel,
+            ),
+        )
+    }
 
     override fun buildPlaybackCommands(profile: ConnectedHeadphoneProfile, control: PlaybackControl): List<HeadphoneCommand> =
         codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)

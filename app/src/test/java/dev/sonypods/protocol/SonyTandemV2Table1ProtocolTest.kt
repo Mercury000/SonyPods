@@ -2,6 +2,7 @@ package dev.sonypods.protocol
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1189,6 +1190,70 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
+    fun leaGetPersistentSetting_matchesSoundConnectInitialization() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x42, 0x0C),
+            SonyTandemV2Table1Protocol.buildGetLeAudioSettingAvailability(),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x46, 0x0C),
+            SonyTandemV2Table1Protocol.buildGetLeAudioSetting(),
+        )
+    }
+
+    @Test
+    fun leaPersistentSettingReplies_areNotParsedAsPairedHistory() {
+        val availability = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0x0C, 0x00),
+        ) as ParsedTandemResponse.LeaSettingAvailability
+        assertTrue(availability.available)
+        assertFalse(availability.isNotification)
+
+        val setting = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x47, 0x0C, 0x01),
+        ) as ParsedTandemResponse.LeaParameterNotification
+        assertEquals(0x0C, setting.setting)
+        assertEquals(LeaEnableDisable.DISABLE, setting.enabled)
+
+        val notification = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x49, 0x0C, 0x00),
+        ) as ParsedTandemResponse.LeaParameterNotification
+        assertEquals(LeaEnableDisable.ENABLE, notification.enabled)
+    }
+
+    @Test
+    fun leaSetEnabledAndChangeConnection_matchesOfficialLayout() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x48, 0x0C, 0x00, 0x00),
+            SonyTandemV2Table1Protocol.buildSetLeAudioEnabled(true, true),
+        )
+    }
+
+    @Test
+    fun leaSetEnabledOnly_matchesOfficialLayout() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x48, 0x0C, 0x00, 0x01),
+            SonyTandemV2Table1Protocol.buildSetLeAudioEnabled(true, false),
+        )
+    }
+
+    @Test
+    fun leaSetDisabled_matchesOfficialLayout() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x48, 0x0C, 0x01, 0x01),
+            SonyTandemV2Table1Protocol.buildSetLeAudioEnabled(false, false),
+        )
+    }
+
+    @Test
+    fun leaSetDisabledAndChangeConnection_matchesOfficialLayout() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x48, 0x0C, 0x01, 0x00),
+            SonyTandemV2Table1Protocol.buildSetLeAudioEnabled(false, true),
+        )
+    }
+
+    @Test
     fun parser_leaRetStatus_HBS_extractsEnableAndStreaming() {
         val raw = byteArrayOf(0x0E, 0x43, 0x01, 0x00, 0x02)
         val parsed = SonyTandemV2Table1Protocol.parse(raw)
@@ -1249,6 +1314,18 @@ class SonyTandemV2Table1ProtocolTest {
         parsed as ParsedTandemResponse.LeaPairedHistoryStatus
         assertEquals(LeaInquiredType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD, parsed.type)
         assertEquals(LeaPairedHistory.ONLY_CLASSIC_BT, parsed.pairedHistory)
+    }
+
+    @Test
+    fun parser_leaNtfyParam_extractsEnableDisableChange() {
+        val raw = byteArrayOf(0x0E, 0x49, 0x0C, 0x01)
+        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.LeaParameterNotification)
+        parsed as ParsedTandemResponse.LeaParameterNotification
+        assertEquals(0x0C, parsed.setting)
+        assertEquals(LeaEnableDisable.DISABLE, parsed.enabled)
+        assertEquals(listOf(0x0C, 0x01), parsed.values)
     }
 
     // ── Quick Access ───────────────────────────────────────────────────────
@@ -1382,5 +1459,51 @@ class SonyTandemV2Table1ProtocolTest {
         ) as ParsedTandemResponse.AlertFixedMessage
         assertEquals(7, alert.messageType)
         assertEquals(0, alert.actionType)
+    }
+
+    @Test
+    fun flexibleLeAudioAlert_preservesItemsAndBuildsMatchingReply() {
+        val raw = byteArrayOf(
+            0x0E,
+            0x99.toByte(),
+            0x06,
+            SonyTandemV2Table1Protocol.FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION.toByte(),
+            0x04,
+            0x06,
+            0x0B,
+            0x17,
+            0x15,
+            0x00,
+        )
+
+        val parsed = SonyTandemV2Table1Protocol.parse(raw) as ParsedTandemResponse.AlertFlexibleMessage
+        assertEquals(SonyTandemV2Table1Protocol.FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION, parsed.messageType)
+        assertEquals(listOf(6, 11, 23, 21), parsed.itemCodes)
+        assertEquals(0, parsed.actionType)
+        assertArrayEquals(raw, parsed.raw)
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x06, 0x0D, 0x01),
+            SonyTandemV2Table1Protocol.buildReplyAlertFlexibleMessage(parsed.messageType, positive = true),
+        )
+    }
+
+    @Test
+    fun alertReplies_echoTheOfficialInquiredType() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x00, 0x31, 0x00),
+            SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage(49, positive = false),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x04, 0x31, 0x01),
+            SonyTandemV2Table1Protocol.buildReplyAlertForegroundMessage(49, positive = true),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x02, 0x31, 0x01),
+            SonyTandemV2Table1Protocol.buildReplyAlertFixedMessageWithLeftRightSelection(49, positive = true),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x98.toByte(), 0x02, 0x31, 0x02),
+            SonyTandemV2Table1Protocol.buildReplyAlertFixedMessageWithLeftRightSelection(49, action = 2),
+        )
     }
 }

@@ -72,7 +72,16 @@ data class SonyStateSnapshot(
     val eqClearBassMin: Int = -10,
     val eqClearBassMax: Int = 10,
 
+    val supportsLeAudio: Boolean = false,
     val leaStatus: String? = null,
+    val leaStreamingStatusL: String? = null,
+    val leaStreamingStatusR: String? = null,
+    val leAudioPending: Boolean = false,
+    val leAudioPendingTargetEnabled: Boolean = false,
+    val leAudioPendingMessageType: Int? = null,
+    val leAudioPendingInquiredType: Int? = null,
+    val leAudioPendingItemCodes: List<Int> = emptyList(),
+    val leAudioSwitchPending: Boolean = false,
     val quickAccessLeftRight: String? = null,
     val quickAccessNcAmb: String? = null,
     val quickAccessKeyCode: Int? = null,
@@ -137,7 +146,16 @@ data class SonyStateSnapshot(
         putInt(KEY_EQ_CB_MIN, eqClearBassMin)
         putInt(KEY_EQ_CB_MAX, eqClearBassMax)
 
+        putBoolean(KEY_SUPPORTS_LEA, supportsLeAudio)
         leaStatus?.let { putString(KEY_LEA, it) }
+        leaStreamingStatusL?.let { putString(KEY_LEA_STREAMING_L, it) }
+        leaStreamingStatusR?.let { putString(KEY_LEA_STREAMING_R, it) }
+        putBoolean(KEY_LEA_PENDING, leAudioPending)
+        putBoolean(KEY_LEA_PENDING_TARGET, leAudioPendingTargetEnabled)
+        leAudioPendingMessageType?.let { putInt(KEY_LEA_PENDING_MESSAGE, it) }
+        leAudioPendingInquiredType?.let { putInt(KEY_LEA_PENDING_INQUIRED, it) }
+        putIntArray(KEY_LEA_PENDING_ITEMS, leAudioPendingItemCodes.toIntArray())
+        putBoolean(KEY_LEA_SWITCH_PENDING, leAudioSwitchPending)
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
         quickAccessKeyCode?.let { putInt(KEY_QA_KEY, it) }
@@ -209,7 +227,16 @@ data class SonyStateSnapshot(
         private const val KEY_EQ_BAND_MAX = "eq_band_max"
         private const val KEY_EQ_CB_MIN = "eq_cb_min"
         private const val KEY_EQ_CB_MAX = "eq_cb_max"
+        private const val KEY_SUPPORTS_LEA = "supports_lea"
         private const val KEY_LEA = "lea"
+        private const val KEY_LEA_STREAMING_L = "lea_streaming_l"
+        private const val KEY_LEA_STREAMING_R = "lea_streaming_r"
+        private const val KEY_LEA_PENDING = "lea_pending"
+        private const val KEY_LEA_PENDING_TARGET = "lea_pending_target"
+        private const val KEY_LEA_PENDING_MESSAGE = "lea_pending_message"
+        private const val KEY_LEA_PENDING_INQUIRED = "lea_pending_inquired"
+        private const val KEY_LEA_PENDING_ITEMS = "lea_pending_items"
+        private const val KEY_LEA_SWITCH_PENDING = "lea_switch_pending"
         private const val KEY_QA_LR = "qa_lr"
         private const val KEY_QA_NC = "qa_nc"
         private const val KEY_QA_KEY = "qa_key"
@@ -272,7 +299,16 @@ data class SonyStateSnapshot(
             eqBandMax = bundle.getInt(KEY_EQ_BAND_MAX, 10),
             eqClearBassMin = bundle.getInt(KEY_EQ_CB_MIN, -10),
             eqClearBassMax = bundle.getInt(KEY_EQ_CB_MAX, 10),
+            supportsLeAudio = bundle.getBoolean(KEY_SUPPORTS_LEA, false),
             leaStatus = bundle.getString(KEY_LEA),
+            leaStreamingStatusL = bundle.getString(KEY_LEA_STREAMING_L),
+            leaStreamingStatusR = bundle.getString(KEY_LEA_STREAMING_R),
+            leAudioPending = bundle.getBoolean(KEY_LEA_PENDING, false),
+            leAudioPendingTargetEnabled = bundle.getBoolean(KEY_LEA_PENDING_TARGET, false),
+            leAudioPendingMessageType = bundle.optInt(KEY_LEA_PENDING_MESSAGE),
+            leAudioPendingInquiredType = bundle.optInt(KEY_LEA_PENDING_INQUIRED),
+            leAudioPendingItemCodes = bundle.getIntArray(KEY_LEA_PENDING_ITEMS)?.toList().orEmpty(),
+            leAudioSwitchPending = bundle.getBoolean(KEY_LEA_SWITCH_PENDING, false),
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
             quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),
@@ -336,7 +372,17 @@ data class SonyStateSnapshot(
                 eqBandMax = capability?.bandDisplayRange?.last ?: 10,
                 eqClearBassMin = capability?.clearBassDisplayRange?.first ?: -10,
                 eqClearBassMax = capability?.clearBassDisplayRange?.last ?: 10,
+                supportsLeAudio = state.connectedProfile
+                    ?.supports(dev.sonypods.headphones.HeadphoneFeature.LEA_STATUS) == true,
                 leaStatus = state.leaState.enabled,
+                leaStreamingStatusL = state.leaState.streamingStatusL,
+                leaStreamingStatusR = state.leaState.streamingStatusR,
+                leAudioPending = state.leAudioPendingAlert != null,
+                leAudioPendingTargetEnabled = state.leAudioPendingAlert?.targetEnabled == true,
+                leAudioPendingMessageType = state.leAudioPendingAlert?.messageType,
+                leAudioPendingInquiredType = state.leAudioPendingAlert?.inquiredType,
+                leAudioPendingItemCodes = state.leAudioPendingAlert?.itemCodes.orEmpty(),
+                leAudioSwitchPending = state.leAudioSwitchPending,
                 quickAccessLeftRight = state.quickAccessState.lrKeyFunction,
                 quickAccessNcAmb = state.quickAccessState.ncAmbKeyFunction,
                 quickAccessKeyCode = state.quickAccessState.key?.code?.toInt()?.and(0xFF),

@@ -72,8 +72,15 @@ object SonyTandemV2Table1Protocol {
     private const val ALERT_NTFY_PARAM: Byte = 0x99.toByte()
     private const val ALERT_SET_PARAM: Byte = 0x98.toByte()
     private const val ALERT_SET_STATUS: Byte = 0x94.toByte()
+    private const val ALERT_GET_STATUS: Byte = 0x92.toByte()
+    private const val ALERT_RET_STATUS: Byte = 0x93.toByte()
+    private const val ALERT_NTFY_STATUS: Byte = 0x95.toByte()
     private const val ALERT_INQUIRED_TYPE_FIXED_MESSAGE: Byte = 0x00
-    private const val ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND: Byte = 0x02
+    // Official bf0.C5695s uses AlertInquiredType.APP_BECOMES_FOREGROUND=0x04.
+    private const val ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND: Byte = 0x04
+    private const val ALERT_INQUIRED_TYPE_LE_AUDIO: Byte = 0x05
+    private const val ALERT_INQUIRED_TYPE_FIXED_MESSAGE_WITH_LEFT_RIGHT: Byte = 0x02
+    private const val ALERT_INQUIRED_TYPE_FLEXIBLE_MESSAGE: Byte = 0x06
     // AlertEnable/Disable (SC `bf0.AbstractC5678b` EnableDisable): ENABLE=0x00, DISABLE=0x01.
     private const val ALERT_ENABLE: Byte = 0x00
     private const val ALERT_DISABLE: Byte = 0x01
@@ -87,6 +94,46 @@ object SonyTandemV2Table1Protocol {
     const val ALERT_MESSAGE_TYPE_QUALITY_PRIOR_WITH_2_DEVICES = 113
     const val ALERT_MESSAGE_TYPE_CONNECTED_2_DEVICES_BG_WITH_LDAC = 114
     const val ALERT_MESSAGE_TYPE_LDAC_990_WITH_2_DEVICES = 115
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_ONLY_FROM_LE_AUDIO = 44
+    const val ALERT_MESSAGE_TYPE_CHANGE_LE_AUDIO_AND_CLASSIC_FROM_LE_AUDIO = 45
+    const val ALERT_MESSAGE_TYPE_ENTER_CLASSIC_PAIRING_FROM_LE_AUDIO = 46
+    const val ALERT_MESSAGE_TYPE_ENTER_PAIRING_WITH_LE_AUDIO_LIMITATIONS = 47
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO = 48
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_LIMITATIONS = 49
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA = 52
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_WAKE_WORD = 53
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_QUICK_ACCESS = 54
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_AND_QUICK_ACCESS = 55
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_PDM = 56
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_AND_PDM = 57
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_QUICK_ACCESS_AND_PDM = 64
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_QUICK_ACCESS_AND_PDM = 65
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_FROM_LE_AUDIO = 116
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_LIMITATIONS_FROM_LE_AUDIO = 117
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_SOUND_QUALITY_PRIOR_FROM_LE_AUDIO = 118
+    const val ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_CONNECTION_QUALITY_PRIOR_FROM_LE_AUDIO = 119
+
+    /** Fixed/foreground AlertMessageType values belonging to the LE Audio flow. */
+    val LE_AUDIO_ALERT_MESSAGE_TYPES: Set<Int> = setOf(
+        44, 45, 46, 47, 48, 49, 52, 53, 54, 55, 56, 57, 64, 65, 116, 117, 118, 119,
+    )
+
+    const val FLEXIBLE_ENTER_PAIRING_WITH_LE_AUDIO_LIMITATION = 12
+    const val FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION = 13
+    const val FLEXIBLE_CHANGE_STANDBY_TO_CLASSIC_ONLY = 14
+    const val FLEXIBLE_CHANGE_STANDBY_TO_LE_AUDIO_CLASSIC = 15
+    const val FLEXIBLE_ENTER_PAIRING_WITH_CONNECTION_MODE = 16
+    const val LE_AUDIO_FLEXIBLE_MESSAGE_TYPE_TO_LE = 17
+
+    /** Flexible types which can appear in the LE Audio connection flow. */
+    val LE_AUDIO_FLEXIBLE_MESSAGE_TYPES: Set<Int> = setOf(
+        FLEXIBLE_ENTER_PAIRING_WITH_LE_AUDIO_LIMITATION,
+        FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION,
+        FLEXIBLE_CHANGE_STANDBY_TO_CLASSIC_ONLY,
+        FLEXIBLE_CHANGE_STANDBY_TO_LE_AUDIO_CLASSIC,
+        FLEXIBLE_ENTER_PAIRING_WITH_CONNECTION_MODE,
+        LE_AUDIO_FLEXIBLE_MESSAGE_TYPE_TO_LE,
+    )
     // AlertActionType / AlertAction: NEGATIVE=0, POSITIVE=1.
     private const val ALERT_ACTION_NEGATIVE: Byte = 0x00
     private const val ALERT_ACTION_POSITIVE: Byte = 0x01
@@ -95,7 +142,15 @@ object SonyTandemV2Table1Protocol {
     private const val LEA_NTFY_STATUS: Byte = 0x45
     private const val LEA_GET_PARAM: Byte = 0x46
     private const val LEA_RET_PARAM: Byte = 0x47
+    private const val LEA_SET_PARAM: Byte = 0x48
     private const val LEA_NTFY_PARAM: Byte = 0x49
+    // LeaSetParam / ClassicOnlyLeClassicSetting (Sound Connect V2 Table1):
+    // [0x0C][EnableDisable][ConnectionMethodChange].
+    private const val LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING: Byte = 0x0C
+    private const val LEA_ENABLE: Byte = 0x00
+    private const val LEA_DISABLE: Byte = 0x01
+    private const val LEA_SETTING_AND_CONNECTION_METHOD_CHANGE: Byte = 0x00
+    private const val LEA_SETTING_CHANGE_ONLY: Byte = 0x01
     private const val EQEBB_GET_STATUS: Byte = 0x52
     private const val EQEBB_RET_STATUS: Byte = 0x53
     private const val EQEBB_NTFY_STATUS: Byte = 0x55
@@ -196,7 +251,7 @@ object SonyTandemV2Table1Protocol {
                     val order = payload.getOrNull(3 + i * 2)?.toInt()?.and(0xFF) ?: break
                     val resolved = SonyV2FunctionType.fromByteCode(SonyTable.NO_1, code)
                     if (resolved != SonyV2FunctionType.OUT_OF_RANGE) {
-                        add(SonySupportedFunction(code, order))
+                        add(SonySupportedFunction(code, order, SonyTable.NO_1))
                     }
                 }
             }.sortedBy { it.order }
@@ -408,6 +463,35 @@ object SonyTandemV2Table1Protocol {
     fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray =
         SonyTandemFrame.message(LEA_GET_PARAM, byteArrayOf(type.code))
 
+    /** Sound Connect C15454a initialization for the persistent LE Audio setting. */
+    fun buildGetLeAudioSettingAvailability(): ByteArray =
+        SonyTandemFrame.message(LEA_GET_STATUS, byteArrayOf(LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING))
+
+    fun buildGetLeAudioSetting(): ByteArray =
+        SonyTandemFrame.message(LEA_GET_PARAM, byteArrayOf(LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING))
+
+    /**
+     * Sets the Sony LE Audio capability. With [changeConnectionMethod] enabled,
+     * the headset immediately changes its Bluetooth connection method, which can
+     * briefly disconnect and reconnect the active audio link.
+     */
+    fun buildSetLeAudioEnabled(
+        enabled: Boolean,
+        changeConnectionMethod: Boolean = true,
+    ): ByteArray =
+        SonyTandemFrame.message(
+            LEA_SET_PARAM,
+            byteArrayOf(
+                LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING,
+                if (enabled) LEA_ENABLE else LEA_DISABLE,
+                if (changeConnectionMethod) {
+                    LEA_SETTING_AND_CONNECTION_METHOD_CHANGE
+                } else {
+                    LEA_SETTING_CHANGE_ONLY
+                },
+            ),
+        )
+
     fun buildGetQuickAccess(): ByteArray =
         SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.QUICK_ACCESS.code))
 
@@ -584,6 +668,12 @@ object SonyTandemV2Table1Protocol {
     fun buildSetAlertFixedMessage(enable: Boolean): ByteArray =
         buildSetAlertStatus(ALERT_INQUIRED_TYPE_FIXED_MESSAGE, enable)
 
+    fun buildGetAlertStatus(): ByteArray =
+        SonyTandemFrame.message(ALERT_GET_STATUS, byteArrayOf(ALERT_INQUIRED_TYPE_LE_AUDIO))
+
+    fun buildSetAlertLeAudioNotification(enable: Boolean): ByteArray =
+        buildSetAlertStatus(ALERT_INQUIRED_TYPE_LE_AUDIO, enable)
+
     fun buildSetNcOnOff(enabled: Boolean): ByteArray =
         SonyTandemFrame.message(
             NCASM_SET_PARAM,
@@ -661,6 +751,7 @@ object SonyTandemV2Table1Protocol {
                 ?: ParsedTandemResponse.Unknown(dataType.unsigned, command.unsigned, payload, raw)
             CONNECT_RET_SUPPORT_FUNCTION -> ParsedTandemResponse.SupportFunction(
                 functions = parseSupportFunction(payload),
+                table = SonyTable.NO_1,
                 raw = raw,
             )
             CONNECT_RET_CAPABILITY_INFO -> parseConnectRetCapabilityInfoPayload(payload)
@@ -704,13 +795,27 @@ object SonyTandemV2Table1Protocol {
             )
             PLAY_RET_PARAM -> parsePlayParam(payload, raw, isUnsolicited = false)
             PLAY_NTFY_PARAM -> parsePlayParam(payload, raw, isUnsolicited = true)
-            LEA_RET_STATUS, LEA_NTFY_STATUS -> parseLeaStatus(payload, raw)
-            LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaParam(payload, raw)
+            LEA_RET_STATUS, LEA_NTFY_STATUS -> if (
+                payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
+            ) {
+                parseLeaSettingAvailability(payload, raw, command == LEA_NTFY_STATUS)
+            } else {
+                parseLeaStatus(payload, raw)
+            }
+            LEA_RET_PARAM, LEA_NTFY_PARAM -> if (
+                payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
+            ) {
+                parseLeaParameterNotification(payload, raw)
+            } else {
+                parseLeaParam(payload, raw)
+            }
             SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
             SYSTEM_RET_EXT_PARAM, SYSTEM_NTFY_EXT_PARAM -> parseSystemRetExtendedParam(payload, raw)
             GS_RET_CAPABILITY -> parseGeneralSettingCapability(payload, raw)
             GS_RET_STATUS, GS_NTFY_STATUS -> parseGeneralSettingStatus(payload, raw)
             GS_RET_PARAM, GS_NTFY_PARAM -> parseGeneralSettingParam(payload, raw)
+            ALERT_RET_STATUS -> parseAlertStatus(payload, raw, false)
+            ALERT_NTFY_STATUS -> parseAlertStatus(payload, raw, true)
             ALERT_NTFY_PARAM -> parseAlertParam(payload, raw)
             else -> ParsedTandemResponse.Unknown(dataType.unsigned, command.unsigned, payload, raw)
         }
@@ -1109,10 +1214,51 @@ object SonyTandemV2Table1Protocol {
             enabled = enabled,
             streamingStatusL = streamingL,
             streamingStatusR = streamingR,
+            inquiredTypeCode = typeCode?.unsigned,
+            table = SonyTable.NO_1,
             raw = raw,
         )
     }
 
+    /** ALERT_SET_PARAM FLEXIBLE_MESSAGE: [0x06][type][action]. */
+    fun buildReplyAlertFlexibleMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            ALERT_SET_PARAM,
+            byteArrayOf(
+                ALERT_INQUIRED_TYPE_FLEXIBLE_MESSAGE,
+                messageType.toByte(),
+                if (positive) ALERT_ACTION_POSITIVE else ALERT_ACTION_NEGATIVE,
+            ),
+        )
+
+    /** ALERT_SET_PARAM fixed-message-with-left/right-selection reply. */
+    fun buildReplyAlertFixedMessageWithLeftRightSelection(messageType: Int, positive: Boolean): ByteArray =
+        buildReplyAlertFixedMessageWithLeftRightSelection(messageType, if (positive) 1 else 0)
+
+    /**
+     * The left/right alert domain does not use a generic POSITIVE byte:
+     * 0=NEGATIVE, 1=LEFT, 2=RIGHT. The official app echoes the selected side.
+     */
+    fun buildReplyAlertFixedMessageWithLeftRightSelection(messageType: Int, action: Int): ByteArray =
+        SonyTandemFrame.message(
+            ALERT_SET_PARAM,
+            byteArrayOf(
+                ALERT_INQUIRED_TYPE_FIXED_MESSAGE_WITH_LEFT_RIGHT,
+                messageType.toByte(),
+                action.coerceIn(0, 2).toByte(),
+            ),
+        )
+
+    /** ALERT_SET_PARAM foreground fixed message: [0x04][type][action]. */
+    fun buildReplyAlertForegroundMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            ALERT_SET_PARAM,
+            byteArrayOf(
+                ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND,
+                messageType.toByte(),
+                if (positive) ALERT_ACTION_POSITIVE else ALERT_ACTION_NEGATIVE,
+            ),
+        )
     private fun parseLeaParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val typeCode = payload.firstOrNull()
         val type = LeaInquiredType.entries.firstOrNull { it.code == typeCode }
@@ -1123,8 +1269,41 @@ object SonyTandemV2Table1Protocol {
             type = type,
             values = payload.unsignedList(),
             pairedHistory = pairedHistory,
+            inquiredTypeCode = typeCode?.unsigned,
+            table = SonyTable.NO_1,
             raw = raw,
         )
+    }
+
+    private fun parseLeaParameterNotification(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse {
+        val setting = payload.firstOrNull()?.unsigned
+        val enabled = payload.getOrNull(1)?.let { code ->
+            LeaEnableDisable.entries.firstOrNull { it.code == code }
+        }
+        return ParsedTandemResponse.LeaParameterNotification(
+            setting = setting,
+            enabled = enabled,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    private fun parseLeaSettingAvailability(
+        payload: ByteArray,
+        raw: ByteArray,
+        isNotification: Boolean,
+    ): ParsedTandemResponse {
+        val available = payload.getOrNull(1)?.let { it == LEA_ENABLE }
+            ?: return ParsedTandemResponse.Unknown(
+                LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING.unsigned,
+                if (isNotification) LEA_NTFY_STATUS.unsigned else LEA_RET_STATUS.unsigned,
+                payload,
+                raw,
+            )
+        return ParsedTandemResponse.LeaSettingAvailability(available, isNotification, raw)
     }
 
     private fun Byte.toLeaStreamingStatus(): LeaStreamingStatus? =
@@ -1520,15 +1699,54 @@ object SonyTandemV2Table1Protocol {
         )
     }
 
-    /** ALERT_NTFY_PARAM (0x99) FIXED_MESSAGE: payload = [0x00(FIXED_MESSAGE), AlertMessageType, AlertActionType].
-     * Only FIXED_MESSAGE alerts are surfaced; other inquired types fall back to Unknown. */
+    /** ALERT_NTFY_PARAM (0x99). Payload shapes mirror bf0.C5682f/C5689m/C5690n. */
     private fun parseAlertParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val inquiredType = payload.getOrNull(0)
         val messageType = payload.getOrNull(1)?.unsigned
-        val actionType = payload.getOrNull(2)?.unsigned
-        if (inquiredType != ALERT_INQUIRED_TYPE_FIXED_MESSAGE || messageType == null || actionType == null) {
-            return ParsedTandemResponse.Unknown(ALERT_INQUIRED_TYPE_FIXED_MESSAGE.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+        if (messageType == null) {
+            return ParsedTandemResponse.Unknown(inquiredType?.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
         }
-        return ParsedTandemResponse.AlertFixedMessage(messageType, actionType, raw)
+        return when (inquiredType) {
+            ALERT_INQUIRED_TYPE_FIXED_MESSAGE,
+            ALERT_INQUIRED_TYPE_APP_BECOMES_FOREGROUND -> {
+                val action = payload.getOrNull(2)?.unsigned
+                    ?: return ParsedTandemResponse.Unknown(inquiredType.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+                if (inquiredType == ALERT_INQUIRED_TYPE_FIXED_MESSAGE) {
+                    ParsedTandemResponse.AlertFixedMessage(messageType, action, raw)
+                } else {
+                    ParsedTandemResponse.AlertForegroundMessage(messageType, action, raw)
+                }
+            }
+            ALERT_INQUIRED_TYPE_FIXED_MESSAGE_WITH_LEFT_RIGHT -> {
+                val selected = payload.getOrNull(2)?.unsigned
+                    ?: return ParsedTandemResponse.Unknown(inquiredType.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+                ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection(messageType, selected, raw)
+            }
+            ALERT_INQUIRED_TYPE_FLEXIBLE_MESSAGE -> {
+                val count = payload.getOrNull(2)?.unsigned ?: return ParsedTandemResponse.Unknown(inquiredType.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+                val end = 3 + count
+                if (payload.size <= end) return ParsedTandemResponse.Unknown(inquiredType.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+                ParsedTandemResponse.AlertFlexibleMessage(
+                    messageType = messageType,
+                    itemCodes = payload.copyOfRange(3, end).map { it.unsigned },
+                    actionType = payload[end].unsigned,
+                    raw = raw,
+                )
+            }
+            else -> ParsedTandemResponse.Unknown(inquiredType?.unsigned, ALERT_NTFY_PARAM.unsigned, payload, raw)
+        }
+    }
+
+    private fun parseAlertStatus(
+        payload: ByteArray,
+        raw: ByteArray,
+        isNotification: Boolean,
+    ): ParsedTandemResponse {
+        if (payload.getOrNull(0)?.unsigned != ALERT_INQUIRED_TYPE_LE_AUDIO.unsigned) {
+            return ParsedTandemResponse.Unknown(null, ALERT_RET_STATUS.unsigned, payload, raw)
+        }
+        val confirmation = payload.getOrNull(1)?.unsigned
+            ?: return ParsedTandemResponse.Unknown(ALERT_INQUIRED_TYPE_LE_AUDIO.unsigned, ALERT_RET_STATUS.unsigned, payload, raw)
+        return ParsedTandemResponse.AlertLeAudioNotification(confirmation, isNotification, raw)
     }
 }

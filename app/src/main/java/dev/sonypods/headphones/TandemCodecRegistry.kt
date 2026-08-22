@@ -77,6 +77,12 @@ interface TandemCodec {
     fun buildSetPlaybackVolume(volume: Int, volumeType: PlayInquiredType): ByteArray? = null
     fun buildGetLeaStatus(type: LeaInquiredType): ByteArray? = null
     fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray? = null
+    fun buildGetLeAudioSettingAvailability(): ByteArray? = null
+    fun buildGetLeAudioSetting(): ByteArray? = null
+    fun buildSetLeAudioEnabled(
+        enabled: Boolean,
+        changeConnectionMethod: Boolean = true,
+    ): ByteArray? = null
     fun buildGetQuickAccess(): ByteArray? = null
     fun buildGetQuickAccessCapability(): ByteArray? = null
     fun buildGetQuickAccessStatus(): ByteArray? = null
@@ -118,8 +124,12 @@ interface TandemCodec {
     fun buildSetGeneralSetting(type: Byte, on: Boolean): ByteArray? = null
     fun generalSettingSlots(): List<Byte> = emptyList()
     fun buildReplyAlertFixingMessage(messageType: Int, positive: Boolean): ByteArray? = null
+    fun buildReplyAlertForegroundMessage(messageType: Int, positive: Boolean): ByteArray? = null
+    fun buildReplyAlertFlexibleMessage(messageType: Int, positive: Boolean): ByteArray? = null
+    fun buildReplyAlertFixedMessageWithLeftRightSelection(messageType: Int, positive: Boolean): ByteArray? = null
     fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray? = null
     fun buildSetAlertFixedMessage(enable: Boolean): ByteArray? = null
+    fun buildSetAlertLeAudioNotification(enable: Boolean): ByteArray? = null
 }
 
 object TandemCodecRegistry {
@@ -410,6 +420,18 @@ object SonyTandemV2Table1Codec : TandemCodec {
     override fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetLeaPairedHistory(type)
 
+    override fun buildGetLeAudioSettingAvailability(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetLeAudioSettingAvailability()
+
+    override fun buildGetLeAudioSetting(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetLeAudioSetting()
+
+    override fun buildSetLeAudioEnabled(
+        enabled: Boolean,
+        changeConnectionMethod: Boolean,
+    ): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetLeAudioEnabled(enabled, changeConnectionMethod)
+
     override fun buildGetQuickAccess(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetQuickAccess()
 
@@ -485,11 +507,26 @@ object SonyTandemV2Table1Codec : TandemCodec {
     override fun buildReplyAlertFixingMessage(messageType: Int, positive: Boolean): ByteArray =
         SonyTandemV2Table1Protocol.buildReplyAlertFixingMessage(messageType, positive)
 
+    override fun buildReplyAlertForegroundMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildReplyAlertForegroundMessage(messageType, positive)
+
+    override fun buildReplyAlertFlexibleMessage(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildReplyAlertFlexibleMessage(messageType, positive)
+
+    override fun buildReplyAlertFixedMessageWithLeftRightSelection(messageType: Int, positive: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildReplyAlertFixedMessageWithLeftRightSelection(messageType, positive)
+
+    fun buildReplyAlertFixedMessageWithLeftRightSelection(messageType: Int, action: Int): ByteArray =
+        SonyTandemV2Table1Protocol.buildReplyAlertFixedMessageWithLeftRightSelection(messageType, action)
+
     override fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray =
         SonyTandemV2Table1Protocol.buildSetAlertAppBecomesForeground(enable)
 
     override fun buildSetAlertFixedMessage(enable: Boolean): ByteArray =
         SonyTandemV2Table1Protocol.buildSetAlertFixedMessage(enable)
+
+    override fun buildSetAlertLeAudioNotification(enable: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetAlertLeAudioNotification(enable)
 
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV2Table1Protocol.parse(raw)

@@ -55,6 +55,8 @@ import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
 import dev.sonypods.ui.dialogs.MultipointAlertDialog
+import dev.sonypods.ui.dialogs.LeAudioAlertDialog
+import dev.sonypods.ui.dialogs.LeAudioPairingHelpDialog
 import dev.sonypods.utils.RootManager
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.Dispatchers
@@ -227,7 +229,9 @@ fun MainUI(
             onMultipointUnpair = { address -> SonyBridge.unpairMultipointDevice(context, address) },
             onSourceSwitchEnabledChange = { enabled -> SonyBridge.setSourceSwitchEnabled(context, enabled) },
             onMultipointEnabledChange = { enabled -> SonyBridge.setMultipointEnabled(context, enabled) },
-            onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
+             onLeAudioEnabledChange = { enabled -> SonyBridge.setLeAudioEnabled(context, enabled) },
+             onLeAudioAlertReply = { positive -> SonyBridge.replyLeAudioAlert(context, positive) },
+             onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
             onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
             onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },
             onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
@@ -896,6 +900,21 @@ fun MainUI(
             messageType = pendingAlertMsgType ?: 7,
             onConfirm = { sonyActions.onMultipointAlertReply(true) },
             onCancel = { sonyActions.onMultipointAlertReply(false) },
+        )
+        LeAudioAlertDialog(
+            show = sonyState.leAudioPending && sonyState.leAudioPendingInquiredType != null,
+            targetEnabled = sonyState.leAudioPendingTargetEnabled,
+            inquiredType = sonyState.leAudioPendingInquiredType,
+            messageType = sonyState.leAudioPendingMessageType,
+            itemCodes = sonyState.leAudioPendingItemCodes,
+            deviceAlert = sonyState.leAudioPendingMessageType != null,
+            onConfirm = { sonyActions.onLeAudioAlertReply(true) },
+            onCancel = { sonyActions.onLeAudioAlertReply(false) },
+        )
+        LeAudioPairingHelpDialog(
+            show = sonyState.leAudioPending && sonyState.leAudioPendingInquiredType == null,
+            targetEnabled = sonyState.leAudioPendingTargetEnabled,
+            onDismiss = { sonyActions.onLeAudioAlertReply(true) },
         )
     }
 }

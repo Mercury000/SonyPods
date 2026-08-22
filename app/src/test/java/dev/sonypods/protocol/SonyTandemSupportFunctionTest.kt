@@ -37,9 +37,9 @@ class SonyTandemSupportFunctionTest {
         // sorted by order field: EBB(order 0), PRESET_EQ(1), NC_ONOFF(2)
         assertEquals(
             listOf(
-                SonySupportedFunction(0x51, 0),
-                SonySupportedFunction(0x50, 1),
-                SonySupportedFunction(0x61, 2),
+                SonySupportedFunction(0x51, 0, SonyTable.NO_1),
+                SonySupportedFunction(0x50, 1, SonyTable.NO_1),
+                SonySupportedFunction(0x61, 2, SonyTable.NO_1),
             ),
             response.functions,
         )

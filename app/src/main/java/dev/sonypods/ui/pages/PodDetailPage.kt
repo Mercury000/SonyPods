@@ -61,6 +61,7 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
@@ -210,6 +211,12 @@ private fun LazyListScope.podControlItems(
         PlaybackCard(uiState = uiState, actions = actions)
     }
 
+    if (uiState.supportsLeAudio) {
+        item {
+            LeAudioCard(uiState = uiState, actions = actions)
+        }
+    }
+
     if (uiState.supportsGestureOperations) {
         item {
             Card(modifier = Modifier.padding(horizontal = 12.dp)) {
@@ -239,6 +246,32 @@ private fun LazyListScope.podControlItems(
 
     item {
         Spacer(modifier = Modifier.height(bottomContentPadding))
+    }
+}
+
+@Composable
+private fun LeAudioCard(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    val enabled = uiState.leaStatus == "ENABLE"
+    val usingLc3 = uiState.leaStreamingStatusL == "VIA_LE_AUDIO_UNICAST" ||
+        uiState.leaStreamingStatusR == "VIA_LE_AUDIO_UNICAST"
+
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        SwitchPreference(
+            title = "连接方式",
+            summary = when {
+                uiState.leAudioSwitchPending -> "正在更改连接方式"
+                usingLc3 -> "LE Audio优先，当前使用 LE Audio（LC3）"
+                enabled -> "LE Audio优先，等待手机连接"
+                else -> "仅经典音频"
+            },
+            checked = enabled,
+            onCheckedChange = { target ->
+                if (!uiState.leAudioSwitchPending) actions.onLeAudioEnabledChange(target)
+            },
+        )
     }
 }
 

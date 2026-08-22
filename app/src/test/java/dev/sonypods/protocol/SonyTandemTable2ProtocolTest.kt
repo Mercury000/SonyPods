@@ -154,6 +154,14 @@ class SonyTandemTable2ProtocolTest {
     }
 
     @Test
+    fun v2_buildGetLeaCapability_matchesCommandShape() {
+        val bytes = SonyTandemV2Table2Protocol.buildGetLeaCapability(
+            LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+        )
+        assertArrayEquals(byteArrayOf(0x0F, 0x60, 0x04), bytes)
+    }
+
+    @Test
     fun v2_buildGetPartyStatus_matchesCommandShape() {
         val bytes = SonyTandemV2Table2Protocol.buildGetPartyStatus(
             PartyInquiredTypeTable2.DJ_CONTROL,
@@ -214,9 +222,9 @@ class SonyTandemTable2ProtocolTest {
         parsed as ParsedTandemResponse.SupportFunction
         assertEquals(
             listOf(
-                SonySupportedFunction(0x50, 0),
-                SonySupportedFunction(0x51, 1),
-                SonySupportedFunction(0x62, 2),
+                SonySupportedFunction(0x50, 0, SonyTable.NO_2),
+                SonySupportedFunction(0x51, 1, SonyTable.NO_2),
+                SonySupportedFunction(0x62, 2, SonyTable.NO_2),
             ),
             parsed.functions,
         )

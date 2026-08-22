@@ -47,6 +47,23 @@ enum class HeadphoneFeature {
     MULTIPOINT,
 }
 
+enum class LeaDeviceKind {
+    TWS_CTKD,
+    HBS_CTKD,
+    TWS_LE_ONLY,
+    PAS_CTKD,
+}
+
+data class LeaProtocolCapability(
+    val kind: LeaDeviceKind,
+    val historyVariant: HeadphoneProtocolVariant,
+    val historyChannel: TandemChannel,
+    val historyInquiredTypeCode: Int,
+    val controlSupported: Boolean,
+    /** Table1 control endpoint, independent of the status/history query table. */
+    val controlChannel: TandemChannel?,
+)
+
 enum class HeadphoneTransport {
     UNKNOWN,
     SPP,
@@ -132,6 +149,7 @@ data class HeadphoneCapabilities(
     val gestureSettingsType: SystemInquiredType = SystemInquiredType.ASSIGNABLE_SETTINGS,
     val queryProtocolInfo: Boolean = true,
     val queryNoiseControlParams: Boolean = true,
+    val lea: LeaProtocolCapability? = null,
 )
 
 data class ConnectedHeadphoneProfile(
@@ -250,16 +268,23 @@ fun buildFeatureBindings(
     capabilities: HeadphoneCapabilities,
 ): Map<HeadphoneFeature, FeatureProtocolBinding> =
     featureProtocolMap.mapValues { (feature, variant) ->
+        val bindingVariant = if (feature == HeadphoneFeature.LEA_STATUS) {
+            capabilities.lea?.historyVariant ?: variant
+        } else {
+            variant
+        }
         FeatureProtocolBinding(
             feature = feature,
-            variant = variant,
+            variant = bindingVariant,
             // Multipoint is a V2 Table2 peripheral domain even when the
             // main profile is negotiated as Table1 on the HPC channel.
-            channel = if (
+            channel = if (feature == HeadphoneFeature.LEA_STATUS && capabilities.lea != null) {
+                capabilities.lea.historyChannel
+            } else if (
                 feature == HeadphoneFeature.MULTIPOINT &&
                     feature in capabilities.features &&
                     variant == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
-            ) TandemChannel.GATT_V2_MC else defaultChannelFor(variant),
+            ) TandemChannel.GATT_V2_MC else defaultChannelFor(bindingVariant),
             queryTypes = queryTypesForFeature(feature, capabilities),
             writableTypes = writableTypesForFeature(feature, capabilities),
         )
@@ -352,6 +377,16 @@ interface HeadphoneAdapter {
 
     fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
 
+    fun buildSetLeAudioEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+        changeConnectionMethod: Boolean = true,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildRefreshLeaPairedHistoryCommands(
+        profile: ConnectedHeadphoneProfile,
+    ): List<HeadphoneCommand> = emptyList()
+
     fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
 
     fun buildRefreshGestureOperationsCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> = emptyList()
@@ -400,6 +435,18 @@ interface HeadphoneAdapter {
         messageType: Int,
         positive: Boolean,
     ): List<HeadphoneCommand> = emptyList()
+
+    fun buildReplyAlertCommand(
+        profile: ConnectedHeadphoneProfile,
+        alert: ParsedTandemResponse,
+        positive: Boolean,
+    ): List<HeadphoneCommand> = when (alert) {
+        is ParsedTandemResponse.AlertFixedMessage -> buildReplyAlertCommand(profile, alert.messageType, positive)
+        is ParsedTandemResponse.AlertForegroundMessage -> buildReplyAlertCommand(profile, alert.messageType, positive)
+        is ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection -> buildReplyAlertCommand(profile, alert.messageType, positive)
+        is ParsedTandemResponse.AlertFlexibleMessage -> buildReplyAlertCommand(profile, alert.messageType, positive)
+        else -> emptyList()
+    }
 
     fun buildSetFixedSourceCommand(
         profile: ConnectedHeadphoneProfile,
@@ -494,6 +541,18 @@ object HeadphoneAdapterRegistry {
     fun buildPowerOffCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildPowerOffCommands(profile)
 
+    fun buildSetLeAudioEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+        changeConnectionMethod: Boolean = true,
+    ): List<HeadphoneCommand> =
+        adapterFor(profile).buildSetLeAudioEnabledCommands(profile, enabled, changeConnectionMethod)
+
+    fun buildRefreshLeaPairedHistoryCommands(
+        profile: ConnectedHeadphoneProfile,
+    ): List<HeadphoneCommand> =
+        adapterFor(profile).buildRefreshLeaPairedHistoryCommands(profile)
+
     fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildRefreshPlaybackCommands(profile)
 
@@ -540,6 +599,9 @@ object HeadphoneAdapterRegistry {
 
     fun buildReplyAlertCommand(profile: ConnectedHeadphoneProfile, messageType: Int, positive: Boolean): List<HeadphoneCommand> =
         adapterFor(profile).buildReplyAlertCommand(profile, messageType, positive)
+
+    fun buildReplyAlertCommand(profile: ConnectedHeadphoneProfile, alert: ParsedTandemResponse, positive: Boolean): List<HeadphoneCommand> =
+        adapterFor(profile).buildReplyAlertCommand(profile, alert, positive)
 
     fun buildSetFixedSourceCommand(profile: ConnectedHeadphoneProfile, address: String): List<HeadphoneCommand> =
         adapterFor(profile).buildSetFixedSourceCommand(profile, address)

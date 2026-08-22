@@ -11,6 +11,7 @@ import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.SystemInquiredType
 import dev.sonypods.config.FunctionCode
+import dev.sonypods.protocol.SonyTandemV2Table2Protocol
 
 /**
  * Connection-time dynamic capability probing, mirroring Sound Connect 13.2.1
@@ -36,8 +37,24 @@ object SonyCapabilityProbe {
             channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
         )
 
-    fun buildGetSupportFunctionCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
-        listOf(buildGetSupportFunctionCommand(profile))
+    fun buildGetSupportFunctionCommands(
+        profile: ConnectedHeadphoneProfile,
+        availableChannels: Set<TandemChannel> = emptySet(),
+    ): List<HeadphoneCommand> = buildList {
+        add(buildGetSupportFunctionCommand(profile))
+        if (
+            TandemChannel.GATT_V2_MC in availableChannels &&
+            profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+        ) {
+            add(
+                HeadphoneCommand(
+                    label = "GET support function Table2",
+                    bytes = SonyTandemV2Table2Protocol.buildGetSupportFunction(),
+                    channel = TandemChannel.GATT_V2_MC,
+                )
+            )
+        }
+    }
 
     /**
      * The single CONNECT_GET_CAPABILITY_INFO command. Its response
@@ -190,6 +207,10 @@ object SonyCapabilityProbe {
         val playTypes = mutableSetOf<PlayInquiredType>()
         var playbackHasMute = false
         var gestureSettingsType: SystemInquiredType? = null
+        val leaKind = functions.firstNotNullOfOrNull { it.leaDeviceKind() }
+        val leaControlSupported = functions.any {
+            it.v2Type() == SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING
+        }
 
         for (function in functions) {
             if (function.isPowerOff(profile)) {
@@ -249,7 +270,9 @@ object SonyCapabilityProbe {
                 }
 
                 ProbeDomain.LEA -> {
-                    features.add(HeadphoneFeature.LEA_STATUS)
+                    if (function.leaDeviceKind() != null) {
+                        features.add(HeadphoneFeature.LEA_STATUS)
+                    }
                 }
 
                 ProbeDomain.NONE -> Unit
@@ -306,6 +329,45 @@ object SonyCapabilityProbe {
             fallback.eqConfig
         }
 
+        // Sound Connect constructs the Classic-only setting sender from the
+        // main V2 tableset when CLASSIC_ONLY_LE_CLASSIC_SETTING is advertised.
+        // It is independent from the TWS/HBS/PAS paired-history reader. Bind it
+        // to the main DEVICE_INFO command endpoint instead of deriving it from
+        // the LEA history kind (PAS history, for example, is Table2/MC).
+        val leaControlChannel = profile?.let {
+            runCatching { it.channelFor(HeadphoneFeature.DEVICE_INFO) }.getOrNull()
+        } ?: when (transport) {
+            HeadphoneTransport.SPP -> TandemChannel.SPP_MDR
+            HeadphoneTransport.GATT_HPC -> TandemChannel.GATT_V2_HPC
+            HeadphoneTransport.GATT_MC -> TandemChannel.GATT_V2_MC
+            HeadphoneTransport.UNSUPPORTED_LE_ENDPOINT,
+            HeadphoneTransport.UNKNOWN -> null
+        }
+        val lea = leaKind?.let { kind ->
+            when (kind) {
+                LeaDeviceKind.TWS_CTKD -> LeaProtocolCapability(
+                    kind, HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+                    TandemChannel.GATT_V2_HPC, 0x00, leaControlSupported,
+                    leaControlChannel.takeIf { leaControlSupported },
+                )
+                LeaDeviceKind.HBS_CTKD -> LeaProtocolCapability(
+                    kind, HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+                    TandemChannel.GATT_V2_HPC, 0x01, leaControlSupported,
+                    leaControlChannel.takeIf { leaControlSupported },
+                )
+                LeaDeviceKind.TWS_LE_ONLY -> LeaProtocolCapability(
+                    kind, HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
+                    TandemChannel.GATT_V2_HPC, 0x02, leaControlSupported,
+                    leaControlChannel.takeIf { leaControlSupported },
+                )
+                LeaDeviceKind.PAS_CTKD -> LeaProtocolCapability(
+                    kind, HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2,
+                    TandemChannel.GATT_V2_MC, 0x04, leaControlSupported,
+                    leaControlChannel.takeIf { leaControlSupported },
+                )
+            }
+        }
+
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
             formFactor = formFactorFromBattery(batteryQueries),
@@ -317,6 +379,7 @@ object SonyCapabilityProbe {
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
             playbackVolumeHasMute = playbackHasMute,
             gestureSettingsType = gestureSettingsType ?: fallback.gestureSettingsType,
+            lea = lea,
         )
     }
 
@@ -343,6 +406,7 @@ object SonyCapabilityProbe {
         val capabilities = capabilitiesFromFunctions(functions, profile.capabilities, transport, profile)
         return profile.copy(
             capabilities = capabilities,
+            featureBindings = buildFeatureBindings(profile.featureProtocolMap, capabilities),
             playbackDispatchStrategy = if (HeadphoneFeature.PLAYBACK_CONTROL in capabilities.features) {
                 PlaybackDispatchStrategy.TANDEM_FIRST
             } else {
@@ -350,7 +414,11 @@ object SonyCapabilityProbe {
             },
             protocolEvidence = profile.protocolEvidence +
                 listOf("probe:ret-support-function(${functions.size})") +
-                functions.map { "probe:${it.domain(profile).name}:0x%02X".format(it.code.toInt() and 0xFF) },
+                functions.map {
+                    val table = it.table.takeIf { table -> table != SonyTable.INVALID }
+                        ?: SonyTable.NO_1
+                    "probe:${table.name}:${it.domain(profile).name}:0x%02X".format(it.code.toInt() and 0xFF)
+                },
         )
     }
 
@@ -376,11 +444,15 @@ object SonyCapabilityProbe {
             val byte = fc.code.toByte()
             if (v1) {
                 SonyV1FunctionType.fromByteCode(byte).takeIf { it != SonyV1FunctionType.OUT_OF_RANGE }
-                    ?.let { SonySupportedFunction(it.code, fc.order) }
+                    ?.let { SonySupportedFunction(it.code, fc.order, SonyTable.NO_1) }
             } else {
-                SonyV2FunctionType.fromByteCode(SonyTable.NO_1, byte)
+                val table = runCatching { SonyTable.valueOf(fc.table) }
+                    .getOrDefault(SonyTable.NO_1)
+                    .takeIf { it != SonyTable.INVALID }
+                    ?: SonyTable.NO_1
+                SonyV2FunctionType.fromByteCode(table, byte)
                     .takeIf { it != SonyV2FunctionType.OUT_OF_RANGE }
-                    ?.let { SonySupportedFunction(it.code, fc.order) }
+                    ?.let { SonySupportedFunction(it.code, fc.order, table) }
             }
         }
     }
@@ -453,7 +525,18 @@ object SonyCapabilityProbe {
     )
 
     private fun SonySupportedFunction.v2Type(): SonyV2FunctionType? =
-        SonyV2FunctionType.fromByteCode(SonyTable.NO_1, code).takeIf { it != SonyV2FunctionType.OUT_OF_RANGE }
+        SonyV2FunctionType.fromByteCode(
+            table.takeIf { it != SonyTable.INVALID } ?: SonyTable.NO_1,
+            code,
+        ).takeIf { it != SonyV2FunctionType.OUT_OF_RANGE }
+
+    private fun SonySupportedFunction.leaDeviceKind(): LeaDeviceKind? = when (v2Type()) {
+        SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> LeaDeviceKind.TWS_CTKD
+        SonyV2FunctionType.HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> LeaDeviceKind.HBS_CTKD
+        SonyV2FunctionType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD -> LeaDeviceKind.TWS_LE_ONLY
+        SonyV2FunctionType.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> LeaDeviceKind.PAS_CTKD
+        else -> null
+    }
 
     private fun SonySupportedFunction.v1Type(): SonyV1FunctionType? =
         SonyV1FunctionType.fromByteCode(code).takeIf { it != SonyV1FunctionType.OUT_OF_RANGE }
@@ -546,7 +629,8 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
         SonyV2FunctionType.HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
         SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING,
-        SonyV2FunctionType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD -> ProbeDomain.LEA
+        SonyV2FunctionType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD,
+        SonyV2FunctionType.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> ProbeDomain.LEA
 
         else -> ProbeDomain.NONE
     }

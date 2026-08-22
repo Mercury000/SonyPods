@@ -33,6 +33,8 @@ data class SonyDetailActions(
     val onMultipointUnpair: (String) -> Unit = {},
     val onSourceSwitchEnabledChange: (Boolean) -> Unit = {},
     val onMultipointEnabledChange: (Boolean) -> Unit = {},
+    val onLeAudioEnabledChange: (Boolean) -> Unit = {},
+    val onLeAudioAlertReply: (Boolean) -> Unit = {},
     val onMultipointAlertReply: (Boolean) -> Unit = {},
     val onFixedSourceChange: (String) -> Unit = {},
     val onMusicHandOverChange: (Boolean) -> Unit = {},

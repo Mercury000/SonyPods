@@ -25,6 +25,7 @@ import dev.sonypods.headphones.HeadphoneAdapterRegistry
 import dev.sonypods.headphones.HeadphoneCommand
 import dev.sonypods.headphones.HeadphoneFeature
 import dev.sonypods.headphones.HeadphoneFormFactor
+import dev.sonypods.headphones.HeadphoneProtocolVariant
 import dev.sonypods.headphones.HeadphoneTransport
 import dev.sonypods.headphones.PlaybackDispatchStrategy
 import dev.sonypods.headphones.MultipointDeviceAction
@@ -32,6 +33,8 @@ import dev.sonypods.headphones.buildFeatureBindings
 import dev.sonypods.headphones.SonyCapabilityProbe
 import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
+import dev.sonypods.leaudio.LeAudioSwitchCoordinator
+import dev.sonypods.leaudio.LeAudioProfileGateway
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheEntry
 import dev.sonypods.config.CapabilityValueCache
@@ -83,6 +86,34 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 
+private const val ALERT_INQUIRED_TYPE_FIXED = 0x00
+private const val ALERT_INQUIRED_TYPE_LEFT_RIGHT = 0x02
+private const val ALERT_INQUIRED_TYPE_FOREGROUND = 0x04
+private const val ALERT_INQUIRED_TYPE_FLEXIBLE = 0x06
+
+private fun fixedLeAudioAlertTargetsLeAudio(messageType: Int): Boolean =
+    messageType in setOf(
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_LE_AUDIO_AND_CLASSIC_FROM_LE_AUDIO,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_ENTER_PAIRING_WITH_LE_AUDIO_LIMITATIONS,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_LIMITATIONS,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_WAKE_WORD,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_QUICK_ACCESS,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_AND_QUICK_ACCESS,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_PDM,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_AND_PDM,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_QUICK_ACCESS_AND_PDM,
+        SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_CHANGE_CLASSIC_AUDIO_WITH_VA_QUICK_ACCESS_AND_PDM,
+    )
+
+private fun flexibleLeAudioAlertTargetsLeAudio(messageType: Int): Boolean =
+    messageType in setOf(
+        SonyTandemV2Table1Protocol.FLEXIBLE_ENTER_PAIRING_WITH_LE_AUDIO_LIMITATION,
+        SonyTandemV2Table1Protocol.FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION,
+        SonyTandemV2Table1Protocol.FLEXIBLE_CHANGE_STANDBY_TO_LE_AUDIO_CLASSIC,
+        SonyTandemV2Table1Protocol.FLEXIBLE_ENTER_PAIRING_WITH_CONNECTION_MODE,
+        SonyTandemV2Table1Protocol.LE_AUDIO_FLEXIBLE_MESSAGE_TYPE_TO_LE,
+    )
 private const val EQ_BAND_STEP_CENTER = 10
 private const val EQ_CLEAR_BASS_RAW_INDEX = 0
 private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
@@ -98,6 +129,7 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
+private const val SUPPORT_FUNCTION_TIMEOUT_MS = 2_500L
 private val MULTIPOINT_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
 
 private fun List<CapabilityValueCache>.replaceCapabilityValue(value: CapabilityValueCache): List<CapabilityValueCache> =
@@ -200,12 +232,49 @@ data class EqState(
 )
 
 data class LeaState(
+    /** The persistent Sony LE Audio setting reported by LEA_NTFY_PARAM (0x49). */
     val enabled: String? = null,
+    /** The currently active connection/stream mode reported by LEA_RET_STATUS (0x43). */
+    val connectionEnabled: String? = null,
     val streamingStatusL: String? = null,
     val streamingStatusR: String? = null,
     val pairedHistory: String? = null,
+    /** LE endpoint addresses returned by the Sony LEA capability query. */
+    val leAudioAddresses: List<String> = emptyList(),
     val raw: List<Int> = emptyList(),
 )
+
+/** Device Alert confirmation or the post-switch pairing guide. */
+data class LeAudioPendingAlert(
+    val targetEnabled: Boolean,
+    /** null means the app-local confirmation shown before Sony 0x48. */
+    val inquiredType: Int? = null,
+    val messageType: Int? = null,
+    val itemCodes: List<Int> = emptyList(),
+    val actionType: Int? = null,
+    /** Exact device notification frame; retained for protocol-complete replies. */
+    val raw: ByteArray = byteArrayOf(),
+)
+
+internal fun LeaState.withConnectionStatus(response: ParsedTandemResponse.LeaStatus): LeaState =
+    copy(
+        // A 0x43 status is useful as an initial fallback, but must never
+        // overwrite the authoritative 0x49 setting once it has been observed.
+        enabled = enabled ?: response.enabled?.name,
+        connectionEnabled = response.enabled?.name ?: connectionEnabled,
+        streamingStatusL = response.streamingStatusL?.name ?: streamingStatusL,
+        streamingStatusR = response.streamingStatusR?.name ?: streamingStatusR,
+        raw = response.values,
+    )
+
+internal fun LeaState.withSettingNotification(
+    response: ParsedTandemResponse.LeaParameterNotification,
+): LeaState =
+    if (response.setting == 0x0C && response.enabled != null) {
+        copy(enabled = response.enabled.name, raw = response.values)
+    } else {
+        this
+    }
 
 data class QuickAccessState(
     val lrKeyFunction: String? = null,
@@ -386,6 +455,8 @@ data class SonyHeadphoneUiState(
     val eqState: EqState = EqState(),
     val eqUiCapability: EqUiCapability? = null,
     val leaState: LeaState = LeaState(),
+    val leAudioPendingAlert: LeAudioPendingAlert? = null,
+    val leAudioSwitchPending: Boolean = false,
     val quickAccessState: QuickAccessState = QuickAccessState(),
     val gestureOperationsState: GestureOperationsState = GestureOperationsState(),
     val multipointState: MultipointState = MultipointState(),
@@ -426,6 +497,70 @@ class SonyHeadphoneRepository private constructor(
     private val mediaController = MediaPlaybackController(appContext)
     private val modelImageCatalog = SonyModelImageCatalog(remoteModelInfoReader)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val leAudioProfileGateway = LeAudioProfileGateway(appContext)
+    private val _state = MutableStateFlow(SonyHeadphoneUiState())
+    private val leAudioCoordinator = LeAudioSwitchCoordinator(
+        object : LeAudioSwitchCoordinator.Callbacks {
+            override fun requestPairedHistory(): Boolean {
+                val commands = HeadphoneAdapterRegistry
+                    .buildRefreshLeaPairedHistoryCommands(ensureConnectedProfile())
+                if (commands.isEmpty()) return false
+                commands.forEach(::sendCommand)
+                return true
+            }
+
+            override fun requestLeAudioProfileReady(
+                onReady: (dev.sonypods.leaudio.LeAudioProfileGateway.Platform) -> Unit,
+            ): Boolean =
+                leAudioProfileGateway.request(onReady)
+
+            override fun sendHeadsetCommand(
+                enabled: Boolean,
+                changeConnectionMethod: Boolean,
+            ): Boolean = sendLeAudioHeadsetCommand(enabled, changeConnectionMethod)
+
+            override fun onPairingGuideRequired(enabled: Boolean, pairedHistory: String?) {
+                appendLog("LE Audio pairing guide required enabled=$enabled pairedHistory=${pairedHistory.orEmpty()}")
+                _state.update {
+                    it.copy(
+                        leAudioSwitchPending = false,
+                        leAudioPendingAlert = LeAudioPendingAlert(targetEnabled = enabled),
+                    )
+                }
+            }
+
+            override fun onFinished(success: Boolean, message: String) {
+                appendLog("LE Audio switch ${if (success) "finished" else "failed"}: $message")
+                _state.update { current ->
+                    current.copy(
+                        // A device Alert is a separate 0x98 transaction. Do not
+                        // erase it when the 0x49 setting observer completes.
+                        leAudioPendingAlert = current.leAudioPendingAlert
+                            ?.takeIf { it.inquiredType != null },
+                        leAudioSwitchPending = false,
+                    )
+                }
+                mainHandler.postDelayed({
+                    if (_state.value.deviceInfo.protocolReady &&
+                        client.availableChannels().isNotEmpty()
+                    ) {
+                        refreshBasics()
+                    }
+                }, LE_AUDIO_REFRESH_AFTER_SWITCH_MS)
+            }
+
+            override fun onLog(message: String) {
+                appendLog(message)
+            }
+
+            override fun shouldSkipPairingGuide(): Boolean {
+                val skip = skipLeAudioPairingGuide
+                skipLeAudioPairingGuide = false
+                return skip
+            }
+
+        },
+    )
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
@@ -435,7 +570,6 @@ class SonyHeadphoneRepository private constructor(
             refreshPlaybackState()
         }
     }
-    private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
     private var pendingQuickAccessFunctionCodes: List<Int>? = null
     /** Connection-scoped request; unlike the UI state, this survives the brief
@@ -476,6 +610,16 @@ class SonyHeadphoneRepository private constructor(
     private var awaitingCapabilityInfo = false
     private var pendingCapabilityCounter: Int? = null
     private var pendingCapabilityIdentifier = ""
+    /** Set only by the official device-originated flexible Alert type 13. */
+    private var skipLeAudioPairingGuide = false
+    private val pendingSupportFunctionTables = mutableSetOf<dev.sonypods.protocol.SonyTable>()
+    private val supportFunctionsByTable = mutableMapOf<dev.sonypods.protocol.SonyTable, List<SonySupportedFunction>>()
+    private val supportFunctionTimeoutRunnable = Runnable {
+        if (pendingSupportFunctionTables.isNotEmpty()) {
+            appendLog("Support-function probe timed out; using received tables=${supportFunctionsByTable.keys}")
+            finishSupportFunctionProbe()
+        }
+    }
     private val capabilityInfoTimeoutRunnable = Runnable {
         if (awaitingCapabilityInfo) {
             awaitingCapabilityInfo = false
@@ -548,6 +692,9 @@ class SonyHeadphoneRepository private constructor(
 
     /** Releases all Bluetooth and Handler resources owned by this generation. */
     fun close() {
+        leAudioCoordinator.cancel()
+        leAudioProfileGateway.close()
+        clearSupportFunctionProbeState()
         mainHandler.removeCallbacksAndMessages(null)
         client.close()
         pendingMultipointToggle = null
@@ -699,16 +846,27 @@ class SonyHeadphoneRepository private constructor(
 
     /** The RET_SUPPORT_FUNCTION-driven probe (used on counter mismatch / no reply). */
     private fun runProbeFromSupportFunction(profile: ConnectedHeadphoneProfile) {
-        val supportCommand = runCatching { SonyCapabilityProbe.buildGetSupportFunctionCommand(profile) }
-            .getOrNull()
-        if (supportCommand == null) {
+        clearSupportFunctionProbeState()
+        val supportCommands = runCatching {
+            SonyCapabilityProbe.buildGetSupportFunctionCommands(profile, client.availableChannels())
+        }.getOrElse { emptyList() }
+        if (supportCommands.isEmpty()) {
             appendLog("No support-function probe for ${profile.protocolName}; falling back to direct refresh")
+            clearSupportFunctionProbeState()
             markProbeComplete()
             refreshBasics()
             return
         }
+        supportCommands.forEach { command ->
+            pendingSupportFunctionTables += if (command.channel == TandemChannel.GATT_V2_MC) {
+                dev.sonypods.protocol.SonyTable.NO_2
+            } else {
+                dev.sonypods.protocol.SonyTable.NO_1
+            }
+        }
+        mainHandler.postDelayed(supportFunctionTimeoutRunnable, SUPPORT_FUNCTION_TIMEOUT_MS)
         appendLog("Probing support function (SC C29903d/C30916e capability sequence)")
-        sendCommand(supportCommand)
+        supportCommands.forEach(::sendCommand)
     }
 
     /** CONNECT_RET_CAPABILITY_INFO (0x03): the capability counter gate. */
@@ -726,6 +884,7 @@ class SonyHeadphoneRepository private constructor(
                 "Capability counter ${response.capabilityCounter} matches cache " +
                     "(identifier=${response.identifier}) → omit capability probe; restoring profile"
             )
+            clearSupportFunctionProbeState()
             markProbeComplete()
             refreshBasics()
             return
@@ -918,7 +1077,9 @@ class SonyHeadphoneRepository private constructor(
             identifier = pendingCapabilityIdentifier,
             variant = profile.protocolName,
             transport = profile.transport.name,
-            functions = functions.map { FunctionCode(it.code.toInt() and 0xFF, it.order) },
+            functions = functions.map {
+                FunctionCode(it.code.toInt() and 0xFF, it.order, it.table.name)
+            },
             // The PLAY capability RET may not have arrived yet at probe-save time;
             // keep whatever was learned before, applyPlaybackCapability updates it.
             playVolumeStep = _state.value.playbackState.musicVolumeStep.takeIf { it > 0 }
@@ -1316,6 +1477,105 @@ class SonyHeadphoneRepository private constructor(
         appendLog("Sending Sony USER_POWER_OFF; headset is expected to disconnect")
         commands.forEach(::sendCommand)
     }
+
+    /** Run Sony's complete phone/headset hand-over instead of only toggling the
+     * headset bit. State is updated solely from real Tandem replies. */
+    fun setLeAudioEnabled(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.LEA_STATUS)) {
+            appendLog("LE Audio write unavailable")
+            return
+        }
+        _state.update { it.copy(leAudioSwitchPending = true) }
+        val current = _state.value
+        if (enabled) {
+            leAudioCoordinator.start(current.leaState.pairedHistory)
+        } else {
+            leAudioCoordinator.disable()
+        }
+    }
+
+    /** Completes the official-style LE Audio confirmation transaction. */
+    fun replyLeAudioAlert(positive: Boolean) {
+        val pending = _state.value.leAudioPendingAlert ?: return
+        if (pending.inquiredType == null) {
+            // This is the Qualcomm-only pairing guide shown after the setting
+            // observer completes. It is not an ALERT_NTFY_PARAM transaction,
+            // so never manufacture a 0x98 reply for it.
+            appendLog("LE Audio pairing guide ${if (positive) "confirmed" else "cancelled"}")
+            if (!positive) leAudioCoordinator.cancel()
+            _state.update { it.copy(leAudioPendingAlert = null, leAudioSwitchPending = leAudioCoordinator.isRunning()) }
+            if (positive) {
+                mainHandler.post {
+                    if (_state.value.deviceInfo.protocolReady && client.availableChannels().isNotEmpty()) {
+                        refreshBasics()
+                    }
+                }
+            }
+            return
+        }
+        if (pending.messageType != null) {
+            val profile = runCatching { ensureConnectedProfile() }.getOrNull()
+            if (profile != null) {
+                val alert: ParsedTandemResponse? = when (pending.inquiredType) {
+                    ALERT_INQUIRED_TYPE_FIXED -> ParsedTandemResponse.AlertFixedMessage(
+                        pending.messageType, pending.actionType ?: 0, pending.raw,
+                    )
+                    ALERT_INQUIRED_TYPE_LEFT_RIGHT -> ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection(
+                        pending.messageType, pending.actionType ?: 0, pending.raw,
+                    )
+                    ALERT_INQUIRED_TYPE_FOREGROUND -> ParsedTandemResponse.AlertForegroundMessage(
+                        pending.messageType, pending.actionType ?: 0, pending.raw,
+                    )
+                    ALERT_INQUIRED_TYPE_FLEXIBLE -> ParsedTandemResponse.AlertFlexibleMessage(
+                        pending.messageType, pending.itemCodes, pending.actionType ?: 0, pending.raw,
+                    )
+                    else -> null
+                }
+                alert?.let {
+                    HeadphoneAdapterRegistry.buildReplyAlertCommand(profile, it, positive).forEach(::sendCommand)
+                }
+            }
+        }
+        if (!positive) {
+            leAudioCoordinator.cancel()
+        }
+        _state.update {
+            it.copy(
+                leAudioPendingAlert = null,
+                leAudioSwitchPending = leAudioCoordinator.isRunning(),
+            )
+        }
+    }
+
+    private fun sendLeAudioHeadsetCommand(
+        enabled: Boolean,
+        changeConnectionMethod: Boolean,
+    ): Boolean {
+        val commands = HeadphoneAdapterRegistry.buildSetLeAudioEnabledCommands(
+            profile = ensureConnectedProfile(),
+            enabled = enabled,
+            changeConnectionMethod = changeConnectionMethod,
+        )
+        if (commands.isEmpty()) return false
+        appendLog(
+            "Sending Sony LE Audio ${if (enabled) "enable" else "disable"} " +
+                "changeConnectionMethod=$changeConnectionMethod; " +
+                "waiting for headset confirmation"
+        )
+        commands.forEach(::sendCommand)
+        return true
+    }
+
+    /**
+     * Sound Connect queues the hand-over behind BtProfileGateway until the
+     * Android LE Audio profile service is bound. Keep the same ordering here;
+     * the Sony 0x48 write must not race profile binding/reconnect.
+     *
+     * Some vendor Bluetooth stacks do not expose LE_AUDIO through
+     * getProfileProxy even though the device supports the Sony protocol. In
+     * that case the Tandem path remains authoritative and is allowed to run.
+     */
+    @SuppressLint("MissingPermission")
 
     fun setEqPreset(preset: EqPresetId) {
         if (!_state.value.deviceInfo.protocolReady) {
@@ -1862,6 +2122,7 @@ class SonyHeadphoneRepository private constructor(
             pendingCapabilityCounter = null
             pendingCapabilityIdentifier = ""
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
+            clearSupportFunctionProbeState()
         }
         val pendingForConnection = if (connected && device != null) {
             pendingMultipointToggle?.takeIf { it.address.equals(device.address, ignoreCase = true) }
@@ -2026,6 +2287,16 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.PlaybackVolume -> applyPlaybackVolume(parsed)
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
+            is ParsedTandemResponse.LeaCapability -> applyLeaCapability(parsed)
+            is ParsedTandemResponse.LeaConnectionMode -> appendLog(
+                "LEA Table2 connection mode type=0x%02X mode=%s result=%s".format(
+                    parsed.inquiredTypeCode,
+                    parsed.mode,
+                    parsed.result,
+                )
+            )
+            is ParsedTandemResponse.LeaSettingAvailability -> applyLeaSettingAvailability(parsed)
+            is ParsedTandemResponse.LeaParameterNotification -> applyLeaParameterNotification(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
             is ParsedTandemResponse.QuickAccessCapability -> applyQuickAccessCapability(parsed)
             is ParsedTandemResponse.QuickAccessStatus -> applyQuickAccessStatus(parsed)
@@ -2045,6 +2316,10 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.GeneralSettingStatus -> applyGeneralSettingStatus(parsed)
             is ParsedTandemResponse.GeneralSettingParam -> applyGeneralSettingParam(parsed)
             is ParsedTandemResponse.AlertFixedMessage -> applyAlertFixedMessage(parsed)
+            is ParsedTandemResponse.AlertForegroundMessage -> applyAlertForegroundMessage(parsed)
+            is ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection -> applyAlertLeftRightMessage(parsed)
+            is ParsedTandemResponse.AlertFlexibleMessage -> applyAlertFlexibleMessage(parsed)
+            is ParsedTandemResponse.AlertLeAudioNotification -> applyAlertLeAudioNotification(parsed)
             is ParsedTandemResponse.Unknown -> applyKnownOrUnknown(parsed)
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.Table2Generic -> applyTable2Diagnostic(channel, parsed)
@@ -2459,25 +2734,85 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyLeaStatus(response: ParsedTandemResponse.LeaStatus) {
+        if (!isExpectedLeaResponse(response.table, response.inquiredTypeCode)) {
+            appendLog(
+                "Ignoring LEA status from unexpected table/type " +
+                    "table=${response.table} type=${response.inquiredTypeCode?.let { "0x%02X".format(it) }}"
+            )
+            return
+        }
         appendLog("LEA status ${response.type} enabled=${response.enabled} streamingL=${response.streamingStatusL} streamingR=${response.streamingStatusR}")
-        _state.update { current ->
-            current.copy(leaState = current.leaState.copy(
-                enabled = response.enabled?.name ?: current.leaState.enabled,
-                streamingStatusL = response.streamingStatusL?.name ?: current.leaState.streamingStatusL,
-                streamingStatusR = response.streamingStatusR?.name ?: current.leaState.streamingStatusR,
-                raw = response.values,
-            ))
+        val next = _state.value.leaState.withConnectionStatus(response)
+        _state.update { it.copy(leaState = next) }
+        leAudioCoordinator.onHeadsetStreaming(next.streamingStatusL, next.streamingStatusR)
+    }
+
+    private fun applyLeaCapability(response: ParsedTandemResponse.LeaCapability) {
+        appendLog(
+            "LEA Table2 capability type=0x%02X compatibility=%s modes=%s addresses=%s".format(
+                response.inquiredTypeCode,
+                response.compatibility,
+                response.connectionModes,
+                response.addresses,
+            )
+        )
+        if (response.addresses.isEmpty()) return
+        _state.update { state ->
+            state.copy(leaState = state.leaState.copy(leAudioAddresses = response.addresses))
         }
     }
 
     private fun applyLeaPairedHistory(response: ParsedTandemResponse.LeaPairedHistoryStatus) {
-        appendLog("LEA paired history ${response.type} pairedHistory=${response.pairedHistory}")
-        _state.update { current ->
-            current.copy(leaState = current.leaState.copy(
-                pairedHistory = response.pairedHistory?.name ?: current.leaState.pairedHistory,
-                raw = response.values,
-            ))
+        if (!isExpectedLeaResponse(response.table, response.inquiredTypeCode)) {
+            appendLog(
+                "Ignoring LEA paired history from unexpected table/type " +
+                    "table=${response.table} type=${response.inquiredTypeCode?.let { "0x%02X".format(it) }}"
+            )
+            return
         }
+        appendLog("LEA paired history ${response.type} pairedHistory=${response.pairedHistory}")
+        val next = _state.value.leaState.let { current ->
+            current.copy(
+                pairedHistory = response.pairedHistory?.name ?: current.pairedHistory,
+                raw = response.values,
+            )
+        }
+        _state.update { it.copy(leaState = next) }
+        leAudioCoordinator.onPairedHistory(next.pairedHistory)
+    }
+
+    private fun isExpectedLeaResponse(
+        table: dev.sonypods.protocol.SonyTable,
+        inquiredTypeCode: Int?,
+    ): Boolean {
+        val lea = _state.value.connectedProfile?.capabilities?.lea ?: return false
+        val expectedTable = when (lea.historyVariant) {
+            HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1 -> dev.sonypods.protocol.SonyTable.NO_1
+            HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2 -> dev.sonypods.protocol.SonyTable.NO_2
+            else -> return false
+        }
+        return table == expectedTable && inquiredTypeCode == lea.historyInquiredTypeCode
+    }
+
+    private fun applyLeaParameterNotification(
+        response: ParsedTandemResponse.LeaParameterNotification,
+    ) {
+        appendLog(
+            "LEA parameter notification setting=${response.setting} " +
+                "value=${response.enabled} values=${response.values}"
+        )
+        if (response.setting != LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING || response.enabled == null) return
+        val next = _state.value.leaState.withSettingNotification(response)
+        _state.update { it.copy(leaState = next) }
+        leAudioCoordinator.onHeadsetSetting(next.enabled)
+    }
+
+    private fun applyLeaSettingAvailability(
+        response: ParsedTandemResponse.LeaSettingAvailability,
+    ) {
+        appendLog(
+            "LE Audio setting availability=${response.available} notification=${response.isNotification}"
+        )
     }
 
     private fun applyQuickAccess(response: ParsedTandemResponse.QuickAccess) {
@@ -2944,10 +3279,93 @@ class SonyHeadphoneRepository private constructor(
                     it.copy(multipointState = it.multipointState.copy(pendingAlertMessageType = response.messageType))
                 }
             }
+            in SonyTandemV2Table1Protocol.LE_AUDIO_ALERT_MESSAGE_TYPES -> {
+                _state.update {
+                    it.copy(
+                        leAudioSwitchPending = true,
+                        leAudioPendingAlert = LeAudioPendingAlert(
+                            targetEnabled = fixedLeAudioAlertTargetsLeAudio(response.messageType),
+                            inquiredType = ALERT_INQUIRED_TYPE_FIXED,
+                            messageType = response.messageType,
+                            actionType = response.actionType,
+                            raw = response.raw,
+                        ),
+                    )
+                }
+            }
             else -> {
                 appendLog("Ignoring non-multipoint V2 fixed alert msgType=${response.messageType}")
             }
         }
+    }
+
+    private fun applyAlertForegroundMessage(response: ParsedTandemResponse.AlertForegroundMessage) {
+        appendLog("V2 foreground alert NTFY msgType=${response.messageType} action=${response.actionType}")
+        if (response.messageType in SonyTandemV2Table1Protocol.LE_AUDIO_ALERT_MESSAGE_TYPES) {
+            _state.update {
+                it.copy(
+                    leAudioSwitchPending = true,
+                        leAudioPendingAlert = LeAudioPendingAlert(
+                            targetEnabled = fixedLeAudioAlertTargetsLeAudio(response.messageType),
+                            inquiredType = ALERT_INQUIRED_TYPE_FOREGROUND,
+                            messageType = response.messageType,
+                            actionType = response.actionType,
+                            raw = response.raw,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun applyAlertLeftRightMessage(response: ParsedTandemResponse.AlertFixedMessageWithLeftRightSelection) {
+        appendLog("V2 left/right alert NTFY msgType=${response.messageType} selected=${response.defaultSelectedSide}")
+        if (response.messageType in SonyTandemV2Table1Protocol.LE_AUDIO_ALERT_MESSAGE_TYPES) {
+            _state.update {
+                it.copy(
+                    leAudioSwitchPending = true,
+                    leAudioPendingAlert = LeAudioPendingAlert(
+                        targetEnabled = fixedLeAudioAlertTargetsLeAudio(response.messageType),
+                        inquiredType = ALERT_INQUIRED_TYPE_LEFT_RIGHT,
+                        messageType = response.messageType,
+                        actionType = response.defaultSelectedSide,
+                        raw = response.raw,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun applyAlertFlexibleMessage(response: ParsedTandemResponse.AlertFlexibleMessage) {
+        appendLog(
+            "V2 flexible alert NTFY msgType=${response.messageType} items=${response.itemCodes} " +
+                "action=${response.actionType}",
+        )
+        if (response.messageType == SonyTandemV2Table1Protocol.FLEXIBLE_CHANGE_CONNECTION_WITH_LE_AUDIO_LIMITATION) {
+            // C12259c0.c sets needToSkipPairingGuideDialog for flexible type 13.
+            skipLeAudioPairingGuide = true
+        }
+        if (response.messageType in SonyTandemV2Table1Protocol.LE_AUDIO_FLEXIBLE_MESSAGE_TYPES) {
+            _state.update {
+                it.copy(
+                    leAudioSwitchPending = true,
+                    leAudioPendingAlert = LeAudioPendingAlert(
+                        targetEnabled = flexibleLeAudioAlertTargetsLeAudio(response.messageType),
+                        inquiredType = ALERT_INQUIRED_TYPE_FLEXIBLE,
+                        messageType = response.messageType,
+                        itemCodes = response.itemCodes,
+                        actionType = response.actionType,
+                        raw = response.raw,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun applyAlertLeAudioNotification(response: ParsedTandemResponse.AlertLeAudioNotification) {
+        appendLog(
+            "LE Audio alert status confirmation=${response.confirmationType} " +
+                "notification=${response.isNotification}",
+        )
     }
 
     private fun applyTable2Diagnostic(channel: TandemChannel, response: ParsedTandemResponse) {
@@ -2988,19 +3406,44 @@ class SonyHeadphoneRepository private constructor(
         // (InitializationFailedCause); mirror that by skipping capability probing.
         if (_state.value.deviceInfo.protocolVersionAccepted == false) {
             appendLog("Protocol version rejected; capability probing aborted (SC C29903d/C30916e)")
+            clearSupportFunctionProbeState()
             markProbeComplete()
+            return
+        }
+        val table = response.table.takeIf { it != dev.sonypods.protocol.SonyTable.INVALID }
+            ?: dev.sonypods.protocol.SonyTable.NO_1
+        supportFunctionsByTable[table] = response.functions
+        pendingSupportFunctionTables.remove(table)
+        if (pendingSupportFunctionTables.isNotEmpty()) {
+            appendLog("Support-function table $table received; waiting for $pendingSupportFunctionTables")
+            return
+        }
+        finishSupportFunctionProbe()
+    }
+
+    private fun finishSupportFunctionProbe() {
+        val functions = supportFunctionsByTable
+            .toSortedMap(compareBy { it.ordinal })
+            .values
+            .flatten()
+            .distinctBy { it.table to it.code }
+        clearSupportFunctionProbeState()
+        if (functions.isEmpty()) {
+            appendLog("No support functions received; falling back to direct refresh")
+            markProbeComplete()
+            refreshBasics()
             return
         }
         val alreadyProbed = _state.value.connectedProfile?.protocolEvidence
             ?.any { it.startsWith("probe:ret-support-function") } == true
         val probeCommands = runCatching {
             _state.value.connectedProfile?.let { profile ->
-                SonyCapabilityProbe.buildCapabilityProbeCommands(profile, response.functions)
+                SonyCapabilityProbe.buildCapabilityProbeCommands(profile, functions)
             } ?: emptyList()
         }.getOrElse { emptyList() }
         _state.update { current ->
             val profile = current.connectedProfile?.let { profile ->
-                SonyCapabilityProbe.applyToProfile(profile, response.functions, profile.transport)
+                SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
             } ?: current.connectedProfile
             current.copy(
                 connectedProfile = profile,
@@ -3011,12 +3454,18 @@ class SonyHeadphoneRepository private constructor(
         // Create the cache entry before dispatching the per-domain probes so a
         // very fast device response cannot arrive before there is an entry to
         // merge its detailed capability into.
-        saveCapabilityCache(response.functions)
+        saveCapabilityCache(functions)
         if (!alreadyProbed) {
             probeCommands.forEach(::sendCommand)
         }
         refreshBasics()
         markProbeComplete()
+    }
+
+    private fun clearSupportFunctionProbeState() {
+        mainHandler.removeCallbacks(supportFunctionTimeoutRunnable)
+        pendingSupportFunctionTables.clear()
+        supportFunctionsByTable.clear()
     }
 
     private fun applyCapabilityInfo(response: ParsedTandemResponse.CapabilityInfo) {
@@ -3194,6 +3643,8 @@ class SonyHeadphoneRepository private constructor(
         const val LOG_TAG = "OpenBuds"
         const val PLAY_NTFY_PARAM = 0xA9
         const val LEA_NTFY_STATUS = 0x45
+        private const val LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING = 0x0C
+        private const val LE_AUDIO_REFRESH_AFTER_SWITCH_MS = 1_000L
 
         fun mergeDevice(old: DiscoveredSonyDevice, new: DiscoveredSonyDevice): DiscoveredSonyDevice =
             old.copy(

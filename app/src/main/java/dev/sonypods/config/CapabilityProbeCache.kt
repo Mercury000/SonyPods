@@ -58,7 +58,12 @@ data class CapabilityCacheEntry(
 )
 
 @Serializable
-data class FunctionCode(val code: Int, val order: Int)
+data class FunctionCode(
+    val code: Int,
+    val order: Int,
+    /** Empty keeps old cache entries readable. */
+    val table: String = "",
+)
 
 @Serializable
 data class CapabilityValueCache(

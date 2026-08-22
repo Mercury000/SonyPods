@@ -986,8 +986,12 @@ object SonyEngineHost {
                 repo.setSourceSwitchEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_MULTIPOINT_ENABLED ->
                 repo.setMultipointEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_LE_AUDIO_ENABLED ->
+                repo.setLeAudioEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_REPLY_MULTIPOINT_ALERT ->
                 repo.replyMultipointAlert(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_REPLY_LE_AUDIO_ALERT ->
+                repo.replyLeAudioAlert(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_FIXED_SOURCE ->
                 intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::setFixedSource)
             SonyBridge.CMD_SET_MUSIC_HAND_OVER ->
