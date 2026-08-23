@@ -231,6 +231,8 @@ fun MainUI(
             onMultipointEnabledChange = { enabled -> SonyBridge.setMultipointEnabled(context, enabled) },
              onLeAudioEnabledChange = { enabled -> SonyBridge.setLeAudioEnabled(context, enabled) },
              onLeAudioAlertReply = { positive -> SonyBridge.replyLeAudioAlert(context, positive) },
+             onLeAudioDevicePair = { SonyBridge.pairLeAudioDevice(context) },
+             onLeAudioPairingGuide = { SonyBridge.showLeAudioPairingGuide(context) },
              onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
             onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
             onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },
@@ -914,6 +916,11 @@ fun MainUI(
         LeAudioPairingHelpDialog(
             show = sonyState.leAudioPending && sonyState.leAudioPendingInquiredType == null,
             targetEnabled = sonyState.leAudioPendingTargetEnabled,
+            formFactor = sonyState.formFactor,
+            pairStage = sonyState.leAudioDevicePairStage,
+            pairMessage = sonyState.leAudioDevicePairMessage,
+            pairedAddress = sonyState.leAudioDevicePairedAddress,
+            onPair = { sonyActions.onLeAudioDevicePair() },
             onDismiss = { sonyActions.onLeAudioAlertReply(true) },
         )
     }

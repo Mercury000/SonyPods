@@ -83,6 +83,12 @@ object SonyBridge {
     const val CMD_SET_LE_AUDIO_ENABLED = "set_le_audio_enabled"
     const val CMD_REPLY_MULTIPOINT_ALERT = "reply_multipoint_alert"
     const val CMD_REPLY_LE_AUDIO_ALERT = "reply_le_audio_alert"
+    /** Bond the headset's LE-only identity so the phone can actually route LC3. */
+    const val CMD_LE_AUDIO_DEVICE_PAIR = "le_audio_device_pair"
+    /** Raise the LE Audio pairing guide from the device detail page. */
+    const val CMD_LE_AUDIO_PAIRING_GUIDE = "le_audio_pairing_guide"
+    /** Remove a LE identity bond created by [CMD_LE_AUDIO_DEVICE_PAIR]. */
+    const val CMD_LE_AUDIO_DEVICE_UNPAIR = "le_audio_device_unpair"
     const val CMD_SET_FIXED_SOURCE = "set_fixed_source"
     const val CMD_SET_MUSIC_HAND_OVER = "set_music_hand_over"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
@@ -216,6 +222,22 @@ object SonyBridge {
 
     fun replyLeAudioAlert(context: Context, positive: Boolean) =
         sendCommand(context, CMD_REPLY_LE_AUDIO_ALERT) { putExtra(EXTRA_BOOL, positive) }
+
+    /**
+     * Asks the engine to find and bond the headset's LE-only identity. Telling the headset
+     * to switch is only half of the hand-over; without this the phone keeps its
+     * BR/EDR-only bond and stays on A2DP.
+     */
+    fun pairLeAudioDevice(context: Context) = sendCommand(context, CMD_LE_AUDIO_DEVICE_PAIR)
+
+    fun showLeAudioPairingGuide(context: Context) =
+        sendCommand(context, CMD_LE_AUDIO_PAIRING_GUIDE)
+
+    /** [address] defaults to whichever LE identity the engine bonded itself. */
+    fun unpairLeAudioDevice(context: Context, address: String? = null) =
+        sendCommand(context, CMD_LE_AUDIO_DEVICE_UNPAIR) {
+            if (address != null) putExtra(EXTRA_STRING, address)
+        }
 
     fun setFixedSource(context: Context, address: String) =
         sendCommand(context, CMD_SET_FIXED_SOURCE) { putExtra(EXTRA_STRING, address) }

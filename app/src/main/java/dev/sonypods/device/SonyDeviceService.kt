@@ -24,6 +24,12 @@ import java.util.concurrent.ConcurrentHashMap
 object SonyDeviceService {
     private val knownAddresses = ConcurrentHashMap.newKeySet<String>()
 
+    /** LE Audio identity address -> the address that carries Tandem. */
+    private val leAudioAliases = ConcurrentHashMap<String, String>()
+
+    /** Audio Stream Control Service: present on the LE Audio identity, absent on the other. */
+    private val ASCS_SERVICE: UUID = UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+
     private val sonyServiceUuids: Set<UUID> = setOf(
         SonyGatt.BLUETOOTH_IAP_CONNECTION_SERVICE,
         SonyGatt.BLUETOOTH_IAP_CONNECTION_MC_SERVICE,
@@ -89,6 +95,75 @@ object SonyDeviceService {
 
     fun isKnownSonyAddress(address: String?): Boolean =
         normalizeAddress(address)?.let { it in knownAddresses } == true
+
+    /**
+     * Whether this is the headset's LE Audio identity rather than the one carrying Tandem.
+     *
+     * A Sony headset with LE Audio enabled bonds as two separate addresses: the classic one
+     * exposes Sony's private services and is the only way to reach Tandem, while the LE one
+     * exposes nothing but the LE Audio service set and carries the LC3 audio. Both answer to
+     * the same name, so name matching alone cannot tell them apart — the presence of a Sony
+     * private service can.
+     */
+    fun isLeAudioIdentity(device: BluetoothDevice?): Boolean {
+        if (device == null) return false
+        val serviceUuids = runCatching { device.uuids.orEmpty().map { it.uuid } }
+            .getOrDefault(emptyList())
+        return isLeAudioIdentity(serviceUuids)
+    }
+
+    fun isLeAudioIdentity(serviceUuids: Collection<UUID>): Boolean {
+        if (serviceUuids.isEmpty()) return false
+        return ASCS_SERVICE in serviceUuids && serviceUuids.none { it in sonyServiceUuids }
+    }
+
+    /**
+     * The address to talk to for control, given either of the headset's two identities.
+     *
+     * Returns [address] unchanged when no LE Audio counterpart is known, so callers can use
+     * this unconditionally.
+     */
+    fun resolveControlAddress(address: String?): String? {
+        val normalized = normalizeAddress(address) ?: return address
+        return leAudioAliases[normalized] ?: address
+    }
+
+    /** Records that [leAddress] is the LE Audio identity of the headset at [controlAddress]. */
+    fun linkLeAudioIdentity(leAddress: String?, controlAddress: String?) {
+        val le = normalizeAddress(leAddress) ?: return
+        val control = normalizeAddress(controlAddress) ?: return
+        if (le == control) return
+        leAudioAliases[le] = control
+        rememberAddress(control)
+    }
+
+    /**
+     * Pairs up the two identities of every bonded Sony headset.
+     *
+     * Matching is by name, because that is what the headset advertises on both — and when
+     * exactly one control identity is bonded there is nothing to be ambiguous about, so an
+     * LE identity whose name was never resolved is still linked.
+     */
+    fun linkLeAudioIdentities(bonded: Collection<BluetoothDevice>) {
+        val sony = bonded.filter(::isSony)
+        if (sony.isEmpty()) return
+        val (leIdentities, controls) = sony.partition(::isLeAudioIdentity)
+        if (leIdentities.isEmpty() || controls.isEmpty()) return
+        leIdentities.forEach { le ->
+            val leName = runCatching { le.name }.getOrNull()
+            val match = controls.firstOrNull { control ->
+                val controlName = runCatching { control.name }.getOrNull()
+                leName != null && controlName != null &&
+                    controlName.equals(leName.removeLePrefix(), ignoreCase = true)
+            } ?: controls.singleOrNull()
+            match?.let { linkLeAudioIdentity(le.address, it.address) }
+        }
+    }
+
+    private fun String.removeLePrefix(): String =
+        removePrefix("LE_").removePrefix("le_").removePrefix("LE-").removePrefix("le-")
+
+    fun leAudioAliasSnapshot(): Map<String, String> = leAudioAliases.toMap()
 
     fun rememberAddress(address: String?) {
         normalizeAddress(address)?.let(knownAddresses::add)

@@ -2,6 +2,7 @@ package dev.sonypods.device
 
 import dev.sonypods.protocol.SonyGatt
 import java.util.UUID
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,4 +45,71 @@ class SonyDeviceServiceTest {
             ),
         )
     }
+
+    /**
+     * Both service sets were read off a LinkBuds S bonded twice with LE Audio enabled: the
+     * LE identity carries the LC3 audio, the other one carries Tandem.
+     */
+    @Test
+    fun theLeAudioIdentityIsTheOneWithoutASonyService() {
+        val leAudioIdentity = listOf(
+            uuid16(0x180F), // Battery
+            uuid16(0x1844), // Volume Control
+            uuid16(0x1846), // Coordinated Set Identification
+            uuid16(0x184E), // Audio Stream Control
+            uuid16(0x184F), // Broadcast Audio Scan
+        )
+        assertTrue(SonyDeviceService.isLeAudioIdentity(leAudioIdentity))
+
+        val controlIdentity = listOf(
+            UUID.fromString("00001108-0000-1000-8000-00805f9b34fb"),
+            UUID.fromString("0000110b-0000-1000-8000-00805f9b34fb"),
+            UUID.fromString("443cce33-e85d-4b85-8d53-6e319ede53ae"),
+            UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"),
+        )
+        assertFalse(SonyDeviceService.isLeAudioIdentity(controlIdentity))
+    }
+
+    @Test
+    fun anAscsAdvertiserThatAlsoExposesTandemIsNotTreatedAsTheLeIdentity() {
+        // A headset that puts LE Audio and Tandem behind one address needs no aliasing:
+        // retargeting it would move the session off the very device that can serve it.
+        assertFalse(
+            SonyDeviceService.isLeAudioIdentity(
+                listOf(uuid16(0x184E), SonyGatt.TANDEM_V2_HPC_SERVICE),
+            ),
+        )
+    }
+
+    @Test
+    fun anEmptyServiceListIsNotClassifiedEitherWay() {
+        // Services are unknown until discovery completes; guessing would hide a real device.
+        assertFalse(SonyDeviceService.isLeAudioIdentity(emptyList()))
+    }
+
+    @Test
+    fun resolvingAnUnlinkedAddressReturnsItUnchanged() {
+        assertEquals("02:00:00:00:00:20", SonyDeviceService.resolveControlAddress("02:00:00:00:00:20"))
+    }
+
+    @Test
+    fun aLinkedLeIdentityResolvesToItsControlAddress() {
+        SonyDeviceService.linkLeAudioIdentity("02:00:00:00:00:21", "02:00:00:00:00:22")
+
+        assertEquals("02:00:00:00:00:22", SonyDeviceService.resolveControlAddress("02:00:00:00:00:21"))
+        // Lower case in, canonical out: callers compare these against system-supplied values.
+        assertEquals("02:00:00:00:00:22", SonyDeviceService.resolveControlAddress("02:00:00:00:00:21".lowercase()))
+        // The control address itself must not be rewritten.
+        assertEquals("02:00:00:00:00:22", SonyDeviceService.resolveControlAddress("02:00:00:00:00:22"))
+    }
+
+    @Test
+    fun anIdentityIsNeverAliasedToItself() {
+        SonyDeviceService.linkLeAudioIdentity("02:00:00:00:00:23", "02:00:00:00:00:23")
+
+        assertEquals("02:00:00:00:00:23", SonyDeviceService.resolveControlAddress("02:00:00:00:00:23"))
+    }
+
+    private fun uuid16(short: Int): UUID =
+        UUID.fromString(String.format("0000%04X-0000-1000-8000-00805F9B34FB", short))
 }

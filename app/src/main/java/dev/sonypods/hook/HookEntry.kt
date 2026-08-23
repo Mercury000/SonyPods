@@ -178,6 +178,7 @@ class HookEntry : XposedModule() {
         when (scope) {
             "com.android.bluetooth" -> {
                 loadHook(HeadsetStateDispatcher, classLoader, scope, active)
+                loadHook(LeAudioAllowListHook, classLoader, scope, active)
                 loadHook(BluetoothUpstreamHeadsetHook(), classLoader, scope, active)
             }
             "com.android.settings" -> {

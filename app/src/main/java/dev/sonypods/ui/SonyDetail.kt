@@ -35,6 +35,9 @@ data class SonyDetailActions(
     val onMultipointEnabledChange: (Boolean) -> Unit = {},
     val onLeAudioEnabledChange: (Boolean) -> Unit = {},
     val onLeAudioAlertReply: (Boolean) -> Unit = {},
+    /** Bonds the headset's LE-only identity, the phone-side half of the LE Audio switch. */
+    val onLeAudioDevicePair: () -> Unit = {},
+    val onLeAudioPairingGuide: () -> Unit = {},
     val onMultipointAlertReply: (Boolean) -> Unit = {},
     val onFixedSourceChange: (String) -> Unit = {},
     val onMusicHandOverChange: (Boolean) -> Unit = {},

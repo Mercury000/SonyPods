@@ -494,34 +494,38 @@ class SonyBleClient(
             return
         }
         stopScan()
-        val remote = adapter?.getRemoteDevice(device.address)
+        // Tandem lives on the control identity only. An LE Audio address can still reach us
+        // from a stale record or from a system-side callback, and connecting it would open a
+        // transport with no Sony service behind it.
+        val target = resolveControlTarget(device)
+        val remote = adapter?.getRemoteDevice(target.address)
         if (remote == null) {
-            listener.onBluetoothUnavailable("Cannot resolve remote device ${device.address}")
+            listener.onBluetoothUnavailable("Cannot resolve remote device ${target.address}")
             return
         }
-        if (shouldUseSpp(device, remote)) {
-            connectSpp(device, remote)
+        if (shouldUseSpp(target, remote)) {
+            connectSpp(target, remote)
             return
         }
-        connectedDevice = device.copy(
-            name = if (device.name == "Unknown BLE device") {
+        connectedDevice = target.copy(
+            name = if (target.name == "Unknown BLE device") {
                 safeDeviceName(remote) ?: "Sony audio device"
             } else {
-                device.name
+                target.name
             },
             address = remote.address,
             bluetoothType = if (remote.type != BluetoothDevice.DEVICE_TYPE_UNKNOWN) {
                 remote.type
             } else {
-                device.bluetoothType
+                target.bluetoothType
             },
         )
         disconnect()
         connectedDevice = connectedDevice?.copy(address = remote.address)
-        val transport = preferredTransport(remote, device)
+        val transport = preferredTransport(remote, target)
         log(
-            "Connecting to ${device.address} type=${remote.type} transport=${transportLabel(transport)} " +
-                "source=${device.source} sonyAd=${device.sonyAd?.summary.orEmpty()}"
+            "Connecting to ${target.address} type=${remote.type} transport=${transportLabel(transport)} " +
+                "source=${target.source} sonyAd=${target.sonyAd?.summary.orEmpty()}"
         )
         gatt = if (Build.VERSION.SDK_INT >= 37) {
             val settings = BluetoothGattConnectionSettings.Builder()
@@ -1419,6 +1423,21 @@ class SonyBleClient(
         )
         if (!SonyDeviceService.isSony(device)) return
 
+        // A headset on LE Audio bonds twice, and only the non-LE identity exposes Sony's
+        // private services — the LE one carries LC3 audio and nothing controllable. Report it
+        // under its control counterpart instead of as a device of its own, which would
+        // otherwise be offered as a connection target that can never complete a session.
+        if (SonyDeviceService.isLeAudioIdentity(device)) {
+            SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
+            val control = SonyDeviceService.resolveControlAddress(device.address)
+            if (control == null || control.equals(device.address, ignoreCase = true)) {
+                log("Skipping LE Audio identity ${device.address}: no control identity bonded")
+                return
+            }
+            log("Folding LE Audio identity ${device.address} into control identity $control")
+            return
+        }
+
         listener.onDeviceFound(
             DiscoveredSonyDevice(
                 name = name ?: "Sony audio device",
@@ -1431,6 +1450,29 @@ class SonyBleClient(
                     device.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
                     name?.startsWith("LE_", ignoreCase = true) == true,
             )
+        )
+    }
+
+    /**
+     * Maps an LE Audio identity onto the identity that actually carries Tandem.
+     *
+     * Returns [device] unchanged for anything else, including when no control identity is
+     * bonded — failing to connect is more honest than silently targeting another headset.
+     */
+    @SuppressLint("MissingPermission")
+    private fun resolveControlTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
+        val bonded = adapter?.bondedDevices.orEmpty()
+        SonyDeviceService.linkLeAudioIdentities(bonded)
+        val control = SonyDeviceService.resolveControlAddress(device.address)
+        if (control == null || control.equals(device.address, ignoreCase = true)) return device
+        val remote = bonded.firstOrNull { it.address.equals(control, ignoreCase = true) }
+        log("Retargeting LE Audio identity ${device.address} to control identity $control")
+        return device.copy(
+            address = control,
+            name = remote?.let(::safeDeviceName) ?: device.name.removePrefix("LE_"),
+            bluetoothType = remote?.type ?: device.bluetoothType,
+            advertisedServices = remote?.uuids?.map { it.uuid.toString() }.orEmpty(),
+            isLikelyControlEndpoint = true,
         )
     }
 

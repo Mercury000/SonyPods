@@ -272,6 +272,28 @@ private fun LeAudioCard(
                 if (!uiState.leAudioSwitchPending) actions.onLeAudioEnabledChange(target)
             },
         )
+        // The headset switching sides is not enough: its LE Audio is a separate,
+        // non-discoverable LE identity that the system pairing screen never lists, so
+        // offer the phone-side bond for as long as LC3 is not actually in use.
+        if (enabled && !usingLc3 && !uiState.leAudioSwitchPending) {
+            val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
+                uiState.leAudioDevicePairStage == "PAIRING"
+            // Only raise the guide; it is hosted at the top level. Resetting an in-ear model
+            // means putting the buds in the case, which disconnects them and tears this page
+            // down, so the prompt cannot live here.
+            BasicComponent(
+                title = "配对 LE Audio 身份",
+                summary = when {
+                    pairing -> uiState.leAudioDevicePairMessage.ifEmpty { "正在配对…" }
+                    uiState.leAudioDevicePairStage == "FAILED" ->
+                        uiState.leAudioDevicePairMessage.ifEmpty { "配对失败，点击重试" }
+                    uiState.leAudioDevicePairedAddress != null ->
+                        "已配对 ${uiState.leAudioDevicePairedAddress}，等待系统建立 LC3"
+                    else -> "需要重置耳机进入配对模式，点击查看步骤"
+                },
+                onClick = { if (!pairing) actions.onLeAudioPairingGuide() },
+            )
+        }
     }
 }
 

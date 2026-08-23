@@ -34,6 +34,7 @@ import dev.sonypods.headphones.SonyCapabilityProbe
 import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.leaudio.LeAudioSwitchCoordinator
+import dev.sonypods.leaudio.LeAudioDevicePairer
 import dev.sonypods.leaudio.LeAudioProfileGateway
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheEntry
@@ -256,6 +257,14 @@ data class LeAudioPendingAlert(
     val raw: ByteArray = byteArrayOf(),
 )
 
+/** Progress of bonding the headset's LE-only identity on the phone side. */
+data class LeAudioDevicePairState(
+    val stage: LeAudioDevicePairer.Stage = LeAudioDevicePairer.Stage.IDLE,
+    val message: String = "",
+    /** The LE identity this module bonded, so disabling LE Audio can remove it again. */
+    val bondedAddress: String? = null,
+)
+
 internal fun LeaState.withConnectionStatus(response: ParsedTandemResponse.LeaStatus): LeaState =
     copy(
         // A 0x43 status is useful as an initial fallback, but must never
@@ -457,6 +466,7 @@ data class SonyHeadphoneUiState(
     val leaState: LeaState = LeaState(),
     val leAudioPendingAlert: LeAudioPendingAlert? = null,
     val leAudioSwitchPending: Boolean = false,
+    val leAudioDevicePairState: LeAudioDevicePairState = LeAudioDevicePairState(),
     val quickAccessState: QuickAccessState = QuickAccessState(),
     val gestureOperationsState: GestureOperationsState = GestureOperationsState(),
     val multipointState: MultipointState = MultipointState(),
@@ -559,6 +569,33 @@ class SonyHeadphoneRepository private constructor(
                 return skip
             }
 
+        },
+    )
+    private val leAudioDevicePairer = LeAudioDevicePairer(
+        appContext,
+        object : LeAudioDevicePairer.Listener {
+            override fun onStageChanged(
+                stage: LeAudioDevicePairer.Stage,
+                message: String,
+                bondedAddress: String?,
+            ) {
+                _state.update { current ->
+                    current.copy(
+                        leAudioDevicePairState = LeAudioDevicePairState(
+                            stage = stage,
+                            message = message,
+                            // Keep the address the pairer bonded so a later disable can
+                            // remove it; a failure must not erase an earlier success.
+                            bondedAddress = bondedAddress
+                                ?: current.leAudioDevicePairState.bondedAddress,
+                        ),
+                    )
+                }
+            }
+
+            override fun onLog(message: String) {
+                appendLog(message)
+            }
         },
     )
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
@@ -693,6 +730,7 @@ class SonyHeadphoneRepository private constructor(
     /** Releases all Bluetooth and Handler resources owned by this generation. */
     fun close() {
         leAudioCoordinator.cancel()
+        leAudioDevicePairer.cancel()
         leAudioProfileGateway.close()
         clearSupportFunctionProbeState()
         mainHandler.removeCallbacksAndMessages(null)
@@ -1490,6 +1528,10 @@ class SonyHeadphoneRepository private constructor(
         if (enabled) {
             leAudioCoordinator.start(current.leaState.pairedHistory)
         } else {
+            // Drop our LE bond before the headset leaves LE Audio, so the stack is not
+            // reconnecting an LE identity that is about to stop announcing.
+            leAudioDevicePairer.cancel()
+            unpairLeAudioDevice()
             leAudioCoordinator.disable()
         }
     }
@@ -1567,15 +1609,47 @@ class SonyHeadphoneRepository private constructor(
     }
 
     /**
-     * Sound Connect queues the hand-over behind BtProfileGateway until the
-     * Android LE Audio profile service is bound. Keep the same ordering here;
-     * the Sony 0x48 write must not race profile binding/reconnect.
+     * Raises the same pairing guide the switch-driven hand-over shows.
      *
-     * Some vendor Bluetooth stacks do not expose LE_AUDIO through
-     * getProfileProxy even though the device supports the Sony protocol. In
-     * that case the Tandem path remains authoritative and is allowed to run.
+     * Resetting the headset is part of that guide, and for in-ear models resetting means
+     * putting the buds back in the case — which drops the connection. Anything hosted on the
+     * connected-device page dies with it, so this routes through the pending-alert state that
+     * the top-level dialog already observes.
      */
-    @SuppressLint("MissingPermission")
+    fun showLeAudioPairingGuide() {
+        if (_state.value.leAudioPendingAlert != null) return
+        appendLog("LE Audio pairing guide requested from device detail")
+        _state.update { it.copy(leAudioPendingAlert = LeAudioPendingAlert(targetEnabled = true)) }
+    }
+
+    /**
+     * Bonds the headset's LE-only identity: the phone-side half of the LE Audio hand-over.
+     *
+     * Sony exposes that identity as a separate, non-discoverable LE advertiser. Classic
+     * discovery — all the system pairing screen runs — never surfaces it, so without this
+     * the phone keeps its BR/EDR-only bond and stays on A2DP no matter what the headset
+     * was told to do.
+     */
+    fun startLeAudioDevicePairing() {
+        val current = _state.value
+        leAudioDevicePairer.start(
+            targetName = current.connectedDevice?.name,
+            reportedLeAddresses = current.leaState.leAudioAddresses,
+            excludeAddresses = listOfNotNull(current.connectedDevice?.address),
+        )
+    }
+
+    /** Drops the LE identity bonded by [startLeAudioDevicePairing]. */
+    fun unpairLeAudioDevice(address: String? = null) {
+        val target = address ?: _state.value.leAudioDevicePairState.bondedAddress
+        if (target == null) {
+            appendLog("no module-created LE Audio bond to remove")
+            return
+        }
+        if (leAudioDevicePairer.unpair(target)) {
+            _state.update { it.copy(leAudioDevicePairState = LeAudioDevicePairState()) }
+        }
+    }
 
     fun setEqPreset(preset: EqPresetId) {
         if (!_state.value.deviceInfo.protocolReady) {

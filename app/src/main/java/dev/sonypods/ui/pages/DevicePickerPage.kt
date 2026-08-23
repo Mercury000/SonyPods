@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.core.content.ContextCompat
 import com.mercury.sonypods.R
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.ui.isLikelySonyAudioDevice
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -140,8 +141,17 @@ fun DevicePickerPage(
     val adapter = btManager?.adapter
     val bluetoothEnabled = adapter?.isEnabled == true
     val pairedDevices = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken) {
-        if (!bluetoothEnabled) emptyList() else adapter.bondedDevices.toList().sortedByDescending {
-            isLikelySonyAudioDevice(it.name)
+        if (!bluetoothEnabled) {
+            emptyList()
+        } else {
+            val bonded = adapter.bondedDevices.toList()
+            // A headset on LE Audio is bonded twice: once for LC3 audio and once for the
+            // Tandem control channel. Listing both would offer the user an entry that cannot
+            // be controlled, so the LE identity is folded into its control counterpart.
+            SonyDeviceService.linkLeAudioIdentities(bonded)
+            bonded
+                .filterNot { SonyDeviceService.isLeAudioIdentity(it) }
+                .sortedByDescending { isLikelySonyAudioDevice(it.name) }
         }
     }
 

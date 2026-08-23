@@ -82,6 +82,10 @@ data class SonyStateSnapshot(
     val leAudioPendingInquiredType: Int? = null,
     val leAudioPendingItemCodes: List<Int> = emptyList(),
     val leAudioSwitchPending: Boolean = false,
+    /** [dev.sonypods.leaudio.LeAudioDevicePairer.Stage] name for the phone-side bond. */
+    val leAudioDevicePairStage: String = "IDLE",
+    val leAudioDevicePairMessage: String = "",
+    val leAudioDevicePairedAddress: String? = null,
     val quickAccessLeftRight: String? = null,
     val quickAccessNcAmb: String? = null,
     val quickAccessKeyCode: Int? = null,
@@ -156,6 +160,9 @@ data class SonyStateSnapshot(
         leAudioPendingInquiredType?.let { putInt(KEY_LEA_PENDING_INQUIRED, it) }
         putIntArray(KEY_LEA_PENDING_ITEMS, leAudioPendingItemCodes.toIntArray())
         putBoolean(KEY_LEA_SWITCH_PENDING, leAudioSwitchPending)
+        putString(KEY_LEA_PAIR_STAGE, leAudioDevicePairStage)
+        putString(KEY_LEA_PAIR_MESSAGE, leAudioDevicePairMessage)
+        leAudioDevicePairedAddress?.let { putString(KEY_LEA_PAIRED_ADDRESS, it) }
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
         quickAccessKeyCode?.let { putInt(KEY_QA_KEY, it) }
@@ -237,6 +244,9 @@ data class SonyStateSnapshot(
         private const val KEY_LEA_PENDING_INQUIRED = "lea_pending_inquired"
         private const val KEY_LEA_PENDING_ITEMS = "lea_pending_items"
         private const val KEY_LEA_SWITCH_PENDING = "lea_switch_pending"
+        private const val KEY_LEA_PAIR_STAGE = "lea_pair_stage"
+        private const val KEY_LEA_PAIR_MESSAGE = "lea_pair_message"
+        private const val KEY_LEA_PAIRED_ADDRESS = "lea_paired_address"
         private const val KEY_QA_LR = "qa_lr"
         private const val KEY_QA_NC = "qa_nc"
         private const val KEY_QA_KEY = "qa_key"
@@ -309,6 +319,9 @@ data class SonyStateSnapshot(
             leAudioPendingInquiredType = bundle.optInt(KEY_LEA_PENDING_INQUIRED),
             leAudioPendingItemCodes = bundle.getIntArray(KEY_LEA_PENDING_ITEMS)?.toList().orEmpty(),
             leAudioSwitchPending = bundle.getBoolean(KEY_LEA_SWITCH_PENDING, false),
+            leAudioDevicePairStage = bundle.getString(KEY_LEA_PAIR_STAGE) ?: "IDLE",
+            leAudioDevicePairMessage = bundle.getString(KEY_LEA_PAIR_MESSAGE).orEmpty(),
+            leAudioDevicePairedAddress = bundle.getString(KEY_LEA_PAIRED_ADDRESS),
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
             quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),
@@ -383,6 +396,9 @@ data class SonyStateSnapshot(
                 leAudioPendingInquiredType = state.leAudioPendingAlert?.inquiredType,
                 leAudioPendingItemCodes = state.leAudioPendingAlert?.itemCodes.orEmpty(),
                 leAudioSwitchPending = state.leAudioSwitchPending,
+                leAudioDevicePairStage = state.leAudioDevicePairState.stage.name,
+                leAudioDevicePairMessage = state.leAudioDevicePairState.message,
+                leAudioDevicePairedAddress = state.leAudioDevicePairState.bondedAddress,
                 quickAccessLeftRight = state.quickAccessState.lrKeyFunction,
                 quickAccessNcAmb = state.quickAccessState.ncAmbKeyFunction,
                 quickAccessKeyCode = state.quickAccessState.key?.code?.toInt()?.and(0xFF),
