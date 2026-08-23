@@ -53,6 +53,13 @@ object SonyEngineHost {
     /** Audio Stream Control Service: only an LE Audio identity carries it. */
     private val ASCS_SERVICE_UUID: java.util.UUID =
         java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+    /**
+     * `BluetoothProfile.HID_HOST`, which is `@SystemApi` and so absent from the compile SDK.
+     *
+     * HyperOS's `LeAudioProfile` trades this against LE Audio alongside A2DP and HFP — AOSP's
+     * `Utils.setLeAudioEnabled` handles only the two audio profiles.
+     */
+    private const val PROFILE_HID_HOST = 4
     private const val STARTUP_ANNOUNCE_COUNT = 10
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
@@ -68,6 +75,8 @@ object SonyEngineHost {
     private const val LE_IDENTITY_RESCAN_MS = 5_000L
     /** `LeAudioService.LE_AUDIO_GROUP_ID_INVALID`: what `getActiveGroupId` answers with no route. */
     private const val LE_AUDIO_GROUP_ID_INVALID = -1
+    /** HyperOS's own wait between forbidding LE Audio and restoring the classic profiles. */
+    private const val CLASSIC_RESTORE_DELAY_MS = 500L
 
     private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scope = newGenerationScope()
@@ -966,15 +975,19 @@ object SonyEngineHost {
      * following the stricter of the stack's two tests (`policy > CONNECTION_POLICY_FORBIDDEN`, as
      * settings does; connecting uses `okToConnect`, which accepts UNKNOWN too).
      */
-    private fun rawLeAudioPolicy(device: BluetoothDevice): Int? {
+    private fun rawLeAudioPolicy(device: BluetoothDevice): Int? =
+        rawProfilePolicy(device, BluetoothProfile.LE_AUDIO)
+
+    /** [rawLeAudioPolicy] for any profile: the same stored value each profile's switch is drawn from. */
+    private fun rawProfilePolicy(device: BluetoothDevice, profile: Int): Int? {
         val service = adapterService() ?: return null
         return runCatching {
             service.javaClass
                 .getMethod("getProfileConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
                 .apply { isAccessible = true }
-                .invoke(service, device, BluetoothProfile.LE_AUDIO) as? Int
+                .invoke(service, device, profile) as? Int
         }.getOrElse {
-            Log.w(TAG, "LE Audio policy read failed", it)
+            Log.w(TAG, "profile $profile policy read failed", it)
             null
         }
     }
@@ -1005,23 +1018,160 @@ object SonyEngineHost {
     }
 
     /**
+     * `persist.bluetooth.enable_dual_mode_audio`, the property that decides who owns the classic
+     * audio profiles while LE Audio is permitted.
+     *
+     * Default false. On that default the stack keeps A2DP and HFP out of the way by itself only
+     * *while* LE Audio is allowed; putting them back when it is forbidden is the caller's job —
+     * `Utils.setLeAudioEnabled` in system settings does exactly that, and not doing it is why the
+     * headset went silent after the switch was turned off.
+     */
+    private fun dualModeAudioEnabled(): Boolean = runCatching {
+        val clazz = appContext?.classLoader?.loadClass("android.os.SystemProperties")
+            ?: return false
+        clazz.getMethod("getBoolean", String::class.java, Boolean::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+            .invoke(null, "persist.bluetooth.enable_dual_mode_audio", false) as? Boolean == true
+    }.getOrElse {
+        Log.w(TAG, "dual mode audio property read failed", it)
+        false
+    }
+
+    /**
+     * Every bonded device the switch applies to: [seed] plus the rest of its coordinated set.
+     *
+     * `Utils.setLeAudioEnabled` is handed `findAllCachedBluetoothDevicesByGroupId`, i.e. the main
+     * device and its members — a two-bond earbud pair has to be flipped together or one bud keeps
+     * the profile the other just gave up. `LeAudioService.getGroupDevices` is the stack-side answer
+     * to the same question; an ungrouped device answers nothing and stands alone.
+     */
+    private fun leAudioSwitchGroup(seed: List<BluetoothDevice>): List<BluetoothDevice> {
+        val service = leAudioService() ?: return seed
+        val members = seed.flatMap { device ->
+            val groupId = leAudioIntCall(service, "getGroupId", device)
+            if (groupId == null || groupId == LE_AUDIO_GROUP_ID_INVALID) {
+                emptyList()
+            } else {
+                leAudioGroupDevices(service, groupId)
+            }
+        }
+        return (seed + members).distinctBy { runCatching { it.address }.getOrNull() ?: it }
+    }
+
+    /** `LeAudioService.getGroupDevices(groupId)`: the bonds the stack counts in one set. */
+    private fun leAudioGroupDevices(service: Any, groupId: Int): List<BluetoothDevice> = runCatching {
+        @Suppress("UNCHECKED_CAST")
+        (service.javaClass
+            .getMethod("getGroupDevices", Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+            .invoke(service, groupId) as? List<BluetoothDevice>)
+            .orEmpty()
+    }.getOrElse {
+        Log.w(TAG, "LE Audio getGroupDevices failed", it)
+        emptyList()
+    }
+
+    /**
+     * The profiles the LE Audio switch trades against, in the order HyperOS writes them.
+     *
+     * `LeAudioProfile.disableProfileBeforeUserEnablesLeAudio` /
+     * `enableProfileAfterUserDisablesLeAudio` walk A2DP, HFP and HID_HOST — the input profile is
+     * HyperOS's own addition on top of AOSP, and it is restored on the same path as the audio
+     * ones.
+     */
+    private val CLASSIC_SWITCH_PROFILES =
+        listOf(BluetoothProfile.A2DP, BluetoothProfile.HEADSET, PROFILE_HID_HOST)
+
+    private fun setClassicAudioEnabled(devices: List<BluetoothDevice>, enabled: Boolean) {
+        CLASSIC_SWITCH_PROFILES.forEach { setProfileEnabledWhenChangingLeAudio(devices, it, enabled) }
+    }
+
+    /**
+     * One classic profile across [devices], with HyperOS's guards kept intact.
+     *
+     * Each direction has its own test, and neither is `!= wanted`: a profile is only turned back
+     * on when its stored policy is exactly FORBIDDEN, and only turned off when it is above
+     * FORBIDDEN. A device that never had the profile answers UNKNOWN and so fails both — which is
+     * what keeps this off the LE-only identity without asking for a UUID list, and is why no
+     * needless disconnect/connect is provoked.
+     */
+    private fun setProfileEnabledWhenChangingLeAudio(
+        devices: List<BluetoothDevice>,
+        profile: Int,
+        enabled: Boolean,
+    ) {
+        val service = classicProfileService(profile)
+        if (service == null) {
+            Log.w(TAG, "profile $profile service is not up; enabled=$enabled not written")
+            return
+        }
+        devices.forEach { device ->
+            val current = rawProfilePolicy(device, profile) ?: return@forEach
+            val write = if (enabled) {
+                current == CONNECTION_POLICY_FORBIDDEN
+            } else {
+                current > CONNECTION_POLICY_FORBIDDEN
+            }
+            if (!write) return@forEach
+            val policy = if (enabled) CONNECTION_POLICY_ALLOWED else CONNECTION_POLICY_FORBIDDEN
+            val written = runCatching {
+                service.javaClass
+                    .getMethod("setConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
+                    .apply { isAccessible = true }
+                    .invoke(service, device, policy)
+                true
+            }.getOrElse {
+                Log.w(TAG, "profile $profile write failed enabled=$enabled", it)
+                false
+            }
+            Log.i(
+                TAG,
+                "profile $profile ${runCatching { device.address }.getOrNull()} " +
+                    "$current -> $policy written=$written",
+            )
+        }
+    }
+
+    /** The profile service that owns [profile]'s connection policy, or null while it is down. */
+    private fun classicProfileService(profile: Int): Any? = when (profile) {
+        BluetoothProfile.A2DP -> profileService("getA2dpService", "com.android.bluetooth.a2dp.A2dpService")
+        BluetoothProfile.HEADSET -> profileService("getHeadsetService", "com.android.bluetooth.hfp.HeadsetService")
+        PROFILE_HID_HOST -> profileService("getHidHostService", "com.android.bluetooth.hid.HidHostService")
+        else -> null
+    }
+
+    /**
+     * The running instance of one profile service.
+     *
+     * This stack hands them out from `AdapterService` as an `Optional`; builds that predate that
+     * keep the singleton behind the service class's own static getter of the same name.
+     */
+    private fun profileService(getter: String, className: String): Any? {
+        adapterService()?.let { adapter ->
+            runCatching {
+                val result = adapter.javaClass.getMethod(getter)
+                    .apply { isAccessible = true }
+                    .invoke(adapter)
+                (result as? java.util.Optional<*>)?.orElse(null) ?: result
+            }.getOrNull()?.let { return it }
+        }
+        val loader = appContext?.classLoader ?: return null
+        return runCatching {
+            loader.loadClass(className).getMethod(getter).apply { isAccessible = true }.invoke(null)
+        }.getOrElse {
+            Log.w(TAG, "$getter lookup failed", it)
+            null
+        }
+    }
+
+    /**
      * The running `LeAudioService`, or null while the profile is not up.
      *
      * `AdapterService.getLeAudioService` answers an `Optional`, empty until the profile starts and
      * again once it stops — so a null here is "no LE Audio profile right now", not an error.
      */
-    private fun leAudioService(): Any? {
-        val service = adapterService() ?: return null
-        return runCatching {
-            (service.javaClass.getMethod("getLeAudioService")
-                .apply { isAccessible = true }
-                .invoke(service) as? java.util.Optional<*>)
-                ?.orElse(null)
-        }.getOrElse {
-            Log.w(TAG, "LE Audio service lookup failed", it)
-            null
-        }
-    }
+    private fun leAudioService(): Any? =
+        profileService("getLeAudioService", "com.android.bluetooth.le_audio.LeAudioService")
 
     /** What the stack currently holds for one of the headset's identities. Nulls mean unreadable. */
     private data class LeAudioSystemState(val connected: Boolean?, val active: Boolean?)
@@ -1132,11 +1282,20 @@ object SonyEngineHost {
     }
 
     /**
-     * Handles [SonyBridge.CMD_SET_LE_AUDIO_POLICY]: write the system policy, then republish.
+     * Handles [SonyBridge.CMD_SET_LE_AUDIO_POLICY]: flip the switch the way HyperOS does, then
+     * republish.
      *
-     * Written to every identity the profile applies to. The profile service acts on the device it
-     * is handed and each identity carries its own stored policy, so forbidding one alone would
-     * leave the other free to bring LE Audio back.
+     * The switch is not one write. Unless `persist.bluetooth.enable_dual_mode_audio` is set — it is
+     * not, by default — A2DP, HFP and HID_HOST are its other half: turned off before LE Audio is
+     * permitted, and turned back on after it is forbidden. HyperOS keeps that in its own
+     * `LeAudioProfile.setEnabled` override (AOSP's `Utils.setLeAudioEnabled` does the two audio
+     * profiles only; the input profile is Xiaomi's addition). Writing the LE Audio policy alone
+     * leaves all three at FORBIDDEN, which is a headset that is connected, controllable, and
+     * completely silent.
+     *
+     * The LE Audio policy is written to every identity it applies to, because each identity
+     * carries its own stored policy and forbidding one alone would leave the other free to bring
+     * LE Audio back. The classic write instead covers the whole coordinated set, as HyperOS does.
      *
      * The republish is not redundant. Publishing is gated on the snapshot differing from the
      * previous one, and this permission lives in the stack rather than in the headset, so no
@@ -1152,7 +1311,29 @@ object SonyEngineHost {
             Log.w(TAG, "no LE Audio capable bond for $address; policy write skipped")
             return
         }
-        if (devices.map { applyLeAudioPolicy(it, allowed) }.none { it }) return
+        val dualMode = dualModeAudioEnabled()
+        val group = leAudioSwitchGroup(devices)
+        Log.i(
+            TAG,
+            "LE Audio switch allowed=$allowed dualMode=$dualMode group=" +
+                group.joinToString { runCatching { it.address }.getOrNull().orEmpty() },
+        )
+        if (allowed && !dualMode) setClassicAudioEnabled(group, enabled = false)
+        if (devices.map { applyLeAudioPolicy(it, allowed) }.none { it }) {
+            // Nothing took the permission, so the profiles just given up are the only audio path
+            // this headset has left.
+            if (allowed && !dualMode) setClassicAudioEnabled(group, enabled = true)
+            return
+        }
+        if (!allowed && !dualMode) {
+            // HyperOS waits out CLASSIC_RESTORE_DELAY_MS on a thread of its own before restoring:
+            // LeAudioService is still tearing the LE Audio link down, and a classic policy written
+            // into that window is what the stack undoes on its way out.
+            scope.launch {
+                delay(CLASSIC_RESTORE_DELAY_MS)
+                setClassicAudioEnabled(group, enabled = true)
+            }
+        }
         val updated = withLeAudioPolicy(base)
         if (updated == base) return
         lastSnapshot = updated
