@@ -471,8 +471,15 @@ data class FeatureStatus(
 )
 
 data class PlaybackState(
-    /** RET/NTFY_STATUS enable bit; null = unknown (treated as enabled). */
-    val enabled: Boolean? = null,
+    /**
+     * PLAY RET/NTFY_STATUS byte 1: whether the headset's own playback controller is operable.
+     *
+     * false is its steady state under LE Audio, where media control belongs to the LE Audio
+     * media-control path rather than to Tandem — the headset then answers a Tandem playback SET
+     * with nothing at all. null = not reported yet. This decides which way a tap is dispatched;
+     * it is deliberately not surfaced to the UI, because the controls stay live either way.
+     */
+    val controllerEnabled: Boolean? = null,
     /** null = UNSETTLED/unknown; "" = NOTHING (UI shows an "unknown" placeholder). */
     val track: String? = null,
     val album: String? = null,
@@ -2346,7 +2353,13 @@ class SonyHeadphoneRepository private constructor(
 
     private fun dispatchPlayback(control: PlaybackControl, mediaFallback: () -> Unit) {
         val profile = ensureConnectedProfile()
-        val commands = if (_state.value.deviceInfo.protocolReady) {
+        val tandemOnly = profile.playbackDispatchStrategy == PlaybackDispatchStrategy.TANDEM_ONLY
+        // A controller the headset reports as disabled swallows the SET silently, which is what
+        // left the transport buttons doing nothing under LE Audio. TANDEM_FIRST then means what
+        // its name says: hand the tap to the phone's media session instead. TANDEM_ONLY has
+        // nowhere else to go, so it still writes and lets the headset decide.
+        val controllerUsable = tandemOnly || _state.value.playbackState.controllerEnabled != false
+        val commands = if (_state.value.deviceInfo.protocolReady && controllerUsable) {
             HeadphoneAdapterRegistry.buildPlaybackCommands(profile, control)
         } else {
             emptyList()
@@ -2356,7 +2369,7 @@ class SonyHeadphoneRepository private constructor(
             commands.forEach(::sendCommand)
             return
         }
-        if (profile.playbackDispatchStrategy != PlaybackDispatchStrategy.TANDEM_ONLY) {
+        if (!tandemOnly) {
             appendLog("PLAYBACK ${control.name} via Android media fallback")
             mediaFallback()
         }
@@ -2969,9 +2982,14 @@ class SonyHeadphoneRepository private constructor(
 
     private fun applyPlayback(response: ParsedTandemResponse.PlaybackAck) {
         val sourceLabel = if (response.isUnsolicited) "NTFY" else "RET"
-        appendLog("Playback notification [$sourceLabel] ${response.values} status=${response.status}")
+        appendLog(
+            "Playback notification [$sourceLabel] ${response.values} " +
+                "status=${response.status} controllerEnabled=${response.enabled}"
+        )
         response.enabled?.let { enabled ->
-            _state.update { it.copy(playbackState = it.playbackState.copy(enabled = enabled)) }
+            _state.update {
+                it.copy(playbackState = it.playbackState.copy(controllerEnabled = enabled))
+            }
         }
         if (response.status != PlaybackStatus.UNKNOWN) {
             applyPlaybackStatus(response.status, source = "Tandem", isUnsolicited = response.isUnsolicited)

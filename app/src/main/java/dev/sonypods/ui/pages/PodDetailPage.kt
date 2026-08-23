@@ -596,9 +596,7 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
         uiState.playbackTrack != null ||
         uiState.playbackArtist != null ||
         uiState.playbackAlbum != null
-    val controlsEnabled = uiState.playbackEnabled != false
     val playing = uiState.playbackStatus == PlaybackStatus.PLAYING
-    val contentAlpha = if (controlsEnabled) 1f else 0.38f
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(
@@ -638,31 +636,30 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
                 if (showMetadata) {
                     PlaybackMetadata(
                         uiState = uiState,
-                        contentAlpha = contentAlpha,
                         modifier = Modifier.weight(1f).padding(end = 8.dp),
                     )
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
                 }
-                IconButton(onClick = actions.onPlaybackPrevious, enabled = controlsEnabled) {
+                IconButton(onClick = actions.onPlaybackPrevious) {
                     Icon(
                         imageVector = AppIcons.SkipPrevious,
                         contentDescription = stringResource(R.string.playback_previous),
-                        modifier = Modifier.size(24.dp).alpha(contentAlpha),
+                        modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = actions.onPlaybackPlayPause, enabled = controlsEnabled) {
+                IconButton(onClick = actions.onPlaybackPlayPause) {
                     Icon(
                         imageVector = if (playing) AppIcons.Pause else AppIcons.Play,
                         contentDescription = stringResource(R.string.playback_play_pause),
-                        modifier = Modifier.size(28.dp).alpha(contentAlpha),
+                        modifier = Modifier.size(28.dp),
                     )
                 }
-                IconButton(onClick = actions.onPlaybackNext, enabled = controlsEnabled) {
+                IconButton(onClick = actions.onPlaybackNext) {
                     Icon(
                         imageVector = AppIcons.SkipNext,
                         contentDescription = stringResource(R.string.playback_next),
-                        modifier = Modifier.size(24.dp).alpha(contentAlpha),
+                        modifier = Modifier.size(24.dp),
                     )
                 }
             }
@@ -672,8 +669,6 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
                 PlaybackVolumeRow(
                     volume = uiState.playbackMusicVolume,
                     step = uiState.playbackMusicVolumeStep,
-                    enabled = controlsEnabled,
-                    contentAlpha = contentAlpha,
                     onVolumeChange = actions.onPlaybackVolumeChange,
                 )
             }
@@ -684,7 +679,6 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
 @Composable
 private fun PlaybackMetadata(
     uiState: SonyStateSnapshot,
-    contentAlpha: Float,
     modifier: Modifier = Modifier,
 ) {
     val track = playbackName(uiState.playbackTrack, R.string.playback_unknown_track)
@@ -694,7 +688,7 @@ private fun PlaybackMetadata(
         Spacer(modifier = modifier)
         return
     }
-    Column(modifier = modifier.alpha(contentAlpha)) {
+    Column(modifier = modifier) {
         track?.let {
             Text(
                 text = it,
@@ -737,8 +731,6 @@ private fun playbackName(value: String?, unknownRes: Int): String? = when {
 private fun PlaybackVolumeRow(
     volume: Int?,
     step: Int,
-    enabled: Boolean,
-    contentAlpha: Float,
     onVolumeChange: (Int) -> Unit,
 ) {
     val effective = (volume ?: 0).coerceIn(0, step - 1)
@@ -759,7 +751,7 @@ private fun PlaybackVolumeRow(
             imageVector = MiuixIcons.VolumeUp,
             contentDescription = null,
             tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.size(20.dp).alpha(contentAlpha),
+            modifier = Modifier.size(20.dp),
         )
         Slider(
             value = draggingValue,
@@ -775,7 +767,6 @@ private fun PlaybackVolumeRow(
                 }
             },
             valueRange = 0f..(step - 1).toFloat(),
-            enabled = enabled,
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 12.dp),

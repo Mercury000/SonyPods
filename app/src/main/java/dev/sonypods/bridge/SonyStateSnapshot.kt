@@ -161,7 +161,6 @@ data class SonyStateSnapshot(
     val playbackMusicVolume: Int? = null,
     /** 0 = no volume control on this device. */
     val playbackMusicVolumeStep: Int = 0,
-    val playbackEnabled: Boolean? = null,
     val scanState: String? = null,
 ) {
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
@@ -275,10 +274,6 @@ data class SonyStateSnapshot(
         playbackAlbum?.let { putString(KEY_PLAY_ALBUM, it) }
         playbackMusicVolume?.let { putInt(KEY_PLAY_VOLUME, it) }
         putInt(KEY_PLAY_VOLUME_STEP, playbackMusicVolumeStep)
-        playbackEnabled?.let {
-            putBoolean(KEY_PLAY_ENABLED_KNOWN, true)
-            putBoolean(KEY_PLAY_ENABLED, it)
-        }
         scanState?.let { putString(KEY_SCAN_STATE, it) }
     }
 
@@ -374,8 +369,6 @@ data class SonyStateSnapshot(
         private const val KEY_PLAY_ALBUM = "play_album"
         private const val KEY_PLAY_VOLUME = "play_volume"
         private const val KEY_PLAY_VOLUME_STEP = "play_volume_step"
-        private const val KEY_PLAY_ENABLED_KNOWN = "play_enabled_known"
-        private const val KEY_PLAY_ENABLED = "play_enabled"
         private const val KEY_SCAN_STATE = "scan_state"
 
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
@@ -468,11 +461,6 @@ data class SonyStateSnapshot(
             playbackAlbum = bundle.getString(KEY_PLAY_ALBUM),
             playbackMusicVolume = bundle.optInt(KEY_PLAY_VOLUME),
             playbackMusicVolumeStep = bundle.getInt(KEY_PLAY_VOLUME_STEP, 0),
-            playbackEnabled = if (bundle.getBoolean(KEY_PLAY_ENABLED_KNOWN, false)) {
-                bundle.getBoolean(KEY_PLAY_ENABLED)
-            } else {
-                null
-            },
             scanState = bundle.getString(KEY_SCAN_STATE),
         )
 
@@ -569,7 +557,6 @@ data class SonyStateSnapshot(
                 playbackAlbum = state.playbackState.album,
                 playbackMusicVolume = state.playbackState.musicVolume,
                 playbackMusicVolumeStep = state.playbackState.musicVolumeStep,
-                playbackEnabled = state.playbackState.enabled,
                 scanState = state.scanState,
             )
         }
