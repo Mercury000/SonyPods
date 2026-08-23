@@ -58,6 +58,14 @@ object SonyEngineHost {
     private const val RECONCILE_INTERVAL_MS = 15_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
     private const val CONNECT_IN_FLIGHT_TIMEOUT_MS = 15_000L
+    /**
+     * `BluetoothProfile.CONNECTION_POLICY_*`, which are `@SystemApi` and so absent from the
+     * compile SDK. The values are the ones the stack stores and compares against.
+     */
+    private const val CONNECTION_POLICY_ALLOWED = 100
+    private const val CONNECTION_POLICY_FORBIDDEN = 0
+    /** How often a missing LE Audio identity is looked for in the bond list. */
+    private const val LE_IDENTITY_RESCAN_MS = 5_000L
 
     private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scope = newGenerationScope()
@@ -73,6 +81,15 @@ object SonyEngineHost {
 
     @Volatile
     private var adapterService: Any? = null
+
+    /** Throttle for the bond enumeration behind [leAudioIdentityAddress]. */
+    private var lastLeIdentityRescanMs = 0L
+
+    /** Last logged LE Audio policy reading, so the per-emission read logs only on change. */
+    private var lastLeAudioPolicyLog: String? = null
+
+    /** Whether the missing-AdapterService warning has already been emitted this generation. */
+    private var adapterServiceWarned = false
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -228,7 +245,7 @@ object SonyEngineHost {
 
         scope.launch {
             repo.state.collect { uiState ->
-                val snapshot = SonyStateSnapshot.fromUiState(uiState)
+                val snapshot = withLeAudioPolicy(SonyStateSnapshot.fromUiState(uiState))
                 val pendingAlert = snapshot.multipoint.pendingAlertMessageType
                 val lastPending = lastSnapshot?.multipoint?.pendingAlertMessageType
                 val same = snapshot == lastSnapshot
@@ -334,6 +351,8 @@ object SonyEngineHost {
         officialAppLeaseAddress = null
         appContext = null
         adapterService = null
+        adapterServiceWarned = false
+        lastLeAudioPolicyLog = null
         prefs = null
         prefsProvider = null
         // Keep connection identity across a rejected reload. A replacement
@@ -369,6 +388,40 @@ object SonyEngineHost {
 
     fun onAdapterService(service: Any?) {
         if (service != null) adapterService = service
+    }
+
+    /**
+     * The live `AdapterService`, recovered from the class when this generation has not been handed
+     * one.
+     *
+     * `AdapterService.onCreate` is where the instance normally arrives, and it does not fire again
+     * in a live bluetooth process — so a hot-reloaded generation, whose fields all start empty, has
+     * to find the singleton itself or every call that needs the stack silently turns into a no-op.
+     * This stack keeps it in the public static `sAdapterService` field; builds that predate that
+     * expose a static `getAdapterService()` instead.
+     */
+    private fun adapterService(): Any? {
+        adapterService?.let { return it }
+        val loader = appContext?.classLoader ?: return null
+        val resolved = runCatching {
+            val clazz = loader.loadClass("com.android.bluetooth.btservice.AdapterService")
+            runCatching {
+                clazz.getDeclaredField("sAdapterService").apply { isAccessible = true }.get(null)
+            }.getOrNull()
+                ?: clazz.getDeclaredMethod("getAdapterService").apply { isAccessible = true }.invoke(null)
+        }.getOrNull()
+        if (resolved == null) {
+            // Once: this sits on the state-emission path and a missing singleton does not fix
+            // itself within a generation.
+            if (!adapterServiceWarned) {
+                adapterServiceWarned = true
+                Log.w(TAG, "AdapterService singleton not resolvable")
+            }
+        } else {
+            adapterService = resolved
+            Log.i(TAG, "AdapterService singleton recovered from class")
+        }
+        return resolved
     }
 
     /** Audio routing changing usually means a bud joined or left; re-read state now. */
@@ -818,6 +871,196 @@ object SonyEngineHost {
         BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
     }.getOrDefault(true)
 
+    // ── System per-device LE Audio permission ("低功耗音频") ──
+
+    /**
+     * Every bonded identity of this headset that the LE Audio profile applies to, control first.
+     *
+     * The stack decides that profile applies to a device from one thing: the device advertises
+     * ASCS. `RemoteDevices` reports a bond's BR/EDR and LE service sets merged, so a dual-mode
+     * headset qualifies under its classic address too — and on a live LC3 link that classic
+     * address is the very one `LeAudioService` holds the connection and the active group on.
+     * Reading the permission therefore does not hang on the module having created the LE-only bond
+     * itself, which is what lets the switch show the true position for a headset that was switched
+     * over from Sound Connect. The LE-only identity is still included, for the models whose
+     * control identity carries no ASCS of its own.
+     */
+    @SuppressLint("MissingPermission")
+    private fun leAudioPolicyDevices(controlAddress: String): List<BluetoothDevice> {
+        val context = appContext ?: return emptyList()
+        val addresses = buildList {
+            add(controlAddress)
+            leAudioIdentityAddress(controlAddress)
+                ?.takeIf { !it.equals(controlAddress, ignoreCase = true) }
+                ?.let { add(it) }
+        }
+        return addresses.mapNotNull { remoteDevice(context, it) }.filter { leAudioApplies(it) }
+    }
+
+    /** Bonded and advertising ASCS: the stack's own test for "the LE Audio profile applies here". */
+    @SuppressLint("MissingPermission")
+    private fun leAudioApplies(device: BluetoothDevice): Boolean = runCatching {
+        device.bondState == BluetoothDevice.BOND_BONDED &&
+            device.uuids.orEmpty().any { it.uuid == ASCS_SERVICE_UUID }
+    }.getOrDefault(false)
+
+    /**
+     * The headset's separate LE-only bond, when the phone holds one.
+     *
+     * A hit in the alias map answers this without touching the stack. Only a miss enumerates the
+     * bonds to rebuild the map, and at most every [LE_IDENTITY_RESCAN_MS], because this sits on
+     * the path of every state emission while the map is populated for free by the BLE client, the
+     * dispatcher, and the pairer.
+     */
+    @SuppressLint("MissingPermission")
+    private fun leAudioIdentityAddress(controlAddress: String): String? {
+        leAudioAliasFor(controlAddress)?.let { return it }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLeIdentityRescanMs < LE_IDENTITY_RESCAN_MS) return null
+        lastLeIdentityRescanMs = now
+        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter ?: return null
+        SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
+        return leAudioAliasFor(controlAddress)
+    }
+
+    /** The alias map is keyed LE -> control, so the control address is looked up by value. */
+    private fun leAudioAliasFor(controlAddress: String): String? =
+        SonyDeviceService.leAudioAliasSnapshot()
+            .entries.firstOrNull { it.value.equals(controlAddress, ignoreCase = true) }
+            ?.key
+
+    /**
+     * The stored LE Audio connection policy of [device], or null when the read itself failed.
+     *
+     * `ConnectableProfile.getConnectionPolicy` is
+     * `AdapterService.getProfileConnectionPolicy(device, BluetoothProfile.LE_AUDIO)`, so this is
+     * the same stored value the system switch is drawn from. A device with no record answers
+     * CONNECTION_POLICY_UNKNOWN, which is an answer and not a failure — the switch draws it off,
+     * following the stricter of the stack's two tests (`policy > CONNECTION_POLICY_FORBIDDEN`, as
+     * settings does; connecting uses `okToConnect`, which accepts UNKNOWN too).
+     */
+    private fun rawLeAudioPolicy(device: BluetoothDevice): Int? {
+        val service = adapterService() ?: return null
+        return runCatching {
+            service.javaClass
+                .getMethod("getProfileConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
+                .apply { isAccessible = true }
+                .invoke(service, device, BluetoothProfile.LE_AUDIO) as? Int
+        }.getOrElse {
+            Log.w(TAG, "LE Audio policy read failed", it)
+            null
+        }
+    }
+
+    /**
+     * Flips that permission through the profile service, which is what the system switch does.
+     *
+     * `LeAudioService.setConnectionPolicy` is far more than a stored flag: it persists the
+     * policy, pushes the native enable state, mirrors the decision into BASS and Xiaomi's
+     * BatteryService, re-authorizes or de-authorizes the related GATT profiles, and finally
+     * connects or disconnects — including handing audio back to A2DP/HFP when forbidding under
+     * dual mode. Writing the stored value alone would leave every one of those undone. The bond
+     * is untouched in both directions, which is why re-enabling needs no re-pairing.
+     */
+    private fun applyLeAudioPolicy(device: BluetoothDevice, allowed: Boolean): Boolean {
+        val service = adapterService() ?: return false
+        val policy = if (allowed) CONNECTION_POLICY_ALLOWED else CONNECTION_POLICY_FORBIDDEN
+        return runCatching {
+            val leAudio = (service.javaClass.getMethod("getLeAudioService")
+                .apply { isAccessible = true }
+                .invoke(service) as? java.util.Optional<*>)
+                ?.orElse(null)
+                ?: return false
+            leAudio.javaClass
+                .getMethod("setConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
+                .apply { isAccessible = true }
+                .invoke(leAudio, device, policy)
+            true
+        }.getOrElse {
+            Log.w(TAG, "LE Audio policy write failed allowed=$allowed", it)
+            false
+        }
+    }
+
+    /**
+     * Adds the two facts only this process can see to a repository-built snapshot.
+     *
+     * `leAudioIdentityAddress` is the identity the permission would be written to, and doubles as
+     * "the system has a device to permit LE Audio on at all"; `leAudioPolicyAllowed` is the
+     * position of its switch, null only when no read succeeded. Both fields are always written, so
+     * a bond that has gone away clears them instead of leaving the last reading in place.
+     *
+     * A headset can hold two records — one per identity — and the two need not agree. Permitted on
+     * either means the system may route LC3, so that is what the switch shows.
+     */
+    private fun withLeAudioPolicy(base: SonyStateSnapshot): SonyStateSnapshot {
+        val address = base.deviceAddress ?: return base
+        val readings = leAudioPolicyDevices(address).map { it to rawLeAudioPolicy(it) }
+        logLeAudioPolicy(address, readings)
+        val known = readings.mapNotNull { it.second }
+        val target = readings.firstOrNull { (_, policy) ->
+            policy != null && policy > CONNECTION_POLICY_FORBIDDEN
+        }?.first ?: readings.firstOrNull()?.first
+        return base.copy(
+            leAudioIdentityAddress = target?.let { runCatching { it.address }.getOrNull() },
+            leAudioPolicyAllowed = if (known.isEmpty()) null
+            else known.any { it > CONNECTION_POLICY_FORBIDDEN },
+        )
+    }
+
+    /** One line per change in what the stack reports, so a wrong switch position is diagnosable. */
+    private fun logLeAudioPolicy(control: String, readings: List<Pair<BluetoothDevice, Int?>>) {
+        val line = readings.joinToString(",") { (device, policy) ->
+            "${runCatching { device.address }.getOrNull()}=$policy"
+        }.ifEmpty { "no le audio capable bond" }
+        val summary = "$control -> $line"
+        if (summary == lastLeAudioPolicyLog) return
+        lastLeAudioPolicyLog = summary
+        Log.i(TAG, "LE Audio policy $summary")
+    }
+
+    /**
+     * [snapshot] with the system-side LE Audio permission re-read.
+     *
+     * Nothing notifies us when that permission changes — system settings writes it straight into
+     * the stack — so a replay request is the moment to look again.
+     */
+    private fun refreshedSnapshot(): SonyStateSnapshot {
+        val current = lastSnapshot ?: return SonyStateSnapshot()
+        val updated = withLeAudioPolicy(current)
+        if (updated != current) lastSnapshot = updated
+        return updated
+    }
+
+    /**
+     * Handles [SonyBridge.CMD_SET_LE_AUDIO_POLICY]: write the system policy, then republish.
+     *
+     * Written to every identity the profile applies to. The profile service acts on the device it
+     * is handed and each identity carries its own stored policy, so forbidding one alone would
+     * leave the other free to bring LE Audio back.
+     *
+     * The republish is not redundant. Publishing is gated on the snapshot differing from the
+     * previous one, and this permission lives in the stack rather than in the headset, so no
+     * repository state changes to carry it out — without pushing the re-read the switch would
+     * spring back to its old position.
+     */
+    private fun setLeAudioPolicy(allowed: Boolean) {
+        val context = appContext ?: return
+        val base = lastSnapshot ?: return
+        val address = base.deviceAddress ?: return
+        val devices = leAudioPolicyDevices(address)
+        if (devices.isEmpty()) {
+            Log.w(TAG, "no LE Audio capable bond for $address; policy write skipped")
+            return
+        }
+        if (devices.map { applyLeAudioPolicy(it, allowed) }.none { it }) return
+        val updated = withLeAudioPolicy(base)
+        if (updated == base) return
+        lastSnapshot = updated
+        cloudFallback?.onState(updated)
+        publish(context, updated)
+    }
+
     /** Cancel both Xiaomi battery surfaces for a terminal Bluetooth disconnect. */
     private fun clearXiaomiSurfaces(
         context: Context,
@@ -1097,6 +1340,8 @@ object SonyEngineHost {
             SonyBridge.CMD_LE_AUDIO_PAIRING_GUIDE -> repo.showLeAudioPairingGuide()
             SonyBridge.CMD_LE_AUDIO_DEVICE_UNPAIR ->
                 repo.unpairLeAudioDevice(intent.getStringExtra(SonyBridge.EXTRA_STRING))
+            SonyBridge.CMD_SET_LE_AUDIO_POLICY ->
+                setLeAudioPolicy(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_FIXED_SOURCE ->
                 intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::setFixedSource)
             SonyBridge.CMD_SET_MUSIC_HAND_OVER ->
@@ -1159,7 +1404,7 @@ object SonyEngineHost {
             // re-submit the notification/island for that request: surface owners
             // have their own CMD_SURFACES_READY handshake, and re-rendering here
             // races Remote File publication when the module is opened.
-            SonyBridge.CMD_REPUBLISH -> appContext?.let { publishState(it, snapshot()) }
+            SonyBridge.CMD_REPUBLISH -> appContext?.let { publishState(it, refreshedSnapshot()) }
 
             SonyBridge.CMD_SURFACES_READY -> appContext?.let {
                 // Forget what we think is on screen so the island shows again.
@@ -1434,7 +1679,7 @@ object SonyEngineHost {
     private fun injectSystemBattery(context: Context, snapshot: SonyStateSnapshot) {
         val address = snapshot.deviceAddress ?: return
         val level = snapshot.systemBatteryLevel ?: return
-        val service = adapterService ?: return
+        val service = adapterService() ?: return
         val device = remoteDevice(context, address) ?: return
         runCatching {
             callMethod(service, "setBatteryLevel", device, level, false)

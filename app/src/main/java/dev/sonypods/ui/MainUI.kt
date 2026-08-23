@@ -233,6 +233,7 @@ fun MainUI(
              onLeAudioAlertReply = { positive -> SonyBridge.replyLeAudioAlert(context, positive) },
              onLeAudioDevicePair = { SonyBridge.pairLeAudioDevice(context) },
              onLeAudioPairingGuide = { SonyBridge.showLeAudioPairingGuide(context) },
+             onLeAudioPolicyChange = { allowed -> SonyBridge.setLeAudioPolicyAllowed(context, allowed) },
              onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
             onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
             onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },

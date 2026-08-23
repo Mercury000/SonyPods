@@ -59,21 +59,15 @@ object HeadsetStateDispatcher : HookContext() {
         physicalDisconnectAddress: String? = null,
     ) {
         SonyDeviceService.rememberAddress(address)
-        // AdapterService.onCreate will not fire again in a live bluetooth process,
-        // so the reloaded generation must re-resolve the running instance itself.
-        val adapterService = runCatching {
-            context.classLoader.loadClass("com.android.bluetooth.btservice.AdapterService")
-                .getDeclaredMethod("getAdapterService")
-                .apply { isAccessible = true }
-                .invoke(null)
-        }.getOrNull()
         // Must happen before start() launches the repository collector and its
         // startup announce. Otherwise the initial Tandem=false snapshot can clear
         // surfaces or look like a new connection during a hot reload.
         SonyEngineHost.restoreHotReloadState(address, physicalDisconnectAddress)
+        // No AdapterService instance to hand over: onCreate will not fire again in a live
+        // bluetooth process, so the host recovers the running singleton from the class on demand.
         SonyEngineHost.start(
             context,
-            adapterService,
+            null,
             prefsProvider,
             remoteModelInfoReader = cloudModelInfoReader(),
             remoteFileReader = remoteFileReader,

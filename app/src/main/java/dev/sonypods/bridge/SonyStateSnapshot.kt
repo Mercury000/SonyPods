@@ -86,6 +86,25 @@ data class SonyStateSnapshot(
     val leAudioDevicePairStage: String = "IDLE",
     val leAudioDevicePairMessage: String = "",
     val leAudioDevicePairedAddress: String? = null,
+    /**
+     * The bonded identity the system's LE Audio permission applies to, or null when the phone
+     * holds none for this headset.
+     *
+     * That is the headset's LE-only bond for models whose control identity advertises no ASCS, and
+     * the control identity itself for the dual-mode ones — which is how the permission stays
+     * readable for a headset switched over from Sound Connect, with no module-created bond.
+     *
+     * Filled in by the bluetooth-process host from the current bonds, not from a pairing session:
+     * the module app is restarted far more often than a bond changes, so the pairing stage above
+     * says nothing about whether an identity exists right now.
+     */
+    val leAudioIdentityAddress: String? = null,
+    /**
+     * `BluetoothProfile.CONNECTION_POLICY_ALLOWED` on [leAudioIdentityAddress] — the state behind
+     * the system's per-device "低功耗音频" switch. Null only when no read succeeded; a device the
+     * stack holds no record for reads as CONNECTION_POLICY_UNKNOWN, which shows off.
+     */
+    val leAudioPolicyAllowed: Boolean? = null,
     val quickAccessLeftRight: String? = null,
     val quickAccessNcAmb: String? = null,
     val quickAccessKeyCode: Int? = null,
@@ -163,6 +182,11 @@ data class SonyStateSnapshot(
         putString(KEY_LEA_PAIR_STAGE, leAudioDevicePairStage)
         putString(KEY_LEA_PAIR_MESSAGE, leAudioDevicePairMessage)
         leAudioDevicePairedAddress?.let { putString(KEY_LEA_PAIRED_ADDRESS, it) }
+        leAudioIdentityAddress?.let { putString(KEY_LEA_IDENTITY_ADDRESS, it) }
+        leAudioPolicyAllowed?.let {
+            putBoolean(KEY_LEA_POLICY_KNOWN, true)
+            putBoolean(KEY_LEA_POLICY_ALLOWED, it)
+        }
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
         quickAccessKeyCode?.let { putInt(KEY_QA_KEY, it) }
@@ -247,6 +271,9 @@ data class SonyStateSnapshot(
         private const val KEY_LEA_PAIR_STAGE = "lea_pair_stage"
         private const val KEY_LEA_PAIR_MESSAGE = "lea_pair_message"
         private const val KEY_LEA_PAIRED_ADDRESS = "lea_paired_address"
+        private const val KEY_LEA_IDENTITY_ADDRESS = "lea_identity_address"
+        private const val KEY_LEA_POLICY_KNOWN = "lea_policy_known"
+        private const val KEY_LEA_POLICY_ALLOWED = "lea_policy_allowed"
         private const val KEY_QA_LR = "qa_lr"
         private const val KEY_QA_NC = "qa_nc"
         private const val KEY_QA_KEY = "qa_key"
@@ -322,6 +349,12 @@ data class SonyStateSnapshot(
             leAudioDevicePairStage = bundle.getString(KEY_LEA_PAIR_STAGE) ?: "IDLE",
             leAudioDevicePairMessage = bundle.getString(KEY_LEA_PAIR_MESSAGE).orEmpty(),
             leAudioDevicePairedAddress = bundle.getString(KEY_LEA_PAIRED_ADDRESS),
+            leAudioIdentityAddress = bundle.getString(KEY_LEA_IDENTITY_ADDRESS),
+            leAudioPolicyAllowed = if (bundle.getBoolean(KEY_LEA_POLICY_KNOWN, false)) {
+                bundle.getBoolean(KEY_LEA_POLICY_ALLOWED, false)
+            } else {
+                null
+            },
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
             quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),

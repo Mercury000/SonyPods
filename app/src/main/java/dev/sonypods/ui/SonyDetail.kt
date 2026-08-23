@@ -38,6 +38,8 @@ data class SonyDetailActions(
     /** Bonds the headset's LE-only identity, the phone-side half of the LE Audio switch. */
     val onLeAudioDevicePair: () -> Unit = {},
     val onLeAudioPairingGuide: () -> Unit = {},
+    /** Flips the system's per-device LE Audio permission; never touches the bond. */
+    val onLeAudioPolicyChange: (Boolean) -> Unit = {},
     val onMultipointAlertReply: (Boolean) -> Unit = {},
     val onFixedSourceChange: (String) -> Unit = {},
     val onMusicHandOverChange: (Boolean) -> Unit = {},

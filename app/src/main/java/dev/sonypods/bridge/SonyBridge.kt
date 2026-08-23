@@ -89,6 +89,8 @@ object SonyBridge {
     const val CMD_LE_AUDIO_PAIRING_GUIDE = "le_audio_pairing_guide"
     /** Remove a LE identity bond created by [CMD_LE_AUDIO_DEVICE_PAIR]. */
     const val CMD_LE_AUDIO_DEVICE_UNPAIR = "le_audio_device_unpair"
+    /** Allow or forbid the LE Audio profile on the bonded LE identity — the system's own switch. */
+    const val CMD_SET_LE_AUDIO_POLICY = "set_le_audio_policy"
     const val CMD_SET_FIXED_SOURCE = "set_fixed_source"
     const val CMD_SET_MUSIC_HAND_OVER = "set_music_hand_over"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
@@ -238,6 +240,13 @@ object SonyBridge {
         sendCommand(context, CMD_LE_AUDIO_DEVICE_UNPAIR) {
             if (address != null) putExtra(EXTRA_STRING, address)
         }
+
+    /**
+     * Flips the system's per-device LE Audio permission on the bonded LE identity, which is
+     * what HyperOS surfaces as "低功耗音频". The bond is left alone either way.
+     */
+    fun setLeAudioPolicyAllowed(context: Context, allowed: Boolean) =
+        sendCommand(context, CMD_SET_LE_AUDIO_POLICY) { putExtra(EXTRA_BOOL, allowed) }
 
     fun setFixedSource(context: Context, address: String) =
         sendCommand(context, CMD_SET_FIXED_SOURCE) { putExtra(EXTRA_STRING, address) }

@@ -260,9 +260,9 @@ private fun LeAudioCard(
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         SwitchPreference(
-            title = "连接方式",
+            title = "LE Audio",
             summary = when {
-                uiState.leAudioSwitchPending -> "正在更改连接方式"
+                uiState.leAudioSwitchPending -> "正在更改 LE Audio"
                 usingLc3 -> "LE Audio优先，当前使用 LE Audio（LC3）"
                 enabled -> "LE Audio优先，等待手机连接"
                 else -> "仅经典音频"
@@ -272,26 +272,40 @@ private fun LeAudioCard(
                 if (!uiState.leAudioSwitchPending) actions.onLeAudioEnabledChange(target)
             },
         )
-        // The headset switching sides is not enough: its LE Audio is a separate,
-        // non-discoverable LE identity that the system pairing screen never lists, so
-        // offer the phone-side bond for as long as LC3 is not actually in use.
-        if (enabled && !usingLc3 && !uiState.leAudioSwitchPending) {
+        // Under LE Audio priority the phone side is a switch of its own — the system's
+        // per-device LE Audio permission, read from and written to the stack that draws the
+        // settings switch. It needs a bonded identity the LE Audio profile applies to; a headset
+        // switched over inside Sound Connect may have none, because its LE identity is a separate,
+        // non-discoverable one the system pairing screen never lists, and only then does the row
+        // lead into the pairing flow. Shown while LC3 is in use as well, since turning it off is
+        // the whole point of surfacing it.
+        if (enabled && !uiState.leAudioSwitchPending) {
             val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
                 uiState.leAudioDevicePairStage == "PAIRING"
-            // Only raise the guide; it is hosted at the top level. Resetting an in-ear model
-            // means putting the buds in the case, which disconnects them and tears this page
-            // down, so the prompt cannot live here.
-            BasicComponent(
-                title = "配对 LE Audio 身份",
+            val policy = uiState.leAudioPolicyAllowed
+            // Nothing bonded for the permission to apply to, so there is nothing to toggle yet.
+            val needsPairing = uiState.leAudioIdentityAddress == null
+            SwitchPreference(
+                title = "低功耗音频",
                 summary = when {
                     pairing -> uiState.leAudioDevicePairMessage.ifEmpty { "正在配对…" }
                     uiState.leAudioDevicePairStage == "FAILED" ->
                         uiState.leAudioDevicePairMessage.ifEmpty { "配对失败，点击重试" }
-                    uiState.leAudioDevicePairedAddress != null ->
-                        "已配对 ${uiState.leAudioDevicePairedAddress}，等待系统建立 LC3"
-                    else -> "需要重置耳机进入配对模式，点击查看步骤"
+                    policy == true && usingLc3 -> "已开启，音频通过 LC3 传输"
+                    policy == true -> "已开启，等待系统建立 LC3"
+                    policy == false -> "已关闭，音频回落到经典蓝牙"
+                    needsPairing -> "需要重置耳机进入配对模式，点击查看步骤"
+                    else -> "未读取到系统开关状态"
                 },
-                onClick = { if (!pairing) actions.onLeAudioPairingGuide() },
+                checked = policy == true,
+                onCheckedChange = { target ->
+                    // Without a bond there is nothing to permit yet, so the row leads into the
+                    // pairing flow instead. Only raise the guide; it is hosted at the top level,
+                    // because resetting an in-ear model means putting the buds in the case, which
+                    // disconnects them and tears this page down.
+                    if (needsPairing) actions.onLeAudioPairingGuide() else actions.onLeAudioPolicyChange(target)
+                },
+                enabled = !pairing,
             )
         }
     }
