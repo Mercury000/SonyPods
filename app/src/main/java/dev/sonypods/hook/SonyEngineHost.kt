@@ -1553,7 +1553,13 @@ object SonyEngineHost {
         // finished — cached devices restore it instantly, a first-time connection
         // must wait. Rendering earlier races the neutral profile's single-battery
         // query and flashes the headband notification variant for TWS buds.
-        if (!snapshot.probeComplete) return
+        //
+        // essentialValuesReady adds the other half: the probe says which features
+        // exist, not what they read. The island and the notification show battery
+        // and the noise-control mode and let the user change the latter, so they
+        // wait until those two domains have actually answered — over LE that is
+        // seconds after the probe, and until then nothing here can be controlled.
+        if (!snapshot.probeComplete || !snapshot.essentialValuesReady) return
 
         val singleBattery = when (snapshot.formFactor) {
             HeadphoneFormFactor.HEADSET.name -> true

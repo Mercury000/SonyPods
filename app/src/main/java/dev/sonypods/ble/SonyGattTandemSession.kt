@@ -57,6 +57,19 @@ internal class SonyGattTandemSession(
         drainWrites()
     }
 
+    /**
+     * True while a command handed to [send] is still on its way out: queued, mid-write,
+     * or written and waiting for the headset's ACK.
+     *
+     * Framed GATT serializes frames behind that ACK exactly as RFCOMM does, so a
+     * connection-time burst takes seconds to transmit. A consumer waiting for the burst's
+     * replies has to distinguish "the headset has answered everything" from "we have not
+     * finished asking yet".
+     */
+    fun hasOutstandingWrites(): Boolean = synchronized(lock) {
+        !closed && (pendingWrites.isNotEmpty() || writeInFlight || fragmentsInFlight > 0 || awaitingAck != null)
+    }
+
     /** Called when a characteristic write completed, successfully or not. */
     fun onWriteComplete(success: Boolean) {
         synchronized(lock) {

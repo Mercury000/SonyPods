@@ -637,6 +637,22 @@ class SonyBleClient(
         return channels
     }
 
+    /**
+     * True while any command already accepted for this connection has not been fully
+     * transmitted: queued for a GATT write, mid-write, or waiting for its Tandem ACK.
+     *
+     * Both transports serialize frames behind the ACK, so a twenty-command connection
+     * burst leaves the phone over several seconds. The initial-value gate uses this to
+     * tell "the headset has answered everything we asked" apart from "we are still
+     * asking" — without it, the pause between two commands looks like the end of the
+     * exchange and the UI opens on values that have not been requested yet.
+     */
+    fun hasOutstandingWrites(): Boolean {
+        sppTransport?.let { return it.hasOutstandingWrites() }
+        if (synchronized(writeStateLock) { writing || writeQueue.isNotEmpty() }) return true
+        return gattSessions.values.any { it.hasOutstandingWrites() }
+    }
+
     private fun writeToChannel(channel: TandemChannel, bytes: ByteArray) {
         if (channel !in gattEndpoints && sppTransport == null) {
             listener.onBluetoothUnavailable("Channel $channel is not available (available: ${availableChannels()})")

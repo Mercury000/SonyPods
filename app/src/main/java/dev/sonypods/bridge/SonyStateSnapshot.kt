@@ -33,6 +33,23 @@ data class SonyStateSnapshot(
      * full probe). The app detail UI is gated on it so it never opens against an
      * empty half-probed profile. */
     val probeComplete: Boolean = false,
+    /**
+     * True once the connection-time value burst is done: every domain the adapter expects
+     * has answered, nothing is left to transmit and the channel has settled (or the wait
+     * timed out).
+     *
+     * [probeComplete] only says which features exist — over LE it is reached seconds
+     * before the first value reply, so a UI opened on it renders untappable defaults.
+     * One reply per domain is not enough either: a domain is several queries. The app UI
+     * waits for this instead.
+     */
+    val initialValuesReady: Boolean = false,
+    /**
+     * The same gate reduced to what a surface outside the app renders: battery and the
+     * noise-control mode. The island, the connection notification and the official
+     * fast-connect dialog wait for this rather than for the whole burst.
+     */
+    val essentialValuesReady: Boolean = false,
     val deviceName: String? = null,
     val deviceAddress: String? = null,
     val firmwareVersion: String? = null,
@@ -134,6 +151,8 @@ data class SonyStateSnapshot(
         putBoolean(KEY_CONNECTED, connected)
         putBoolean(KEY_PROTOCOL_READY, protocolReady)
         putBoolean(KEY_PROBE_COMPLETE, probeComplete)
+        putBoolean(KEY_INITIAL_VALUES_READY, initialValuesReady)
+        putBoolean(KEY_ESSENTIAL_VALUES_READY, essentialValuesReady)
         deviceName?.let { putString(KEY_DEVICE_NAME, it) }
         deviceAddress?.let { putString(KEY_DEVICE_ADDRESS, it) }
         firmwareVersion?.let { putString(KEY_FIRMWARE, it) }
@@ -217,6 +236,8 @@ data class SonyStateSnapshot(
         private const val KEY_CONNECTED = "connected"
         private const val KEY_PROTOCOL_READY = "protocol_ready"
         private const val KEY_PROBE_COMPLETE = "probe_complete"
+        private const val KEY_INITIAL_VALUES_READY = "initial_values_ready"
+        private const val KEY_ESSENTIAL_VALUES_READY = "essential_values_ready"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_DEVICE_ADDRESS = "device_address"
         private const val KEY_FIRMWARE = "firmware"
@@ -301,6 +322,8 @@ data class SonyStateSnapshot(
             connected = bundle.getBoolean(KEY_CONNECTED, false),
             protocolReady = bundle.getBoolean(KEY_PROTOCOL_READY, false),
             probeComplete = bundle.getBoolean(KEY_PROBE_COMPLETE, false),
+            initialValuesReady = bundle.getBoolean(KEY_INITIAL_VALUES_READY, false),
+            essentialValuesReady = bundle.getBoolean(KEY_ESSENTIAL_VALUES_READY, false),
             deviceName = bundle.getString(KEY_DEVICE_NAME),
             deviceAddress = bundle.getString(KEY_DEVICE_ADDRESS),
             firmwareVersion = bundle.getString(KEY_FIRMWARE),
@@ -389,6 +412,8 @@ data class SonyStateSnapshot(
                 connected = state.connectedDevice != null,
                 protocolReady = state.deviceInfo.protocolReady,
                 probeComplete = state.probeComplete,
+                initialValuesReady = state.initialValuesReady,
+                essentialValuesReady = state.essentialValuesReady,
                 deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,
                 deviceAddress = state.connectedDevice?.address,
                 firmwareVersion = state.deviceInfo.firmwareVersion,

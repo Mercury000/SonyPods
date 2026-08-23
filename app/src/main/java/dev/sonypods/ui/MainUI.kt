@@ -123,9 +123,9 @@ fun MainUI(
     var restartingScopes by remember { mutableStateOf(false) }
     var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
     // Keep the navigation intent separate from the transport handshake. The
-    // engine reports connected before capability probing finishes, so clearing
-    // the connection marker at that point must not lose the request to open the
-    // detail page once probeComplete becomes true.
+    // engine reports connected before capability probing and the connection-time
+    // value burst finish, so clearing the connection marker at that point must
+    // not lose the request to open the detail page once the session is operable.
     var pendingAutoOpenAddress by remember { mutableStateOf<String?>(null) }
     // Scope restart puts the UI on the picker, while Bluetooth normally
     // restores the previous Sony connection without a row click. Keep that
@@ -174,7 +174,11 @@ fun MainUI(
     // The capability probe is what turns the neutral profile into the real one
     // (battery layout, writable NC types, EQ support); gating the detail page on
     // it prevents opening against an empty half-probed profile while connecting.
-    val canShowDetailPage = sonyConnected && sonyState.probeComplete
+    // The probe only says which features exist, though — the values behind them
+    // arrive later, over LE by several seconds. Waiting for the connection-time
+    // value burst as well is what keeps the page from opening on defaults that
+    // cannot be tapped.
+    val canShowDetailPage = sonyConnected && sonyState.probeComplete && sonyState.initialValuesReady
     // A device selection is itself a navigation request. Do not make the
     // request depend solely on the effect below winning a particular
     // recomposition: the connection broadcast and the picker state can be
@@ -271,6 +275,7 @@ fun MainUI(
         sonyConnected,
         connectedDeviceAddress,
         sonyState.probeComplete,
+        sonyState.initialValuesReady,
     ) {
         val pending = pendingExternalDetailAddress ?: return@LaunchedEffect
         if (!canShowDetailPage || !connectedDeviceAddress.equals(pending, ignoreCase = true)) return@LaunchedEffect
@@ -282,11 +287,13 @@ fun MainUI(
 
     // Connection established: record the device so the automatic model image can be
     // associated with its Bluetooth address. Navigation waits for the capability
-    // probe, because the detail page is intentionally gated on probeComplete.
+    // probe and for the connection-time values, because the detail page is gated on
+    // both — entering earlier would show untappable defaults.
     LaunchedEffect(
         sonyConnected,
         connectedDeviceAddress,
         sonyState.probeComplete,
+        sonyState.initialValuesReady,
     ) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
             // The selected Bluetooth address can be represented by different
@@ -309,7 +316,7 @@ fun MainUI(
                 name = displayTitle,
             )
 
-            if (sonyState.probeComplete && shouldAutoOpen) {
+            if (canShowDetailPage && shouldAutoOpen) {
                 selectedTab = MainTab.Earphones
                 hasAppliedDefaultTab = true
                 showDevicePicker = false

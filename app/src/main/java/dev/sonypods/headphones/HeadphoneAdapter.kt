@@ -363,6 +363,19 @@ interface HeadphoneAdapter {
     }
 
     fun buildRefreshCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand>
+
+    /**
+     * The domains whose connection-time replies a caller should wait for before
+     * treating the session as operable.
+     *
+     * [buildRefreshCommands] fires its whole burst at once and returns nothing about
+     * what will answer it, so a caller cannot tell "asked" from "answered": every
+     * control still reads its default value while the replies are in flight. This is
+     * the subset of that burst the headset is expected to answer for this profile —
+     * one reply in each listed domain means the values behind the UI have arrived.
+     */
+    fun initialValueDomains(profile: ConnectedHeadphoneProfile): Set<HeadphoneFeature> = emptySet()
+
     fun buildSetNoiseControlModeCommands(
         profile: ConnectedHeadphoneProfile,
         mode: NoiseControlMode,
@@ -514,6 +527,9 @@ object HeadphoneAdapterRegistry {
 
     fun buildRefreshCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         adapterFor(profile).buildRefreshCommands(profile)
+
+    fun initialValueDomains(profile: ConnectedHeadphoneProfile): Set<HeadphoneFeature> =
+        adapterFor(profile).initialValueDomains(profile)
 
     fun canWrite(profile: ConnectedHeadphoneProfile, feature: HeadphoneFeature): Boolean =
         adapterFor(profile).canWrite(profile, feature)

@@ -3,6 +3,7 @@ package dev.sonypods.ble
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.protocol.hexString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -192,6 +193,63 @@ class SonyGattTandemSessionTest {
 
         assertEquals(0, payloads.size)
         assertEquals(0, writes.size)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Outstanding-write reporting (the initial-value gate's "still asking" signal)
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun anIdleSessionHasNoOutstandingWrites() {
+        assertFalse(session().hasOutstandingWrites())
+    }
+
+    @Test
+    fun aFrameWaitingForItsAckCountsAsOutstanding() {
+        val session = session()
+        session.send(bytes("0E 02 00"))
+        assertTrue("mid-write", session.hasOutstandingWrites())
+
+        // The write landed, but the headset has not acknowledged it. This is the gap the
+        // gate must not mistake for the end of the burst: nothing is being received and
+        // nothing is being written, yet the exchange is still in progress.
+        session.onWriteComplete(true)
+        assertTrue("awaiting ACK", session.hasOutstandingWrites())
+
+        session.onNotification(SonyTandemFraming.encode(0x01, 1, byteArrayOf()))
+        assertFalse("acknowledged", session.hasOutstandingWrites())
+    }
+
+    @Test
+    fun aQueuedFrameKeepsTheSessionOutstanding() {
+        val session = session()
+        session.send(bytes("0E 02 00"))
+        session.onWriteComplete(true)
+        session.send(bytes("0E 04 01"))
+
+        // The ACK releases the first frame, and the queued one immediately takes the line.
+        session.onNotification(SonyTandemFraming.encode(0x01, 1, byteArrayOf()))
+        assertTrue(session.hasOutstandingWrites())
+    }
+
+    @Test
+    fun fragmentsStillInFlightCountAsOutstanding() {
+        val session = session(writableValueLength = 20)
+        session.send(bytes("0E") + ByteArray(100) { 0x41 })
+        val fragments = writes.size
+
+        repeat(fragments - 1) { session.onWriteComplete(true) }
+        assertTrue("one fragment left", session.hasOutstandingWrites())
+    }
+
+    @Test
+    fun aClosedSessionReportsNothingOutstanding() {
+        val session = session()
+        session.send(bytes("0E 02 00"))
+        session.close()
+
+        // Otherwise a torn-down transport would hold the gate to its ceiling.
+        assertFalse(session.hasOutstandingWrites())
     }
 
     private fun unframe(frame: ByteArray): ByteArray =

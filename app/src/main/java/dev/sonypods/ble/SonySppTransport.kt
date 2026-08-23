@@ -39,6 +39,20 @@ internal class SonySppTransport(
         drainWrites()
     }
 
+    /**
+     * True while a command handed to [send] has not left the transport yet: still queued,
+     * or written and waiting for the headset's ACK.
+     *
+     * Frames go out one at a time behind that ACK, so a connection-time burst of twenty
+     * GETs is transmitted over several seconds. A consumer waiting for the burst's replies
+     * must know the burst is still being *sent*, or it mistakes the quiet between two
+     * commands for the end of the exchange.
+     */
+    fun hasOutstandingWrites(): Boolean {
+        if (closed.get()) return false
+        return pendingWrites.isNotEmpty() || synchronized(lock) { awaitingAck != null }
+    }
+
     fun close() {
         if (!closed.getAndSet(true)) {
             pendingWrites.clear()

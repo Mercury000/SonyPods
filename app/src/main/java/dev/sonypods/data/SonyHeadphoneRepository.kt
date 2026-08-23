@@ -131,6 +131,42 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
 private const val SUPPORT_FUNCTION_TIMEOUT_MS = 2_500L
+
+/**
+ * How long the initial-value gate waits with no further progress before releasing the
+ * UI anyway. Re-armed on every reply the headset sends, so a slow burst that is still
+ * being answered is never cut short — only silence ends the wait.
+ */
+private const val INITIAL_VALUE_IDLE_TIMEOUT_MS = 3_000L
+
+/**
+ * How long the channel has to stay quiet after the last domain answered before the gate
+ * opens.
+ *
+ * Answering a domain is not the same as finishing it: BATTERY is three queries
+ * (left/right, cradle), EQ is status plus param plus band info, gestures are capability
+ * plus presets plus mappings. Releasing on the first reply of each domain is what made
+ * the page open with most controls still at their defaults. Waiting for a short quiet
+ * window instead covers the rest of every domain, and the capability replies that fill
+ * in available presets and functions along with them.
+ */
+private const val INITIAL_VALUE_SETTLE_MS = 1_200L
+
+/**
+ * The ceiling on that wait. Both other timers can be held open indefinitely — the quiet
+ * window by unsolicited traffic (playback metadata while music is playing pushes
+ * notifications of its own), and a stuck write queue by a transport that never reports its
+ * last write complete — so the gate also opens once this much time has passed since arming,
+ * however busy the channel looks. Three times what a full LE burst needs, which is the slow
+ * case the gate exists for.
+ */
+private const val INITIAL_VALUE_MAX_WAIT_MS = 15_000L
+
+/** What a surface outside the app renders: battery level and the noise-control mode. */
+private val ESSENTIAL_INITIAL_VALUE_DOMAINS = setOf(
+    HeadphoneFeature.BATTERY,
+    HeadphoneFeature.NOISE_CONTROL,
+)
 private val MULTIPOINT_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
 
 private fun List<CapabilityValueCache>.replaceCapabilityValue(value: CapabilityValueCache): List<CapabilityValueCache> =
@@ -488,6 +524,25 @@ data class SonyHeadphoneUiState(
      * never opens against an empty half-probed profile.
      */
     val probeComplete: Boolean = false,
+    /**
+     * True once the connection-time initial-value burst is done: every domain in
+     * [HeadphoneAdapter.initialValueDomains] has answered, nothing is left to transmit and
+     * the channel has stayed quiet for [INITIAL_VALUE_SETTLE_MS] (or the wait timed out).
+     *
+     * [probeComplete] only says which features exist; it fires before a single value has
+     * come back, which over LE is some seconds ahead of the first reply. The first reply of
+     * each domain is not enough either — a domain is several queries, and commands leave the
+     * phone one at a time behind their ACK. The app UI is gated on this so it never opens on
+     * defaults that cannot be tapped, or on values that visibly jump moments later.
+     */
+    val initialValuesReady: Boolean = false,
+    /**
+     * The same gate reduced to what a surface outside the app needs: battery and
+     * noise control. The island and the connection notification render only those, so
+     * they are released as soon as those two are in rather than waiting for the whole
+     * burst the detail page needs.
+     */
+    val essentialValuesReady: Boolean = false,
 )
 
 /**
@@ -657,6 +712,46 @@ class SonyHeadphoneRepository private constructor(
             finishSupportFunctionProbe()
         }
     }
+    /**
+     * Domains from [HeadphoneAdapterRegistry.initialValueDomains] that the connection-time
+     * refresh burst has not been answered on yet. Empty means either "not armed" or
+     * "all in"; [initialValueGateArmed] tells the two apart.
+     */
+    private val pendingInitialValueDomains = mutableSetOf<HeadphoneFeature>()
+    private var initialValueGateArmed = false
+
+    /**
+     * The channel has gone quiet. Either the burst is genuinely finished (every domain in,
+     * nothing left to transmit) or the headset stopped answering a domain it advertised —
+     * both release the UI, because spinning forever on a query that will never be answered
+     * would keep every other control hidden.
+     *
+     * A still-busy transport does not count as quiet: commands leave the phone one at a
+     * time behind their ACK, so the pause between two of them is not the end of the
+     * exchange. In that case the timer is simply re-armed; [initialValueDeadlineRunnable]
+     * is what bounds the wait.
+     */
+    private val initialValueTimeoutRunnable = Runnable {
+        if (!initialValueGateArmed) return@Runnable
+        if (runCatching { client.hasOutstandingWrites() }.getOrDefault(false)) {
+            rearmInitialValueIdle()
+            return@Runnable
+        }
+        markInitialValuesReady(
+            if (pendingInitialValueDomains.isEmpty()) {
+                "channel settled after the initial burst"
+            } else {
+                "timed out waiting for $pendingInitialValueDomains"
+            },
+        )
+    }
+
+    /** The absolute ceiling on that wait; see [INITIAL_VALUE_MAX_WAIT_MS]. */
+    private val initialValueDeadlineRunnable = Runnable {
+        if (initialValueGateArmed) {
+            markInitialValuesReady("gave up waiting for $pendingInitialValueDomains")
+        }
+    }
     private val capabilityInfoTimeoutRunnable = Runnable {
         if (awaitingCapabilityInfo) {
             awaitingCapabilityInfo = false
@@ -733,6 +828,7 @@ class SonyHeadphoneRepository private constructor(
         leAudioDevicePairer.cancel()
         leAudioProfileGateway.close()
         clearSupportFunctionProbeState()
+        clearInitialValueGate()
         mainHandler.removeCallbacksAndMessages(null)
         client.close()
         pendingMultipointToggle = null
@@ -831,7 +927,12 @@ class SonyHeadphoneRepository private constructor(
         return CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())[address]
     }
 
-    fun refreshBasics() {
+    /**
+     * @param initial true for the connection-time burst. It arms the initial-value gate,
+     *   so consumers can wait for the replies instead of rendering defaults; a later
+     *   user-triggered refresh must not re-arm it and close an open detail page.
+     */
+    fun refreshBasics(initial: Boolean = false) {
         if (!_state.value.deviceInfo.protocolReady) {
             if (_state.value.connectedDevice != null && _state.value.endpointDiagnostic != null) {
                 appendLog("Refresh requested for unsupported endpoint; rerunning GATT diagnostics")
@@ -839,16 +940,148 @@ class SonyHeadphoneRepository private constructor(
             } else {
                 onBluetoothUnavailable("Sony Tandem channel is not ready; cannot refresh device state.")
             }
+            // The gate exists to wait for this burst's replies. Nothing is being sent,
+            // so there is nothing to wait for — leaving it closed would hold the UI on
+            // a session whose channel is already gone.
+            if (initial) markInitialValuesReady("channel not ready for the initial refresh")
             return
         }
         if (client.availableChannels().isEmpty()) {
             onBluetoothUnavailable("Sony Tandem channel is no longer available; reconnect required.")
+            if (initial) markInitialValuesReady("no channel for the initial refresh")
             return
         }
         val profile = ensureConnectedProfile()
+        if (initial) armInitialValueGate(profile)
         HeadphoneAdapterRegistry.buildRefreshCommands(profile)
             .forEach(::sendCommand)
         updatePlaybackStatusFromAudioManager()
+    }
+
+    /**
+     * Start waiting for the values the burst about to be sent will bring back.
+     *
+     * Only one arming per connection matters: once the gate has opened, every consumer
+     * has already been told the session is operable and taking that back would flicker
+     * the UI back to its connecting state.
+     */
+    private fun armInitialValueGate(profile: ConnectedHeadphoneProfile) {
+        if (_state.value.initialValuesReady) return
+        val domains = runCatching { HeadphoneAdapterRegistry.initialValueDomains(profile) }
+            .getOrDefault(emptySet())
+        pendingInitialValueDomains.clear()
+        pendingInitialValueDomains += domains
+        initialValueGateArmed = true
+        mainHandler.removeCallbacks(initialValueTimeoutRunnable)
+        mainHandler.removeCallbacks(initialValueDeadlineRunnable)
+        if (pendingInitialValueDomains.isEmpty()) {
+            markInitialValuesReady("no queryable domain for ${profile.protocolName}")
+            return
+        }
+        appendLog("Awaiting initial values $pendingInitialValueDomains")
+        publishEssentialValuesReady()
+        rearmInitialValueIdle()
+        mainHandler.postDelayed(initialValueDeadlineRunnable, INITIAL_VALUE_MAX_WAIT_MS)
+    }
+
+    /**
+     * Cross off the domain a freshly parsed reply belongs to, then wait for the channel to
+     * settle.
+     *
+     * The checklist alone is not a completion signal: one reply marks a domain as *started*,
+     * while BATTERY, EQ, gestures and multipoint each answer with several, and the
+     * capability replies that fill in available presets and functions carry no domain at
+     * all. So the gate never opens here — every reply only re-arms the quiet-window timer,
+     * and [initialValueTimeoutRunnable] is what releases the UI once the headset has stopped
+     * talking and nothing is left to transmit. [initialValueDeadlineRunnable] bounds it.
+     */
+    private fun noteInitialValue(parsed: ParsedTandemResponse) {
+        if (!initialValueGateArmed) return
+        val domain = initialValueDomainOf(parsed)
+        if (domain != null && pendingInitialValueDomains.remove(domain)) {
+            appendLog(
+                if (pendingInitialValueDomains.isEmpty()) {
+                    "Initial value $domain received; every domain answered, waiting for the channel to settle"
+                } else {
+                    "Initial value $domain received; waiting for $pendingInitialValueDomains"
+                },
+                writeLogcat = false,
+            )
+            publishEssentialValuesReady()
+        }
+        rearmInitialValueIdle()
+    }
+
+    /**
+     * Restart the quiet window. It is short once every domain has answered — only the rest
+     * of each domain is still outstanding — and longer while a domain has not been heard
+     * from at all, since that reply may simply be slow.
+     */
+    private fun rearmInitialValueIdle() {
+        mainHandler.removeCallbacks(initialValueTimeoutRunnable)
+        val delay = if (pendingInitialValueDomains.isEmpty()) {
+            INITIAL_VALUE_SETTLE_MS
+        } else {
+            INITIAL_VALUE_IDLE_TIMEOUT_MS
+        }
+        mainHandler.postDelayed(initialValueTimeoutRunnable, delay)
+    }
+
+    /**
+     * Which domain a reply carries a value for. Capability and protocol replies are
+     * mapped to nothing: they describe the model, not its current state, and a session
+     * that only got those still has every control sitting at its default.
+     */
+    private fun initialValueDomainOf(parsed: ParsedTandemResponse): HeadphoneFeature? = when (parsed) {
+        is ParsedTandemResponse.DeviceInfo -> HeadphoneFeature.DEVICE_INFO
+        is ParsedTandemResponse.Battery -> HeadphoneFeature.BATTERY
+        is ParsedTandemResponse.NoiseControl -> HeadphoneFeature.NOISE_CONTROL
+        is ParsedTandemResponse.EqEbb,
+        is ParsedTandemResponse.EqEbbExtendedInfo -> HeadphoneFeature.EQ
+        is ParsedTandemResponse.PlaybackAck,
+        is ParsedTandemResponse.PlaybackVolume,
+        is ParsedTandemResponse.PlaybackMetadata,
+        is ParsedTandemResponse.PlaybackMetadataField -> HeadphoneFeature.PLAYBACK_CONTROL
+        is ParsedTandemResponse.LeaStatus,
+        is ParsedTandemResponse.LeaPairedHistoryStatus,
+        is ParsedTandemResponse.LeaSettingAvailability,
+        is ParsedTandemResponse.LeaParameterNotification -> HeadphoneFeature.LEA_STATUS
+        is ParsedTandemResponse.QuickAccess,
+        is ParsedTandemResponse.QuickAccessStatus -> HeadphoneFeature.QUICK_ACCESS
+        is ParsedTandemResponse.AssignableSettingsPresets,
+        is ParsedTandemResponse.AssignableSettingsStatus,
+        is ParsedTandemResponse.AssignableSettingsExtendedParam -> HeadphoneFeature.GESTURE_OPERATIONS
+        is ParsedTandemResponse.WearingStatus -> HeadphoneFeature.WEARING_STATUS
+        is ParsedTandemResponse.MultipointStatus,
+        is ParsedTandemResponse.MultipointDevices,
+        is ParsedTandemResponse.SourceSwitchStatus,
+        is ParsedTandemResponse.MusicHandOverStatus -> HeadphoneFeature.MULTIPOINT
+        else -> null
+    }
+
+    private fun markInitialValuesReady(reason: String) {
+        mainHandler.removeCallbacks(initialValueTimeoutRunnable)
+        mainHandler.removeCallbacks(initialValueDeadlineRunnable)
+        pendingInitialValueDomains.clear()
+        initialValueGateArmed = false
+        if (_state.value.initialValuesReady && _state.value.essentialValuesReady) return
+        _state.update { it.copy(initialValuesReady = true, essentialValuesReady = true) }
+        appendLog("Initial values ready ($reason)")
+    }
+
+    /** Release the island/notification as soon as their own two domains are in. */
+    private fun publishEssentialValuesReady() {
+        if (_state.value.essentialValuesReady) return
+        if (pendingInitialValueDomains.any { it in ESSENTIAL_INITIAL_VALUE_DOMAINS }) return
+        _state.update { it.copy(essentialValuesReady = true) }
+        appendLog("Essential values ready; waiting for $pendingInitialValueDomains", writeLogcat = false)
+    }
+
+    private fun clearInitialValueGate() {
+        mainHandler.removeCallbacks(initialValueTimeoutRunnable)
+        mainHandler.removeCallbacks(initialValueDeadlineRunnable)
+        pendingInitialValueDomains.clear()
+        initialValueGateArmed = false
     }
 
     /**
@@ -892,7 +1125,7 @@ class SonyHeadphoneRepository private constructor(
             appendLog("No support-function probe for ${profile.protocolName}; falling back to direct refresh")
             clearSupportFunctionProbeState()
             markProbeComplete()
-            refreshBasics()
+            refreshBasics(initial = true)
             return
         }
         supportCommands.forEach { command ->
@@ -924,7 +1157,7 @@ class SonyHeadphoneRepository private constructor(
             )
             clearSupportFunctionProbeState()
             markProbeComplete()
-            refreshBasics()
+            refreshBasics(initial = true)
             return
         }
         appendLog(
@@ -2197,6 +2430,7 @@ class SonyHeadphoneRepository private constructor(
             pendingCapabilityIdentifier = ""
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
             clearSupportFunctionProbeState()
+            clearInitialValueGate()
         }
         val pendingForConnection = if (connected && device != null) {
             pendingMultipointToggle?.takeIf { it.address.equals(device.address, ignoreCase = true) }
@@ -2309,6 +2543,8 @@ class SonyHeadphoneRepository private constructor(
                 scanState = if (connected) "Connected" else "Idle",
                 supportedFeatures = featureStatusesFor(profile),
                 probeComplete = if (connected) it.probeComplete else false,
+                initialValuesReady = if (connected) it.initialValuesReady else false,
+                essentialValuesReady = if (connected) it.essentialValuesReady else false,
             )
         }
     }
@@ -2346,7 +2582,8 @@ class SonyHeadphoneRepository private constructor(
                 appendLog("Drop RX [$channel] frame: no connected device yet")
                 return
             }
-        when (val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)) {
+        val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)
+        when (parsed) {
             is ParsedTandemResponse.DeviceInfo -> applyDeviceInfo(parsed)
             is ParsedTandemResponse.CommonStatus -> applyCommonStatus(parsed)
             is ParsedTandemResponse.Battery -> applyBattery(parsed)
@@ -2402,6 +2639,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.ConnectCapabilityInfo -> applyConnectCapabilityInfo(parsed)
             is ParsedTandemResponse.CapabilityInfo -> applyCapabilityInfo(parsed)
         }
+        // After the handler, so the value is already in the state when the gate opens.
+        noteInitialValue(parsed)
     }
 
     override fun onLog(message: String) {
@@ -3482,6 +3721,10 @@ class SonyHeadphoneRepository private constructor(
             appendLog("Protocol version rejected; capability probing aborted (SC C29903d/C30916e)")
             clearSupportFunctionProbeState()
             markProbeComplete()
+            // No refresh burst follows this abort, so nothing would ever answer the
+            // initial-value gate. Release it instead of leaving every consumer waiting
+            // for values this session is never going to ask for.
+            markInitialValuesReady("capability probing aborted")
             return
         }
         val table = response.table.takeIf { it != dev.sonypods.protocol.SonyTable.INVALID }
@@ -3505,7 +3748,7 @@ class SonyHeadphoneRepository private constructor(
         if (functions.isEmpty()) {
             appendLog("No support functions received; falling back to direct refresh")
             markProbeComplete()
-            refreshBasics()
+            refreshBasics(initial = true)
             return
         }
         val alreadyProbed = _state.value.connectedProfile?.protocolEvidence
@@ -3532,7 +3775,7 @@ class SonyHeadphoneRepository private constructor(
         if (!alreadyProbed) {
             probeCommands.forEach(::sendCommand)
         }
-        refreshBasics()
+        refreshBasics(initial = true)
         markProbeComplete()
     }
 

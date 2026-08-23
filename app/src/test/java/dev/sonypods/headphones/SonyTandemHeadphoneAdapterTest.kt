@@ -840,6 +840,110 @@ class SonyTandemHeadphoneAdapterTest {
         assertEquals(listOf(88), parsed.values)
     }
 
+    // ── Connection-time initial-value gate ───────────────────────────────────
+
+    @Test
+    fun initialValueDomains_neutralProfile_onlyTheAlwaysSafeReads() {
+        // The neutral profile enables device info and battery only, so those are the
+        // only replies a caller may wait for before the probe has run.
+        assertEquals(
+            setOf(HeadphoneFeature.DEVICE_INFO, HeadphoneFeature.BATTERY),
+            SonyTandemHeadphoneAdapter.initialValueDomains(HeadphoneAdapterRegistry.resolve(xm4Device())),
+        )
+    }
+
+    @Test
+    fun initialValueDomains_probedLinkBudsS_coversEveryProbedValueDomain() {
+        val profile = probed(
+            linkBudsSDevice(),
+            v2NcAsm17(), v2Eq(), v2TwsBattery(), v2Play(), v2Lea(), v2QuickAccess(), v2Wearing(),
+        )
+        assertEquals(
+            setOf(
+                HeadphoneFeature.DEVICE_INFO,
+                HeadphoneFeature.BATTERY,
+                HeadphoneFeature.NOISE_CONTROL,
+                HeadphoneFeature.EQ,
+                HeadphoneFeature.PLAYBACK_CONTROL,
+                HeadphoneFeature.LEA_STATUS,
+                HeadphoneFeature.QUICK_ACCESS,
+                HeadphoneFeature.WEARING_STATUS,
+            ),
+            SonyTandemHeadphoneAdapter.initialValueDomains(profile),
+        )
+    }
+
+    @Test
+    fun initialValueDomains_probedV1_staysWithinTheV1FeatureSet() {
+        // WH-1000XM4 on V1 has no LEA / Quick Access / wearing / multipoint domain;
+        // waiting for one would stall every connection until the idle timeout.
+        assertEquals(
+            setOf(
+                HeadphoneFeature.DEVICE_INFO,
+                HeadphoneFeature.BATTERY,
+                HeadphoneFeature.NOISE_CONTROL,
+                HeadphoneFeature.EQ,
+                HeadphoneFeature.PLAYBACK_CONTROL,
+            ),
+            SonyTandemHeadphoneAdapter.initialValueDomains(probedV1(xm4Device(), v1FullSet())),
+        )
+    }
+
+    @Test
+    fun initialValueDomains_neverExceedTheSupportedFeatures() {
+        // A domain the profile does not support is never queried, so declaring it
+        // would make the gate wait for a reply that cannot arrive.
+        val profiles = listOf(
+            HeadphoneAdapterRegistry.resolve(xm4Device()),
+            HeadphoneAdapterRegistry.resolve(linkBudsSDevice()),
+            probed(linkBudsSDevice(), v2NcAsm17(), v2Eq(), v2TwsBattery(), v2Play()),
+            probed(linkBudsSDevice(), v2NcAsm17(), v2Eq(), v2TwsBattery(), v2Play(), v2Lea(), v2QuickAccess(), v2Wearing()),
+            probedV1(xm4Device(), v1FullSet()),
+        )
+        for (profile in profiles) {
+            for (domain in SonyTandemHeadphoneAdapter.initialValueDomains(profile)) {
+                assertTrue(
+                    "${profile.modelName} declares $domain without supporting it",
+                    profile.supports(domain),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun initialValueDomains_everyDomainHasACommandInTheBurst() {
+        // The gate waits for exactly these domains, and the burst is the only thing
+        // that will ever answer it. Cross-check the two so a domain can never be
+        // declared without a GET behind it.
+        val labelsByDomain = mapOf(
+            HeadphoneFeature.DEVICE_INFO to "GET device info",
+            HeadphoneFeature.BATTERY to "GET battery",
+            HeadphoneFeature.NOISE_CONTROL to "GET NC/ASM",
+            HeadphoneFeature.EQ to "GET EQ",
+            HeadphoneFeature.PLAYBACK_CONTROL to "GET playback status",
+            HeadphoneFeature.LEA_STATUS to "GET LEA",
+            HeadphoneFeature.QUICK_ACCESS to "GET Quick Access status",
+            HeadphoneFeature.GESTURE_OPERATIONS to "GET gesture status",
+            HeadphoneFeature.MULTIPOINT to "GET multipoint status",
+            HeadphoneFeature.WEARING_STATUS to "GET Wearing status",
+        )
+        val profiles = listOf(
+            HeadphoneAdapterRegistry.resolve(xm4Device()),
+            probed(linkBudsSDevice(), v2NcAsm17(), v2Eq(), v2TwsBattery(), v2Play(), v2Lea(), v2QuickAccess(), v2Wearing()),
+            probedV1(xm4Device(), v1FullSet()),
+        )
+        for (profile in profiles) {
+            val labels = SonyTandemHeadphoneAdapter.buildRefreshCommands(profile).map { it.label }
+            for (domain in SonyTandemHeadphoneAdapter.initialValueDomains(profile)) {
+                val prefix = labelsByDomain.getValue(domain)
+                assertTrue(
+                    "${profile.modelName} declares $domain but the burst has no \"$prefix\" command",
+                    labels.any { it.startsWith(prefix) },
+                )
+            }
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun fn(code: Byte, order: Int = 0) = SonySupportedFunction(code, order)

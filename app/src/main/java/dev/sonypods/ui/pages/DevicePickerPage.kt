@@ -72,6 +72,15 @@ fun DevicePickerPage(
     connectedDeviceName: String = "",
     connectedDeviceAddress: String = "",
     connectingDeviceAddress: String? = null,
+    /**
+     * Whether the connected headset's Tandem control channel is up and its capabilities known.
+     *
+     * A Bluetooth link is not yet a control channel: over LE the headset can take some ten seconds
+     * to answer the protocol handshake, and until it has, every control the page could reach is
+     * inert. The connected row keeps its spinner for that whole window rather than offering a
+     * disconnect button for a session that is still coming up.
+     */
+    controlChannelReady: Boolean = true,
     showConnectError: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     bottomContentPadding: Dp = 16.dp,
@@ -213,7 +222,8 @@ fun DevicePickerPage(
                         title = device.name ?: stringResource(R.string.unknown_device),
                         summary = device.address,
                         connected = connected,
-                        connecting = device.address == connectingDeviceAddress,
+                        connecting = device.address == connectingDeviceAddress ||
+                            (connected && !controlChannelReady),
                         onClick = { if (connected) onConnectedDeviceClick() else onDeviceSelected(device) },
                         onDisconnect = { onDeviceDisconnect(device) },
                     )
@@ -277,6 +287,10 @@ fun DevicePickerPage(
 
 }
 
+/**
+ * One paired device. [connecting] takes the place of the disconnect button, because a session that
+ * is still being established has nothing to disconnect from yet.
+ */
 @Composable
 private fun DeviceRow(
     title: String,

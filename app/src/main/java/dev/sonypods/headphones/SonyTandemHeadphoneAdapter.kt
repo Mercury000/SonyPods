@@ -252,6 +252,82 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
         }
 
+    /**
+     * The refresh burst above, reduced to the domains that answer with a value.
+     *
+     * Derived by asking the same builders the burst uses, not by restating its
+     * conditions: a domain is listed only when a GET that carries a value was
+     * actually built for this profile. A domain declared without a query behind it
+     * would hold every consumer until the idle timeout, so "supported" alone is not
+     * enough — the capability table can advertise a feature whose codec has no
+     * getter on this protocol generation.
+     *
+     * Capability-only queries are excluded on the same grounds: their replies
+     * describe the model rather than its state, so a domain that can only answer
+     * with one (Quick Access, gestures, playback) does not count as answered. The
+     * alert-arming SETs and the protocol-info exchange are absent for the same
+     * reason.
+     */
+    override fun initialValueDomains(profile: ConnectedHeadphoneProfile): Set<HeadphoneFeature> =
+        buildSet {
+            if (profile.supports(HeadphoneFeature.DEVICE_INFO)) {
+                val codec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
+                if (DeviceInfoType.entries.any { codec.buildGetDeviceInfo(it) != null }) {
+                    add(HeadphoneFeature.DEVICE_INFO)
+                }
+            }
+            // Already gated on supports(BATTERY) and on a non-empty query list.
+            if (buildRefreshBatteryCommands(profile).isNotEmpty()) add(HeadphoneFeature.BATTERY)
+            if (profile.supports(HeadphoneFeature.NOISE_CONTROL) &&
+                buildRefreshNoiseControlCommands(profile).isNotEmpty()
+            ) {
+                add(HeadphoneFeature.NOISE_CONTROL)
+            }
+            if (profile.supports(HeadphoneFeature.EQ) && buildRefreshEqCommands(profile).isNotEmpty()) {
+                add(HeadphoneFeature.EQ)
+            }
+            if (profile.supports(HeadphoneFeature.PLAYBACK_CONTROL)) {
+                val codec = codecFor(profile, HeadphoneFeature.PLAYBACK_CONTROL)
+                val type = profile.capabilities.playbackControlType
+                val hasValueQuery = codec.buildGetPlaybackStatus(type) != null ||
+                    codec.buildGetPlaybackMetadata(type).isNotEmpty() ||
+                    codec.buildGetPlaybackVolume(volumeType(profile)) != null
+                if (hasValueQuery) add(HeadphoneFeature.PLAYBACK_CONTROL)
+            }
+            if (profile.supports(HeadphoneFeature.LEA_STATUS) &&
+                buildRefreshLeaCommands(profile).isNotEmpty()
+            ) {
+                add(HeadphoneFeature.LEA_STATUS)
+            }
+            if (profile.supports(HeadphoneFeature.QUICK_ACCESS)) {
+                val codec = codecFor(profile, HeadphoneFeature.QUICK_ACCESS)
+                if (codec.buildGetQuickAccessStatus() != null || codec.buildGetQuickAccess() != null) {
+                    add(HeadphoneFeature.QUICK_ACCESS)
+                }
+            }
+            if (profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
+                val codec = codecFor(profile, HeadphoneFeature.GESTURE_OPERATIONS)
+                val type = profile.capabilities.gestureSettingsType
+                val hasValueQuery = codec.buildGetAssignableSettingsStatus(type) != null ||
+                    codec.buildGetAssignableSettingsPresets(type) != null ||
+                    codec.buildGetAssignableSettingsExtendedParam(type) != null
+                if (hasValueQuery) add(HeadphoneFeature.GESTURE_OPERATIONS)
+            }
+            // The burst queries the peripheral domain before the probe has enabled
+            // multipoint; wait for it only where the headset actually has it, or a
+            // model without multipoint would stall on a reply that never comes.
+            if (profile.supports(HeadphoneFeature.MULTIPOINT) &&
+                buildRefreshMultipointCommands(profile).isNotEmpty()
+            ) {
+                add(HeadphoneFeature.MULTIPOINT)
+            }
+            if (profile.supports(HeadphoneFeature.WEARING_STATUS) &&
+                codecFor(profile, HeadphoneFeature.WEARING_STATUS).buildGetWearingStatus() != null
+            ) {
+                add(HeadphoneFeature.WEARING_STATUS)
+            }
+        }
+
     override fun canWrite(profile: ConnectedHeadphoneProfile, feature: HeadphoneFeature): Boolean =
         when (feature) {
             HeadphoneFeature.LEA_STATUS ->

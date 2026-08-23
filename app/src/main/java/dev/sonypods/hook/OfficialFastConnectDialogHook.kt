@@ -1111,7 +1111,11 @@ object OfficialFastConnectDialogHook : HookContext() {
             Log.d(TAG, "official dialog state=connecting address=$address")
         }
 
-        if (!snapshot.probeComplete) return
+        // The dialog's success state is a battery readout, so the probe alone is not
+        // enough: it says a battery feature exists, not what it reads. Hold the
+        // connecting state until the value itself has come back — over LE the gap is
+        // seconds, and filling the dialog before that shows an empty level.
+        if (!snapshot.probeComplete || !snapshot.essentialValuesReady) return
         activeView?.let { view ->
             refreshBatteryText(view, snapshot)
             refreshBatteryIcons(view, snapshot)
