@@ -316,14 +316,14 @@ object SonyTandemV1Table1Protocol {
             PLAY_RET_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
-                enabled = payload.getOrNull(1)?.let { it.unsigned == 0 },
+                enabled = playStatusEnabled(payload),
                 isUnsolicited = false,
                 raw = raw,
             )
             PLAY_NTFY_STATUS -> ParsedTandemResponse.PlaybackAck(
                 values = payload.unsignedList(),
                 status = parsePlaybackStatus(payload),
-                enabled = payload.getOrNull(1)?.let { it.unsigned == 0 },
+                enabled = playStatusEnabled(payload),
                 isUnsolicited = true,
                 raw = raw,
             )
@@ -405,13 +405,26 @@ object SonyTandemV1Table1Protocol {
         )
     }
 
+    /** Transport state, and only for the playback types: 0x40 PLAY_MODE carries its play mode at
+     * this same offset, whose codes overlap PLAYING/PAUSED/STOPPED. */
     private fun parsePlaybackStatus(payload: ByteArray): PlaybackStatus =
-        when (payload.getOrNull(2)?.unsigned) {
-            1 -> PlaybackStatus.PLAYING
-            2 -> PlaybackStatus.PAUSED
-            3 -> PlaybackStatus.STOPPED
-            else -> PlaybackStatus.UNKNOWN
+        if (payload.firstOrNull()?.unsigned !in 1..3) {
+            PlaybackStatus.UNKNOWN
+        } else {
+            when (payload.getOrNull(2)?.unsigned) {
+                1 -> PlaybackStatus.PLAYING
+                2 -> PlaybackStatus.PAUSED
+                3 -> PlaybackStatus.STOPPED
+                else -> PlaybackStatus.UNKNOWN
+            }
         }
+
+    /** STATUS enable bit; guarded the same way, so a PLAY_MODE reply cannot grey out the
+     * playback card. */
+    private fun playStatusEnabled(payload: ByteArray): Boolean? =
+        payload.getOrNull(1)
+            ?.takeIf { payload.firstOrNull()?.unsigned in 1..3 }
+            ?.let { it.unsigned == 0 }
 
     /** [type, volumeStep, PlaybackControlType, MetaDataDisplayType]; falls back to
      * the generic capability dump so the debug page still shows odd replies. */

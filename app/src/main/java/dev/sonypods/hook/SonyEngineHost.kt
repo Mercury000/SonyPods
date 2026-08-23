@@ -66,6 +66,8 @@ object SonyEngineHost {
     private const val CONNECTION_POLICY_FORBIDDEN = 0
     /** How often a missing LE Audio identity is looked for in the bond list. */
     private const val LE_IDENTITY_RESCAN_MS = 5_000L
+    /** `LeAudioService.LE_AUDIO_GROUP_ID_INVALID`: what `getActiveGroupId` answers with no route. */
+    private const val LE_AUDIO_GROUP_ID_INVALID = -1
 
     private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scope = newGenerationScope()
@@ -439,6 +441,31 @@ object SonyEngineHost {
         Log.d(TAG, "refresh requested: $reason")
         runCatching { repo.refreshBasics() }
             .onFailure { Log.w(TAG, "refresh failed reason=$reason", it) }
+    }
+
+    /**
+     * Re-reads the stack's own LE Audio facts and pushes them out.
+     *
+     * Publishing is driven by the repository's state changing, and none of what
+     * [withLeAudioPolicy] adds lives there: the LE Audio profile connecting, or its group becoming
+     * the audio route, moves nothing the collector watches. So the surfaces would keep showing the
+     * reading taken at the last headset event — the switch summary in particular sticking on
+     * "waiting for the system to establish LC3" long after it had. The LE Audio hooks call this on
+     * every state and active-device change.
+     */
+    fun republishLeAudioState(reason: String) {
+        val context = appContext ?: return
+        val base = lastSnapshot ?: return
+        val updated = withLeAudioPolicy(base)
+        if (updated == base) return
+        lastSnapshot = updated
+        cloudFallback?.onState(updated)
+        publish(context, updated)
+        Log.d(
+            TAG,
+            "LE Audio state republished reason=$reason connected=${updated.leAudioSystemConnected} " +
+                "active=${updated.leAudioSystemActive}"
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -963,14 +990,9 @@ object SonyEngineHost {
      * is untouched in both directions, which is why re-enabling needs no re-pairing.
      */
     private fun applyLeAudioPolicy(device: BluetoothDevice, allowed: Boolean): Boolean {
-        val service = adapterService() ?: return false
+        val leAudio = leAudioService() ?: return false
         val policy = if (allowed) CONNECTION_POLICY_ALLOWED else CONNECTION_POLICY_FORBIDDEN
         return runCatching {
-            val leAudio = (service.javaClass.getMethod("getLeAudioService")
-                .apply { isAccessible = true }
-                .invoke(service) as? java.util.Optional<*>)
-                ?.orElse(null)
-                ?: return false
             leAudio.javaClass
                 .getMethod("setConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
                 .apply { isAccessible = true }
@@ -983,20 +1005,90 @@ object SonyEngineHost {
     }
 
     /**
-     * Adds the two facts only this process can see to a repository-built snapshot.
+     * The running `LeAudioService`, or null while the profile is not up.
+     *
+     * `AdapterService.getLeAudioService` answers an `Optional`, empty until the profile starts and
+     * again once it stops — so a null here is "no LE Audio profile right now", not an error.
+     */
+    private fun leAudioService(): Any? {
+        val service = adapterService() ?: return null
+        return runCatching {
+            (service.javaClass.getMethod("getLeAudioService")
+                .apply { isAccessible = true }
+                .invoke(service) as? java.util.Optional<*>)
+                ?.orElse(null)
+        }.getOrElse {
+            Log.w(TAG, "LE Audio service lookup failed", it)
+            null
+        }
+    }
+
+    /** What the stack currently holds for one of the headset's identities. Nulls mean unreadable. */
+    private data class LeAudioSystemState(val connected: Boolean?, val active: Boolean?)
+
+    /**
+     * Whether the stack has LE Audio connected to this headset, and whether it is the audio route.
+     *
+     * "Active" is decided by group, not by device: `getActiveGroupId` names the group the stack is
+     * routing to, and a coordinated set answers with one group id for either bud and for either
+     * identity of a dual-mode headset. Comparing group ids therefore holds however the headset is
+     * bonded and whichever bud the stack happens to have made active — where comparing addresses
+     * against `getActiveDevices` would miss the other identity.
+     */
+    private fun leAudioSystemState(devices: List<BluetoothDevice>): LeAudioSystemState {
+        if (devices.isEmpty()) return LeAudioSystemState(null, null)
+        val service = leAudioService() ?: return LeAudioSystemState(null, null)
+        val states = devices.map { leAudioIntCall(service, "getConnectionState", it) }
+        val connected = if (states.all { it == null }) null
+        else states.any { it == BluetoothProfile.STATE_CONNECTED }
+        val activeGroup = leAudioIntCall(service, "getActiveGroupId")
+        val active = when {
+            activeGroup == null -> null
+            activeGroup == LE_AUDIO_GROUP_ID_INVALID -> false
+            else -> {
+                val groups = devices.map { leAudioIntCall(service, "getGroupId", it) }
+                if (groups.all { it == null }) null else groups.any { it == activeGroup }
+            }
+        }
+        return LeAudioSystemState(connected, active)
+    }
+
+    /** One reflective int read off the profile service; null when it is not available to us. */
+    private fun leAudioIntCall(service: Any, name: String, device: BluetoothDevice? = null): Int? =
+        runCatching {
+            val method = if (device == null) {
+                service.javaClass.getMethod(name)
+            } else {
+                service.javaClass.getMethod(name, BluetoothDevice::class.java)
+            }
+            method.isAccessible = true
+            val result = if (device == null) method.invoke(service) else method.invoke(service, device)
+            (result as? Int) ?: (result as? Number)?.toInt()
+        }.getOrElse {
+            Log.w(TAG, "LE Audio $name read failed", it)
+            null
+        }
+
+
+    /**
+     * Adds the facts only this process can see to a repository-built snapshot.
      *
      * `leAudioIdentityAddress` is the identity the permission would be written to, and doubles as
      * "the system has a device to permit LE Audio on at all"; `leAudioPolicyAllowed` is the
-     * position of its switch, null only when no read succeeded. Both fields are always written, so
-     * a bond that has gone away clears them instead of leaving the last reading in place.
+     * position of its switch, null only when no read succeeded. `leAudioSystemConnected` and
+     * `leAudioSystemActive` are what the stack has actually done with that permission. All are
+     * always written, so a bond that has gone away clears them instead of leaving the last reading
+     * in place.
      *
      * A headset can hold two records — one per identity — and the two need not agree. Permitted on
      * either means the system may route LC3, so that is what the switch shows.
      */
     private fun withLeAudioPolicy(base: SonyStateSnapshot): SonyStateSnapshot {
         val address = base.deviceAddress ?: return base
-        val readings = leAudioPolicyDevices(address).map { it to rawLeAudioPolicy(it) }
-        logLeAudioPolicy(address, readings)
+        val devices = leAudioPolicyDevices(address)
+        val readings = devices.map { it to rawLeAudioPolicy(it) }
+        val system = leAudioSystemState(devices)
+        logLeAudioPolicy(address, readings, system)
         val known = readings.mapNotNull { it.second }
         val target = readings.firstOrNull { (_, policy) ->
             policy != null && policy > CONNECTION_POLICY_FORBIDDEN
@@ -1005,19 +1097,26 @@ object SonyEngineHost {
             leAudioIdentityAddress = target?.let { runCatching { it.address }.getOrNull() },
             leAudioPolicyAllowed = if (known.isEmpty()) null
             else known.any { it > CONNECTION_POLICY_FORBIDDEN },
+            leAudioSystemConnected = system.connected,
+            leAudioSystemActive = system.active,
         )
     }
 
     /** One line per change in what the stack reports, so a wrong switch position is diagnosable. */
-    private fun logLeAudioPolicy(control: String, readings: List<Pair<BluetoothDevice, Int?>>) {
+    private fun logLeAudioPolicy(
+        control: String,
+        readings: List<Pair<BluetoothDevice, Int?>>,
+        system: LeAudioSystemState,
+    ) {
         val line = readings.joinToString(",") { (device, policy) ->
             "${runCatching { device.address }.getOrNull()}=$policy"
         }.ifEmpty { "no le audio capable bond" }
-        val summary = "$control -> $line"
+        val summary = "$control -> $line connected=${system.connected} active=${system.active}"
         if (summary == lastLeAudioPolicyLog) return
         lastLeAudioPolicyLog = summary
         Log.i(TAG, "LE Audio policy $summary")
     }
+
 
     /**
      * [snapshot] with the system-side LE Audio permission re-read.

@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -233,6 +234,7 @@ private fun LazyListScope.podControlItems(
         item {
             MultipointEntryCard(
                 state = uiState.multipoint,
+                leAudioRestricted = uiState.connectedViaLeAudio,
                 onOpen = actions.onOpenMultipointSettings,
             )
         }
@@ -255,8 +257,11 @@ private fun LeAudioCard(
     actions: SonyDetailActions,
 ) {
     val enabled = uiState.leaStatus == "ENABLE"
-    val usingLc3 = uiState.leaStreamingStatusL == "VIA_LE_AUDIO_UNICAST" ||
-        uiState.leaStreamingStatusR == "VIA_LE_AUDIO_UNICAST"
+    // Two witnesses, either conclusive: the stack routing this headset's LE Audio group, or the
+    // headset reporting a bud streaming unicast. The headset's own report only arrives with a LEA
+    // status notification, so waiting for it alone left this summary stuck on "等待系统建立 LC3".
+    val usingLc3 = uiState.usingLeAudio
+
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         SwitchPreference(
@@ -348,6 +353,8 @@ private fun AncControlCard(uiState: SonyStateSnapshot, actions: SonyDetailAction
 @Composable
 private fun MultipointEntryCard(
     state: MultipointSnapshot,
+    /** Connected over LE Audio, where the headset cannot hold a second device at all. */
+    leAudioRestricted: Boolean,
     onOpen: () -> Unit,
 ) {
     // Mirrors the official dashboard card (SC `so.q` /
@@ -362,21 +369,53 @@ private fun MultipointEntryCard(
     } else {
         state.multipointEnabled == false
     }
+    // Under LC3 there is nothing to open: the settings page holds one switch the headset would
+    // refuse, so the card stops being a link rather than leading to a dead end.
+    if (leAudioRestricted) {
+        Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+            MultipointEntryContent(
+                state = state,
+                slotCount = slotCount,
+                multipointDisabled = multipointDisabled,
+                leAudioRestricted = true,
+            )
+        }
+        return
+    }
     Card(
         modifier = Modifier.padding(horizontal = 12.dp),
         showIndication = true,
         onClick = onOpen,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "同时连接2台设备",
-                modifier = Modifier.weight(1f),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-            )
+        MultipointEntryContent(
+            state = state,
+            slotCount = slotCount,
+            multipointDisabled = multipointDisabled,
+            leAudioRestricted = false,
+        )
+    }
+}
+
+@Composable
+private fun MultipointEntryContent(
+    state: MultipointSnapshot,
+    slotCount: Int,
+    multipointDisabled: Boolean,
+    leAudioRestricted: Boolean,
+) {
+    val contentAlpha = if (leAudioRestricted) 0.38f else 1f
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "同时连接2台设备",
+            modifier = Modifier.weight(1f).alpha(contentAlpha),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        // No chevron while restricted: the card is not a link then.
+        if (!leAudioRestricted) {
             Icon(
                 imageVector = MiuixIcons.Basic.ArrowRight,
                 contentDescription = null,
@@ -384,61 +423,65 @@ private fun MultipointEntryCard(
                 tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
             )
         }
-        if (multipointDisabled) {
-            // 功能关闭：不显示两个未连接槽位，居中显示"关闭"（高度约两个槽位行）。
-            Box(
+    }
+    if (leAudioRestricted || multipointDisabled) {
+        // 功能关闭：不显示两个未连接槽位，居中显示"关闭"（高度约两个槽位行）。
+        // 通过 LE Audio 连接时同样占用这个位置，说明这不是用户关掉的，而是连接方式决定的。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(76.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (leAudioRestricted) "在通过 LE Audio 连接时，此功能不可用" else "关闭",
+                modifier = Modifier.padding(horizontal = 16.dp).alpha(contentAlpha),
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+    } else {
+        (1..slotCount).forEach { slot ->
+            val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
+            val holdsPlayback = device != null && state.playbackRight > 0 &&
+                device.connectedStatus == state.playbackRight
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(76.dp),
-                contentAlignment = Alignment.Center,
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(bottom = if (slot == slotCount) 10.dp else 0.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "关闭",
-                    fontSize = 16.sp,
+                    text = "$slot.",
+                    modifier = Modifier.widthIn(min = 22.dp),
+                    fontSize = 14.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
-            }
-        } else {
-            (1..slotCount).forEach { slot ->
-                val device = state.connectedDevices.firstOrNull { it.connectedStatus == slot }
-                val holdsPlayback = device != null && state.playbackRight > 0 &&
-                    device.connectedStatus == state.playbackRight
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .padding(bottom = if (slot == slotCount) 10.dp else 0.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "$slot.",
-                        modifier = Modifier.widthIn(min = 22.dp),
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                if (holdsPlayback) {
+                    Icon(
+                        imageVector = MiuixIcons.VolumeUp,
+                        contentDescription = "正在播放",
+                        modifier = Modifier.size(18.dp).padding(end = 2.dp),
+                        tint = MiuixTheme.colorScheme.primary,
                     )
-                    if (holdsPlayback) {
-                        Icon(
-                            imageVector = MiuixIcons.VolumeUp,
-                            contentDescription = "正在播放",
-                            modifier = Modifier.size(18.dp).padding(end = 2.dp),
-                            tint = MiuixTheme.colorScheme.primary,
-                        )
-                        Spacer(modifier = Modifier.widthIn(min = 4.dp))
-                    }
-                    Text(
-                        text = device?.name?.ifBlank { device.address } ?: "未连接",
-                        fontSize = 14.sp,
-                        color = if (device != null) {
-                            MiuixTheme.colorScheme.onSurface
-                        } else {
-                            MiuixTheme.colorScheme.onSurfaceVariantSummary
-                        },
-                    )
+                    Spacer(modifier = Modifier.widthIn(min = 4.dp))
                 }
+                Text(
+                    text = device?.name?.ifBlank { device.address } ?: "未连接",
+                    fontSize = 14.sp,
+                    color = if (device != null) {
+                        MiuixTheme.colorScheme.onSurface
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
+                )
             }
         }
     }
 }
+
 
 @Composable
 private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {

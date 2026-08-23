@@ -1108,12 +1108,18 @@ object SonyTandemV2Table1Protocol {
         )
     }
 
+    /** Transport state, and only for the playback types: 0x40 PLAY_MODE carries its play mode at
+     * this same offset, whose codes overlap PLAYING/PAUSED/STOPPED. */
     private fun parsePlaybackStatus(payload: ByteArray): PlaybackStatus =
-        when (payload.getOrNull(2)?.unsigned) {
-            1 -> PlaybackStatus.PLAYING
-            2 -> PlaybackStatus.PAUSED
-            3 -> PlaybackStatus.STOPPED
-            else -> PlaybackStatus.UNKNOWN
+        if (payload.firstOrNull()?.unsigned !in 1..3) {
+            PlaybackStatus.UNKNOWN
+        } else {
+            when (payload.getOrNull(2)?.unsigned) {
+                1 -> PlaybackStatus.PLAYING
+                2 -> PlaybackStatus.PAUSED
+                3 -> PlaybackStatus.STOPPED
+                else -> PlaybackStatus.UNKNOWN
+            }
         }
 
     /** STATUS enable bit; only for the playback types — 0x40 PLAY_MODE has its own

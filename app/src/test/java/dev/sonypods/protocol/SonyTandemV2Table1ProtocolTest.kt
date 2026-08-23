@@ -1506,4 +1506,56 @@ class SonyTandemV2Table1ProtocolTest {
             SonyTandemV2Table1Protocol.buildReplyAlertFixedMessageWithLeftRightSelection(49, action = 2),
         )
     }
+
+    /**
+     * PLAY_MODE (inquired type 0x40) shares the STATUS layout with the playback types: its
+     * enable byte sits at [1] and its mode at [2], where the mode codes overlap
+     * PLAYING/PAUSED/STOPPED. Reading it as playback would grey out the playback card and
+     * report a bogus transport state, so both fields must stay unset.
+     */
+    @Test
+    fun parser_playModeStatus_isNotReadAsPlaybackState() {
+        listOf<Byte>(0xA3.toByte(), 0xA5.toByte()).forEach { command ->
+            val parsed = SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, command, 0x40, 0x00, 0x01)
+            )
+
+            assertTrue(parsed is ParsedTandemResponse.PlaybackAck)
+            parsed as ParsedTandemResponse.PlaybackAck
+            assertEquals(PlaybackStatus.UNKNOWN, parsed.status)
+            assertEquals(null, parsed.enabled)
+        }
+    }
+
+    @Test
+    fun parser_v1PlayModeStatus_isNotReadAsPlaybackState() {
+        listOf<Byte>(0xA3.toByte(), 0xA5.toByte()).forEach { command ->
+            val parsed = SonyTandemV1Table1Protocol.parse(
+                byteArrayOf(0x0E, command, 0x40, 0x00, 0x01)
+            )
+
+            assertTrue(parsed is ParsedTandemResponse.PlaybackAck)
+            parsed as ParsedTandemResponse.PlaybackAck
+            assertEquals(PlaybackStatus.UNKNOWN, parsed.status)
+            assertEquals(null, parsed.enabled)
+        }
+    }
+
+    /** The guard must not swallow the real playback types: 0x00 at [1] means ENABLE. */
+    @Test
+    fun parser_playbackStatus_stillReportsEnableForPlaybackTypes() {
+        listOf<Byte>(0x01, 0x02, 0x03).forEach { inquiredType ->
+            val v2 = SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xA5.toByte(), inquiredType, 0x00, 0x01)
+            ) as ParsedTandemResponse.PlaybackAck
+            assertEquals(PlaybackStatus.PLAYING, v2.status)
+            assertEquals(true, v2.enabled)
+
+            val v1 = SonyTandemV1Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xA3.toByte(), inquiredType, 0x01, 0x02)
+            ) as ParsedTandemResponse.PlaybackAck
+            assertEquals(PlaybackStatus.PAUSED, v1.status)
+            assertEquals(false, v1.enabled)
+        }
+    }
 }

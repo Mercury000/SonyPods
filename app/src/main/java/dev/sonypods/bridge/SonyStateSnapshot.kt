@@ -122,6 +122,20 @@ data class SonyStateSnapshot(
      * stack holds no record for reads as CONNECTION_POLICY_UNKNOWN, which shows off.
      */
     val leAudioPolicyAllowed: Boolean? = null,
+    /**
+     * `LeAudioService` holds a CONNECTED state machine for one of this headset's identities.
+     *
+     * The permission above only says the system *may* connect LE Audio; this says it has. Null
+     * when the profile service could not be read — it is absent until the profile starts.
+     */
+    val leAudioSystemConnected: Boolean? = null,
+    /**
+     * That LE Audio group is the stack's active audio route, i.e. media really is carried as LC3.
+     *
+     * The headset's own streaming status answers the same question, but only while it happens to
+     * push a LEA status — this one is readable at any moment and is what the system acts on.
+     */
+    val leAudioSystemActive: Boolean? = null,
     val quickAccessLeftRight: String? = null,
     val quickAccessNcAmb: String? = null,
     val quickAccessKeyCode: Int? = null,
@@ -146,6 +160,29 @@ data class SonyStateSnapshot(
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
     val systemBatteryLevel: Int?
         get() = listOfNotNull(batterySingle, batteryLeft, batteryRight).minOrNull()
+
+    /**
+     * True when audio for this headset really is being carried over LE Audio right now.
+     *
+     * Two independent witnesses, either of which is conclusive: the stack has made the headset's
+     * LE Audio group the active route, or the headset itself reports a bud streaming
+     * `VIA_LE_AUDIO_UNICAST`. The stack's own view settles first and stays readable, while the
+     * headset's arrives only with a LEA status notification — so neither alone is enough.
+     */
+    val usingLeAudio: Boolean
+        get() = leAudioSystemActive == true ||
+            leaStreamingStatusL == LEA_STREAMING_UNICAST ||
+            leaStreamingStatusR == LEA_STREAMING_UNICAST
+
+    /**
+     * True when this phone holds the headset over LE Audio rather than classic Bluetooth.
+     *
+     * Sony's LC3 links do not carry every function of a classic one — multipoint above all: a
+     * headset connected this way cannot hold a second device. The profile being connected is
+     * enough, whether or not the stack has already handed the audio route over.
+     */
+    val connectedViaLeAudio: Boolean
+        get() = leAudioSystemConnected == true || usingLeAudio
 
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(KEY_CONNECTED, connected)
@@ -205,6 +242,14 @@ data class SonyStateSnapshot(
         leAudioPolicyAllowed?.let {
             putBoolean(KEY_LEA_POLICY_KNOWN, true)
             putBoolean(KEY_LEA_POLICY_ALLOWED, it)
+        }
+        leAudioSystemConnected?.let {
+            putBoolean(KEY_LEA_SYS_CONNECTED_KNOWN, true)
+            putBoolean(KEY_LEA_SYS_CONNECTED, it)
+        }
+        leAudioSystemActive?.let {
+            putBoolean(KEY_LEA_SYS_ACTIVE_KNOWN, true)
+            putBoolean(KEY_LEA_SYS_ACTIVE, it)
         }
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
@@ -295,6 +340,14 @@ data class SonyStateSnapshot(
         private const val KEY_LEA_IDENTITY_ADDRESS = "lea_identity_address"
         private const val KEY_LEA_POLICY_KNOWN = "lea_policy_known"
         private const val KEY_LEA_POLICY_ALLOWED = "lea_policy_allowed"
+        private const val KEY_LEA_SYS_CONNECTED_KNOWN = "lea_sys_connected_known"
+        private const val KEY_LEA_SYS_CONNECTED = "lea_sys_connected"
+        private const val KEY_LEA_SYS_ACTIVE_KNOWN = "lea_sys_active_known"
+        private const val KEY_LEA_SYS_ACTIVE = "lea_sys_active"
+
+        /** `LeaTargetStreamingStatus.VIA_LE_AUDIO_UNICAST` as the headset reports it. */
+        const val LEA_STREAMING_UNICAST = "VIA_LE_AUDIO_UNICAST"
+
         private const val KEY_QA_LR = "qa_lr"
         private const val KEY_QA_NC = "qa_nc"
         private const val KEY_QA_KEY = "qa_key"
@@ -378,6 +431,16 @@ data class SonyStateSnapshot(
             } else {
                 null
             },
+            leAudioSystemConnected = if (bundle.getBoolean(KEY_LEA_SYS_CONNECTED_KNOWN, false)) {
+                bundle.getBoolean(KEY_LEA_SYS_CONNECTED, false)
+            } else {
+                null
+            },
+            leAudioSystemActive = if (bundle.getBoolean(KEY_LEA_SYS_ACTIVE_KNOWN, false)) {
+                bundle.getBoolean(KEY_LEA_SYS_ACTIVE, false)
+            } else {
+                null
+            },
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
             quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),
@@ -457,6 +520,9 @@ data class SonyStateSnapshot(
                 leAudioDevicePairStage = state.leAudioDevicePairState.stage.name,
                 leAudioDevicePairMessage = state.leAudioDevicePairState.message,
                 leAudioDevicePairedAddress = state.leAudioDevicePairState.bondedAddress,
+                // leAudioIdentityAddress, leAudioPolicyAllowed and leAudioSystem* are the stack's
+                // own facts, not the repository's: the bluetooth-process host fills them in as it
+                // publishes, since only it can read the LE Audio profile service.
                 quickAccessLeftRight = state.quickAccessState.lrKeyFunction,
                 quickAccessNcAmb = state.quickAccessState.ncAmbKeyFunction,
                 quickAccessKeyCode = state.quickAccessState.key?.code?.toInt()?.and(0xFF),

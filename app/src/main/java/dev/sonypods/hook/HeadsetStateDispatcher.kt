@@ -105,6 +105,7 @@ object HeadsetStateDispatcher : HookContext() {
         }
 
         hookLeAudioConnectionState()
+        hookLeAudioActiveDevice()
 
         hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
             val currState = args[2] as Int
@@ -153,6 +154,13 @@ object HeadsetStateDispatcher : HookContext() {
 
     private var aclReceiverRegistered = false
     private var lastAclRefreshMs = 0L
+    private var lastLeAudioRefreshMs = 0L
+
+    /**
+     * A route change lands as a burst — the group is confirmed active, volume control follows — and
+     * one re-read covers the burst. Shorter than the ACL debounce because this fires far less often.
+     */
+    private const val LE_AUDIO_REFRESH_DEBOUNCE_MS = 1_500L
 
     /** Hook-side catalog access; the module app's ordinary files/prefs are not visible here. */
     private fun cloudModelInfoReader(): () -> String? = {
@@ -240,6 +248,11 @@ object HeadsetStateDispatcher : HookContext() {
         if (!isSonyPod(device)) return
         Log.d("SonyPods", "LE Audio state=$currState for ${device.address}")
         if (currState == prevState) return
+        // Before the identity folding below, because what the stack holds is group-wide: either
+        // identity connecting or dropping changes the answer, and the surfaces have no other way
+        // to learn it.
+        onLeAudioSystemStateMoved(serviceInstance, "le-audio-state-$currState")
+
         // Both coordinated-set members reach CONNECTED, but only the classic identity
         // carries Sony's services. Acting on the lead earbud's resolvable LE identity is
         // wrong twice over: the session would never handshake on an identity with no Sony
@@ -306,10 +319,64 @@ object HeadsetStateDispatcher : HookContext() {
     }
 
     /**
+     * Hooks the moment the stack changes which device owns the LE Audio audio route.
+     *
+     * `LeAudioService.notifyActiveDeviceChanged` is where the profile has settled on a new active
+     * group — it drives the volume-control service, the framework broadcast and `groupConfirmActive`
+     * from there — and it is also called with a null device when the route is given up. That
+     * transition is the system establishing or dropping LC3, which is exactly what the "低功耗音频"
+     * summary and the LE-Audio-only feature restrictions have to follow. Nothing else announces it
+     * to us: it moves no headset state, so no Tandem notification arrives and the repository emits
+     * nothing.
+     */
+    private fun hookLeAudioActiveDevice() {
+        runCatching {
+            hookAfter(findMethodByParamCount(
+                "com.android.bluetooth.le_audio.LeAudioService",
+                "notifyActiveDeviceChanged",
+                1,
+            )) {
+                val device = args.getOrNull(0) as? BluetoothDevice
+                // A null device means "no LE Audio route any more", which concerns us whatever
+                // it was before; a named one is only ours to act on if it is a Sony.
+                if (device != null && !isSonyPod(device)) return@hookAfter
+                onLeAudioSystemStateMoved(instance, "le-audio-active-${device?.address ?: "none"}")
+            }
+        }.onFailure {
+            Log.d("SonyPods", "LeAudioService.notifyActiveDeviceChanged hook skipped", it)
+        }
+    }
+
+    /**
+     * The stack's LE Audio position moved: republish it, and re-read the headset.
+     *
+     * Two separate jobs. The republish carries the system-side facts — connected, and routing LC3 —
+     * that only this process can read and that no repository state change would ever push out. The
+     * refresh is for the headset's own view: its LEA streaming status and, in particular, its
+     * playback availability are reported once and then latched, so a DISABLE captured while the
+     * link was being handed over leaves the playback controls greyed out for the rest of the
+     * session. Re-reading on the route change is the same event-driven pattern the A2DP hook
+     * already uses for a second bud joining.
+     *
+     * Posted onto the profile's own handler: the hooked methods run under the profile's group lock
+     * and both halves of this read it back.
+     */
+    private fun onLeAudioSystemStateMoved(serviceInstance: Any?, reason: String) {
+        postToProfileHandler(serviceInstance) {
+            SonyEngineHost.republishLeAudioState(reason)
+            val now = System.currentTimeMillis()
+            if (now - lastLeAudioRefreshMs < LE_AUDIO_REFRESH_DEBOUNCE_MS) return@postToProfileHandler
+            lastLeAudioRefreshMs = now
+            SonyEngineHost.refreshNow(reason)
+        }
+    }
+
+    /**
      * Addresses the profile itself counts as members of this device's LE Audio group, or null
      * when that could not be read.
      *
      * `LeAudioService.getGroupDevices(BluetoothDevice)` is `getGroupDevices(getGroupId(device))`,
+
      * which walks `mDeviceDescriptors` for the matching group id — so membership here is the
      * same thing as "that address will announce on its own". Descriptors are created by
      * `connect()`, which rejects a remote without the LE_AUDIO UUID, and by
