@@ -135,8 +135,18 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         sppUuid: java.util.UUID? = null,
     ): ConnectedHeadphoneProfile {
         val variant = bindVariantFromChannels(channels, sppUuid) ?: return profile
-        if (variant == profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) return profile
-        return rebindProfile(profile, variant)
+        if (variant == profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) {
+            // Same table, but the endpoints may still have changed — a reconnect over LE Audio
+            // exposes only the HPC service where the previous session had MC.
+            return profile.copy(
+                featureBindings = buildFeatureBindings(
+                    profile.featureProtocolMap,
+                    profile.capabilities,
+                    channels,
+                ),
+            )
+        }
+        return rebindProfile(profile, variant, channels)
     }
 
     fun bindVariantFromChannels(
@@ -163,11 +173,12 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     private fun rebindProfile(
         profile: ConnectedHeadphoneProfile,
         variant: HeadphoneProtocolVariant,
+        endpoints: Set<TandemChannel> = emptySet(),
     ): ConnectedHeadphoneProfile {
         val newMap = profile.featureProtocolMap.mapValues { variant }
         return profile.copy(
             featureProtocolMap = newMap,
-            featureBindings = buildFeatureBindings(newMap, profile.capabilities),
+            featureBindings = buildFeatureBindings(newMap, profile.capabilities, endpoints),
         ).rebounded()
     }
 
@@ -694,7 +705,14 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         profile: ConnectedHeadphoneProfile,
         label: String,
         bytes: ByteArray,
-    ): HeadphoneCommand = HeadphoneCommand(label, bytes, TandemChannel.GATT_V2_MC)
+    ): HeadphoneCommand = HeadphoneCommand(
+        label,
+        bytes,
+        // The profile knows which endpoint this connection actually has; MC does not exist on
+        // an LE Audio session, where the headset exposes only the HPC service.
+        profile.bindingFor(HeadphoneFeature.MULTIPOINT)?.channel
+            ?: profile.defaultResponseChannel(),
+    )
 
     /**
      * ALERT_SET_STATUS (0x94) ENABLE for both alert inquired types SC arms:

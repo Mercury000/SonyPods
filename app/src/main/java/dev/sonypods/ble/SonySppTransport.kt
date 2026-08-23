@@ -272,67 +272,20 @@ internal class SonySppTransport(
 
     private companion object {
         const val WRITABLE_VALUE_LENGTH = 1024
-        private const val HEADER_SIZE = 6
-        private const val CHECKSUM_SIZE = 1
-        private const val FRAME_START: Byte = 0x3E
-        private const val FRAME_END: Byte = 0x3C
-        private const val ESCAPE: Byte = 0x3D
+        private const val HEADER_SIZE = SonyTandemFraming.HEADER_SIZE
+        private const val CHECKSUM_SIZE = SonyTandemFraming.CHECKSUM_SIZE
+        private const val FRAME_START: Byte = SonyTandemFraming.FRAME_START
+        private const val FRAME_END: Byte = SonyTandemFraming.FRAME_END
 
-        fun encodeFrame(type: SonySppFrameType, sequence: Byte, payload: ByteArray): ByteArray {
-            val body = ByteArray(HEADER_SIZE + payload.size + CHECKSUM_SIZE)
-            body[0] = type.code
-            body[1] = sequence
-            body[2] = ((payload.size ushr 24) and 0xFF).toByte()
-            body[3] = ((payload.size ushr 16) and 0xFF).toByte()
-            body[4] = ((payload.size ushr 8) and 0xFF).toByte()
-            body[5] = (payload.size and 0xFF).toByte()
-            payload.copyInto(body, HEADER_SIZE)
-            body[body.lastIndex] = checksum(body, body.size - CHECKSUM_SIZE).toByte()
-            return byteArrayOf(FRAME_START) + escape(body) + byteArrayOf(FRAME_END)
-        }
+        fun encodeFrame(type: SonySppFrameType, sequence: Byte, payload: ByteArray): ByteArray =
+            SonyTandemFraming.encode(type.code, sequence, payload)
 
-        fun escape(bytes: ByteArray): ByteArray {
-            val escaped = ArrayList<Byte>(bytes.size)
-            bytes.forEach { byte ->
-                when (byte) {
-                    FRAME_END -> {
-                        escaped += ESCAPE
-                        escaped += 0x2C.toByte()
-                    }
-                    ESCAPE -> {
-                        escaped += ESCAPE
-                        escaped += 0x2D.toByte()
-                    }
-                    FRAME_START -> {
-                        escaped += ESCAPE
-                        escaped += 0x2E.toByte()
-                    }
-                    else -> escaped += byte
-                }
-            }
-            return escaped.toByteArray()
-        }
-
-        fun unescape(bytes: ByteArray): ByteArray {
-            val unescaped = ArrayList<Byte>(bytes.size)
-            var index = 0
-            while (index < bytes.size) {
-                val byte = bytes[index]
-                if (byte == ESCAPE && index + 1 < bytes.size) {
-                    index++
-                    unescaped += (bytes[index].toInt() or 0x10).toByte()
-                } else {
-                    unescaped += byte
-                }
-                index++
-            }
-            return unescaped.toByteArray()
-        }
+        fun unescape(bytes: ByteArray): ByteArray = SonyTandemFraming.unescape(bytes)
 
         fun checksum(bytes: ByteArray, length: Int): Int =
-            (0 until length).fold(0) { acc, index -> (acc + bytes[index].u) and 0xFF }
+            SonyTandemFraming.checksum(bytes, length)
 
-        fun inverseSequence(sequence: Byte): Byte = (1 - sequence).toByte()
+        fun inverseSequence(sequence: Byte): Byte = SonyTandemFraming.inverseSequence(sequence)
 
         fun ByteArray.int32be(offset: Int): Int =
             ((this[offset].u) shl 24) or

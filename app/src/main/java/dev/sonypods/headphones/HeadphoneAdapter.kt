@@ -263,9 +263,17 @@ val ConnectedHeadphoneProfile.eqUiCapability: EqUiCapability
 /** Build the per-feature protocol/channel/query bindings for a feature map.
  * Shared by [ProfileTemplate] and dynamic rebinding, so a profile rebound to a
  * different protocol generation keeps every domain addressable. */
+/**
+ * @param endpoints the transport endpoints this connection actually exposes. Sound Connect has
+ * no per-table channel concept at all — a session is `C22925e(CommandTableSet, transport)` and
+ * sending picks a DataType from the table alone — so a table must not imply an endpoint. When
+ * the endpoints are known, commands go to one that exists; [defaultChannelFor] is only the
+ * answer for a profile built before any transport is up.
+ */
 fun buildFeatureBindings(
     featureProtocolMap: Map<HeadphoneFeature, HeadphoneProtocolVariant>,
     capabilities: HeadphoneCapabilities,
+    endpoints: Set<TandemChannel> = emptySet(),
 ): Map<HeadphoneFeature, FeatureProtocolBinding> =
     featureProtocolMap.mapValues { (feature, variant) ->
         val bindingVariant = if (feature == HeadphoneFeature.LEA_STATUS) {
@@ -287,8 +295,23 @@ fun buildFeatureBindings(
             ) TandemChannel.GATT_V2_MC else defaultChannelFor(bindingVariant),
             queryTypes = queryTypesForFeature(feature, capabilities),
             writableTypes = writableTypesForFeature(feature, capabilities),
-        )
+        ).onEndpoints(endpoints)
     }
+
+/**
+ * Moves a binding onto an endpoint this connection actually has.
+ *
+ * The endpoint a variant defaults to may simply not exist: on LE Audio the headset exposes only
+ * TANDEM_V2_HPC_SERVICE, and Sound Connect runs table 2 over exactly that service. Keeping the
+ * default would address an endpoint that was never discovered and the frame would be dropped.
+ */
+private fun FeatureProtocolBinding.onEndpoints(
+    endpoints: Set<TandemChannel>,
+): FeatureProtocolBinding {
+    if (endpoints.isEmpty() || channel in endpoints) return this
+    val substitute = endpoints.singleOrNull() ?: return this
+    return copy(channel = substitute)
+}
 
 private fun queryTypesForFeature(
     feature: HeadphoneFeature,

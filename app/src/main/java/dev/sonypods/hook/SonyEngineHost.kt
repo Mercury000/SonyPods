@@ -16,6 +16,7 @@ import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -49,6 +50,9 @@ import kotlinx.coroutines.cancel
  */
 object SonyEngineHost {
     private const val TAG = "SonyPods-Engine"
+    /** Audio Stream Control Service: only an LE Audio identity carries it. */
+    private val ASCS_SERVICE_UUID: java.util.UUID =
+        java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
     private const val STARTUP_ANNOUNCE_COUNT = 10
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
@@ -697,6 +701,14 @@ object SonyEngineHost {
     @SuppressLint("MissingPermission")
     fun disconnectDevice(device: BluetoothDevice) {
         val address = runCatching { device.address }.getOrNull() ?: return
+        // A2DP dropping is expected, not terminal, once the headset moves audio to LE Audio:
+        // the classic link goes away while Tandem keeps working over it on demand. Treating it
+        // as a physical disconnect tore down a session that was still exchanging frames, which
+        // is why the headset became uncontrollable exactly when LC3 started working.
+        if (isLeAudioStillConnected(device)) {
+            Log.d(TAG, "A2DP disconnect for $address ignored: LE Audio is still connected")
+            return
+        }
         // This is an explicit A2DP disconnect, not a recoverable Tandem transport loss.
         transportRecoveryAddress = null
         physicalDisconnectAddress = address
@@ -714,6 +726,39 @@ object SonyEngineHost {
         if (repo?.state?.value?.connectedDevice?.address.equals(address, ignoreCase = true)) {
             Log.d(TAG, "disconnecting Tandem session from $address")
             repo?.disconnect()
+        }
+    }
+
+    /**
+     * Whether this headset still has an LE Audio connection.
+     *
+     * Both of a TWS headset's identities are checked: LE Audio runs on the LE identity while
+     * A2DP runs on the classic one, and either address may be the one whose A2DP just dropped.
+     * Reads the live profile rather than cached state so a stale record cannot keep a session
+     * alive after the headset is really gone.
+     */
+    @SuppressLint("MissingPermission")
+    private fun isLeAudioStillConnected(device: BluetoothDevice): Boolean {
+        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+            ?: return false
+        val address = runCatching { device.address }.getOrNull() ?: return false
+        val related = buildSet {
+            add(address.uppercase())
+            SonyDeviceService.resolveControlAddress(address)?.let { add(it.uppercase()) }
+            SonyDeviceService.leAudioAliasSnapshot().forEach { (le, control) ->
+                if (control.equals(address, ignoreCase = true)) add(le.uppercase())
+            }
+        }
+        // Checked per identity rather than on the device that just dropped: that one reports
+        // disconnected the moment A2DP goes, which says nothing about the LE side. Requiring an
+        // ASCS service is what makes an ACL here mean "LE Audio", since under LC3 the classic
+        // link is the one that went away.
+        return related.any { candidate ->
+            runCatching {
+                val remote = adapter.getRemoteDevice(candidate)
+                if (remote.uuids.orEmpty().none { it.uuid == ASCS_SERVICE_UUID }) return@runCatching false
+                BluetoothDevice::class.java.getMethod("isConnected").invoke(remote) as? Boolean == true
+            }.getOrDefault(false)
         }
     }
 

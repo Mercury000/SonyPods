@@ -31,6 +31,7 @@ import dev.sonypods.protocol.SonyGatt
 import dev.sonypods.protocol.hexString
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
@@ -167,6 +168,8 @@ class SonyBleClient(
     @Volatile private var sppConnectThread: Thread? = null
     @Volatile private var pendingSppSocket: BluetoothSocket? = null
     private val writeQueue = ConcurrentLinkedQueue<PendingTandemWrite>()
+    /** One framed Tandem session per GATT endpoint, created once the handshake completes. */
+    private val gattSessions = ConcurrentHashMap<TandemChannel, SonyGattTandemSession>()
     private val pendingNotifyEndpoints = ArrayDeque<GattTandemEndpoint>()
     private var handshakeTimeout: Runnable? = null
     private var writeTimeout: Runnable? = null
@@ -246,6 +249,7 @@ class SonyBleClient(
                     activeWriteGeneration = null
                 }
                 writeQueue.clear()
+                closeGattSessions()
                 pendingNotifyEndpoints.clear()
                 writing = false
                 toAcc = null
@@ -378,7 +382,12 @@ class SonyBleClient(
                 return
             }
             log("Write ${characteristic.uuid}: status=$status")
-            if (status != BluetoothGatt.GATT_SUCCESS) {
+            val success = status == BluetoothGatt.GATT_SUCCESS
+            // Only the session that issued this write may advance: with two endpoints bound, a
+            // completion on one would otherwise release the other's in-flight slot and let two
+            // frames interleave on the same sequence number.
+            sessionForToAcc(characteristic)?.onWriteComplete(success)
+            if (!success) {
                 failGattSession(gatt, "BLE write failed for ${characteristic.uuid}: $status")
                 return
             }
@@ -494,10 +503,16 @@ class SonyBleClient(
             return
         }
         stopScan()
-        // Tandem lives on the control identity only. An LE Audio address can still reach us
-        // from a stale record or from a system-side callback, and connecting it would open a
-        // transport with no Sony service behind it.
-        val target = resolveControlTarget(device)
+        // Resolve to the classic identity only when Tandem will actually run over SPP. With LE
+        // Audio up the GATT session belongs on the LE identity — that is where the headset keeps
+        // its Tandem services in that state, and retargeting to the classic address would aim
+        // the connection at the link the headset just dropped.
+        val requested = adapter?.getRemoteDevice(device.address)
+        val target = if (requested != null && isLeAudioConnected(requested)) {
+            device
+        } else {
+            resolveControlTarget(device)
+        }
         val remote = adapter?.getRemoteDevice(target.address)
         if (remote == null) {
             listener.onBluetoothUnavailable("Cannot resolve remote device ${target.address}")
@@ -558,6 +573,7 @@ class SonyBleClient(
         cancelAllTimeouts()
         closeSpp(notify = false)
         writeQueue.clear()
+        closeGattSessions()
         pendingNotifyEndpoints.clear()
         synchronized(writeStateLock) {
             activeWriteGeneration = null
@@ -622,22 +638,45 @@ class SonyBleClient(
     }
 
     private fun writeToChannel(channel: TandemChannel, bytes: ByteArray) {
+        if (channel !in gattEndpoints && sppTransport == null) {
+            listener.onBluetoothUnavailable("Channel $channel is not available (available: ${availableChannels()})")
+            return
+        }
+        // A GATT endpoint carries framed Tandem, exactly as RFCOMM does: Sound Connect hands both
+        // transports to the same framer. The session owns framing, sequencing and ACK retries —
+        // including splitting a frame that outgrows the writable value length, so the payload is
+        // not size-checked against it here.
+        val session = gattSessions[channel]
+        if (session != null) {
+            session.send(bytes)
+            return
+        }
         if (!TandemGattProtocolRules.canWrite(bytes.size, writableValueLength)) {
             listener.onBluetoothUnavailable(
                 "Tandem payload is ${bytes.size} bytes, exceeding writable limit $writableValueLength"
             )
             return
         }
-        if (channel !in gattEndpoints && sppTransport == null) {
-            listener.onBluetoothUnavailable("Channel $channel is not available (available: ${availableChannels()})")
-            return
-        }
         writeQueue.add(PendingTandemWrite(channel, bytes))
         drainWriteQueue()
     }
 
+    /**
+     * Picks the transport the way Sound Connect does.
+     *
+     * Its decision table (`connectInternal`) keys off one thing — whether LE Audio is connected:
+     * with LE Audio up it uses GATT, and SPP is only the fallback for when it is not, logged
+     * there as "LEA device but LE Audio not connected. Falling back to SPP via Classic BD
+     * address." Getting this backwards is why the module went uncontrollable exactly when LC3
+     * started working: it kept opening RFCOMM on the classic address whose link the headset had
+     * just dropped in favour of the LE one.
+     */
     @SuppressLint("MissingPermission")
     private fun shouldUseSpp(device: DiscoveredSonyDevice, remote: BluetoothDevice): Boolean {
+        if (isLeAudioConnected(remote)) {
+            log("LE Audio is connected for ${remote.address}; using GATT for Tandem")
+            return false
+        }
         if (device.sonyAd?.leGattControlFlag == true) return false
         val hasMdrSppUuid = remote.uuids.orEmpty().any { it.uuid == MDR_SPP_MARKER_UUID }
         val classicCandidate = remote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
@@ -645,6 +684,36 @@ class SonyBleClient(
             device.source.startsWith("connected-a2dp") ||
             device.source.startsWith("connected-headset")
         return hasMdrSppUuid || classicCandidate || device.sonyAd?.androidLine?.contains("SPP") == true
+    }
+
+    /**
+     * Whether an LE Audio link is up for either identity of this headset.
+     *
+     * Both are checked because LE Audio runs on the LE identity while the caller may hold the
+     * classic one. An ASCS service is required so a classic ACL that has not torn down yet does
+     * not read as LE Audio.
+     */
+    @SuppressLint("MissingPermission")
+    private fun isLeAudioConnected(remote: BluetoothDevice): Boolean {
+        val address = runCatching { remote.address }.getOrNull() ?: return false
+        val bonded = adapter?.bondedDevices.orEmpty()
+        SonyDeviceService.linkLeAudioIdentities(bonded)
+        val candidates = buildSet {
+            add(address.uppercase())
+            SonyDeviceService.resolveControlAddress(address)?.let { add(it.uppercase()) }
+            SonyDeviceService.leAudioAliasSnapshot().forEach { (le, control) ->
+                if (control.equals(address, ignoreCase = true)) add(le.uppercase())
+            }
+        }
+        return candidates.any { candidate ->
+            runCatching {
+                val device = adapter?.getRemoteDevice(candidate) ?: return@runCatching false
+                if (device.uuids.orEmpty().none { it.uuid == ASCS_SERVICE_UUID }) {
+                    return@runCatching false
+                }
+                BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
+            }.getOrDefault(false)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -704,7 +773,16 @@ class SonyBleClient(
                     onPayload = { payload -> listener.onMessage(TandemChannel.SPP_MDR, payload) },
                     onClosed = { reason ->
                         log(reason ?: "SPP transport closed")
-                        if (sppTransport === createdTransport) {
+                        // Object identity alone is not enough. A new connection publishes its
+                        // transport a few lines below this callback's registration, so an older
+                        // socket closing in that window still matched `sppTransport === null`
+                        // and cleared the session that had just come up — the channel table
+                        // went empty while state stayed "connected", and every Tandem frame was
+                        // dropped as "channel not available". The generation says whether this
+                        // callback belongs to the attempt that is still current.
+                        if (sppConnectGeneration.get() != generation) {
+                            log("ignoring close of superseded SPP transport")
+                        } else if (sppTransport === createdTransport) {
                             sppTransport = null
                             listener.onConnectionStateChanged(false, connectedDevice)
                         }
@@ -864,6 +942,53 @@ class SonyBleClient(
         log("Read $uuid = ${value.hexString()}")
     }
 
+    /**
+     * Creates a framed Tandem session for every discovered GATT endpoint.
+     *
+     * Done once the handshake has settled the writable value length, because that is the fragment
+     * size the framer splits against — the same value `je0.C19229b.mo850j0()` reports.
+     */
+    private fun createGattSessions() {
+        gattSessions.values.forEach { it.close() }
+        gattSessions.clear()
+        gattEndpoints.forEach { (channel, endpoint) ->
+            gattSessions[channel] = SonyGattTandemSession(
+                channel = channel,
+                writableValueLength = writableValueLength,
+                writeBytes = { bytes -> enqueueGattWrite(endpoint, bytes) },
+                onPayload = { ch, payload -> listener.onMessage(ch, payload) },
+                onFailure = { reason -> listener.onBluetoothUnavailable(reason) },
+                log = ::log,
+                scheduleTimeout = { delayMs, action ->
+                    timeoutHandler.postDelayed({ action() }, delayMs)
+                },
+            )
+        }
+        log("Framed Tandem sessions ready for ${gattSessions.keys}")
+    }
+
+    /** The session whose TO_ACC characteristic this is, if any. */
+    private fun sessionForToAcc(characteristic: BluetoothGattCharacteristic): SonyGattTandemSession? {
+        val channel = gattEndpoints.entries
+            .firstOrNull { (_, endpoint) -> endpoint.toAcc.uuid == characteristic.uuid }
+            ?.key
+            ?: return null
+        return gattSessions[channel]
+    }
+
+    /** Sequence state and pending retries must not survive into the next connection. */
+    private fun closeGattSessions() {
+        gattSessions.values.forEach { it.close() }
+        gattSessions.clear()
+    }
+
+    /** Queues raw bytes for the endpoint's TO_ACC characteristic, already framed by the session. */
+    private fun enqueueGattWrite(endpoint: GattTandemEndpoint, bytes: ByteArray): Boolean {
+        writeQueue.add(PendingTandemWrite(endpoint.channel, bytes))
+        drainWriteQueue()
+        return true
+    }
+
     private fun handleCharacteristicChanged(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
@@ -891,6 +1016,13 @@ class SonyBleClient(
         ) ?: TandemGattRouting.fromAccChannelFor(characteristic.service?.uuid, uuid)
             ?: gattEndpoints.keys.singleOrNull()
             ?: defaultGattWriteChannel()
+        // Notifications carry framed Tandem, and one frame can span several of them, so the
+        // session reassembles and unframes before anything reaches the protocol layer.
+        val session = gattSessions[channel]
+        if (session != null) {
+            session.onNotification(value)
+            return
+        }
         listener.onMessage(channel, value)
     }
 
@@ -997,7 +1129,13 @@ class SonyBleClient(
 
     private fun preferredTransport(device: BluetoothDevice, discovered: DiscoveredSonyDevice): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            when (device.type) {
+            // With LE Audio up the link to use is the LE one, and TRANSPORT_AUTO is not good
+            // enough to say so: both of this headset's identities report DEVICE_TYPE_DUAL, so
+            // AUTO can aim at the classic link the headset has already dropped. Sound Connect
+            // hardcodes GattConnectionTransport.LE for the same reason.
+            if (isLeAudioConnected(device)) {
+                BluetoothDevice.TRANSPORT_LE
+            } else when (device.type) {
                 BluetoothDevice.DEVICE_TYPE_LE -> BluetoothDevice.TRANSPORT_LE
                 BluetoothDevice.DEVICE_TYPE_CLASSIC,
                 BluetoothDevice.DEVICE_TYPE_DUAL -> BluetoothDevice.TRANSPORT_AUTO
@@ -1131,6 +1269,7 @@ class SonyBleClient(
         val endpoint = pendingNotifyEndpoints.removeFirstOrNull()
         if (endpoint == null) {
             handshakeStep = HandshakeStep.Ready
+            createGattSessions()
             listener.onReady(
                 SonyBleConnectionInfo(
                     mtu = negotiatedMtu,
@@ -1204,7 +1343,10 @@ class SonyBleClient(
             activeWriteGeneration = generation
             writing = true
         }
-        if (!TandemGattProtocolRules.canWrite(pending.bytes.size, writableValueLength)) {
+        // Framed writes arrive here already split by the session against the same limit, so only
+        // an unframed payload can still legitimately exceed it.
+        val framed = gattSessions.containsKey(pending.channel)
+        if (!framed && !TandemGattProtocolRules.canWrite(pending.bytes.size, writableValueLength)) {
             synchronized(writeStateLock) {
                 if (activeWriteGeneration == generation) {
                     activeWriteGeneration = null
@@ -1681,6 +1823,9 @@ class SonyBleClient(
         private const val WRITE_COMPLETION_TIMEOUT_MS = 500L
         private val MDR_SPP_MARKER_UUID: UUID =
             UUID.fromString("443cce33-e85d-4b85-8d53-6e319ede53ae")
+        /** Audio Stream Control Service: its presence plus a live link means LE Audio is up. */
+        private val ASCS_SERVICE_UUID: UUID =
+            UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
         private val OFFICIAL_SPP_UUIDS = listOf(
             UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"),
             UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
