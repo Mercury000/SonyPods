@@ -413,6 +413,32 @@ class SonyCapabilityProbeTest {
         assertTrue(HeadphoneFeature.EQ in applied.capabilities.features)
     }
 
+    /**
+     * The capability table having been applied is what every surface gates on, and
+     * [SonyCapabilityProbe.applyToProfile] is the only place a real table becomes a profile —
+     * the live probe, the counter-matched cache restore and the connection-time restore all
+     * funnel through it. A profile that has not been through it must not claim the table:
+     * rendering that state is what showed a pair of buds as a single-battery headband.
+     */
+    @Test
+    fun applyToProfile_marksCapabilitiesKnown() {
+        assertFalse(v2Profile.capabilitiesKnown)
+
+        val applied = SonyCapabilityProbe.applyToProfile(
+            profile = v2Profile,
+            functions = listOf(fn(SonyV2FunctionType.PRESET_EQ, 0)),
+            transport = HeadphoneTransport.GATT_HPC,
+        )
+
+        assertTrue(applied.capabilitiesKnown)
+    }
+
+    /** An empty function list is not a table, so it must not open the gate either. */
+    @Test
+    fun restoreFunctions_withNoCachedFunctions_yieldsNothingToApply() {
+        assertTrue(SonyCapabilityProbe.restoreFunctions(v2Profile, emptyList()).isEmpty())
+    }
+
     @Test
     fun v1ProbeCommands_generatesNcAsmSystemProbe() {
         val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(

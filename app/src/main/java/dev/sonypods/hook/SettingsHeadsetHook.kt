@@ -16,6 +16,7 @@ import com.mercury.sonypods.BuildConfig
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -439,7 +440,12 @@ object SettingsHeadsetHook : HookContext() {
                             currentAddress = snapshot.deviceAddress
                             SonyDeviceService.rememberAddress(snapshot.deviceAddress)
                             currentName = snapshot.deviceName
-                            currentFormFactor = snapshot.formFactor
+                            // UNKNOWN is the pre-capability-table placeholder and carries no
+                            // information; keep the last real value (which is also what gets
+                            // persisted) rather than falling back to the TWS layout.
+                            snapshot.formFactor
+                                ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
+                                ?.let { currentFormFactor = it }
                             currentBattery = snapshotBattery(snapshot)
                             // Reconcile the ANC/transparency-vocal state from the engine's live
                             // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement

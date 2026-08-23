@@ -17,6 +17,7 @@ import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -49,7 +50,11 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             SonyDeviceService.rememberAddress(it)
         }
         snapshot.deviceName?.let { currentName = it }
-        snapshot.formFactor?.let { currentFormFactor = it }
+        // UNKNOWN is the neutral profile's placeholder before the capability table lands; it
+        // carries no information, and letting it overwrite a real value (which is also
+        // persisted) would flip an over-ear device to the TWS layout.
+        snapshot.formFactor?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
+            ?.let { currentFormFactor = it }
         currentBattery = BatteryParams(
             left = (snapshot.batteryLeft ?: snapshot.batterySingle)
                 ?.let { PodParams(battery = it, isConnected = true) },

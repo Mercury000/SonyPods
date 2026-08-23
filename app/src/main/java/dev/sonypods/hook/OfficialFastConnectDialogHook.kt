@@ -1111,11 +1111,12 @@ object OfficialFastConnectDialogHook : HookContext() {
             Log.d(TAG, "official dialog state=connecting address=$address")
         }
 
-        // The dialog's success state is a battery readout, so the probe alone is not
-        // enough: it says a battery feature exists, not what it reads. Hold the
+        // The dialog's success state is a battery readout, so the capability table alone is
+        // not enough: it says a battery feature exists, not what it reads. Hold the
         // connecting state until the value itself has come back — over LE the gap is
-        // seconds, and filling the dialog before that shows an empty level.
-        if (!snapshot.probeComplete || !snapshot.essentialValuesReady) return
+        // seconds, and filling the dialog before that shows an empty level. The table is
+        // still required, because how many battery slots this device has comes from it.
+        if (!snapshot.capabilitiesKnown || !snapshot.essentialValuesReady) return
         activeView?.let { view ->
             refreshBatteryText(view, snapshot)
             refreshBatteryIcons(view, snapshot)
@@ -1633,7 +1634,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val textView = instance as? TextView ?: return@hookAfter
                 if (batteryTextRewriteDepth.get() == true) return@hookAfter
                 val snapshot = latestSnapshot ?: return@hookAfter
-                if (!snapshot.probeComplete ||
+                if (!snapshot.capabilitiesKnown ||
                     !isManagedOfficialTarget(activeActivity) ||
                     !isActiveBatteryTextView(textView)
                 ) return@hookAfter

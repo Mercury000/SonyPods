@@ -29,19 +29,26 @@ import dev.sonypods.protocol.PlaybackStatus
 data class SonyStateSnapshot(
     val connected: Boolean = false,
     val protocolReady: Boolean = false,
-    /** True once the connection-time capability probe finished (cache restore or
-     * full probe). The app detail UI is gated on it so it never opens against an
-     * empty half-probed profile. */
-    val probeComplete: Boolean = false,
+    /**
+     * The device's own capability table has been applied: the live RET_SUPPORT_FUNCTION
+     * replies, or the cached table restored on a capability-counter match.
+     *
+     * Every surface gates on this. Until the table lands the profile is the neutral fallback
+     * — UNKNOWN form factor, a single battery query, nothing writable — and rendering it
+     * shows a pair of buds as a single-battery headband and greys out controls the device
+     * does have. Everything model-shaped (form factor, battery slots, which noise-control
+     * types are writable, EQ) comes from that table, so nothing may be drawn before it lands.
+     */
+    val capabilitiesKnown: Boolean = false,
     /**
      * True once the connection-time value burst is done: every domain the adapter expects
      * has answered, nothing is left to transmit and the channel has settled (or the wait
      * timed out).
      *
-     * [probeComplete] only says which features exist — over LE it is reached seconds
-     * before the first value reply, so a UI opened on it renders untappable defaults.
-     * One reply per domain is not enough either: a domain is several queries. The app UI
-     * waits for this instead.
+     * [capabilitiesKnown] only says which features exist — over LE it is true seconds before
+     * the first value reply, so a UI opened on it renders untappable defaults. One reply per
+     * domain is not enough either: a domain is several queries. The app UI waits for this
+     * instead.
      */
     val initialValuesReady: Boolean = false,
     /**
@@ -187,7 +194,7 @@ data class SonyStateSnapshot(
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(KEY_CONNECTED, connected)
         putBoolean(KEY_PROTOCOL_READY, protocolReady)
-        putBoolean(KEY_PROBE_COMPLETE, probeComplete)
+        putBoolean(KEY_CAPABILITIES_KNOWN, capabilitiesKnown)
         putBoolean(KEY_INITIAL_VALUES_READY, initialValuesReady)
         putBoolean(KEY_ESSENTIAL_VALUES_READY, essentialValuesReady)
         deviceName?.let { putString(KEY_DEVICE_NAME, it) }
@@ -280,7 +287,7 @@ data class SonyStateSnapshot(
 
         private const val KEY_CONNECTED = "connected"
         private const val KEY_PROTOCOL_READY = "protocol_ready"
-        private const val KEY_PROBE_COMPLETE = "probe_complete"
+        private const val KEY_CAPABILITIES_KNOWN = "capabilities_known"
         private const val KEY_INITIAL_VALUES_READY = "initial_values_ready"
         private const val KEY_ESSENTIAL_VALUES_READY = "essential_values_ready"
         private const val KEY_DEVICE_NAME = "device_name"
@@ -374,7 +381,7 @@ data class SonyStateSnapshot(
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
             connected = bundle.getBoolean(KEY_CONNECTED, false),
             protocolReady = bundle.getBoolean(KEY_PROTOCOL_READY, false),
-            probeComplete = bundle.getBoolean(KEY_PROBE_COMPLETE, false),
+            capabilitiesKnown = bundle.getBoolean(KEY_CAPABILITIES_KNOWN, false),
             initialValuesReady = bundle.getBoolean(KEY_INITIAL_VALUES_READY, false),
             essentialValuesReady = bundle.getBoolean(KEY_ESSENTIAL_VALUES_READY, false),
             deviceName = bundle.getString(KEY_DEVICE_NAME),
@@ -474,7 +481,7 @@ data class SonyStateSnapshot(
             return SonyStateSnapshot(
                 connected = state.connectedDevice != null,
                 protocolReady = state.deviceInfo.protocolReady,
-                probeComplete = state.probeComplete,
+                capabilitiesKnown = state.capabilitiesKnown,
                 initialValuesReady = state.initialValuesReady,
                 essentialValuesReady = state.essentialValuesReady,
                 deviceName = state.deviceInfo.modelName ?: state.connectedDevice?.name,

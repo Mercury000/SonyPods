@@ -105,11 +105,11 @@ internal fun EarphonesTabPage(
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,
                 // Connected is only the transport. The row stays in its connecting state until the
-                // control channel has answered, the capability probe has finished and the values
+                // control channel has answered, the device's capability table is in and the values
                 // behind the controls have come back — the same three facts the detail page waits
                 // on, so the spinner ends exactly when the page becomes operable.
                 controlChannelReady = uiState.protocolReady &&
-                    uiState.probeComplete &&
+                    uiState.capabilitiesKnown &&
                     uiState.initialValuesReady,
                 showConnectError = showConnectErrorDialog,
                 contentPadding = contentPadding,

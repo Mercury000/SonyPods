@@ -1648,22 +1648,29 @@ object SonyEngineHost {
             transportRecoveryAddress = null
         }
 
-        // Form factor (headband vs TWS) is only known once the capability probe
-        // finished — cached devices restore it instantly, a first-time connection
-        // must wait. Rendering earlier races the neutral profile's single-battery
-        // query and flashes the headband notification variant for TWS buds.
+        // Form factor (headband vs TWS) comes from the device's capability table, and
+        // nothing here may render before that table is in: the neutral fallback profile
+        // reports UNKNOWN form factor and asks a single battery question, which renders a
+        // pair of buds as a single-battery headband. Cached devices restore the table
+        // instantly, a first-time connection has to wait for the probe replies.
         //
-        // essentialValuesReady adds the other half: the probe says which features
-        // exist, not what they read. The island and the notification show battery
-        // and the noise-control mode and let the user change the latter, so they
-        // wait until those two domains have actually answered — over LE that is
-        // seconds after the probe, and until then nothing here can be controlled.
-        if (!snapshot.probeComplete || !snapshot.essentialValuesReady) return
+        // essentialValuesReady adds the other half: the table says which features exist,
+        // not what they read. The island and the notification show battery and the
+        // noise-control mode and let the user change the latter, so they wait until those
+        // two domains have actually answered — over LE that is seconds after the table, and
+        // until then nothing here can be controlled.
+        if (!snapshot.capabilitiesKnown || !snapshot.essentialValuesReady) return
 
         val singleBattery = when (snapshot.formFactor) {
             HeadphoneFormFactor.HEADSET.name -> true
             HeadphoneFormFactor.TRUE_WIRELESS.name -> false
-            else -> snapshot.batterySingle != null && snapshot.batteryLeft == null
+            else -> {
+                // Unreachable via the gate above: a capability table always resolves the
+                // form factor to one of the two. Guessing from the battery shape is what
+                // produced the single-battery headband island, so refuse instead.
+                Log.d(TAG, "skip surface render: form factor unresolved address=$address")
+                return
+            }
         }
 
         // Battery values are normalized once in SonyHeadphoneRepository: disconnected

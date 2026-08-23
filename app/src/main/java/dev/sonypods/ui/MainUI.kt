@@ -171,14 +171,16 @@ fun MainUI(
     val sonyConnected = sonyState.connected
     val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
     val displayTitle = sonyState.displayName
-    // The capability probe is what turns the neutral profile into the real one
+    // The capability table is what turns the neutral profile into the real one
     // (battery layout, writable NC types, EQ support); gating the detail page on
     // it prevents opening against an empty half-probed profile while connecting.
-    // The probe only says which features exist, though — the values behind them
+    // "The probe finished" is not the same fact — it is also true when the probe
+    // gave up without a table, and the page would then render the fallback guess.
+    // The table only says which features exist, though — the values behind them
     // arrive later, over LE by several seconds. Waiting for the connection-time
     // value burst as well is what keeps the page from opening on defaults that
     // cannot be tapped.
-    val canShowDetailPage = sonyConnected && sonyState.probeComplete && sonyState.initialValuesReady
+    val canShowDetailPage = sonyConnected && sonyState.capabilitiesKnown && sonyState.initialValuesReady
     // A device selection is itself a navigation request. Do not make the
     // request depend solely on the effect below winning a particular
     // recomposition: the connection broadcast and the picker state can be
@@ -274,7 +276,7 @@ fun MainUI(
         pendingExternalDetailAddress,
         sonyConnected,
         connectedDeviceAddress,
-        sonyState.probeComplete,
+        sonyState.capabilitiesKnown,
         sonyState.initialValuesReady,
     ) {
         val pending = pendingExternalDetailAddress ?: return@LaunchedEffect
@@ -286,13 +288,13 @@ fun MainUI(
     }
 
     // Connection established: record the device so the automatic model image can be
-    // associated with its Bluetooth address. Navigation waits for the capability
-    // probe and for the connection-time values, because the detail page is gated on
+    // associated with its Bluetooth address. Navigation waits for the capability table
+    // and for the connection-time values, because the detail page is gated on
     // both — entering earlier would show untappable defaults.
     LaunchedEffect(
         sonyConnected,
         connectedDeviceAddress,
-        sonyState.probeComplete,
+        sonyState.capabilitiesKnown,
         sonyState.initialValuesReady,
     ) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {

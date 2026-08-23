@@ -406,6 +406,9 @@ object SonyCapabilityProbe {
         val capabilities = capabilitiesFromFunctions(functions, profile.capabilities, transport, profile)
         return profile.copy(
             capabilities = capabilities,
+            // The one funnel a real capability table passes through — the live probe, the
+            // cache restore and the connection-time restore all land here.
+            capabilitiesKnown = true,
             featureBindings = buildFeatureBindings(profile.featureProtocolMap, capabilities),
             playbackDispatchStrategy = if (HeadphoneFeature.PLAYBACK_CONTROL in capabilities.features) {
                 PlaybackDispatchStrategy.TANDEM_FIRST

@@ -338,7 +338,10 @@ object MiLinkServiceHook : HookContext() {
             SonyDeviceService.rememberAddress(it)
         }
         snapshot.deviceName?.let { currentName = it }
-        snapshot.formFactor?.let { currentFormFactor = it }
+        // UNKNOWN is the pre-capability-table placeholder and carries no information; it must
+        // not overwrite (or be persisted over) a real form factor.
+        snapshot.formFactor?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
+            ?.let { currentFormFactor = it }
         currentBattery = BatteryParams(
             left = (snapshot.batteryLeft ?: snapshot.batterySingle)
                 ?.let { PodParams(battery = it, isConnected = true) },

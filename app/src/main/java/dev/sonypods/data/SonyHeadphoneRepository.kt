@@ -130,7 +130,6 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 /** How long to wait for CONNECT_RET_CAPABILITY_INFO before falling back to the
  * full RET_SUPPORT_FUNCTION probe (some models/FW may not reply). */
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
-private const val SUPPORT_FUNCTION_TIMEOUT_MS = 2_500L
 
 /**
  * How long the initial-value gate waits with no further progress before releasing the
@@ -518,22 +517,15 @@ data class SonyHeadphoneUiState(
     val strictSonyScanFilter: Boolean = false,
     val preferredProtocol: String = "Sony Tandem",
     /**
-     * True once the connection-time capability probe has finished (either from a
-     * cache restore when the CONNECT_RET_CAPABILITY_INFO counter matched, or from
-     * the full RET_SUPPORT_FUNCTION probe). The detail UI is gated on this so it
-     * never opens against an empty half-probed profile.
-     */
-    val probeComplete: Boolean = false,
-    /**
      * True once the connection-time initial-value burst is done: every domain in
      * [HeadphoneAdapter.initialValueDomains] has answered, nothing is left to transmit and
      * the channel has stayed quiet for [INITIAL_VALUE_SETTLE_MS] (or the wait timed out).
      *
-     * [probeComplete] only says which features exist; it fires before a single value has
-     * come back, which over LE is some seconds ahead of the first reply. The first reply of
-     * each domain is not enough either — a domain is several queries, and commands leave the
-     * phone one at a time behind their ACK. The app UI is gated on this so it never opens on
-     * defaults that cannot be tapped, or on values that visibly jump moments later.
+     * [capabilitiesKnown] only says which features exist; it is true before a single value
+     * has come back, which over LE is some seconds ahead of the first reply. The first reply
+     * of each domain is not enough either — a domain is several queries, and commands leave
+     * the phone one at a time behind their ACK. The app UI is gated on this so it never opens
+     * on defaults that cannot be tapped, or on values that visibly jump moments later.
      */
     val initialValuesReady: Boolean = false,
     /**
@@ -543,7 +535,21 @@ data class SonyHeadphoneUiState(
      * burst the detail page needs.
      */
     val essentialValuesReady: Boolean = false,
-)
+) {
+    /**
+     * The device answered with its own capability table (or the counter-matched cache
+     * restored one). Everything model-shaped is derived from it: form factor, how many
+     * batteries to ask about, which noise-control types are writable, EQ.
+     *
+     * Until it lands the profile is the neutral fallback — UNKNOWN form factor, a single
+     * battery question, nothing writable — so this is what a surface must wait for before
+     * rendering anything about the model. "The probe stopped" is deliberately not that fact:
+     * it is also true when the probe stopped *without* a table, and rendering on it showed a
+     * pair of buds as a single-battery headband.
+     */
+    val capabilitiesKnown: Boolean
+        get() = connectedProfile?.capabilitiesKnown == true
+}
 
 /**
  * @param resourceContext base module context. It is retained as the primary constructor
@@ -704,14 +710,24 @@ class SonyHeadphoneRepository private constructor(
     private var pendingCapabilityIdentifier = ""
     /** Set only by the official device-originated flexible Alert type 13. */
     private var skipLeAudioPairingGuide = false
-    private val pendingSupportFunctionTables = mutableSetOf<dev.sonypods.protocol.SonyTable>()
+    /**
+     * One entry per GET_SUPPORT_FUNCTION command that went out, removed as its
+     * RET_SUPPORT_FUNCTION comes back. We sent the requests, so the number of replies to
+     * expect is known exactly: the probe finishes when this empties, and nothing else ends
+     * the wait — no clock. A link that dies clears it through [clearSupportFunctionProbeState].
+     *
+     * A list rather than a set so two requests that map to the same table still expect two
+     * replies.
+     */
+    private val pendingSupportFunctionTables = mutableListOf<dev.sonypods.protocol.SonyTable>()
+    /**
+     * A GET_SUPPORT_FUNCTION burst is out and its replies are still being collected. Without
+     * it a duplicate or unsolicited RET_SUPPORT_FUNCTION arriving after the probe closed would
+     * re-run [finishSupportFunctionProbe] against that one table alone, narrowing a profile
+     * that was built from the full set.
+     */
+    private var supportFunctionProbeRunning = false
     private val supportFunctionsByTable = mutableMapOf<dev.sonypods.protocol.SonyTable, List<SonySupportedFunction>>()
-    private val supportFunctionTimeoutRunnable = Runnable {
-        if (pendingSupportFunctionTables.isNotEmpty()) {
-            appendLog("Support-function probe timed out; using received tables=${supportFunctionsByTable.keys}")
-            finishSupportFunctionProbe()
-        }
-    }
     /**
      * Domains from [HeadphoneAdapterRegistry.initialValueDomains] that the connection-time
      * refresh burst has not been answered on yet. Empty means either "not armed" or
@@ -1124,7 +1140,6 @@ class SonyHeadphoneRepository private constructor(
         if (supportCommands.isEmpty()) {
             appendLog("No support-function probe for ${profile.protocolName}; falling back to direct refresh")
             clearSupportFunctionProbeState()
-            markProbeComplete()
             refreshBasics(initial = true)
             return
         }
@@ -1135,8 +1150,11 @@ class SonyHeadphoneRepository private constructor(
                 dev.sonypods.protocol.SonyTable.NO_1
             }
         }
-        mainHandler.postDelayed(supportFunctionTimeoutRunnable, SUPPORT_FUNCTION_TIMEOUT_MS)
-        appendLog("Probing support function (SC C29903d/C30916e capability sequence)")
+        supportFunctionProbeRunning = true
+        appendLog(
+            "Probing support function (SC C29903d/C30916e capability sequence); " +
+                "awaiting ${supportCommands.size} table(s) $pendingSupportFunctionTables"
+        )
         supportCommands.forEach(::sendCommand)
     }
 
@@ -1156,7 +1174,6 @@ class SonyHeadphoneRepository private constructor(
                     "(identifier=${response.identifier}) → omit capability probe; restoring profile"
             )
             clearSupportFunctionProbeState()
-            markProbeComplete()
             refreshBasics(initial = true)
             return
         }
@@ -1410,12 +1427,6 @@ class SonyHeadphoneRepository private constructor(
         if (updated == current) return
         capabilityCache[address] = updated
         cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
-    }
-
-    private fun markProbeComplete() {
-        if (_state.value.probeComplete) return
-        _state.update { it.copy(probeComplete = true) }
-        appendLog("Capability probe complete", writeLogcat = false)
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -2542,7 +2553,6 @@ class SonyHeadphoneRepository private constructor(
                 permissionIssue = if (connected) it.permissionIssue else null,
                 scanState = if (connected) "Connected" else "Idle",
                 supportedFeatures = featureStatusesFor(profile),
-                probeComplete = if (connected) it.probeComplete else false,
                 initialValuesReady = if (connected) it.initialValuesReady else false,
                 essentialValuesReady = if (connected) it.essentialValuesReady else false,
             )
@@ -3720,7 +3730,6 @@ class SonyHeadphoneRepository private constructor(
         if (_state.value.deviceInfo.protocolVersionAccepted == false) {
             appendLog("Protocol version rejected; capability probing aborted (SC C29903d/C30916e)")
             clearSupportFunctionProbeState()
-            markProbeComplete()
             // No refresh burst follows this abort, so nothing would ever answer the
             // initial-value gate. Release it instead of leaving every consumer waiting
             // for values this session is never going to ask for.
@@ -3729,6 +3738,13 @@ class SonyHeadphoneRepository private constructor(
         }
         val table = response.table.takeIf { it != dev.sonypods.protocol.SonyTable.INVALID }
             ?: dev.sonypods.protocol.SonyTable.NO_1
+        if (!supportFunctionProbeRunning) {
+            // Every table we asked for has already been accounted for. Feeding this one
+            // through would rebuild the profile from it alone, dropping the functions the
+            // other tables contributed.
+            appendLog("Support-function table $table arrived outside a probe; ignored")
+            return
+        }
         supportFunctionsByTable[table] = response.functions
         pendingSupportFunctionTables.remove(table)
         if (pendingSupportFunctionTables.isNotEmpty()) {
@@ -3747,7 +3763,6 @@ class SonyHeadphoneRepository private constructor(
         clearSupportFunctionProbeState()
         if (functions.isEmpty()) {
             appendLog("No support functions received; falling back to direct refresh")
-            markProbeComplete()
             refreshBasics(initial = true)
             return
         }
@@ -3758,6 +3773,13 @@ class SonyHeadphoneRepository private constructor(
                 SonyCapabilityProbe.buildCapabilityProbeCommands(profile, functions)
             } ?: emptyList()
         }.getOrElse { emptyList() }
+        // The table can land after an earlier give-up already ran a burst against the neutral
+        // profile and opened the value gate. That burst asked one BATTERY question and nothing
+        // else, while the real table asks a different set — so the gate is re-closed here and
+        // the burst at the end of this function is awaited properly. Nothing was rendered off
+        // the open gate: every surface also requires capabilitiesKnown, which the update below
+        // is what sets.
+        clearInitialValueGate()
         _state.update { current ->
             val profile = current.connectedProfile?.let { profile ->
                 SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
@@ -3766,6 +3788,8 @@ class SonyHeadphoneRepository private constructor(
                 connectedProfile = profile,
                 eqUiCapability = profile?.eqUiCapability,
                 supportedFeatures = featureStatusesFor(profile),
+                initialValuesReady = false,
+                essentialValuesReady = false,
             )
         }
         // Create the cache entry before dispatching the per-domain probes so a
@@ -3775,12 +3799,12 @@ class SonyHeadphoneRepository private constructor(
         if (!alreadyProbed) {
             probeCommands.forEach(::sendCommand)
         }
+        appendLog("Capability table applied: ${functions.size} functions", writeLogcat = false)
         refreshBasics(initial = true)
-        markProbeComplete()
     }
 
     private fun clearSupportFunctionProbeState() {
-        mainHandler.removeCallbacks(supportFunctionTimeoutRunnable)
+        supportFunctionProbeRunning = false
         pendingSupportFunctionTables.clear()
         supportFunctionsByTable.clear()
     }

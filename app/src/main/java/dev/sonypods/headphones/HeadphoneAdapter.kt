@@ -177,6 +177,18 @@ data class ConnectedHeadphoneProfile(
     /** Bumped whenever the profile is rebound to a different protocol generation
      * or transport; stale probe-derived evidence is discarded on a rebind. */
     val rebindGeneration: Int = 0,
+    /**
+     * The device's own capability table has been applied — either the live
+     * RET_SUPPORT_FUNCTION reply or the counter-matched cache restore.
+     *
+     * Everything model-shaped comes from that table: the form factor, the battery query
+     * set, which noise-control types are writable, EQ. Until it lands the profile is the
+     * neutral fallback, which asks a single BATTERY question and reports UNKNOWN form
+     * factor — render on that and a pair of buds appears as a single-battery headband.
+     * Every surface gates on this, which is why it is a fact about the profile rather than
+     * about the probe: a probe that stopped without a table must not read as ready.
+     */
+    val capabilitiesKnown: Boolean = false,
 ) {
     fun supports(feature: HeadphoneFeature): Boolean = feature in capabilities.features
     fun protocolFor(feature: HeadphoneFeature): HeadphoneProtocolVariant =
@@ -201,9 +213,11 @@ data class ConnectedHeadphoneProfile(
         copy(protocolVersion = version)
 
     /** Mark this profile as rebound (new generation/transport); clears the
-     * protocol version so a stale whitelist verdict is never reused. */
+     * protocol version so a stale whitelist verdict is never reused, and the
+     * capability table with it — its function codes are specific to the generation
+     * that answered, so it says nothing about the one now bound. */
     fun rebounded(): ConnectedHeadphoneProfile =
-        copy(rebindGeneration = rebindGeneration + 1, protocolVersion = null)
+        copy(rebindGeneration = rebindGeneration + 1, protocolVersion = null, capabilitiesKnown = false)
 }
 
 data class ProfileTemplate(
