@@ -20,12 +20,28 @@ class TandemTransportRulesTest {
     @Test
     fun rxSequenceTracker_filtersOnlyConsecutiveDuplicates() {
         val tracker = SppRxSequenceTracker()
-        assertTrue(tracker.shouldDispatch(0))
-        assertFalse(tracker.shouldDispatch(0))
-        assertTrue(tracker.shouldDispatch(1))
-        assertTrue(tracker.shouldDispatch(0))
+        val type = SonySppFrameType.DATA_MDR_NO2
+        assertTrue(tracker.shouldDispatch(type, 0))
+        assertFalse(tracker.shouldDispatch(type, 0))
+        assertTrue(tracker.shouldDispatch(type, 1))
+        assertTrue(tracker.shouldDispatch(type, 0))
         tracker.reset()
-        assertTrue(tracker.shouldDispatch(0))
+        assertTrue(tracker.shouldDispatch(type, 0))
+    }
+
+    /**
+     * Each frame type counts its sequence independently, so one type's frame is never the other's
+     * retransmission. Sharing one counter dropped the second stream's frame — ACKed, never
+     * dispatched — and Table1/Table2 traffic does share a transport.
+     */
+    @Test
+    fun rxSequenceTracker_keepsFrameTypeSequenceSpacesApart() {
+        val tracker = SppRxSequenceTracker()
+        assertTrue(tracker.shouldDispatch(SonySppFrameType.DATA_MDR_NO2, 0))
+        assertTrue(tracker.shouldDispatch(SonySppFrameType.DATA_MDR, 0))
+        assertTrue(tracker.shouldDispatch(SonySppFrameType.LARGE_DATA_MDR, 0))
+        assertFalse(tracker.shouldDispatch(SonySppFrameType.DATA_MDR_NO2, 0))
+        assertTrue(tracker.shouldDispatch(SonySppFrameType.DATA_MDR_NO2, 1))
     }
 
     @Test

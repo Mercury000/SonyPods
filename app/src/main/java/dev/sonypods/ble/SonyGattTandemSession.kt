@@ -157,12 +157,12 @@ internal class SonyGattTandemSession(
             SonySppFrameType.LARGE_DATA_MDR -> {
                 // A retransmission still has to be ACKed, but its payload is dispatched once.
                 sendAck(frame.sequence)
-                if (rxSequenceTracker.shouldDispatch(frame.sequence)) {
+                if (rxSequenceTracker.shouldDispatch(type, frame.sequence)) {
                     SonySppPayloadMapper.inboundToTandemBytes(type, frame.payload)?.let {
                         onPayload(channel, it)
                     }
                 } else {
-                    log("GATT[$channel] RX duplicate seq=${frame.sequence.u}; ACKed without redispatch")
+                    log("GATT[$channel] RX duplicate ${type.name} seq=${frame.sequence.u}; ACKed without redispatch")
                 }
             }
             SonySppFrameType.SHOT_MDR,

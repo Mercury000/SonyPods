@@ -287,6 +287,18 @@ fun MainUI(
         onExternalDetailRequestConsumed()
     }
 
+    // Re-read the device when the detail page becomes visible, the way every Sound Connect
+    // card issues its GET on becoming visible instead of drawing whatever the last session
+    // left behind. The connection-time burst is a single shot taken seconds earlier: the
+    // headset's music info in particular is UNSETTLED until the phone's AVRCP metadata
+    // reaches it, and a reply that says so leaves the song/artist/album rows empty with
+    // nothing scheduled to ask again.
+    LaunchedEffect(showEarphoneDetail, connectedDeviceAddress) {
+        if (showEarphoneDetail && connectedDeviceAddress.isNotBlank()) {
+            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
+        }
+    }
+
     // Connection established: record the device so the automatic model image can be
     // associated with its Bluetooth address. Navigation waits for the capability table
     // and for the connection-time values, because the detail page is gated on

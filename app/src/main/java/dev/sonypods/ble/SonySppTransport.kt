@@ -160,10 +160,10 @@ internal class SonySppTransport(
                 // Retransmitted frames must still be ACKed, but the Tandem payload
                 // is dispatched only once for each consecutive RX sequence value.
                 sendAck(sequence)
-                if (rxSequenceTracker.shouldDispatch(sequence)) {
+                if (rxSequenceTracker.shouldDispatch(type, sequence)) {
                     SonySppPayloadMapper.inboundToTandemBytes(type, payload)?.let(onPayload)
                 } else {
-                    log("SPP RX duplicate seq=${sequence.u}; ACKed without redispatch")
+                    log("SPP RX duplicate ${type.name} seq=${sequence.u}; ACKed without redispatch")
                 }
             }
             SonySppFrameType.SHOT_MDR,
