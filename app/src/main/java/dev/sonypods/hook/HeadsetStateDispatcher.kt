@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.StatusBarManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.ContextWrapper
@@ -109,6 +110,8 @@ object HeadsetStateDispatcher : HookContext() {
             Log.d("SonyPods", "AdapterService.onCreate hook skipped", it)
         }
 
+        hookLeAudioConnectionState()
+
         hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
             val currState = args[2] as Int
             val fromState = args[1] as Int
@@ -168,6 +171,9 @@ object HeadsetStateDispatcher : HookContext() {
      * was removed there is no other trigger to re-fetch — so we listen for the Android
      * ACL connect/disconnect of a Sony device and trigger one event-driven refresh.
      * This is not polling: it only fires on an actual link change.
+     *
+     * The disconnect side additionally carries the terminal-power-off signal for headsets whose
+     * control identity is not an LE Audio member — see [SonyEngineHost.onAclDisconnected].
      */
     private fun registerAclReceiver(context: Context?) {
         if (context == null || aclReceiverRegistered) return
@@ -178,10 +184,15 @@ object HeadsetStateDispatcher : HookContext() {
                 if (action != BluetoothDevice.ACTION_ACL_CONNECTED && action != BluetoothDevice.ACTION_ACL_DISCONNECTED) return
                 val device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
                 if (!isSonyPod(device)) return
+                val connected = action == BluetoothDevice.ACTION_ACL_CONNECTED
+                // Evaluated before the refresh debounce: when the headset powers off both
+                // identities drop within milliseconds, and it is the second drop — the one the
+                // debounce would swallow — that sees every link gone.
+                if (!connected) SonyEngineHost.onAclDisconnected(device)
                 val now = System.currentTimeMillis()
                 if (now - lastAclRefreshMs < 2000L) return
                 lastAclRefreshMs = now
-                Log.d("SonyPods", "ACL ${if (action == BluetoothDevice.ACTION_ACL_CONNECTED) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
+                Log.d("SonyPods", "ACL ${if (connected) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
                 SonyEngineHost.refreshNow("bud-acl")
             }
         }
@@ -192,6 +203,166 @@ object HeadsetStateDispatcher : HookContext() {
         aclReceiver = receiver
         receiverContext = context
     }
+
+    /**
+     * Drives session start from the LE Audio profile state machine, mirroring the A2DP hook.
+     *
+     * With LE Audio active neither A2DP nor a classic ACL exists: the audio link is LE, so
+     * both existing triggers stay silent and the module would sit idle until something else
+     * forced a connect. We live in this process, so instead of subscribing to the framework
+     * broadcast (the app-level pattern Sound Connect uses) we hook the state machine's own
+     * transition point — synchronous, ordered before any broadcast marshalling, and immune
+     * to receiver scheduling.
+     *
+     * Signature verified against a HyperOS bluetooth.apk: LeAudioStateMachine
+     * .broadcastConnectionState reaches LeAudioService.notifyConnectionStateChanged(device,
+     * current, previous), whose 4-arg overload merely forwards into the 3-arg one doing the
+     * real work. Mind the state order — (current, previous), the reverse of the A2DP hook.
+     */
+    private fun hookLeAudioConnectionState() {
+        runCatching {
+            hookAfter(findMethodByParamCount(
+                "com.android.bluetooth.le_audio.LeAudioService",
+                "notifyConnectionStateChanged",
+                3,
+            )) {
+                val device = args.getOrNull(0) as? BluetoothDevice
+                val currState = args.getOrNull(1) as? Int
+                val prevState = args.getOrNull(2) as? Int
+                if (device == null || currState == null || prevState == null) return@hookAfter
+                onLeAudioStateChanged(instance, device, currState, prevState)
+            }
+        }.onFailure {
+            Log.d("SonyPods", "LeAudioService.notifyConnectionStateChanged hook skipped", it)
+        }
+    }
+
+    private fun onLeAudioStateChanged(
+        serviceInstance: Any?,
+        device: BluetoothDevice,
+        currState: Int,
+        prevState: Int,
+    ) {
+        if (!isSonyPod(device)) return
+        Log.d("SonyPods", "LE Audio state=$currState for ${device.address}")
+        if (currState == prevState) return
+        // Both coordinated-set members reach CONNECTED, but only the classic identity
+        // carries Sony's services. Acting on the lead earbud's resolvable LE identity is
+        // wrong twice over: the session would never handshake on an identity with no Sony
+        // GATT server, and dialing the control counterpart while its own CIS is still
+        // forming collides with link establishment and stalls both for tens of seconds.
+        // So fold identities first and only answer for the control identity — mirroring
+        // SonyBleClient's resolveControlTarget.
+        val controlAddress = resolveControlAddress(serviceInstance, device)
+        val fromControlIdentity =
+            controlAddress == null || controlAddress.equals(device.address, ignoreCase = true)
+        when (currState) {
+            BluetoothProfile.STATE_CONNECTED -> {
+                if (!fromControlIdentity) {
+                    // Deferring is only right when the control identity is itself an LE Audio
+                    // device — otherwise nothing ever announces it and the session never
+                    // starts, since under LC3 there is no A2DP transition either. The profile
+                    // answers this directly: a device reaches notifyConnectionStateChanged only
+                    // if it holds a LeAudioDeviceDescriptor, and getGroupDevices lists exactly
+                    // the descriptors in that group.
+                    val group = leAudioGroupAddresses(serviceInstance, device)
+                    if (group == null || controlAddress.uppercase() in group) {
+                        Log.d(
+                            "SonyPods",
+                            "Deferring ${device.address}; control identity $controlAddress " +
+                                "will announce separately",
+                        )
+                        return
+                    }
+                    val control = remoteControlDevice(serviceInstance, controlAddress) ?: return
+                    Log.d(
+                        "SonyPods",
+                        "Control identity $controlAddress is outside the LE Audio group " +
+                            "$group; connecting it from ${device.address}",
+                    )
+                    postToProfileHandler(serviceInstance) { SonyEngineHost.connectDevice(control) }
+                    return
+                }
+                postToProfileHandler(serviceInstance) { SonyEngineHost.connectDevice(device) }
+            }
+
+            BluetoothProfile.STATE_DISCONNECTED -> {
+                // The classic path learns physical power-off from A2DP; under LE Audio no
+                // other signal marks it, and without terminal teardown the surfaces stay
+                // preserved "for recovery" forever. But a coordinated-set member leaving is
+                // routine, not terminal — one earbud back in the case drops its own CIS while
+                // the other keeps playing, and the control link is untouched. Folding that
+                // member's drop onto the control identity would tear down a session that is
+                // still exchanging frames, the same mistake the A2DP path made under LC3.
+                // Only the control identity's own transition ends the session; when the
+                // headset really powers off, that transition follows.
+                if (!fromControlIdentity) {
+                    Log.d(
+                        "SonyPods",
+                        "LE Audio drop of ${device.address} is a set member; " +
+                            "control identity $controlAddress still owns the session",
+                    )
+                    return
+                }
+                postToProfileHandler(serviceInstance) {
+                    SonyEngineHost.disconnectDevice(device, forceTeardown = true)
+                }
+            }
+        }
+    }
+
+    /**
+     * Addresses the profile itself counts as members of this device's LE Audio group, or null
+     * when that could not be read.
+     *
+     * `LeAudioService.getGroupDevices(BluetoothDevice)` is `getGroupDevices(getGroupId(device))`,
+     * which walks `mDeviceDescriptors` for the matching group id — so membership here is the
+     * same thing as "that address will announce on its own". Descriptors are created by
+     * `connect()`, which rejects a remote without the LE_AUDIO UUID, and by
+     * `handleGroupNodeAdded`, which the native stack raises for every stored set member at
+     * adapter start; both precede any member's CONNECTED. An empty set is a real answer: the
+     * device has no coordinated set, so no counterpart will announce. Taking the group read
+     * lock here is safe — the hooked method calls `getConnectedDevices()` on that same lock.
+     */
+    private fun leAudioGroupAddresses(serviceInstance: Any?, device: BluetoothDevice): Set<String>? =
+        runCatching {
+            val service = serviceInstance ?: return null
+            // Resolved by parameter type: getGroupDevices is overloaded on BluetoothDevice
+            // and on the raw group id, and both take one argument.
+            val members = service.javaClass
+                .getMethod("getGroupDevices", BluetoothDevice::class.java)
+                .invoke(service, device) as? List<*>
+                ?: return null
+            members.filterIsInstance<BluetoothDevice>()
+                .mapNotNull { runCatching { it.address?.uppercase() }.getOrNull() }
+                .toSet()
+        }.getOrNull()
+
+    private fun postToProfileHandler(serviceInstance: Any?, block: () -> Unit) {
+        // Serialized with profile internals like the A2DP path; connectDevice itself dedupes
+        // already-live sessions and in-flight attempts.
+        val handler = runCatching { getObjectField(serviceInstance, "mHandler") as Handler }.getOrNull()
+            ?: Handler(android.os.Looper.getMainLooper())
+        handler.post(block)
+    }
+
+    /** Refreshes the LE-Audio-identity -> control-address map from current bonds. */
+    @SuppressLint("MissingPermission")
+    private fun resolveControlAddress(serviceInstance: Any?, device: BluetoothDevice): String? {
+        val adapter = (serviceInstance as? Context)
+            ?.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+            ?: return device.address
+        val bonded = adapter.bondedDevices.orEmpty()
+        SonyDeviceService.linkLeAudioIdentities(bonded)
+        return SonyDeviceService.resolveControlAddress(device.address) ?: device.address
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun remoteControlDevice(serviceInstance: Any?, address: String): BluetoothDevice? =
+        (serviceInstance as? Context)
+            ?.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+            ?.runCatching { getRemoteDevice(address) }
+            ?.getOrNull()
 
     private fun registerAppRequestReceiver(context: Context?) {
         if (context == null || appRequestReceiverRegistered) return
