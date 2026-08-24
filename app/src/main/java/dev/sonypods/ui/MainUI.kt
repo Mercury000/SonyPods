@@ -236,6 +236,7 @@ fun MainUI(
             onSourceSwitchEnabledChange = { enabled -> SonyBridge.setSourceSwitchEnabled(context, enabled) },
             onMultipointEnabledChange = { enabled -> SonyBridge.setMultipointEnabled(context, enabled) },
              onLeAudioEnabledChange = { enabled -> SonyBridge.setLeAudioEnabled(context, enabled) },
+            onUpscalingEnabledChange = { enabled -> SonyBridge.setUpscalingEnabled(context, enabled) },
              onLeAudioAlertReply = { positive -> SonyBridge.replyLeAudioAlert(context, positive) },
              onLeAudioDevicePair = { SonyBridge.pairLeAudioDevice(context) },
              onLeAudioPairingGuide = { SonyBridge.showLeAudioPairingGuide(context) },

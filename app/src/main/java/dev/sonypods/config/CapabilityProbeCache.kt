@@ -52,6 +52,12 @@ data class CapabilityCacheEntry(
     val maxPairedDevices: Int = 0,
     val maxConnectedDevices: Int = 0,
     val supportsFileTransfer: Boolean? = null,
+    /** AUDIO-domain DSEE/upscaling: the inquired type the support list chose
+     * (0x01 / 0x0B) and the UpscalingType generation byte from
+     * AUDIO_RET_CAPABILITY (`cf0.e0`) that titles the row. Neither is derivable
+     * from the function list alone, so both persist with the entry. */
+    val upscalingInquiredTypeCode: Int? = null,
+    val upscalingTypeCode: Int? = null,
     /** GS capability metadata; the matched slot remains in [multipointGsSlot]. */
     val generalSettingCapability: GeneralSettingCapabilityCache? = null,
     val savedAtMs: Long = 0L,

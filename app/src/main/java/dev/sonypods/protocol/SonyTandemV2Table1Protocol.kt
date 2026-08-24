@@ -181,6 +181,27 @@ object SonyTandemV2Table1Protocol {
     private const val PLAY_NTFY_PARAM: Byte = 0xA9.toByte()
     private const val PLAY_GET_CAPABILITY: Byte = 0xA0.toByte()
     private const val PLAY_RET_CAPABILITY: Byte = 0xA1.toByte()
+    // ── AUDIO domain (Sound Connect `cf0` package): DSEE / upscaling lives here ──
+    // Payload after dataType is [Command][AudioInquiredType][value…]; the upscaling
+    // GET is exactly 3 bytes, SET/RET/NTFY carry one UpscalingTypeAutoOff value byte.
+    private const val AUDIO_GET_CAPABILITY: Byte = 0xE0.toByte()
+    private const val AUDIO_RET_CAPABILITY: Byte = 0xE1.toByte()
+    private const val AUDIO_GET_PARAM: Byte = 0xE6.toByte()
+    private const val AUDIO_RET_PARAM: Byte = 0xE7.toByte()
+    private const val AUDIO_SET_PARAM: Byte = 0xE8.toByte()
+    private const val AUDIO_NTFY_PARAM: Byte = 0xE9.toByte()
+    /** AudioInquiredType.UPSCALING — the first-generation DSEE HX / DSEE toggle. */
+    private const val AUDIO_INQ_UPSCALING: Byte = 0x01
+    /** AudioInquiredType.UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON — the newer
+     * generation that also covers DSEE Ultimate. `BSON.REGEX` (0x0B) in SC's enum. */
+    private const val AUDIO_INQ_UPSCALING_WITH_REASON: Byte = 0x0B
+    /** UpscalingTypeAutoOff: OFF=0, AUTO=1 — the switch's two states. */
+    private const val UPSCALING_OFF: Byte = 0x00
+    private const val UPSCALING_AUTO: Byte = 0x01
+    /** UpscalingType (AUDIO_RET_CAPABILITY body): the DSEE generation the headset
+     * reports — the value Sound Connect's `UpsclType` title/description picks from
+     * (`cf0.e0`): DSEE_HX=0, DSEE=1, DSEE_HX_AI("Extreme")=2, DSEE_ULTIMATE=3. */
+    private val UPSCALING_TYPES: List<Byte> = listOf(0x00, 0x01, 0x02, 0x03)
     private const val VALUE_ENABLE: Byte = 0x00
     private const val VALUE_CHANGED: Byte = 0x01
 
@@ -227,6 +248,29 @@ object SonyTandemV2Table1Protocol {
      */
     fun buildGetSupportFunction(): ByteArray =
         SonyTandemFrame.message(CONNECT_GET_SUPPORT_FUNCTION, byteArrayOf(0x00))
+
+    /** AUDIO_GET_PARAM for one of the upscaling inquired types (0x01 / 0x0B). */
+    fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemFrame.message(AUDIO_GET_PARAM, byteArrayOf(inquiredTypeCode))
+
+    /**
+     * AUDIO_GET_CAPABILITY (0xE0) for one of the upscaling inquired types. Its
+     * RET carries the DSEE generation byte (`cf0.e0`) that decides whether the
+     * row reads DSEE / DSEE HX / DSEE Extreme / DSEE Ultimate.
+     */
+    fun buildGetUpscalingCapability(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemFrame.message(AUDIO_GET_CAPABILITY, byteArrayOf(inquiredTypeCode))
+
+    /**
+     * AUDIO_SET_PARAM toggling DSEE / DSEE Extreme: [inquiredTypeCode] selects the
+     * generation the device advertised, [on] maps onto UpscalingTypeAutoOff
+     * AUTO/OFF exactly as Sound Connect's UpsclValue does.
+     */
+    fun buildSetUpscaling(inquiredTypeCode: Byte, on: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            AUDIO_SET_PARAM,
+            byteArrayOf(inquiredTypeCode, if (on) UPSCALING_AUTO else UPSCALING_OFF),
+        )
 
     /**
      * Parse a V2 CONNECT_RET_SUPPORT_FUNCTION payload (0x07).
@@ -795,6 +839,9 @@ object SonyTandemV2Table1Protocol {
             )
             PLAY_RET_PARAM -> parsePlayParam(payload, raw, isUnsolicited = false)
             PLAY_NTFY_PARAM -> parsePlayParam(payload, raw, isUnsolicited = true)
+            AUDIO_RET_PARAM -> parseAudioParam(payload, raw, isUnsolicited = false)
+            AUDIO_NTFY_PARAM -> parseAudioParam(payload, raw, isUnsolicited = true)
+            AUDIO_RET_CAPABILITY -> parseUpscalingCapability(payload, raw)
             LEA_RET_STATUS, LEA_NTFY_STATUS -> if (
                 payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
             ) {
@@ -1165,6 +1212,45 @@ object SonyTandemV2Table1Protocol {
             } ?: unknownPlayParam(payload, raw)
             else -> unknownPlayParam(payload, raw)
         }
+
+    /**
+     * AUDIO_RET_PARAM / AUDIO_NTFY_PARAM for the upscaling inquired types:
+     * `[inq][UpscalingTypeAutoOff]`, exactly three bytes on the wire like SC's
+     * `cf0.o0` (length and value-range violations reject the whole frame).
+     */
+    private fun parseAudioParam(payload: ByteArray, raw: ByteArray, isUnsolicited: Boolean): ParsedTandemResponse {
+        val inquiredType = payload.firstOrNull()?.unsigned
+        if (payload.size != 2 || (inquiredType != AUDIO_INQ_UPSCALING.unsigned &&
+                    inquiredType != AUDIO_INQ_UPSCALING_WITH_REASON.unsigned)
+        ) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+        return when (payload[1]) {
+            UPSCALING_OFF -> ParsedTandemResponse.Upscaling(false, inquiredType!!, isUnsolicited, raw)
+            UPSCALING_AUTO -> ParsedTandemResponse.Upscaling(true, inquiredType!!, isUnsolicited, raw)
+            else -> ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+    }
+
+    /**
+     * AUDIO_RET_CAPABILITY (0xE1) for the upscaling inquired types: `[inq][type]`,
+     * three bytes on the wire like SC's `cf0.e0` — length violations, foreign
+     * inquired types and out-of-range UpscalingType values reject the whole frame.
+     * [type] is the DSEE generation byte the UI titles/describes from.
+     */
+    private fun parseUpscalingCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val inquiredType = payload.firstOrNull()?.unsigned
+        if (payload.size != 2 || (inquiredType != AUDIO_INQ_UPSCALING.unsigned &&
+                    inquiredType != AUDIO_INQ_UPSCALING_WITH_REASON.unsigned)
+        ) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+        val type = payload[1]
+        if (type !in UPSCALING_TYPES) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+        return ParsedTandemResponse.UpscalingCapability(inquiredType!!, type.unsigned, raw)
+    }
 
     /** payload[0]=type, then exactly four [nameStatus, len, utf8…] elements in the
      * fixed order track/album/artist/genre. Partial payloads are rejected whole —

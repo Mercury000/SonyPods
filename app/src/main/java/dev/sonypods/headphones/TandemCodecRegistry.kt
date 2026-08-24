@@ -28,6 +28,11 @@ interface TandemCodec {
     fun buildGetSupportFunction(): ByteArray? = null
     fun buildGetProtocolInfo(): ByteArray? = null
     fun buildGetCapabilityInfo(): ByteArray? = null
+    /** AUDIO-domain DSEE / upscaling; null on protocols without the domain. */
+    fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray? = null
+    fun buildSetUpscaling(inquiredTypeCode: Byte, on: Boolean): ByteArray? = null
+    /** AUDIO_GET_CAPABILITY for the upscaling inquired types (DSEE generation). */
+    fun buildGetUpscalingCapability(inquiredTypeCode: Byte): ByteArray? = null
     fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray? = null
     fun buildGetDisplayFirmwareVersion(): ByteArray? = null
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray? = null
@@ -295,6 +300,15 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildGetCapabilityInfo(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetCapabilityInfo()
+
+    override fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetUpscaling(inquiredTypeCode)
+
+    override fun buildSetUpscaling(inquiredTypeCode: Byte, on: Boolean): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetUpscaling(inquiredTypeCode, on)
+
+    override fun buildGetUpscalingCapability(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetUpscalingCapability(inquiredTypeCode)
 
     override fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetDeviceInfo(type)

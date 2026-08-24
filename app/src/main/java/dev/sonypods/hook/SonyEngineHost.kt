@@ -1612,6 +1612,8 @@ object SonyEngineHost {
                 repo.setMultipointEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_LE_AUDIO_ENABLED ->
                 repo.setLeAudioEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_UPSCALING_ENABLED ->
+                repo.setUpscalingEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_REPLY_MULTIPOINT_ALERT ->
                 repo.replyMultipointAlert(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_REPLY_LE_AUDIO_ALERT ->

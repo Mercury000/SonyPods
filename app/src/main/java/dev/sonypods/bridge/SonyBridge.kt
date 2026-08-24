@@ -81,6 +81,7 @@ object SonyBridge {
     const val CMD_SET_SOURCE_SWITCH_ENABLED = "set_source_switch_enabled"
     const val CMD_SET_MULTIPOINT_ENABLED = "set_multipoint_enabled"
     const val CMD_SET_LE_AUDIO_ENABLED = "set_le_audio_enabled"
+    const val CMD_SET_UPSCALING_ENABLED = "set_upscaling_enabled"
     const val CMD_REPLY_MULTIPOINT_ALERT = "reply_multipoint_alert"
     const val CMD_REPLY_LE_AUDIO_ALERT = "reply_le_audio_alert"
     /** Bond the headset's LE-only identity so the phone can actually route LC3. */
@@ -217,6 +218,9 @@ object SonyBridge {
 
     fun setLeAudioEnabled(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_LE_AUDIO_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setUpscalingEnabled(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_UPSCALING_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
 
     /** Reply to the device's pending reconnection alert; true = confirm (execute), false = cancel. */
     fun replyMultipointAlert(context: Context, positive: Boolean) =

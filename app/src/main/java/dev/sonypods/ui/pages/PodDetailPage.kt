@@ -212,6 +212,12 @@ private fun LazyListScope.podControlItems(
         PlaybackCard(uiState = uiState, actions = actions)
     }
 
+    if (uiState.supportsUpscaling) {
+        item {
+            UpscalingCard(uiState = uiState, actions = actions)
+        }
+    }
+
     if (uiState.supportsLeAudio) {
         item {
             LeAudioCard(uiState = uiState, actions = actions)
@@ -249,6 +255,44 @@ private fun LazyListScope.podControlItems(
     item {
         Spacer(modifier = Modifier.height(bottomContentPadding))
     }
+}
+
+/**
+ * DSEE / DSEE Extreme (AUDIO-domain upscaling). Title and description mirror
+ * Sound Connect's `UpsclType` strings, picked by the AUDIO_RET_CAPABILITY
+ * generation byte — not by which FunctionType the support list advertised.
+ */
+@Composable
+private fun UpscalingCard(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        SwitchPreference(
+            title = upscalingTitle(uiState.upscalingTypeCode),
+            summary = upscalingDescription(uiState.upscalingTypeCode),
+            checked = uiState.upscalingEnabled == true,
+            onCheckedChange = actions.onUpscalingEnabledChange,
+        )
+    }
+}
+
+/** UpsclType → official title (DSEEHX_Title / DSEE_Title / DSEEHX_AI_Title / DSEEULT_Title). */
+private fun upscalingTitle(typeCode: Int): String = when (typeCode) {
+    0 -> "DSEE HX"
+    2 -> "DSEE Extreme"
+    3 -> "DSEE Ultimate"
+    else -> "DSEE"
+}
+
+/** Official per-generation descriptions (SC `*_Description` resources). */
+private fun upscalingDescription(typeCode: Int): String = when (typeCode) {
+    0 ->
+        "修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，让您能享受到媲美高解析度的音质。"
+    2, 3 ->
+        "利用人工智能技术增强流媒体或MP3等压缩音频源，以呈现清晰且富有动态感的声音。"
+    else ->
+        "修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，以还原出宽广、自然的音频效果。"
 }
 
 @Composable

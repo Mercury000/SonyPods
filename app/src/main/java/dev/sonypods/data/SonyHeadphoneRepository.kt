@@ -516,6 +516,9 @@ data class SonyHeadphoneUiState(
     val wearingState: WearingState = WearingState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val playbackState: PlaybackState = PlaybackState(),
+    /** DSEE / DSEE Extreme (AUDIO-domain upscaling) toggle; null until answered
+     * or unsupported — the UI only draws it when the profile advertises it. */
+    val upscalingEnabled: Boolean? = null,
     val endpointDiagnostic: EndpointDiagnosticState? = null,
     val table2Diagnostic: Table2DiagnosticState? = null,
     val supportedFeatures: List<FeatureStatus> = featureStatusesFor(null),
@@ -1219,7 +1222,12 @@ class SonyHeadphoneRepository private constructor(
         val profile = _state.value.connectedProfile ?: return false
         val functions = SonyCapabilityProbe.restoreFunctions(profile, entry.functions)
         if (functions.isEmpty()) return false
-        val restored = SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
+        val restored = SonyCapabilityProbe.applyToProfile(
+            profile, functions, profile.transport,
+            // A cache restore is not a live probe: claiming its evidence stamp
+            // would let the engine skip every later genuine probe burst.
+            markProbed = false,
+        )
             .withCachedCapabilityDetails(entry)
             .withCachedMultipointSlot(entry)
         _state.update {
@@ -1274,7 +1282,7 @@ class SonyHeadphoneRepository private constructor(
         if (functions.isEmpty()) {
             return resolved.withCachedCapabilityDetails(entry).withCachedMultipointSlot(entry)
         }
-        return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport)
+        return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport, markProbed = false)
             .withCachedCapabilityDetails(entry)
             .withCachedMultipointSlot(entry)
     }
@@ -1297,6 +1305,9 @@ class SonyHeadphoneRepository private constructor(
                 bandCount = cachedBandCount,
                 hasClearBass = entry.eqHasClearBass ?: currentEq.hasClearBass,
             ),
+            upscalingInquiredTypeCode = capabilities.upscalingInquiredTypeCode
+                ?: entry.upscalingInquiredTypeCode,
+            upscalingTypeCode = capabilities.upscalingTypeCode ?: entry.upscalingTypeCode,
         )
         return copy(
             capabilities = restoredCapabilities,
@@ -1418,6 +1429,12 @@ class SonyHeadphoneRepository private constructor(
                 .takeIf { it > 0 } ?: previous?.maxConnectedDevices ?: 0,
             supportsFileTransfer = _state.value.multipointState.supportsFileTransfer
                 ?: previous?.supportsFileTransfer,
+            upscalingInquiredTypeCode = profile.capabilities.upscalingInquiredTypeCode
+                ?: previous?.upscalingInquiredTypeCode,
+            // The AUDIO capability RET usually lands after this save; keep the
+            // previously learned generation until applyUpscalingCapability updates it.
+            upscalingTypeCode = profile.capabilities.upscalingTypeCode
+                ?: previous?.upscalingTypeCode,
             generalSettingCapability = previous?.generalSettingCapability,
             savedAtMs = System.currentTimeMillis(),
         )
@@ -2593,6 +2610,7 @@ class SonyHeadphoneRepository private constructor(
                 initialValuesReady = if (connected) it.initialValuesReady else false,
                 essentialValuesReady = if (connected) it.essentialValuesReady else false,
                 leAudioSwitchPending = if (connected) it.leAudioSwitchPending else false,
+                upscalingEnabled = if (connected) it.upscalingEnabled else null,
             )
         }
     }
@@ -2653,6 +2671,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.PlaybackMetadataField -> applyPlaybackMetadataField(parsed)
             is ParsedTandemResponse.PlaybackMetadataInvalidated -> applyPlaybackMetadataInvalidated(parsed)
             is ParsedTandemResponse.PlaybackVolume -> applyPlaybackVolume(parsed)
+            is ParsedTandemResponse.Upscaling -> applyUpscaling(parsed)
+            is ParsedTandemResponse.UpscalingCapability -> applyUpscalingCapability(parsed)
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
             is ParsedTandemResponse.LeaCapability -> applyLeaCapability(parsed)
@@ -3112,6 +3132,61 @@ class SonyHeadphoneRepository private constructor(
 
     private fun applyPlaybackVolume(response: ParsedTandemResponse.PlaybackVolume) {
         _state.update { it.copy(playbackState = it.playbackState.copy(musicVolume = response.volume)) }
+    }
+
+    private fun applyUpscaling(response: ParsedTandemResponse.Upscaling) {
+        appendLog(
+            "Upscaling ${if (response.isUnsolicited) "NTFY" else "RET"} " +
+                "inq=0x%02X enabled=%s".format(response.inquiredTypeCode, response.enabled)
+        )
+        _state.update { it.copy(upscalingEnabled = response.enabled) }
+    }
+
+    /** AUDIO_RET_CAPABILITY: records the DSEE generation (`cf0.e0`) the headset
+     * reports; the detail row's official title/description derive from it. */
+    private fun applyUpscalingCapability(response: ParsedTandemResponse.UpscalingCapability) {
+        appendLog(
+            "Upscaling capability inq=0x%02X type=%d"
+                .format(response.inquiredTypeCode, response.upscalingTypeCode)
+        )
+        _state.update { state ->
+            val profile = state.connectedProfile ?: return@update state
+            state.copy(
+                connectedProfile = profile.copy(
+                    capabilities = profile.capabilities.copy(
+                        upscalingTypeCode = response.upscalingTypeCode,
+                    ),
+                ),
+            )
+        }
+        _state.value.connectedDevice?.address?.let { address ->
+            updateCapabilityCache(address) { entry ->
+                entry.copy(upscalingTypeCode = response.upscalingTypeCode)
+            }
+        }
+    }
+
+    /**
+     * Toggles DSEE / DSEE Extreme (AUDIO_SET_PARAM). The inquired type is the one
+     * the device's support-function list chose; optimistic like the other SETs —
+     * the RET/NTFY corrects the state when the headset disagrees.
+     */
+    fun setUpscalingEnabled(enabled: Boolean) {
+        val profile = _state.value.connectedProfile ?: return
+        if (!profile.supports(HeadphoneFeature.UPSCALING)) return
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) return
+        val inquiredTypeCode = profile.capabilities.upscalingInquiredTypeCode ?: return
+        _state.update { it.copy(upscalingEnabled = enabled) }
+        sendCommandIfReady(
+            HeadphoneCommand(
+                label = "SET upscaling ${if (enabled) "AUTO" else "OFF"}",
+                bytes = TandemCodecRegistry
+                    .codecFor(profile.protocolFor(HeadphoneFeature.DEVICE_INFO))
+                    .buildSetUpscaling(inquiredTypeCode.toByte(), enabled)
+                    ?: return,
+                channel = profile.channelFor(HeadphoneFeature.UPSCALING),
+            )
+        )
     }
 
     private fun applyLeaStatus(response: ParsedTandemResponse.LeaStatus) {

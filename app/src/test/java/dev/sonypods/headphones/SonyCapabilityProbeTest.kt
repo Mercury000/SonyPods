@@ -433,6 +433,44 @@ class SonyCapabilityProbeTest {
         assertTrue(applied.capabilitiesKnown)
     }
 
+    /**
+     * A cache restore re-derives the same table without a live probe, so it must
+     * not stamp `probe:ret-support-function` — the engine fires its one-shot
+     * per-domain probe burst only while that stamp is absent, and a restore
+     * claiming it silently suppressed every later genuine probe (the AUDIO
+     * capability GET never went out and the DSEE generation stayed unknown).
+     */
+    @Test
+    fun applyToProfile_restoreDoesNotClaimProbeEvidence() {
+        val restored = SonyCapabilityProbe.applyToProfile(
+            profile = v2Profile,
+            functions = listOf(fn(SonyV2FunctionType.PRESET_EQ, 0)),
+            transport = HeadphoneTransport.GATT_HPC,
+            markProbed = false,
+        )
+
+        assertTrue(restored.capabilitiesKnown)
+        assertTrue(restored.protocolEvidence.none { it.startsWith("probe:ret-support-function") })
+        assertTrue(restored.protocolEvidence.any { it.startsWith("probe:NO_1:EQEBB:") })
+    }
+
+    /** The upscaling probe rides the same burst as the other domains whenever the
+     * support list advertises either upscaling FunctionType (`u70.p1` picks inq
+     * 0x01 over 0x0B); its RET carries the DSEE generation byte. */
+    @Test
+    fun probeCommands_emitsAudioUpscalingCapability() {
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v2Profile.copy(
+                featureProtocolMap = v2Profile.featureProtocolMap +
+                    (HeadphoneFeature.UPSCALING to HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1),
+            ),
+            functions = listOf(fn(SonyV2FunctionType.UPSCALING_AUTO_OFF, 0)),
+        )
+        assertEquals(1, commands.size)
+        assertEquals("GET AUDIO capability upscaling", commands.single().label)
+        assertEquals("0E E0 01", commands.single().bytes.joinToString(" ") { "%02X".format(it) })
+    }
+
     /** An empty function list is not a table, so it must not open the gate either. */
     @Test
     fun restoreFunctions_withNoCachedFunctions_yieldsNothingToApply() {

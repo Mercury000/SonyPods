@@ -212,6 +212,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             if (profile.supports(HeadphoneFeature.LEA_STATUS)) {
                 addAll(buildRefreshLeaCommands(profile))
             }
+            if (profile.supports(HeadphoneFeature.UPSCALING)) {
+                addAll(buildRefreshUpscalingCommands(profile))
+            }
             if (profile.supports(HeadphoneFeature.QUICK_ACCESS)) {
                 val codec = codecFor(profile, HeadphoneFeature.QUICK_ACCESS)
                 codec.buildGetQuickAccessCapability()?.let {
@@ -788,6 +791,26 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         profile.bindingFor(HeadphoneFeature.MULTIPOINT)?.channel
             ?: profile.defaultResponseChannel(),
     )
+
+    /**
+     * AUDIO-domain DSEE / upscaling status query. SC reads the toggle through
+     * the same AUDIO_GET_PARAM its switch uses; there is no capability probe for
+     * this domain. The inquired type is the one the support-function list chose.
+     */
+    private fun buildRefreshUpscalingCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        val inquiredTypeCode = profile.capabilities.upscalingInquiredTypeCode ?: return emptyList()
+        return listOf(
+            HeadphoneCommand(
+                "GET upscaling",
+                codecFor(profile, HeadphoneFeature.DEVICE_INFO)
+                    .buildGetUpscaling(inquiredTypeCode.toByte()) ?: return emptyList(),
+                profile.channelFor(HeadphoneFeature.UPSCALING),
+            ),
+        )
+    }
 
     /**
      * ALERT_SET_STATUS (0x94) ENABLE for the alert inquired types SC arms:

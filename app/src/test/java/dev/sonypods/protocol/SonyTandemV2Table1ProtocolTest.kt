@@ -1592,5 +1592,53 @@ class SonyTandemV2Table1ProtocolTest {
             assertEquals(PlaybackNameStatus.NOTHING, name.status)
         }
     }
+
+    /** AUDIO-domain DSEE toggle: RET carries AUTO(0x01), NTFY carries OFF(0x00);
+     * an out-of-range value byte rejects the whole frame like SC's factory does. */
+    @Test
+    fun audioParam_upscaling_retNtfy_andOutOfRangeValue() {
+        val ret = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE7.toByte(), 0x01, 0x01)
+        ) as ParsedTandemResponse.Upscaling
+        assertFalse(ret.isUnsolicited)
+        assertEquals(0x01, ret.inquiredTypeCode)
+        assertTrue(ret.enabled)
+
+        val ntfy = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE9.toByte(), 0x0B, 0x00)
+        ) as ParsedTandemResponse.Upscaling
+        assertTrue(ntfy.isUnsolicited)
+        assertEquals(0x0B, ntfy.inquiredTypeCode)
+        assertFalse(ntfy.enabled)
+
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xE7.toByte(), 0x01, 0x7F)
+            ) is ParsedTandemResponse.Unknown
+        )
+    }
+
+    /** AUDIO_RET_CAPABILITY (0xE1) carries the DSEE generation byte (`cf0.e0`);
+     * foreign inquired types and out-of-range generations reject the frame. */
+    @Test
+    fun audioCapability_upscalingType_strictValidation() {
+        val ret = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE1.toByte(), 0x01, 0x02)
+        ) as ParsedTandemResponse.UpscalingCapability
+        assertEquals(0x01, ret.inquiredTypeCode)
+        // DSEE_HX_AI — the generation Sound Connect titles "DSEE Extreme".
+        assertEquals(0x02, ret.upscalingTypeCode)
+
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xE1.toByte(), 0x01, 0x04)
+            ) is ParsedTandemResponse.Unknown
+        )
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xE1.toByte(), 0x02, 0x02)
+            ) is ParsedTandemResponse.Unknown
+        )
+    }
 }
 

@@ -41,6 +41,7 @@ enum class HeadphoneFeature {
     EQ,
     CLEAR_BASS,
     LEA_STATUS,
+    UPSCALING,
     QUICK_ACCESS,
     WEARING_STATUS,
     GESTURE_OPERATIONS,
@@ -150,6 +151,16 @@ data class HeadphoneCapabilities(
     val queryProtocolInfo: Boolean = true,
     val queryNoiseControlParams: Boolean = true,
     val lea: LeaProtocolCapability? = null,
+    /** AUDIO inquired type this device's DSEE/upscaling toggle uses:
+     * 0x01 (UPSCALING) for the first generation, 0x0B
+     * (UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON) for the newer one.
+     * Null = the support-function list did not advertise upscaling. */
+    val upscalingInquiredTypeCode: Int? = null,
+    /** UpscalingType byte from AUDIO_RET_CAPABILITY (`cf0.e0`) — the DSEE
+     * generation: DSEE_HX=0, DSEE=1, DSEE_HX_AI/Extreme=2, DSEE_ULTIMATE=3.
+     * The official title/description strings are picked from this, not from
+     * which FunctionType the support list carried. Null = not probed yet. */
+    val upscalingTypeCode: Int? = null,
 )
 
 data class ConnectedHeadphoneProfile(

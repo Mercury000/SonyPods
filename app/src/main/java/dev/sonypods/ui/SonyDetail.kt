@@ -35,6 +35,8 @@ data class SonyDetailActions(
     val onMultipointEnabledChange: (Boolean) -> Unit = {},
     val onLeAudioEnabledChange: (Boolean) -> Unit = {},
     val onLeAudioAlertReply: (Boolean) -> Unit = {},
+    /** Toggles DSEE / DSEE Extreme (AUDIO-domain upscaling). */
+    val onUpscalingEnabledChange: (Boolean) -> Unit = {},
     /** Bonds the headset's LE-only identity, the phone-side half of the LE Audio switch. */
     val onLeAudioDevicePair: () -> Unit = {},
     val onLeAudioPairingGuide: () -> Unit = {},

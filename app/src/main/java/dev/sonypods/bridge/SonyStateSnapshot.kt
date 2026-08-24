@@ -98,6 +98,13 @@ data class SonyStateSnapshot(
 
     val supportsLeAudio: Boolean = false,
     val leaStatus: String? = null,
+    /** DSEE / DSEE Extreme (AUDIO-domain upscaling): supported + current state.
+     * [upscalingTypeCode] is the AUDIO_RET_CAPABILITY generation byte
+     * (DSEE_HX=0, DSEE=1, DSEE_Extreme=2, DSEE_Ultimate=3; -1 = not probed yet)
+     * that the official title/description strings are picked from. */
+    val supportsUpscaling: Boolean = false,
+    val upscalingEnabled: Boolean? = null,
+    val upscalingTypeCode: Int = -1,
     val leaStreamingStatusL: String? = null,
     val leaStreamingStatusR: String? = null,
     val leAudioPending: Boolean = false,
@@ -232,6 +239,9 @@ data class SonyStateSnapshot(
         putInt(KEY_EQ_CB_MAX, eqClearBassMax)
 
         putBoolean(KEY_SUPPORTS_LEA, supportsLeAudio)
+        putBoolean(KEY_SUPPORTS_UPSCALING, supportsUpscaling)
+        upscalingEnabled?.let { putBoolean(KEY_UPSCALING_ENABLED, it) }
+        putInt(KEY_UPSCALING_TYPE, upscalingTypeCode)
         leaStatus?.let { putString(KEY_LEA, it) }
         leaStreamingStatusL?.let { putString(KEY_LEA_STREAMING_L, it) }
         leaStreamingStatusR?.let { putString(KEY_LEA_STREAMING_R, it) }
@@ -327,6 +337,9 @@ data class SonyStateSnapshot(
         private const val KEY_EQ_CB_MIN = "eq_cb_min"
         private const val KEY_EQ_CB_MAX = "eq_cb_max"
         private const val KEY_SUPPORTS_LEA = "supports_lea"
+        private const val KEY_SUPPORTS_UPSCALING = "supports_upscaling"
+        private const val KEY_UPSCALING_ENABLED = "upscaling_enabled"
+        private const val KEY_UPSCALING_TYPE = "upscaling_type"
         private const val KEY_LEA = "lea"
         private const val KEY_LEA_STREAMING_L = "lea_streaming_l"
         private const val KEY_LEA_STREAMING_R = "lea_streaming_r"
@@ -413,6 +426,11 @@ data class SonyStateSnapshot(
             eqClearBassMin = bundle.getInt(KEY_EQ_CB_MIN, -10),
             eqClearBassMax = bundle.getInt(KEY_EQ_CB_MAX, 10),
             supportsLeAudio = bundle.getBoolean(KEY_SUPPORTS_LEA, false),
+            supportsUpscaling = bundle.getBoolean(KEY_SUPPORTS_UPSCALING, false),
+            upscalingEnabled = if (bundle.containsKey(KEY_UPSCALING_ENABLED)) {
+                bundle.getBoolean(KEY_UPSCALING_ENABLED)
+            } else null,
+            upscalingTypeCode = bundle.getInt(KEY_UPSCALING_TYPE, -1),
             leaStatus = bundle.getString(KEY_LEA),
             leaStreamingStatusL = bundle.getString(KEY_LEA_STREAMING_L),
             leaStreamingStatusR = bundle.getString(KEY_LEA_STREAMING_R),
@@ -504,6 +522,11 @@ data class SonyStateSnapshot(
                 supportsLeAudio = state.connectedProfile
                     ?.supports(dev.sonypods.headphones.HeadphoneFeature.LEA_STATUS) == true,
                 leaStatus = state.leaState.enabled,
+                supportsUpscaling = state.connectedProfile
+                    ?.supports(dev.sonypods.headphones.HeadphoneFeature.UPSCALING) == true,
+                upscalingEnabled = state.upscalingEnabled,
+                upscalingTypeCode = state.connectedProfile
+                    ?.capabilities?.upscalingTypeCode ?: -1,
                 leaStreamingStatusL = state.leaState.streamingStatusL,
                 leaStreamingStatusR = state.leaState.streamingStatusR,
                 leAudioPending = state.leAudioPendingAlert != null,

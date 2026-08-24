@@ -187,6 +187,28 @@ sealed interface ParsedTandemResponse {
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
+    /** AUDIO_RET/NTFY_PARAM for the DSEE / upscaling inquired types:
+     * [enabled] mirrors UpscalingTypeAutoOff AUTO/OFF; null never occurs from a
+     * parsed frame (off-range values are rejected as Unknown). */
+    data class Upscaling(
+        val enabled: Boolean,
+        val inquiredTypeCode: Int,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /**
+     * AUDIO_RET_CAPABILITY for the upscaling inquired types (`cf0.e0`): the
+     * [upscalingTypeCode] byte is the DSEE generation the headset reports
+     * (DSEE_HX=0, DSEE=1, DSEE_HX_AI/Extreme=2, DSEE_ULTIMATE=3) and is what the
+     * official row's title/description are picked from.
+     */
+    data class UpscalingCapability(
+        val inquiredTypeCode: Int,
+        val upscalingTypeCode: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
     /** Structured PLAY_RET_CAPABILITY (v1 and v2). */
     data class PlaybackCapability(
         val inquiredTypeCode: Int,

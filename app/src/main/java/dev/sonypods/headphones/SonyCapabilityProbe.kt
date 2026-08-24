@@ -84,8 +84,19 @@ object SonyCapabilityProbe {
     ): List<HeadphoneCommand> {
         val codec = TandemCodecRegistry.codecFor(profile.protocolFor(HeadphoneFeature.NOISE_CONTROL))
         val deviceInfoCodec = TandemCodecRegistry.codecFor(profile.protocolFor(HeadphoneFeature.DEVICE_INFO))
+        // SC picks the upscaling inquired type the same way (`u70.p1`): plain
+        // UPSCALING_AUTO_OFF wins over WITH_STATUS_DISABLE_REASON. The chosen
+        // type's GET_CAPABILITY then returns the DSEE generation byte.
+        var upscalingPlain = false
+        var upscalingWithStatusReason = false
         return buildList {
             for (function in functions) {
+                when (function.v2Type()) {
+                    SonyV2FunctionType.UPSCALING_AUTO_OFF -> upscalingPlain = true
+                    SonyV2FunctionType.UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON ->
+                        upscalingWithStatusReason = true
+                    else -> Unit
+                }
                 when (function.domain(profile)) {
                     ProbeDomain.NCASM -> if (function.isV1(profile)) {
                         codec.buildGetNcAsmCapability(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM)?.let { bytes ->
@@ -184,6 +195,18 @@ object SonyCapabilityProbe {
                     ProbeDomain.NONE -> Unit
                 }
             }
+            if (upscalingPlain || upscalingWithStatusReason) {
+                val inquiredTypeCode = (if (upscalingPlain) 0x01 else 0x0B).toByte()
+                deviceInfoCodec.buildGetUpscalingCapability(inquiredTypeCode)?.let { bytes ->
+                    add(
+                        HeadphoneCommand(
+                            label = "GET AUDIO capability upscaling",
+                            bytes = bytes,
+                            channel = profile.channelFor(HeadphoneFeature.UPSCALING),
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -208,6 +231,11 @@ object SonyCapabilityProbe {
         var playbackHasMute = false
         var gestureSettingsType: SystemInquiredType? = null
         val leaKind = functions.firstNotNullOfOrNull { it.leaDeviceKind() }
+        // SC picks the upscaling inquired type the same way (`u70.p1`): the plain
+        // UPSCALING_AUTO_OFF generation wins over the WITH_STATUS_DISABLE_REASON
+        // one, and neither means the device has no DSEE toggle at all.
+        var upscalingPlain = false
+        var upscalingWithStatusReason = false
         val leaControlSupported = functions.any {
             it.v2Type() == SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING
         }
@@ -215,6 +243,12 @@ object SonyCapabilityProbe {
         for (function in functions) {
             if (function.isPowerOff(profile)) {
                 features.add(HeadphoneFeature.POWER_OFF)
+            }
+            when (function.v2Type()) {
+                SonyV2FunctionType.UPSCALING_AUTO_OFF -> upscalingPlain = true
+                SonyV2FunctionType.UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON ->
+                    upscalingWithStatusReason = true
+                else -> Unit
             }
             when (function.domain(profile)) {
                 ProbeDomain.NCASM -> if (function.isV1(profile)) {
@@ -368,6 +402,15 @@ object SonyCapabilityProbe {
             }
         }
 
+        val upscalingInquiredTypeCode = when {
+            upscalingPlain -> 0x01
+            upscalingWithStatusReason -> 0x0B
+            else -> null
+        }
+        if (upscalingInquiredTypeCode != null) {
+            features.add(HeadphoneFeature.UPSCALING)
+        }
+
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
             formFactor = formFactorFromBattery(batteryQueries),
@@ -375,6 +418,11 @@ object SonyCapabilityProbe {
             noiseControlQueryTypes = noiseQueries.distinct().ifEmpty { fallback.noiseControlQueryTypes },
             writableNoiseControlTypes = preferDualWriteTypes(writableNoise)
                 .ifEmpty { fallback.writableNoiseControlTypes },
+            upscalingInquiredTypeCode = upscalingInquiredTypeCode
+                ?: fallback.upscalingInquiredTypeCode,
+            // The DSEE generation byte only arrives via the AUDIO_RET_CAPABILITY
+            // probe; a restored/fallback tableset keeps whatever was cached.
+            upscalingTypeCode = fallback.upscalingTypeCode,
             eqConfig = eqConfig,
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
             playbackVolumeHasMute = playbackHasMute,
@@ -397,11 +445,22 @@ object SonyCapabilityProbe {
         else -> HeadphoneFormFactor.HEADSET
     }
 
-    /** A probe-derived profile, or null when the probe supplied nothing new. */
+    /**
+     * A probe-derived profile, or null when the probe supplied nothing new.
+     *
+     * [markProbed] records whether a *live* support-function probe produced this
+     * table: only the live probe may stamp `probe:ret-support-function` into the
+     * evidence. Cache restores re-derive the same profile from persisted
+     * FunctionCodes and must not claim it — the engine gates its one-shot
+     * per-domain probe burst on that stamp, so a restore claiming it would
+     * suppress every future genuine probe (observed: DSEE generation byte never
+     * fetched because a cache hit always ran first on dual-identity headsets).
+     */
     fun applyToProfile(
         profile: ConnectedHeadphoneProfile,
         functions: List<SonySupportedFunction>,
         transport: HeadphoneTransport,
+        markProbed: Boolean = true,
     ): ConnectedHeadphoneProfile {
         val capabilities = capabilitiesFromFunctions(functions, profile.capabilities, transport, profile)
         return profile.copy(
@@ -416,7 +475,7 @@ object SonyCapabilityProbe {
                 profile.playbackDispatchStrategy
             },
             protocolEvidence = profile.protocolEvidence +
-                listOf("probe:ret-support-function(${functions.size})") +
+                (if (markProbed) listOf("probe:ret-support-function(${functions.size})") else emptyList()) +
                 functions.map {
                     val table = it.table.takeIf { table -> table != SonyTable.INVALID }
                         ?: SonyTable.NO_1
@@ -522,6 +581,7 @@ object SonyCapabilityProbe {
         HeadphoneFeature.BATTERY,
         HeadphoneFeature.POWER_OFF,
         HeadphoneFeature.LEA_STATUS,
+        HeadphoneFeature.UPSCALING,
         HeadphoneFeature.QUICK_ACCESS,
         HeadphoneFeature.WEARING_STATUS,
         HeadphoneFeature.GESTURE_OPERATIONS,
