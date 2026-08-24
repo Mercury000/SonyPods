@@ -149,8 +149,17 @@ internal fun MainTabsScaffold(
             !showGestureOperations &&
             !showMultipointSettings &&
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // The hero image belongs to the device, not to the connection. The snapshot
+    // drops the address the moment the link drops, and resolving by an empty
+    // address would swap the user's own headset picture for the generic
+    // placeholder mid-view — so resolve against the last known address instead.
+    var lastKnownImageAddress by remember { mutableStateOf(connectedDeviceAddress) }
+    if (connectedDeviceAddress.isNotBlank()) {
+        lastKnownImageAddress = connectedDeviceAddress
+    }
+    val imageLookupAddress = connectedDeviceAddress.ifBlank { lastKnownImageAddress }
     val currentEarphonePref = earphonePrefs.firstOrNull {
-        it.address.equals(connectedDeviceAddress, ignoreCase = true)
+        it.address.equals(imageLookupAddress, ignoreCase = true)
     }
     var showPowerOffDialog by remember { mutableStateOf(false) }
 
