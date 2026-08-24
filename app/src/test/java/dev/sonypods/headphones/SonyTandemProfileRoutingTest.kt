@@ -509,8 +509,8 @@ class SonyTandemProfileRoutingTest {
 
         val labels = commands.map { it.label }
 
-        // Fallback profile: queryProtocolInfo=true (default), so GET protocol info IS present
-        assertTrue(labels.any { it == "GET protocol info" })
+        // Protocol info is the session's FIRST exchange (probe path), never a refresh command
+        assertFalse(labels.any { it == "GET protocol info" })
         // Battery queries present (only basic BATTERY type)
         assertTrue(labels.any { it == "GET battery BATTERY" })
         // No NC/ASM, EQ, playback, LEA, quick access, or wearing queries

@@ -503,15 +503,19 @@ class SonyBleClient(
             return
         }
         stopScan()
-        // Resolve to the classic identity only when Tandem will actually run over SPP. With LE
-        // Audio up the GATT session belongs on the LE identity — that is where the headset keeps
-        // its Tandem services in that state, and retargeting to the classic address would aim
-        // the connection at the link the headset just dropped.
+        // Resolve identities only after knowing which transport Tandem will run on. With LE
+        // Audio up Sound Connect aims its GATT session at the LEA pairing-service identifier;
+        // on this platform the stack registers the LE_AUDIO profile (and its active device)
+        // under BOTH bonded identities — the dual/control one included — and the headset
+        // applies phone-initiated settings only on the session matching that registration
+        // (writes echoed correctly on the pure-LE session yet had no effect; the same write
+        // applied when aimed at the dual address). Keep the requested address, mirroring the
+        // pairing-record identifier rather than remapping onto the pure-LE identity.
         val requested = adapter?.getRemoteDevice(device.address)
-        val target = if (requested != null && isLeAudioConnected(requested)) {
-            device
-        } else {
+        val target = if (requested != null && !isLeAudioConnected(requested)) {
             resolveControlTarget(device)
+        } else {
+            device
         }
         val remote = adapter?.getRemoteDevice(target.address)
         if (remote == null) {
@@ -654,6 +658,23 @@ class SonyBleClient(
     }
 
     private fun writeToChannel(channel: TandemChannel, bytes: ByteArray) {
+        val session = gattSessions[channel]
+        if (session != null) {
+            session.send(bytes)
+            return
+        }
+        // Sound Connect funnels every command through the single live reliability pipe no
+        // matter which table a command belongs to — sendToChannel already does the same
+        // while SPP is up. A Table2/MC command routed at an endpoint this connection lacks
+        // must therefore ride the one framed session instead of vanishing, or its domain
+        // waits forever for replies to requests that were never sent.
+        val preferred = defaultGattWriteChannel()
+        val alternate = gattSessions[preferred] ?: gattSessions.values.firstOrNull()
+        if (alternate != null) {
+            log("Routing $channel frame over $preferred endpoint")
+            alternate.send(bytes)
+            return
+        }
         if (channel !in gattEndpoints && sppTransport == null) {
             listener.onBluetoothUnavailable("Channel $channel is not available (available: ${availableChannels()})")
             return
@@ -662,11 +683,6 @@ class SonyBleClient(
         // transports to the same framer. The session owns framing, sequencing and ACK retries —
         // including splitting a frame that outgrows the writable value length, so the payload is
         // not size-checked against it here.
-        val session = gattSessions[channel]
-        if (session != null) {
-            session.send(bytes)
-            return
-        }
         if (!TandemGattProtocolRules.canWrite(bytes.size, writableValueLength)) {
             listener.onBluetoothUnavailable(
                 "Tandem payload is ${bytes.size} bytes, exceeding writable limit $writableValueLength"
@@ -703,11 +719,21 @@ class SonyBleClient(
     }
 
     /**
-     * Whether an LE Audio link is up for either identity of this headset.
+     * Whether an LE Audio session is actually up for either identity of this headset.
      *
-     * Both are checked because LE Audio runs on the LE identity while the caller may hold the
-     * classic one. An ASCS service is required so a classic ACL that has not torn down yet does
-     * not read as LE Audio.
+     * Sound Connect keys its SPP-vs-GATT table on this state — its fallback line is
+     * literally "LEA device but LE Audio not connected" — so a bond alone must never
+     * read as connected. A bonded-but-idle LE identity still shows an ACL (background
+     * GATT scans, our own previous control link, vendor keep-alives), so a raw
+     * isConnected() stays true long after LC3 audio has stopped, which is what used to
+     * drag LDAC-mode connections onto the GATT path.
+     *
+     * Primary signal is the profile-scoped connected list, which only contains devices
+     * with a live LE Audio profile connection. Some builds answer it empty even while
+     * the session is up, so the fallback asks the adapter whether the profile holds any
+     * connection at all before trusting identity liveness — with LC3 down the adapter
+     * drops out first (every identity leaves the profile), so the stale-ACL trap stays
+     * closed.
      */
     @SuppressLint("MissingPermission")
     private fun isLeAudioConnected(remote: BluetoothDevice): Boolean {
@@ -721,15 +747,54 @@ class SonyBleClient(
                 if (control.equals(address, ignoreCase = true)) add(le.uppercase())
             }
         }
-        return candidates.any { candidate ->
-            runCatching {
-                val device = adapter?.getRemoteDevice(candidate) ?: return@runCatching false
-                if (device.uuids.orEmpty().none { it.uuid == ASCS_SERVICE_UUID }) {
-                    return@runCatching false
-                }
-                BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
-            }.getOrDefault(false)
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val leAudioAddresses = mutableSetOf<String>()
+        var profileListUsable = true
+        if (manager != null) {
+            for (profileId in intArrayOf(BluetoothProfile.LE_AUDIO, QUALCOMM_LE_AUDIO_PROFILE)) {
+                runCatching { manager.getConnectedDevices(profileId) }
+                    .onFailure {
+                        if (profileId == BluetoothProfile.LE_AUDIO) profileListUsable = false
+                        log("LE Audio connected-devices query failed for profile $profileId: ${it.message}")
+                    }
+                    .getOrDefault(emptyList())
+                    .forEach { device ->
+                        device.address?.uppercase()?.let(leAudioAddresses::add)
+                    }
+            }
+        } else {
+            profileListUsable = false
         }
+        val connectedByProfile = profileListUsable && candidates.any { it in leAudioAddresses }
+        if (profileListUsable) {
+            log(
+                "LE Audio profile check: connected=${connectedByProfile} " +
+                    "identities=$candidates profileDevices=$leAudioAddresses"
+            )
+            return connectedByProfile
+        }
+        // Adapter-level fallback: the profile holds a connection for someone, so a
+        // candidate identity showing a live ASCS-capable link genuinely is LE Audio.
+        val adapterState = runCatching {
+            adapter?.getProfileConnectionState(BluetoothProfile.LE_AUDIO)
+        }.onFailure {
+            log("LE Audio profile-state query failed: ${it.message}")
+        }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
+        val connectedByAdapter = adapterState == BluetoothProfile.STATE_CONNECTED &&
+            candidates.any { candidate ->
+                runCatching {
+                    val device = adapter?.getRemoteDevice(candidate) ?: return@runCatching false
+                    device.uuids.orEmpty().any { it.uuid.toString() == ASCS_SERVICE_STRING } &&
+                        BluetoothDevice::class.java.getMethod("isConnected").invoke(device) == true
+                }.onFailure {
+                    log("LE Audio identity probe failed for $candidate: ${it.message}")
+                }.getOrDefault(false)
+            }
+        log(
+            "LE Audio adapter-level check: connected=${connectedByAdapter} " +
+                "profileState=$adapterState identities=$candidates"
+        )
+        return connectedByAdapter
     }
 
     @SuppressLint("MissingPermission")
@@ -1839,9 +1904,10 @@ class SonyBleClient(
         private const val WRITE_COMPLETION_TIMEOUT_MS = 500L
         private val MDR_SPP_MARKER_UUID: UUID =
             UUID.fromString("443cce33-e85d-4b85-8d53-6e319ede53ae")
-        /** Audio Stream Control Service: its presence plus a live link means LE Audio is up. */
-        private val ASCS_SERVICE_UUID: UUID =
-            UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+        /** Qualcomm's private LE Audio profile id (mirrors LeAudioProfileGateway). */
+        private const val QUALCOMM_LE_AUDIO_PROFILE = 32
+        /** Audio Stream Control Service, for adapter-level LE Audio identity checks. */
+        private const val ASCS_SERVICE_STRING = "0000184e-0000-1000-8000-00805f9b34fb"
         private val OFFICIAL_SPP_UUIDS = listOf(
             UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"),
             UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),

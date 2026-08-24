@@ -27,6 +27,7 @@ import dev.sonypods.headphones.HeadphoneFeature
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.headphones.HeadphoneProtocolVariant
 import dev.sonypods.headphones.HeadphoneTransport
+import dev.sonypods.headphones.TandemCodecRegistry
 import dev.sonypods.headphones.PlaybackDispatchStrategy
 import dev.sonypods.headphones.MultipointDeviceAction
 import dev.sonypods.headphones.buildFeatureBindings
@@ -1121,6 +1122,24 @@ class SonyHeadphoneRepository private constructor(
     private fun probeCapabilities() {
         if (awaitingCapabilityInfo) return
         val profile = ensureConnectedProfile()
+        // SC C30916e opens every session with CONNECT_GET_PROTOCOL_INFO
+        // (m112238v0 runs before the capability gate) — keep that order. Sending
+        // this query directly AFTER a capability exchange deterministically wedges
+        // the headset's HPC ACK state (four captures, 19:48:00 / 19:48:15 /
+        // 20:26:40 / 20:26:43): the firmware keeps repeating its previous ACK while
+        // still answering payloads. First-position protocol info never wedges.
+        runCatching {
+            val codec = TandemCodecRegistry.codecFor(profile.protocolFor(HeadphoneFeature.DEVICE_INFO))
+            codec.buildGetProtocolInfo()?.let { bytes ->
+                sendCommand(
+                    HeadphoneCommand(
+                        label = "GET protocol info",
+                        bytes = bytes,
+                        channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
+                    )
+                )
+            }
+        }
         val address = _state.value.connectedDevice?.address
         if (address != null && address.isNotBlank()) {
             val capabilityInfoCommand = runCatching {
@@ -2455,6 +2474,11 @@ class SonyHeadphoneRepository private constructor(
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
             clearSupportFunctionProbeState()
             clearInitialValueGate()
+            // The setting transaction rides the live transport: once the link is gone it can
+            // never see its 0x49 notification, so keeping the gate armed wedged the UI on
+            // "switching LE Audio" across reboots and reconnects. The pairing-guide phase
+            // runs after the coordinator already completed, so this cannot cut a live one.
+            leAudioCoordinator.cancel()
         }
         val pendingForConnection = if (connected && device != null) {
             pendingMultipointToggle?.takeIf { it.address.equals(device.address, ignoreCase = true) }
@@ -2568,6 +2592,7 @@ class SonyHeadphoneRepository private constructor(
                 supportedFeatures = featureStatusesFor(profile),
                 initialValuesReady = if (connected) it.initialValuesReady else false,
                 essentialValuesReady = if (connected) it.essentialValuesReady else false,
+                leAudioSwitchPending = if (connected) it.leAudioSwitchPending else false,
             )
         }
     }

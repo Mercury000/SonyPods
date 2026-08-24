@@ -185,11 +185,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     override fun buildRefreshCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         buildList {
             val deviceInfoCodec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
-            // Unconditional first exchange (SC C29903d/C30916e): the runtime
-            // protocol version from RET_PROTOCOL_INFO drives the whitelist check.
-            deviceInfoCodec.buildGetProtocolInfo()?.let {
-                add(command(profile, HeadphoneFeature.DEVICE_INFO, "GET protocol info", it))
-            }
+            // GET_PROTOCOL_INFO is deliberately NOT here: SC sends it as the very
+            // first exchange of a session (C30916e.m112238v0), and the probe path
+            // now does the same. Mid-burst it deterministically wedges the
+            // headset's HPC ACK state (see repository probeCapabilities).
             if (profile.supports(HeadphoneFeature.DEVICE_INFO)) {
                 DeviceInfoType.entries.forEach {
                     deviceInfoCodec.buildGetDeviceInfo(it)?.let { bytes ->
@@ -791,9 +790,16 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     )
 
     /**
-     * ALERT_SET_STATUS (0x94) ENABLE for both alert inquired types SC arms:
+     * ALERT_SET_STATUS (0x94) ENABLE for the alert inquired types SC arms:
      * APP_BECOMES_FOREGROUND on UI shown, FIXED_MESSAGE on device connect.
      * Table1 domain, same channel as GS.
+     *
+     * SC never registers LE_AUDIO_ALERT_NOTIFICATION: its V2 ALERT_SET_PARAM
+     * factory (`bf0.l$b`) dispatches only types 0/1/2/4/6 and throws on type 5 —
+     * the app only listens for that notification (`i00.b`), it does not arm it.
+     * Arming it here deterministically wedges the headset's HPC ACK state: after
+     * this SET, the next DATA frame's ACK repeats stale values forever while
+     * payloads keep being processed (observed twice, 19:48:00 / 19:48:15).
      */
     private fun buildRefreshAlertCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
         val channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO)
@@ -806,11 +812,6 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             HeadphoneCommand(
                 "SET alert status FIXED_MESSAGE ENABLE",
                 SonyTandemV2Table1Codec.buildSetAlertFixedMessage(true),
-                channel,
-            ),
-            HeadphoneCommand(
-                "SET alert status LE_AUDIO ENABLE",
-                SonyTandemV2Table1Codec.buildSetAlertLeAudioNotification(true),
                 channel,
             ),
         )

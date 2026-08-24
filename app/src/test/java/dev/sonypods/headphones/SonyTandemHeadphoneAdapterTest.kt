@@ -147,14 +147,19 @@ class SonyTandemHeadphoneAdapterTest {
     // ── Protocol info ────────────────────────────────────────────────────────
 
     @Test
-    fun refreshCommands_alwaysRequestProtocolInfo() {
+    fun refreshCommands_doNotRequestProtocolInfo() {
         val profile = HeadphoneAdapterRegistry.resolve(xm4Device())
         val commands = SonyTandemHeadphoneAdapter.buildRefreshCommands(profile)
-        assertTrue(commands.any { it.label == "GET protocol info" })
+        // SC opens every session with CONNECT_GET_PROTOCOL_INFO (C30916e.m112238v0)
+        // before the capability gate — mid-burst it wedges the HPC ACK state, so it
+        // lives in the probe path only.
+        assertFalse(commands.any { it.label == "GET protocol info" })
         // Official GET_PROTOCOL_INFO body: [dataType 0x0E][cmd 0x00][type 0x00]
         assertArrayEquals(
             byteArrayOf(0x0E, 0x00, 0x00),
-            commands.first { it.label == "GET protocol info" }.bytes,
+            TandemCodecRegistry
+                .codecFor(profile.protocolFor(HeadphoneFeature.DEVICE_INFO))
+                .buildGetProtocolInfo(),
         )
     }
 
@@ -214,7 +219,7 @@ class SonyTandemHeadphoneAdapterTest {
         val commands = SonyTandemHeadphoneAdapter.buildRefreshCommands(profile)
         val labels = commands.map { it.label }
 
-        assertTrue(labels.any { it == "GET protocol info" })
+        assertFalse(labels.any { it == "GET protocol info" })
         // Battery uses V2 POWER_GET_STATUS (0x22).
         val batteryCmd = commands.first { it.label.startsWith("GET battery") }
         assertEquals(0x22, batteryCmd.bytes[1].toInt() and 0xFF)
