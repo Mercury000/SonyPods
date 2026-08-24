@@ -87,16 +87,16 @@ fun LeAudioPairingHelpDialog(
         ) {
             if (targetEnabled && !paired) {
                 TextButton(
-                    text = if (failed) "已重置，重新配对" else "已重置耳机，开始配对",
+                    text = "关闭",
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = if (failed) "重新配对" else "开始配对",
                     onClick = onPair,
                     enabled = !pairing,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColorsPrimary(),
-                )
-                TextButton(
-                    text = "关闭",
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
                 )
             } else {
                 TextButton(
