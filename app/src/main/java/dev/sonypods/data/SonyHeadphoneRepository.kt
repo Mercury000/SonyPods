@@ -2619,6 +2619,15 @@ class SonyHeadphoneRepository private constructor(
             )
         }
         appendLog("Tandem channel ready: transport=${info.transport}, mtu=${info.mtu}, writable=${info.writableValueLength}, channels=${info.channels}")
+        // From this moment the card must never draw blank rows: seed every name
+        // slot as unknown until real text arrives (headset RET/NTFY or nothing).
+        _state.update { current ->
+            current.copy(playbackState = current.playbackState.copy(
+                track = current.playbackState.track ?: "",
+                artist = current.playbackState.artist ?: "",
+                album = current.playbackState.album ?: "",
+            ))
+        }
         probeCapabilities()
     }
 
@@ -3021,6 +3030,11 @@ class SonyHeadphoneRepository private constructor(
         } else {
             updatePlaybackStatusFromAudioManager()
         }
+        // A status flip is also the earliest hint that AVRCP has delivered track
+        // info to the headset; refresh the fallback while the names are empty.
+        if (_state.value.playbackState.track.isNullOrBlank()) {
+            mainHandler.postDelayed(playbackMetadataRefetchRunnable, PLAYBACK_METADATA_REFETCH_DELAY_MS)
+        }
     }
 
     private fun applyPlaybackCapability(response: ParsedTandemResponse.PlaybackCapability) {
@@ -3056,10 +3070,12 @@ class SonyHeadphoneRepository private constructor(
         }
     }
 
-    private fun PlaybackName.toUiValue(): String? = when (status) {
-        PlaybackNameStatus.SETTLED -> text
-        PlaybackNameStatus.NOTHING -> ""
-        PlaybackNameStatus.UNSETTLED -> null
+    /** Once a session exists, a name slot must never render blank: settled
+     * non-blank text wins, and everything else (NOTHING, UNSETTLED, settled-but-
+     * blank) degrades to the empty string that the detail card draws as "unknown". */
+    private fun PlaybackName.toUiValue(): String = when {
+        status == PlaybackNameStatus.SETTLED && text.isNotBlank() -> text
+        else -> ""
     }
 
     private fun applyPlaybackMetadata(response: ParsedTandemResponse.PlaybackMetadata) {
@@ -3086,7 +3102,6 @@ class SonyHeadphoneRepository private constructor(
             })
         }
     }
-
     private fun applyPlaybackMetadataInvalidated(response: ParsedTandemResponse.PlaybackMetadataInvalidated) {
         // Never clear on this signal: v1 NTFYs carry no content, so clearing
         // would flash "unknown track" on every song change. Just refetch.

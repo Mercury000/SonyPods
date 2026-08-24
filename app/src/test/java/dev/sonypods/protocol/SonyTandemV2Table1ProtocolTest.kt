@@ -1558,4 +1558,39 @@ class SonyTandemV2Table1ProtocolTest {
             assertEquals(false, v1.enabled)
         }
     }
+
+    /** LinkBuds S 20:49:26 capture: connection-time answer while AVRCP has not
+     * delivered track info yet — all four name slots are NOTHING, never UNSETTLED. */
+    @Test
+    fun playParam_metadata_emptyConnectionTimeCapture_isNothingNotUnsettled() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xA7.toByte(), 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00)
+        ) as ParsedTandemResponse.PlaybackMetadata
+
+        assertFalse(parsed.isUnsolicited)
+        listOf(parsed.track, parsed.album, parsed.artist, parsed.genre).forEach { name ->
+            assertEquals(PlaybackNameStatus.NOTHING, name.status)
+            assertEquals("", name.text)
+        }
+    }
+
+    /** LinkBuds S 21:15:25 capture: spontaneous NTFY carrying a settled track and
+     * empty artist/album/genre — this is how LC3 sessions learn the track without
+     * any re-query once AVRCP delivers it. */
+    @Test
+    fun playParam_metadata_ntfySettledTitle_parsesFromDeviceCapture() {
+        val raw = byteArrayOf(0x0E, 0xA9.toByte(), 0x01, 0x02, 0x06) +
+            byteArrayOf(0xE7.toByte(), 0xA7.toByte(), 0xAF.toByte()) +
+            byteArrayOf(0xE9.toByte(), 0x9B.toByte(), 0xAA.toByte()) +
+            byteArrayOf(0x01, 0x00, 0x01, 0x00, 0x01, 0x00)
+        val parsed = SonyTandemV2Table1Protocol.parse(raw) as ParsedTandemResponse.PlaybackMetadata
+
+        assertTrue(parsed.isUnsolicited)
+        assertEquals(PlaybackNameStatus.SETTLED, parsed.track.status)
+        assertTrue(parsed.track.text.isNotEmpty())
+        listOf(parsed.album, parsed.artist, parsed.genre).forEach { name ->
+            assertEquals(PlaybackNameStatus.NOTHING, name.status)
+        }
+    }
 }
+

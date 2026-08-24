@@ -268,8 +268,8 @@ private fun LeAudioCard(
             title = "LE Audio",
             summary = when {
                 uiState.leAudioSwitchPending -> "正在更改 LE Audio"
-                usingLc3 -> "LE Audio优先，当前使用 LE Audio（LC3）"
-                enabled -> "LE Audio优先，等待手机连接"
+                usingLc3 -> "LE Audio优先，当前使用 LC3 音频"
+                enabled -> "LE Audio优先，当前使用经典音频"
                 else -> "仅经典音频"
             },
             checked = enabled,
@@ -623,17 +623,16 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
             }
 
             // Official layout row 1: song info (left) + transport buttons (right).
-            // Metadata only while PLAY/PAUSE; a Spacer keeps the buttons pinned
-            // right when it is hidden (STOP/UNSETTLED or fallback mode).
+            // Once Tandem playback data exists the name block is always drawn:
+            // empty slots degrade to "unknown" text, so a stopped or unsettled
+            // session never collapses into blank space.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val showMetadata = tandemMode && uiState.playbackStatus in
-                    setOf(PlaybackStatus.PLAYING, PlaybackStatus.PAUSED)
-                if (showMetadata) {
+                if (tandemMode) {
                     PlaybackMetadata(
                         uiState = uiState,
                         modifier = Modifier.weight(1f).padding(end = 8.dp),
@@ -684,46 +683,37 @@ private fun PlaybackMetadata(
     val track = playbackName(uiState.playbackTrack, R.string.playback_unknown_track)
     val artist = playbackName(uiState.playbackArtist, R.string.playback_unknown_artist)
     val album = playbackName(uiState.playbackAlbum, R.string.playback_unknown_album)
-    if (track == null && artist == null && album == null) {
-        Spacer(modifier = modifier)
-        return
-    }
     Column(modifier = modifier) {
-        track?.let {
-            Text(
-                text = it,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                modifier = Modifier.basicMarquee(),
-            )
-        }
-        artist?.let {
-            Text(
-                text = it,
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        album?.let {
-            Text(
-                text = it,
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            text = track,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier.basicMarquee(),
+        )
+        Text(
+            text = artist,
+            fontSize = 13.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = album,
+            fontSize = 13.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
-/** Official copy rules: SETTLED→text, NOTHING("")→"unknown" placeholder, null→row hidden. */
+/** Hard guarantee: every name slot draws either real text or the unknown
+ * placeholder — null, empty and whitespace inputs all degrade to unknown,
+ * so no upstream state can ever collapse a row into blank space. */
 @Composable
-private fun playbackName(value: String?, unknownRes: Int): String? = when {
-    value == null -> null
-    value.isEmpty() -> stringResource(unknownRes)
+private fun playbackName(value: String?, unknownRes: Int): String = when {
+    value.isNullOrBlank() -> stringResource(unknownRes)
     else -> value
 }
 
