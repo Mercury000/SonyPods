@@ -92,20 +92,20 @@ fun AncSwitch(
             verticalAlignment = Alignment.CenterVertically
         ) {
             AncButton(
-                offIconRes = R.drawable.ic_openanc_off,
-                onIconRes = R.drawable.ic_openanc_on,
-                label = stringResource(R.string.noise_cancellation_title),
-                isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLING,
-                onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLING) },
-                modifier = Modifier.weight(1f),
-                compact = compact
-            )
-            AncButton(
                 offIconRes = R.drawable.ic_transparent_off,
                 onIconRes = R.drawable.ic_transparent_on,
                 label = stringResource(R.string.ambient_sound_title),
                 isSelected = ancStatus == NoiseControlMode.AMBIENT_SOUND,
                 onClick = { onAncModeChange(NoiseControlMode.AMBIENT_SOUND) },
+                modifier = Modifier.weight(1f),
+                compact = compact
+            )
+            AncButton(
+                offIconRes = R.drawable.ic_openanc_off,
+                onIconRes = R.drawable.ic_openanc_on,
+                label = stringResource(R.string.noise_cancellation_title),
+                isSelected = ancStatus == NoiseControlMode.NOISE_CANCELLING,
+                onClick = { onAncModeChange(NoiseControlMode.NOISE_CANCELLING) },
                 modifier = Modifier.weight(1f),
                 compact = compact
             )

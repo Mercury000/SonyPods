@@ -117,7 +117,7 @@
     <string name="restart_scope_summary">Select apps to restart with root.</string>
     <string name="restart_scope_success">Scope restarted</string>
     <string name="restart_scope_failed">Root restart failed</string>
-    <string name="ambient_sound_title">Ambient</string>
+    <string name="ambient_sound_title">Transparency</string>
     <string name="ambient_normal">Normal</string>
     <string name="ambient_voice_focus">Voice</string>
     <string name="ambient_level">Ambient sound level</string>

@@ -118,7 +118,7 @@
     <string name="restart_scope_summary">选择要通过 root 重启的作用域软件。</string>
     <string name="restart_scope_success">作用域已重启</string>
     <string name="restart_scope_failed">Root 重启失败</string>
-    <string name="ambient_sound_title">环境声</string>
+    <string name="ambient_sound_title">通透</string>
     <string name="ambient_normal">普通</string>
     <string name="ambient_voice_focus">人声</string>
     <string name="ambient_level">环境声等级</string>
