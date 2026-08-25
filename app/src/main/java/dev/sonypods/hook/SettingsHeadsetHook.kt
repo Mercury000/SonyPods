@@ -8,6 +8,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
+import android.content.res.Resources
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -18,7 +21,9 @@ import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.headphones.HeadphoneFormFactor
+import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -54,6 +59,11 @@ object SettingsHeadsetHook : HookContext() {
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
     private var currentTransparencyVocalEnhancement = false
+    private var currentCodec: SoundQualityCodec? = null
+    private var currentDseeGeneration: DseeGeneration? = null
+    private var currentDseeActive = false
+    private var currentLeaStreamingL: String? = null
+    private var currentLeaStreamingR: String? = null
     private var proxyCheckSupportCalls = 0
     private var proxySetCommonCommandCalls = 0
     private var proxyGetDeviceConfigCalls = 0
@@ -466,6 +476,14 @@ object SettingsHeadsetHook : HookContext() {
                             }
                             currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
                             hasAncState = true
+                            // Live sound-quality badge inputs. Assigned unconditionally: the
+                            // repository nulls them on disconnect, and a stale LDAC/DSEE mark must
+                            // not outlive the link that carried it.
+                            currentCodec = snapshot.soundQualityCodec
+                            currentDseeGeneration = snapshot.dseeGeneration
+                            currentDseeActive = snapshot.dseeActive
+                            currentLeaStreamingL = snapshot.leaStreamingStatusL
+                            currentLeaStreamingR = snapshot.leaStreamingStatusR
                             SonyDeviceService.rememberAddress(currentAddress)
                             Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
                             saveState(context)
@@ -801,10 +819,156 @@ object SettingsHeadsetHook : HookContext() {
             if (address != null) {
                 val refreshPayload = settingsRefreshPayload()
                 Log.d(TAG, "injectFragmentStatus refreshPayload=$refreshPayload address=$address")
-                callMethod(fragment, "refreshStatus", address, refreshPayload)
+                // Official internals post to worker handlers that may already be dead (stale
+                // fragments in the map); a throw here must not skip the badge pass below.
+                runCatching { callMethod(fragment, "refreshStatus", address, refreshPayload) }
+                    .onFailure { Log.w(TAG, "refreshStatus injection failed (stale fragment?)", it) }
             }
             Log.d(TAG, "fragment status injected anc=$currentAnc battery=${settingsBatteryString()}")
         }.onFailure { Log.w(TAG, "inject fragment status failed", it) }
+        updateSoundQualityBadges(fragment)
+    }
+
+    /** Official 18dp badge height (Sound Connect big_header_view). */
+    private const val BADGE_HEIGHT_DP = 18
+    private const val BADGE_SPACING_DP = 10
+
+    /** Gap kept between the badge row and the battery card once the card's top margin is absorbed. */
+    private const val BADGE_CARD_GAP_DP = 8
+
+    /**
+     * Live sound-quality badges between the headset picture and the battery card — the same
+     * three marks (LE Audio / codec / DSEE, official order) as the module UI's row. Rendered
+     * as drawables on the layout's ViewOverlay: nothing joins the view hierarchy, so the
+     * stock spacing is untouched and a page without badges is pixel-identical to stock.
+     * Drawables come from the module APK via createPackageContext (same pattern as
+     * ModuleText), values from the engine snapshot the status receiver already tracks.
+     */
+    private fun updateSoundQualityBadges(fragment: Any?) {
+        runCatching {
+            val rootView = getObjectField(fragment, "mRootView") as? View
+            if (rootView == null) {
+                Log.d(TAG, "badges skip: no mRootView")
+                return@runCatching
+            }
+            val ctx = rootView.context
+            val host = findView(rootView, "linear_layout") as? ViewGroup
+            val card = findView(rootView, "groupBatteryCard")
+            if (host == null || card == null) {
+                Log.d(TAG, "badges skip: linear_layout=${host != null} batteryCard=${card != null}")
+                return@runCatching
+            }
+            val res = ctx.moduleResourcesOrNull()
+            if (res == null) {
+                Log.w(TAG, "badges skip: module resources unavailable")
+                return@runCatching
+            }
+            val dark = (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES
+            // LEA streaming statuses are cleared on disconnect by the repository, so a stale
+            // mark cannot outlive its link — same unconditional-assignment rule as the codec.
+            val leaRes = if (currentLeaStreamingL == SonyStateSnapshot.LEA_STREAMING_UNICAST ||
+                currentLeaStreamingR == SonyStateSnapshot.LEA_STREAMING_UNICAST
+            ) {
+                if (dark) R.drawable.a_mdr_connection_leaudio_dark else R.drawable.a_mdr_connection_leaudio_light
+            } else {
+                null
+            }
+            val codecRes = codecBadgeRes(currentCodec, dark)
+            val dseeRes = currentDseeGeneration?.takeIf { currentDseeActive }?.let { dseeBadgeRes(it, dark) }
+            val resIds = listOf(leaRes, codecRes, dseeRes)
+            val state = badgeOverlayStates[host] ?: BadgeOverlayState().also { badgeOverlayStates[host] = it }
+            state.resIds = resIds
+            state.drawables.forEach { host.overlay.remove(it) }
+            state.drawables.clear()
+            val visible = resIds.any { it != null }
+            if (visible) {
+                resIds.forEach { id ->
+                    if (id == null) return@forEach
+                    runCatching { res.getDrawable(id) }.getOrNull()?.let { state.drawables.add(it) }
+                }
+                // Overlay drawables live in host coordinates; reposition whenever the card
+                // moves (initial layout, battery layout switch, animation resizes).
+                card.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                    positionBadges(host, card, badgeOverlayStates[host] ?: return@addOnLayoutChangeListener)
+                    host.invalidate()
+                }
+                positionBadges(host, card, state)
+                state.drawables.forEach { host.overlay.add(it) }
+            }
+            Log.i(
+                TAG,
+                "badges updated lea=${leaRes != null} codec=$currentCodec " +
+                    "dsee=$currentDseeGeneration active=$currentDseeActive visible=$visible",
+            )
+        }.onFailure { Log.w(TAG, "update sound quality badges failed", it) }
+    }
+
+    /** Per-host overlay badge state; host is the settings linear_layout. */
+    private class BadgeOverlayState {
+        val drawables = mutableListOf<Drawable>()
+        var resIds: List<Int?> = emptyList()
+    }
+
+    private val badgeOverlayStates = WeakHashMap<View, BadgeOverlayState>()
+
+    /** Centers the badge drawables horizontally, bottoms resting just above the battery card. */
+    private fun positionBadges(host: ViewGroup, card: View, state: BadgeOverlayState) {
+        if (state.drawables.isEmpty() || card.parent !== host) return
+        val density = host.resources.displayMetrics.density
+        val height = (BADGE_HEIGHT_DP * density).toInt()
+        val gap = (BADGE_CARD_GAP_DP * density).toInt()
+        val spacing = (BADGE_SPACING_DP * density).toInt()
+        val widths = state.drawables.map { d ->
+            if (d.intrinsicHeight > 0) height * d.intrinsicWidth / d.intrinsicHeight else 0
+        }
+        val total = widths.sum() + spacing * (state.drawables.size - 1).coerceAtLeast(0)
+        val contentWidth = (host.width - host.paddingLeft - host.paddingRight).coerceAtLeast(total)
+        var x = host.paddingLeft + (contentWidth - total) / 2
+        val bottom = card.top - gap
+        val top = bottom - height
+        state.drawables.forEachIndexed { index, drawable ->
+            drawable.setBounds(x, top, x + widths[index], bottom)
+            x += widths[index] + spacing
+        }
+    }
+
+    private fun Context.moduleResourcesOrNull(): Resources? = runCatching {
+        if (packageName == BuildConfig.APPLICATION_ID) {
+            resources
+        } else {
+            createPackageContext(BuildConfig.APPLICATION_ID, Context.CONTEXT_IGNORE_SECURITY)
+                .resources
+        }
+    }.getOrNull()
+
+    /** SC `a_mdr_codec_*`; UNSETTLED/OTHER have no official badge. Mirrors PodDetailPage. */
+    private fun codecBadgeRes(codec: SoundQualityCodec?, dark: Boolean): Int? = when (codec) {
+        SoundQualityCodec.SBC ->
+            if (dark) R.drawable.a_mdr_codec_sbc_dark else R.drawable.a_mdr_codec_sbc_light
+        SoundQualityCodec.AAC ->
+            if (dark) R.drawable.a_mdr_codec_aac_dark else R.drawable.a_mdr_codec_aac_light
+        SoundQualityCodec.LDAC ->
+            if (dark) R.drawable.a_mdr_codec_ldac_dark else R.drawable.a_mdr_codec_ldac_light
+        SoundQualityCodec.APT_X ->
+            if (dark) R.drawable.a_mdr_codec_aptx_dark else R.drawable.a_mdr_codec_aptx_light
+        SoundQualityCodec.APT_X_HD ->
+            if (dark) R.drawable.a_mdr_codec_aptxhd_dark else R.drawable.a_mdr_codec_aptxhd_light
+        SoundQualityCodec.LC3 ->
+            if (dark) R.drawable.a_mdr_codec_lc3_dark else R.drawable.a_mdr_codec_lc3_light
+        else -> null
+    }
+
+    /** SC `a_mdr_dsee*` — one mark per DSEE generation. Mirrors PodDetailPage. */
+    private fun dseeBadgeRes(generation: DseeGeneration, dark: Boolean): Int = when (generation) {
+        DseeGeneration.DSEE_HX ->
+            if (dark) R.drawable.a_mdr_dseehx_dark else R.drawable.a_mdr_dseehx_light
+        DseeGeneration.DSEE ->
+            if (dark) R.drawable.a_mdr_dsee_dark else R.drawable.a_mdr_dsee_light
+        DseeGeneration.DSEE_HX_AI ->
+            if (dark) R.drawable.a_mdr_dseehx_ai_dark else R.drawable.a_mdr_dseehx_ai_light
+        DseeGeneration.DSEE_ULTIMATE ->
+            if (dark) R.drawable.a_mdr_dsee_ult_dark else R.drawable.a_mdr_dsee_ult_light
     }
 
     private fun isSonyFragment(fragment: Any?): Boolean {
