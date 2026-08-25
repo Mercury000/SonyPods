@@ -3,6 +3,7 @@ package dev.sonypods.ui.pages
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
+import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
@@ -113,6 +116,10 @@ fun PodDetailPage(
                                 .widthIn(max = 280.dp),
                             contentScale = ContentScale.FillWidth
                         )
+                        SoundQualityBadges(
+                            uiState = uiState,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
                     }
                 }
                 item {
@@ -160,6 +167,9 @@ fun PodDetailPage(
                     .padding(vertical = 16.dp),
                 contentScale = ContentScale.FillWidth
             )
+        }
+        item {
+            SoundQualityBadges(uiState = uiState)
         }
 
         podControlItems(
@@ -760,6 +770,102 @@ private fun playbackName(value: String?, unknownRes: Int): String = when {
     value.isNullOrBlank() -> stringResource(unknownRes)
     else -> value
 }
+
+/**
+ * Live sound-quality badges under the headset picture: the codec the link is
+ * using right now plus the DSEE mark while it is actively processing. Both are
+ * hidden for anything the headset has not confirmed — UNSETTLED/OTHER codecs,
+ * an unknown generation, or a DSEE status that is not VALID (`u60.a`).
+ */
+@Composable
+private fun SoundQualityBadges(uiState: SonyStateSnapshot, modifier: Modifier = Modifier) {
+    val dark = isSystemInDarkTheme()
+    val leaStreaming = uiState.leaStreamingStatusL == LE_AUDIO_UNICAST ||
+        uiState.leaStreamingStatusR == LE_AUDIO_UNICAST
+    val leaRes = if (leaStreaming) {
+        if (dark) R.drawable.a_mdr_connection_leaudio_dark else R.drawable.a_mdr_connection_leaudio_light
+    } else {
+        null
+    }
+    val codecRes = uiState.soundQualityCodec?.let { codecBadgeRes(it, dark) }
+    val dseeRes = uiState.dseeGeneration?.takeIf { uiState.dseeActive }?.let { dseeBadgeRes(it, dark) }
+    if (leaRes == null && codecRes == null && dseeRes == null) {
+        Spacer(modifier)
+        return
+    }
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Official order (`big_header_view.xml`): LE Audio first, then codec, then DSEE.
+        leaRes?.let { res -> BadgeImage(res, scale = BADGE_SCALE) }
+        codecRes?.let { res -> BadgeImage(res, scale = BADGE_SCALE) }
+        dseeRes?.let { res -> BadgeImage(res, scale = BADGE_SCALE) }
+    }
+}
+
+/** 1f = the official 18dp badge height; bump this one number to scale all three. */
+private const val BADGE_SCALE = 1.0f
+
+/** Every badge draws at the official 18dp height (`big_header_view.xml`) times
+ * [BADGE_SCALE], with the width from its own asset's pixel aspect ratio — that
+ * reproduces the official sizes exactly (LE Audio's 112x36 asset lands on the
+ * layout's fixed 56x18dp). `intrinsicSize` is raw pixels: using it as dp
+ * directly rendered 3x-small on xxhdpi devices and row-filling on others. */
+private val OFFICIAL_BADGE_HEIGHT = 18.dp
+
+@Composable
+private fun BadgeImage(res: Int, scale: Float) {
+    val painter = painterResource(res)
+    val intrinsic = painter.intrinsicSize
+    val height = OFFICIAL_BADGE_HEIGHT * scale
+    val width = if (intrinsic.width > 0f && intrinsic.height > 0f) {
+        height * (intrinsic.width / intrinsic.height)
+    } else {
+        Dp.Unspecified
+    }
+    Image(
+        painter = painter,
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.size(width = width, height = height),
+    )
+}
+
+/** StreamingStatus value the LE Audio badge lights up for (SC `LEAudioIcon`). */
+private const val LE_AUDIO_UNICAST = "VIA_LE_AUDIO_UNICAST"
+
+/** SC `a_mdr_codec_*`; UNSETTLED/OTHER have no official badge. */
+private fun codecBadgeRes(codec: SoundQualityCodec, dark: Boolean): Int? =
+    when (codec) {
+        SoundQualityCodec.SBC ->
+            if (dark) R.drawable.a_mdr_codec_sbc_dark else R.drawable.a_mdr_codec_sbc_light
+        SoundQualityCodec.AAC ->
+            if (dark) R.drawable.a_mdr_codec_aac_dark else R.drawable.a_mdr_codec_aac_light
+        SoundQualityCodec.LDAC ->
+            if (dark) R.drawable.a_mdr_codec_ldac_dark else R.drawable.a_mdr_codec_ldac_light
+        SoundQualityCodec.APT_X ->
+            if (dark) R.drawable.a_mdr_codec_aptx_dark else R.drawable.a_mdr_codec_aptx_light
+        SoundQualityCodec.APT_X_HD ->
+            if (dark) R.drawable.a_mdr_codec_aptxhd_dark else R.drawable.a_mdr_codec_aptxhd_light
+        SoundQualityCodec.LC3 ->
+            if (dark) R.drawable.a_mdr_codec_lc3_dark else R.drawable.a_mdr_codec_lc3_light
+        SoundQualityCodec.UNSETTLED, SoundQualityCodec.OTHER -> null
+    }
+
+/** SC `a_mdr_dsee*` — one mark per DSEE generation. */
+private fun dseeBadgeRes(generation: DseeGeneration, dark: Boolean): Int =
+    when (generation) {
+        DseeGeneration.DSEE_HX ->
+            if (dark) R.drawable.a_mdr_dseehx_dark else R.drawable.a_mdr_dseehx_light
+        DseeGeneration.DSEE ->
+            if (dark) R.drawable.a_mdr_dsee_dark else R.drawable.a_mdr_dsee_light
+        DseeGeneration.DSEE_HX_AI ->
+            if (dark) R.drawable.a_mdr_dseehx_ai_dark else R.drawable.a_mdr_dseehx_ai_light
+        DseeGeneration.DSEE_ULTIMATE ->
+            if (dark) R.drawable.a_mdr_dsee_ult_dark else R.drawable.a_mdr_dsee_ult_light
+    }
 
 @Composable
 private fun PlaybackVolumeRow(

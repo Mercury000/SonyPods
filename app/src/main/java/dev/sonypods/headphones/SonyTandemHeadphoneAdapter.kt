@@ -244,6 +244,20 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                     add(command(profile, HeadphoneFeature.WEARING_STATUS, "GET Wearing status", it))
                 }
             }
+            // Live sound-quality badges: one COMMON_GET_STATUS each, then NTFY
+            // pushes keep them current (SC `n10.a.mo313a` / `u60.a.mo313a` query
+            // once on feature start and never re-poll).
+            val badgeCodec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
+            if (profile.capabilities.codecIndicatorSupported) {
+                badgeCodec.buildGetAudioCodecStatus()?.let {
+                    add(command(profile, HeadphoneFeature.DEVICE_INFO, "GET audio codec status", it))
+                }
+            }
+            if (profile.capabilities.upscalingIndicatorSupported) {
+                badgeCodec.buildGetUpscalingEffectStatus()?.let {
+                    add(command(profile, HeadphoneFeature.DEVICE_INFO, "GET upscaling effect status", it))
+                }
+            }
             // SC arms the alert domain or the device never pushes the 0x99
             // confirmation for GS SETs that need one (multipoint reconnect etc.):
             // 0x94 [APP_BECOMES_FOREGROUND=0x02][ENABLE] on UI shown, 0x94

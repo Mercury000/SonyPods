@@ -1640,5 +1640,75 @@ class SonyTandemV2Table1ProtocolTest {
             ) is ParsedTandemResponse.Unknown
         )
     }
-}
 
+    /** V2 codec badge: RET `0E 13 02 10` — LDAC active (SC `ef0.o`, len==3). */
+    @Test
+    fun commonStatus_audioCodec_ret_ldac_parsesFromWire() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x13, 0x02, 0x10)
+        ) as ParsedTandemResponse.AudioCodecStatus
+
+        assertFalse(parsed.isUnsolicited)
+        assertEquals(SoundQualityCodec.LDAC, parsed.codec)
+    }
+
+    /** V2 codec badge: unsolicited NTFY `0E 15 02 30` — LC3 under LE Audio. */
+    @Test
+    fun commonStatus_audioCodec_ntfy_lc3_isUnsolicitedPush() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x15, 0x02, 0x30)
+        ) as ParsedTandemResponse.AudioCodecStatus
+
+        assertTrue(parsed.isUnsolicited)
+        assertEquals(SoundQualityCodec.LC3, parsed.codec)
+    }
+
+    /** Wrong length or an out-of-table codec byte drops the frame whole. */
+    @Test
+    fun commonStatus_audioCodec_malformed_isUnknown() {
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0x13, 0x02, 0x10, 0x00)
+            ) is ParsedTandemResponse.Unknown
+        )
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0x13, 0x02, 0x55)
+            ) is ParsedTandemResponse.Unknown
+        )
+    }
+
+    /** V2 DSEE badge: RET `0E 13 03 03 01` — Ultimate generation, VALID effect. */
+    @Test
+    fun commonStatus_upscalingEffect_ret_ultimateValid_parses() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x13, 0x03, 0x03, 0x01)
+        ) as ParsedTandemResponse.UpscalingEffect
+
+        assertFalse(parsed.isUnsolicited)
+        assertEquals(DseeGeneration.DSEE_ULTIMATE, parsed.generation)
+        assertEquals(DseeEffectState.VALID, parsed.state)
+    }
+
+    /** NTFY push with OFF status still parses; visibility is decided upstream. */
+    @Test
+    fun commonStatus_upscalingEffect_ntfy_off_keepsGeneration() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x15, 0x03, 0x01, 0x00)
+        ) as ParsedTandemResponse.UpscalingEffect
+
+        assertTrue(parsed.isUnsolicited)
+        assertEquals(DseeGeneration.DSEE, parsed.generation)
+        assertEquals(DseeEffectState.OFF, parsed.state)
+    }
+
+    /** Effect frames must be exactly [inq][type][status]; longer is dropped. */
+    @Test
+    fun commonStatus_upscalingEffect_wrongLength_isUnknown() {
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0x13, 0x03, 0x03, 0x01, 0x00)
+            ) is ParsedTandemResponse.Unknown
+        )
+    }
+}

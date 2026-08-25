@@ -104,6 +104,25 @@ object SonyTandemV1Table1Protocol {
     fun buildGetProtocolInfo(): ByteArray =
         SonyTandemFrame.message(CONNECT_GET_PROTOCOL_INFO, byteArrayOf(0x00))
 
+    // ── Sound-quality badges (V1 dedicated COMMON commands; SC `qe0.C26527c` /
+    // `C26568k0` builders, bodies `[cmd][FIXED_VALUE 0x00]`) ──
+    private const val COMMON_GET_AUDIO_CODEC: Byte = 0x18
+    private const val COMMON_RET_AUDIO_CODEC: Byte = 0x19
+    private const val COMMON_NTFY_AUDIO_CODEC: Byte = 0x1B
+    private const val COMMON_GET_UPSCALING_EFFECT: Byte = 0x14
+    private const val COMMON_RET_UPSCALING_EFFECT: Byte = 0x15
+    private const val COMMON_NTFY_UPSCALING_EFFECT: Byte = 0x17
+    /** V1 carries a single FIXED_VALUE (0x00) inquired type for both domains. */
+    private const val V1_COMMON_FIXED_VALUE: Byte = 0x00
+
+    /** COMMON_GET_AUDIO_CODEC — codec badge source on V1 models. */
+    fun buildGetAudioCodecStatus(): ByteArray =
+        SonyTandemFrame.message(COMMON_GET_AUDIO_CODEC, byteArrayOf(V1_COMMON_FIXED_VALUE))
+
+    /** COMMON_GET_UPSCALING_EFFECT — live DSEE badge source on V1 models. */
+    fun buildGetUpscalingEffectStatus(): ByteArray =
+        SonyTandemFrame.message(COMMON_GET_UPSCALING_EFFECT, byteArrayOf(V1_COMMON_FIXED_VALUE))
+
     /**
      * Parse a V1 CONNECT_RET_PROTOCOL_INFO payload (0x01); see the shared
      * [parseProtocolInfoPayload] for the byte layout.
@@ -329,8 +348,52 @@ object SonyTandemV1Table1Protocol {
             )
             PLAY_RET_PARAM -> parsePlayRetParam(payload, raw)
             PLAY_NTFY_PARAM -> parsePlayNtfyParam(payload, raw)
+            COMMON_RET_AUDIO_CODEC, COMMON_NTFY_AUDIO_CODEC -> parseAudioCodecStatus(command, payload, raw)
+            COMMON_RET_UPSCALING_EFFECT, COMMON_NTFY_UPSCALING_EFFECT ->
+                parseUpscalingEffectStatus(command, payload, raw)
             else -> unknown(command, payload, raw)
         }
+    }
+
+    /** V1 codec body `[FIXED_VALUE 0x00][codecByte]`, exactly 2 bytes — SC
+     * `qe0.p0` (`COMMON_NTFY_AUDIO_CODEC`). Unknown codec bytes degrade to a
+     * null [ParsedTandemResponse.AudioCodecStatus.codec] (badge hidden). */
+    private fun parseAudioCodecStatus(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val inquired = payload.getOrNull(0)?.unsigned
+        val codecByte = payload.getOrNull(1)?.unsigned
+        if (payload.size != 2 || inquired != 0x00 || codecByte == null) {
+            return unknown(command, payload, raw)
+        }
+        // The V1 AudioCodec table has no LC3 entry; its lookup degrades any
+        // off-table byte to UNSETTLED, which hides the badge upstream.
+        val codec = when (SoundQualityCodec.fromCode(codecByte)) {
+            SoundQualityCodec.LC3, null -> SoundQualityCodec.UNSETTLED
+            else -> SoundQualityCodec.fromCode(codecByte)
+        }
+        return ParsedTandemResponse.AudioCodecStatus(
+            codec = codec,
+            isUnsolicited = command == COMMON_NTFY_AUDIO_CODEC,
+            raw = raw,
+        )
+    }
+
+    /** V1 effect body `[FIXED_VALUE 0x00][effectType][effectStatus]`, exactly
+     * 3 bytes — SC `qe0.y2` (`COMMON_RET_UPSCALING_EFFECT`). */
+    private fun parseUpscalingEffectStatus(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val inquired = payload.getOrNull(0)?.unsigned
+        val typeByte = payload.getOrNull(1)?.unsigned
+        val stateByte = payload.getOrNull(2)?.unsigned
+        if (payload.size != 3 || inquired != 0x00 || typeByte == null || stateByte == null) {
+            return unknown(command, payload, raw)
+        }
+        // The V1 table has no DSEE Ultimate (SC `UpscalingEffectType` v1), but the
+        // shared enum keeps the byte mapping so a firmware that sends it still renders.
+        return ParsedTandemResponse.UpscalingEffect(
+            generation = DseeGeneration.fromCode(typeByte),
+            state = DseeEffectState.fromCode(stateByte),
+            isUnsolicited = command == COMMON_NTFY_UPSCALING_EFFECT,
+            raw = raw,
+        )
     }
 
     private fun parseDeviceInfo(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {

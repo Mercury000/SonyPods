@@ -27,6 +27,10 @@ interface TandemCodec {
     fun parse(raw: ByteArray): ParsedTandemResponse
     fun buildGetSupportFunction(): ByteArray? = null
     fun buildGetProtocolInfo(): ByteArray? = null
+    /** COMMON_GET_STATUS(AUDIO_CODEC) — the live sound-quality codec badge query. */
+    fun buildGetAudioCodecStatus(): ByteArray? = null
+    /** COMMON_GET_STATUS(UPSCALING_EFFECT) — the live DSEE badge query. */
+    fun buildGetUpscalingEffectStatus(): ByteArray? = null
     fun buildGetCapabilityInfo(): ByteArray? = null
     /** AUDIO-domain DSEE / upscaling; null on protocols without the domain. */
     fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray? = null
@@ -173,6 +177,12 @@ object SonyTandemV1Table1Codec : TandemCodec {
     override fun buildGetCapabilityInfo(): ByteArray =
         SonyTandemV1Table1Protocol.buildGetCapabilityInfo()
 
+    override fun buildGetAudioCodecStatus(): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetAudioCodecStatus()
+
+    override fun buildGetUpscalingEffectStatus(): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetUpscalingEffectStatus()
+
     override fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemV1Table1Protocol.buildGetDeviceInfo(type)
 
@@ -300,6 +310,12 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildGetCapabilityInfo(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetCapabilityInfo()
+
+    override fun buildGetAudioCodecStatus(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetAudioCodecStatus()
+
+    override fun buildGetUpscalingEffectStatus(): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetUpscalingEffectStatus()
 
     override fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray =
         SonyTandemV2Table1Protocol.buildGetUpscaling(inquiredTypeCode)

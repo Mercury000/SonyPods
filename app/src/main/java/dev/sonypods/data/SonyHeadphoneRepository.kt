@@ -51,6 +51,9 @@ import dev.sonypods.config.QuickAccessActionCapabilityCache
 import dev.sonypods.config.QuickAccessCapabilityCache
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.DeviceInfoType
+import dev.sonypods.protocol.DseeEffectState
+import dev.sonypods.protocol.DseeGeneration
+import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
@@ -492,6 +495,15 @@ data class PlaybackState(
     val musicVolumeStep: Int = 0,
 )
 
+/** Live sound-quality badge values — what the headset reports right now via the
+ * COMMON domain (SC `n10.a` codec / `u60.a` upscaling effect). A null codec
+ * hides that badge; the DSEE badge draws only while [dseeActive] (VALID). */
+data class SoundQualityState(
+    val codec: SoundQualityCodec? = null,
+    val dseeGeneration: DseeGeneration? = null,
+    val dseeActive: Boolean = false,
+)
+
 data class SonyHeadphoneUiState(
     val scanState: String = "Idle",
     val isScanning: Boolean = false,
@@ -516,6 +528,7 @@ data class SonyHeadphoneUiState(
     val wearingState: WearingState = WearingState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val playbackState: PlaybackState = PlaybackState(),
+    val soundQualityState: SoundQualityState = SoundQualityState(),
     /** DSEE / DSEE Extreme (AUDIO-domain upscaling) toggle; null until answered
      * or unsupported — the UI only draws it when the profile advertises it. */
     val upscalingEnabled: Boolean? = null,
@@ -2609,6 +2622,7 @@ class SonyHeadphoneRepository private constructor(
                 supportedFeatures = featureStatusesFor(profile),
                 initialValuesReady = if (connected) it.initialValuesReady else false,
                 essentialValuesReady = if (connected) it.essentialValuesReady else false,
+                soundQualityState = if (connected) it.soundQualityState else SoundQualityState(),
                 leAudioSwitchPending = if (connected) it.leAudioSwitchPending else false,
                 upscalingEnabled = if (connected) it.upscalingEnabled else null,
             )
@@ -2693,6 +2707,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.AssignableSettingsStatus -> applyAssignableSettingsStatus(parsed)
             is ParsedTandemResponse.AssignableSettingsExtendedParam -> applyAssignableSettingsExtendedParam(parsed)
             is ParsedTandemResponse.WearingStatus -> applyWearingStatus(parsed)
+            is ParsedTandemResponse.AudioCodecStatus -> applySoundCodec(parsed)
+            is ParsedTandemResponse.UpscalingEffect -> applyUpscalingEffectState(parsed)
             is ParsedTandemResponse.MultipointCapability -> applyMultipointCapability(parsed)
             is ParsedTandemResponse.MultipointStatus -> applyMultipointStatus(parsed)
             is ParsedTandemResponse.MultipointDevices -> applyMultipointDevices(parsed)
@@ -3105,6 +3121,24 @@ class SonyHeadphoneRepository private constructor(
                 album = response.album.toUiValue(),
                 artist = response.artist.toUiValue(),
                 genre = response.genre.toUiValue(),
+            ))
+        }
+    }
+
+    // UNSETTLED/OTHER keep the enum (the UI hides those badges) — storing the
+    // raw value preserves what the headset actually said for diagnostics.
+    private fun applySoundCodec(response: ParsedTandemResponse.AudioCodecStatus) {
+        _state.update {
+            it.copy(soundQualityState = it.soundQualityState.copy(codec = response.codec))
+        }
+    }
+
+    /** Only `VALID` means DSEE is actively processing; OFF/INVALID hide it. */
+    private fun applyUpscalingEffectState(response: ParsedTandemResponse.UpscalingEffect) {
+        _state.update {
+            it.copy(soundQualityState = it.soundQualityState.copy(
+                dseeGeneration = response.generation,
+                dseeActive = response.state == DseeEffectState.VALID,
             ))
         }
     }

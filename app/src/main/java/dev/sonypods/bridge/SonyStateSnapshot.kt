@@ -10,6 +10,8 @@ import dev.sonypods.protocol.AssignableSettingsFunction
 import dev.sonypods.protocol.AssignableSettingsKey
 import dev.sonypods.protocol.AssignableSettingsPreset
 import dev.sonypods.protocol.AssignableSettingsType
+import dev.sonypods.protocol.DseeGeneration
+import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.PlaybackStatus
@@ -168,6 +170,10 @@ data class SonyStateSnapshot(
     val playbackMusicVolume: Int? = null,
     /** 0 = no volume control on this device. */
     val playbackMusicVolumeStep: Int = 0,
+    /** Live sound-quality badge values (COMMON domain); codec null or OTHER/UNSETTLED hides it. */
+    val soundQualityCodec: SoundQualityCodec? = null,
+    val dseeGeneration: DseeGeneration? = null,
+    val dseeActive: Boolean = false,
     val scanState: String? = null,
 ) {
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
@@ -284,6 +290,9 @@ data class SonyStateSnapshot(
         playbackAlbum?.let { putString(KEY_PLAY_ALBUM, it) }
         playbackMusicVolume?.let { putInt(KEY_PLAY_VOLUME, it) }
         putInt(KEY_PLAY_VOLUME_STEP, playbackMusicVolumeStep)
+        soundQualityCodec?.let { putString(KEY_SQ_CODEC, it.name) }
+        dseeGeneration?.let { putString(KEY_DSEE_GENERATION, it.name) }
+        putBoolean(KEY_DSEE_ACTIVE, dseeActive)
         scanState?.let { putString(KEY_SCAN_STATE, it) }
     }
 
@@ -382,6 +391,9 @@ data class SonyStateSnapshot(
         private const val KEY_PLAY_ALBUM = "play_album"
         private const val KEY_PLAY_VOLUME = "play_volume"
         private const val KEY_PLAY_VOLUME_STEP = "play_volume_step"
+        private const val KEY_SQ_CODEC = "sq_codec"
+        private const val KEY_DSEE_GENERATION = "dsee_generation"
+        private const val KEY_DSEE_ACTIVE = "dsee_active"
         private const val KEY_SCAN_STATE = "scan_state"
 
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
@@ -479,6 +491,13 @@ data class SonyStateSnapshot(
             playbackAlbum = bundle.getString(KEY_PLAY_ALBUM),
             playbackMusicVolume = bundle.optInt(KEY_PLAY_VOLUME),
             playbackMusicVolumeStep = bundle.getInt(KEY_PLAY_VOLUME_STEP, 0),
+            soundQualityCodec = bundle.getString(KEY_SQ_CODEC)?.let { name ->
+                SoundQualityCodec.entries.firstOrNull { it.name == name }
+            },
+            dseeGeneration = bundle.getString(KEY_DSEE_GENERATION)?.let { name ->
+                DseeGeneration.entries.firstOrNull { it.name == name }
+            },
+            dseeActive = bundle.getBoolean(KEY_DSEE_ACTIVE, false),
             scanState = bundle.getString(KEY_SCAN_STATE),
         )
 
@@ -580,6 +599,9 @@ data class SonyStateSnapshot(
                 playbackAlbum = state.playbackState.album,
                 playbackMusicVolume = state.playbackState.musicVolume,
                 playbackMusicVolumeStep = state.playbackState.musicVolumeStep,
+                soundQualityCodec = state.soundQualityState.codec,
+                dseeGeneration = state.soundQualityState.dseeGeneration,
+                dseeActive = state.soundQualityState.dseeActive,
                 scanState = state.scanState,
             )
         }

@@ -1,5 +1,48 @@
 package dev.sonypods.protocol
 
+/**
+ * The codec a sound-quality badge draws, generation-agnostic: V1 and V2 carry
+ * the same byte codes except that V1 has no LC3 (SC `AudioCodec` table1/table2).
+ * Unknown bytes map to null upstream — official hides the badge for them.
+ */
+enum class SoundQualityCodec(val code: Int) {
+    UNSETTLED(0x00),
+    SBC(0x01),
+    AAC(0x02),
+    LDAC(0x10),
+    APT_X(0x20),
+    APT_X_HD(0x21),
+    LC3(0x30),
+    OTHER(0xFF);
+
+    companion object {
+        fun fromCode(code: Int): SoundQualityCodec? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/** Which DSEE generation an upscaling effect report refers to. */
+enum class DseeGeneration(val code: Int) {
+    DSEE_HX(0x00),
+    DSEE(0x01),
+    DSEE_HX_AI(0x02),
+    DSEE_ULTIMATE(0x03);
+
+    companion object {
+        fun fromCode(code: Int): DseeGeneration? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/** Whether DSEE is actively processing the stream right now (V1 == V2 codes). */
+enum class DseeEffectState(val code: Int) {
+    OFF(0x00),
+    VALID(0x01),
+    INVALID(0x02);
+
+    companion object {
+        fun fromCode(code: Int): DseeEffectState? = entries.firstOrNull { it.code == code }
+    }
+}
+
 enum class DeviceInfoType(val code: Byte) {
     MODEL_NAME(0x01),
     FW_VERSION(0x02),

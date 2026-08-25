@@ -304,6 +304,16 @@ object SonyTandemV2Table1Protocol {
     fun buildGetDisplayFirmwareVersion(): ByteArray =
         SonyTandemFrame.message(COMMON_GET_STATUS, byteArrayOf(CommonInquiredType.DISPLAY_FW_VERSION.code))
 
+    /** COMMON_GET_STATUS for AUDIO_CODEC — the sound-quality codec badge source
+     * (SC `ef0.b.m68094g(AUDIO_CODEC)`; body `[cmd 0x12][inqType 0x02]`). */
+    fun buildGetAudioCodecStatus(): ByteArray =
+        SonyTandemFrame.message(COMMON_GET_STATUS, byteArrayOf(CommonInquiredType.AUDIO_CODEC.code))
+
+    /** COMMON_GET_STATUS for UPSCALING_EFFECT — the live DSEE badge source
+     * (SC `ef0.b.m68094g(UPSCALING_EFFECT)`; body `[cmd 0x12][inqType 0x03]`). */
+    fun buildGetUpscalingEffectStatus(): ByteArray =
+        SonyTandemFrame.message(COMMON_GET_STATUS, byteArrayOf(CommonInquiredType.UPSCALING_EFFECT.code))
+
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray =
         SonyTandemFrame.message(POWER_GET_STATUS, byteArrayOf(type.code))
 
@@ -816,7 +826,7 @@ object SonyTandemV2Table1Protocol {
             CONNECT_RET_DEVICE_INFO -> parseDeviceInfo(payload, raw)
             SYSTEM_RET_CAPABILITY -> parseSystemRetCapability(payload, raw)
             SYSTEM_RET_STATUS, SYSTEM_NTFY_STATUS -> parseSystemStatus(payload, raw)
-            COMMON_RET_STATUS, COMMON_NTFY_STATUS -> parseCommonStatus(payload, raw)
+            COMMON_RET_STATUS, COMMON_NTFY_STATUS -> parseCommonStatus(command, payload, raw)
             POWER_RET_STATUS, POWER_NTFY_STATUS -> parseBattery(payload, raw)
             EQEBB_RET_STATUS, EQEBB_NTFY_STATUS,
             EQEBB_RET_PARAM, EQEBB_NTFY_PARAM -> parseEqEbb(command, payload, raw)
@@ -883,9 +893,17 @@ object SonyTandemV2Table1Protocol {
         return ParsedTandemResponse.DeviceInfo(type, text, raw, colorCode)
     }
 
-    private fun parseCommonStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+    private fun parseCommonStatus(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val type = payload.firstOrNull()?.let { code ->
             CommonInquiredType.entries.firstOrNull { it.code == code }
+        }
+        // SC `ef0.n$b`/`ef0.i$b` dispatch AUDIO_CODEC and UPSCALING_EFFECT to
+        // their own message classes with strict length+value validation; a frame
+        // failing it is dropped whole, never partially applied.
+        when (type) {
+            CommonInquiredType.AUDIO_CODEC -> return parseAudioCodecStatus(command, payload, raw)
+            CommonInquiredType.UPSCALING_EFFECT -> return parseUpscalingEffectStatus(command, payload, raw)
+            else -> Unit
         }
         val text = when (type) {
             CommonInquiredType.DISPLAY_FW_VERSION -> parseLengthPrefixedString(payload, offset = 1)
@@ -896,6 +914,36 @@ object SonyTandemV2Table1Protocol {
             type = type,
             text = text,
             values = payload.drop(1).map { it.unsigned },
+            raw = raw,
+        )
+    }
+
+    /** `[inqType 0x02][codecByte]`, exactly 2 bytes; a byte outside the codec
+     * table rejects the frame whole (SC `ef0.o$b` validates the same way). */
+    private fun parseAudioCodecStatus(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val codecByte = payload.getOrNull(1)?.unsigned
+        val codec = codecByte?.let(SoundQualityCodec::fromCode)
+        if (payload.size != 2 || codec == null) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, command.unsigned, payload, raw)
+        }
+        return ParsedTandemResponse.AudioCodecStatus(
+            codec = codec,
+            isUnsolicited = command == COMMON_NTFY_STATUS,
+            raw = raw,
+        )
+    }
+
+    /** `[inqType 0x03][effectType][effectStatus]`, exactly 3 bytes. */
+    private fun parseUpscalingEffectStatus(command: Byte, payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val generation = payload.getOrNull(1)?.unsigned?.let(DseeGeneration::fromCode)
+        val state = payload.getOrNull(2)?.unsigned?.let(DseeEffectState::fromCode)
+        if (payload.size != 3 || generation == null || state == null) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, command.unsigned, payload, raw)
+        }
+        return ParsedTandemResponse.UpscalingEffect(
+            generation = generation,
+            state = state,
+            isUnsolicited = command == COMMON_NTFY_STATUS,
             raw = raw,
         )
     }

@@ -369,6 +369,47 @@ sealed interface ParsedTandemResponse {
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
+    /** COMMON GET/RET/NTFY_STATUS for AUDIO_CODEC (V2 inqType 0x02; V1 has the
+     * dedicated 0x18/0x19/0x1B commands with the same body). Wire payload after
+     * dataType+command is `[inqType][codecByte]`; [codec] is null for bytes that
+     * no badge draws (UNSETTLED/OTHER/unknown), mirroring SC hiding the view. */
+    data class AudioCodecStatus(
+        val codec: SoundQualityCodec?,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is AudioCodecStatus) return false
+            return codec == other.codec && isUnsolicited == other.isUnsolicited &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int = 31 * (codec?.hashCode() ?: 0) + raw.contentHashCode()
+    }
+
+    /** COMMON UPSCALING_EFFECT report (V2 `0E 13/15 03 <type> <status>`; V1 uses
+     * dedicated 0x14/0x15/0x17 commands, same field order). [generation] null on
+     * out-of-table bytes — V2 may report DSEE_ULTIMATE(3) where V1's table stops
+     * at DSEE_HX_AI(2). */
+    data class UpscalingEffect(
+        val generation: DseeGeneration?,
+        val state: DseeEffectState?,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is UpscalingEffect) return false
+            return generation == other.generation && state == other.state &&
+                isUnsolicited == other.isUnsolicited && raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int =
+            31 * ((generation?.hashCode() ?: 0) * 31 + (state?.hashCode() ?: 0)) +
+                raw.contentHashCode()
+    }
+
     /** CONNECT_RET_PROTOCOL_INFO: the runtime protocol-version number the device
      * negotiates at connection time. SC validates it against a fixed whitelist
      * (`C29903d.f85968b`, protocol versions 0x1000..0x7030) and refuses to

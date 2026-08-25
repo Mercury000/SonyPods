@@ -411,6 +411,25 @@ object SonyCapabilityProbe {
             features.add(HeadphoneFeature.UPSCALING)
         }
 
+        // Live sound-quality badges: SC registers both indicator features on
+        // their FunctionType presence alone (`u70.p1` / `t70.d`), so a model
+        // without the entry simply never shows that badge. V1 and V2 byte codes
+        // collide, so the check follows the profile's protocol generation.
+        val codecIndicatorSupported = functions.any { function ->
+            if (function.isV1(profile)) {
+                function.v1Type() == SonyV1FunctionType.CODEC_INDICATOR
+            } else {
+                function.v2Type() == SonyV2FunctionType.CODEC_INDICATOR
+            }
+        }
+        val upscalingIndicatorSupported = functions.any { function ->
+            if (function.isV1(profile)) {
+                function.v1Type() == SonyV1FunctionType.UPSCALING_INDICATOR
+            } else {
+                function.v2Type() == SonyV2FunctionType.UPSCALING_INDICATOR
+            }
+        }
+
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
             formFactor = formFactorFromBattery(batteryQueries),
@@ -423,6 +442,8 @@ object SonyCapabilityProbe {
             // The DSEE generation byte only arrives via the AUDIO_RET_CAPABILITY
             // probe; a restored/fallback tableset keeps whatever was cached.
             upscalingTypeCode = fallback.upscalingTypeCode,
+            codecIndicatorSupported = codecIndicatorSupported,
+            upscalingIndicatorSupported = upscalingIndicatorSupported,
             eqConfig = eqConfig,
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
             playbackVolumeHasMute = playbackHasMute,

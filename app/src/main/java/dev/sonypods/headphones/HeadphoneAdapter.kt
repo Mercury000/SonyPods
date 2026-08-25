@@ -161,6 +161,12 @@ data class HeadphoneCapabilities(
      * The official title/description strings are picked from this, not from
      * which FunctionType the support list carried. Null = not probed yet. */
     val upscalingTypeCode: Int? = null,
+    /** FunctionType CODEC_INDICATOR advertised — enables the live codec badge
+     * (COMMON_GET_STATUS AUDIO_CODEC + NTFY), mirroring SC `mo58633n()`. */
+    val codecIndicatorSupported: Boolean = false,
+    /** FunctionType UPSCALING_INDICATOR advertised — enables the live DSEE badge
+     * (COMMON_GET_STATUS UPSCALING_EFFECT + NTFY), mirroring SC `mo58463A1()`. */
+    val upscalingIndicatorSupported: Boolean = false,
 )
 
 data class ConnectedHeadphoneProfile(

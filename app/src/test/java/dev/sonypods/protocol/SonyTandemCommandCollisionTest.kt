@@ -113,13 +113,14 @@ class SonyTandemCommandCollisionTest {
     }
 
     @Test
-    fun v2Parser_0x13_audioCodec_returnsCommonStatus() {
-        val raw = byteArrayOf(0x0E, 0x13, 0x02, 0x00, 0x01)
-        val parsed = SonyTandemV2Table1Protocol.parse(raw)
+    fun v2Parser_0x13_audioCodec_returnsTypedCodecStatus() {
+        // V2 COMMON_RET_STATUS(0x13) with inqType AUDIO_CODEC(0x02) is the live
+        // codec-badge reply and parses into its own typed response; a same-prefix
+        // V1 battery frame is disambiguated by the V1 parser (xm4 cases below).
+        val parsed = SonyTandemV2Table1Protocol.parse(byteArrayOf(0x0E, 0x13, 0x02, 0x01))
 
-        assertTrue("Expected CommonStatus but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.CommonStatus)
-        parsed as ParsedTandemResponse.CommonStatus
-        assertEquals(CommonInquiredType.AUDIO_CODEC, parsed.type)
+        assertTrue("Expected AudioCodecStatus but got ${parsed::class.simpleName}", parsed is ParsedTandemResponse.AudioCodecStatus)
+        assertEquals(SoundQualityCodec.SBC, (parsed as ParsedTandemResponse.AudioCodecStatus).codec)
     }
 
     // ── Adapter level: classify0x13 heuristics ───────────────────────────────
