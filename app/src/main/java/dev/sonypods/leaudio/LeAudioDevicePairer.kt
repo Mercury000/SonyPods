@@ -13,10 +13,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import com.mercury.sonypods.R
 import dev.sonypods.device.SonyDeviceService
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import dev.sonypods.utils.ModuleText
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -114,7 +116,7 @@ class LeAudioDevicePairer(
         }
         val localAdapter = adapter
         if (localAdapter == null || !runCatching { localAdapter.isEnabled }.getOrDefault(false)) {
-            fail("蓝牙未开启")
+            fail(ModuleText.get(appContext, R.string.pairer_bluetooth_off))
             return
         }
         this.targetName = targetName
@@ -226,21 +228,21 @@ class LeAudioDevicePairer(
             if (android.os.SystemClock.elapsedRealtime() < scanDeadline) {
                 passIndex = 0
             } else {
-                fail("未找到耳机的 LE Audio 身份，请重置耳机使其进入配对模式后重试")
+                fail(ModuleText.get(appContext, R.string.pairer_identity_not_found))
                 return
             }
         }
         val pass = passes.getOrNull(passIndex)
         if (pass == null) {
-            fail("未找到耳机的 LE Audio 身份，请重置耳机使其进入配对模式后重试")
+            fail(ModuleText.get(appContext, R.string.pairer_identity_not_found))
             return
         }
         val scanner = adapter?.bluetoothLeScanner
         if (scanner == null) {
-            fail("BLE 扫描不可用")
+            fail(ModuleText.get(appContext, R.string.pairer_scan_unavailable))
             return
         }
-        setStage(Stage.SCANNING, "请重置耳机使其进入配对模式，正在查找 LE Audio 身份", null)
+        setStage(Stage.SCANNING, ModuleText.get(appContext, R.string.pairer_scanning_for_identity), null)
         log("scan pass ${passIndex + 1}/${passes.size} filtered=${pass.filtered} extended=${pass.extended}")
 
         val callback = object : ScanCallback() {
@@ -365,15 +367,15 @@ class LeAudioDevicePairer(
 
     private fun finishAllMembers() {
         if (bonded.isEmpty()) {
-            fail("未能配对耳机的 LE Audio 身份，请重置耳机使其进入配对模式后重试")
+            fail(ModuleText.get(appContext, R.string.pairer_bond_failed))
             return
         }
         // A single bonded member still gives audio in one ear, which beats reporting failure
         // and leaving the user with nothing; the message says which case they are in.
         val message = if (failedMembers.isEmpty()) {
-            "LE Audio 身份已配对（${bonded.size} 只）"
+            ModuleText.get(appContext, R.string.pairer_success_all, bonded.size)
         } else {
-            "仅配对了 ${bonded.size} 只，另一只未响应，可能只有一侧处于配对模式"
+            ModuleText.get(appContext, R.string.pairer_success_partial, bonded.size)
         }
         succeedAll(message)
     }
@@ -382,11 +384,11 @@ class LeAudioDevicePairer(
     private fun beginBond(address: String) {
         val device = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         if (device == null) {
-            onMemberFailed(address, "无法解析地址")
+            onMemberFailed(address, ModuleText.get(appContext, R.string.pairer_address_unresolvable))
             return
         }
         bondTarget = device
-        setStage(Stage.PAIRING, "正在配对 LE Audio 身份 $address", null)
+        setStage(Stage.PAIRING, ModuleText.get(appContext, R.string.pairer_pairing_identity, address), null)
 
         if (runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE) ==
             BluetoothDevice.BOND_BONDED
@@ -486,7 +488,7 @@ class LeAudioDevicePairer(
                     } else if (previous == BluetoothDevice.BOND_BONDING) {
                         ctkdRepairAddress = null
                         handler.removeCallbacks(ctkdTimeout)
-                        onMemberFailed(device.address, "重新配对被拒绝或中断")
+                        onMemberFailed(device.address, ModuleText.get(appContext, R.string.pairer_rebond_rejected))
                     }
                 BluetoothDevice.BOND_BONDED -> onCtkdRepaired(device.address)
             }
@@ -497,7 +499,7 @@ class LeAudioDevicePairer(
             BluetoothDevice.BOND_BONDED -> onMemberBonded(device.address)
             BluetoothDevice.BOND_NONE ->
                 if (previous == BluetoothDevice.BOND_BONDING) {
-                    onMemberFailed(device.address, "配对被拒绝或中断")
+                    onMemberFailed(device.address, ModuleText.get(appContext, R.string.pairer_bond_rejected))
                 }
         }
     }
@@ -539,7 +541,7 @@ class LeAudioDevicePairer(
 
     private fun onBondTimeout() {
         if (stage != Stage.PAIRING) return
-        onMemberFailed(bondTarget?.address.orEmpty(), "配对超时")
+        onMemberFailed(bondTarget?.address.orEmpty(), ModuleText.get(appContext, R.string.pairer_bond_timeout))
     }
 
     private fun succeedAll(message: String) {
@@ -671,7 +673,7 @@ class LeAudioDevicePairer(
     private fun beginCtkdRepair(device: BluetoothDevice) {
         val address = device.address
         ctkdRepairAddress = address
-        setStage(Stage.PAIRING, "正在重新配对以派生 LE 密钥 $address", null)
+        setStage(Stage.PAIRING, ModuleText.get(appContext, R.string.pairer_rebonding_for_lekey, address), null)
         runCatching {
             BluetoothDevice::class.java.getMethod("disconnect").invoke(device)
         }.onFailure { log("disconnect($address) unavailable: $it") }
@@ -703,7 +705,7 @@ class LeAudioDevicePairer(
             connectLeAudio(address)
             onMemberBonded(address)
         } else {
-            onMemberFailed(address, "重新配对后仍未派生 LE 密钥")
+            onMemberFailed(address, ModuleText.get(appContext, R.string.pairer_lekey_missing_after_rebond))
         }
     }
 
@@ -712,7 +714,7 @@ class LeAudioDevicePairer(
         ctkdRepairAddress = null
         val state = runCatching { adapter?.getRemoteDevice(address)?.bondState }.getOrNull()
         log("CTKD re-pair timed out for $address state=${bondStateName(state ?: -1)}")
-        onMemberFailed(address, "重新配对超时，耳机可能需要进入配对模式")
+        onMemberFailed(address, ModuleText.get(appContext, R.string.pairer_rebond_timeout))
     }
 
     /**

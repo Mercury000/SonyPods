@@ -358,7 +358,7 @@ fun SettingsPage(
             Card(modifier = Modifier.padding(top = 12.dp)) {
                 BasicComponent(
                     title = stringResource(R.string.about),
-                    summary = "SonyPods",
+                    summary = stringResource(R.string.about_sonypods),
                     onClick = onOpenAbout
                 )
             }

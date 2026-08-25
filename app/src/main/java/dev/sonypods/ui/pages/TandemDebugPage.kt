@@ -33,12 +33,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mercury.sonypods.R
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.data.SonyHeadphoneRepository
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -136,7 +138,7 @@ fun TandemDebugPage(
                 modifier = Modifier.weight(1f),
             )
             TextButton(
-                text = "发送",
+                text = stringResource(R.string.dbg_send),
                 onClick = {
                     SonyBridge.sendCommand(context, SonyBridge.CMD_DEBUG_RAW) {
                         putExtra(SonyBridge.EXTRA_STRING, hexInput)
@@ -153,7 +155,7 @@ fun TandemDebugPage(
 private fun EmptyLogCard() {
     Card {
         Text(
-            text = "等待 Tandem 日志...",
+            text = stringResource(R.string.dbg_waiting_logs),
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             fontSize = 14.sp,
@@ -165,10 +167,11 @@ private fun EmptyLogCard() {
 private fun TandemLogCard(entry: String) {
     val context = LocalContext.current
     val clipboard = context.getSystemService(ClipboardManager::class.java)
+    val copiedMessage = stringResource(R.string.dbg_log_copied)
     Card(
         onClick = {
             clipboard?.setPrimaryClip(ClipData.newPlainText(null, entry))
-            Toast.makeText(context, "已复制日志", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
         }
     ) {
         Text(
@@ -205,7 +208,7 @@ private fun HexInputField(
             Box(contentAlignment = Alignment.CenterStart) {
                 if (value.isEmpty()) {
                     Text(
-                        text = "HEX",
+                        text = stringResource(R.string.dbg_hex),
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         fontSize = 14.sp,
                     )

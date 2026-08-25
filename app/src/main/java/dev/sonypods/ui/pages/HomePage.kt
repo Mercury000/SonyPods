@@ -40,6 +40,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
+import androidx.compose.ui.res.stringResource
 
 @Composable
 fun HomePage(
@@ -57,9 +58,9 @@ fun HomePage(
     val systemInfo = remember { homeSystemInfo(context) }
     val active = remember(xposedService) { hasRequiredBluetoothScopes(xposedService) }
     val inactiveSummary = if (xposedService == null) {
-        "等待 LSPosed 服务连接"
+        stringResource(R.string.home_wait_lsposed)
     } else {
-        "请在LSPosed中激活作用域"
+        stringResource(R.string.home_activate_scope)
     }
 
     LazyColumn(
@@ -107,8 +108,8 @@ private fun StatusGrid(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 StatusCard(active = active, inactiveSummary = inactiveSummary, bluetoothServiceResponsive = bluetoothServiceResponsive, modifier = Modifier.weight(1f).height(112.dp))
-                StatCard(title = "蓝牙状态", value = if (bluetoothEnabled) "已开启" else "未开启", modifier = Modifier.weight(1f).height(112.dp), onClick = onBluetoothStatusClick)
-                StatCard(title = "配对蓝牙", value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f).height(112.dp), onClick = onPairedBluetoothClick)
+                StatCard(title = stringResource(R.string.home_bt_status), value = if (bluetoothEnabled) stringResource(R.string.home_on) else stringResource(R.string.home_off), modifier = Modifier.weight(1f).height(112.dp), onClick = onBluetoothStatusClick)
+                StatCard(title = stringResource(R.string.home_paired_bt), value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f).height(112.dp), onClick = onPairedBluetoothClick)
             }
         } else {
             Row(
@@ -121,8 +122,8 @@ private fun StatusGrid(
                     modifier = Modifier.weight(1f).aspectRatio(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    StatCard(title = "蓝牙状态", value = if (bluetoothEnabled) "已开启" else "未开启", modifier = Modifier.weight(1f), onClick = onBluetoothStatusClick)
-                    StatCard(title = "配对蓝牙", value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f), onClick = onPairedBluetoothClick)
+                    StatCard(title = stringResource(R.string.home_bt_status), value = if (bluetoothEnabled) stringResource(R.string.home_on) else stringResource(R.string.home_off), modifier = Modifier.weight(1f), onClick = onBluetoothStatusClick)
+                    StatCard(title = stringResource(R.string.home_paired_bt), value = bondedDeviceCount.toString(), modifier = Modifier.weight(1f), onClick = onPairedBluetoothClick)
                 }
             }
         }
@@ -163,9 +164,9 @@ private fun StatusCard(active: Boolean, inactiveSummary: String, bluetoothServic
             Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                 Text(
                     text = when {
-                        !active -> "LSPosed 未激活"
-                        serviceTimeout -> "模块服务超时"
-                        else -> "模块已激活"
+                        !active -> stringResource(R.string.home_lsposed_inactive)
+                        serviceTimeout -> stringResource(R.string.home_service_timeout)
+                        else -> stringResource(R.string.home_module_active)
                     },
                     fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -174,8 +175,8 @@ private fun StatusCard(active: Boolean, inactiveSummary: String, bluetoothServic
                 Text(
                     text = when {
                         !active -> inactiveSummary
-                        serviceTimeout -> "模块服务未响应"
-                        else -> "模块服务已连接"
+                        serviceTimeout -> stringResource(R.string.home_service_no_response)
+                        else -> stringResource(R.string.home_service_connected)
                     },
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -237,12 +238,12 @@ private fun StatCard(title: String, value: String, modifier: Modifier = Modifier
 private fun InfoCard(systemInfo: HomeSystemInfo, xposedService: XposedService?) {
     Card {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            InfoText(title = "系统版本", content = systemInfo.systemVersion)
-            InfoText(title = "应用版本", content = systemInfo.appVersion)
-            InfoText(title = "Android 版本", content = systemInfo.androidVersion)
-            InfoText(title = "LSPosed 版本", content = lsposedVersion(xposedService).ifBlank { "未知" })
-            InfoText(title = "构建时间", content = systemInfo.buildDate.ifBlank { "未知" })
-            InfoText(title = "设备型号", content = systemInfo.deviceModel.ifBlank { "未知" }, bottomPadding = 0.dp)
+            InfoText(title = stringResource(R.string.home_system_version), content = systemInfo.systemVersion)
+            InfoText(title = stringResource(R.string.home_app_version), content = systemInfo.appVersion)
+            InfoText(title = stringResource(R.string.home_android_version), content = systemInfo.androidVersion)
+            InfoText(title = stringResource(R.string.home_lsposed_version), content = lsposedVersion(xposedService).ifBlank { stringResource(R.string.unknown_generic) })
+            InfoText(title = stringResource(R.string.home_build_date), content = systemInfo.buildDate.ifBlank { stringResource(R.string.unknown_generic) })
+            InfoText(title = stringResource(R.string.home_device_model), content = systemInfo.deviceModel.ifBlank { stringResource(R.string.unknown_generic) }, bottomPadding = 0.dp)
         }
     }
 }

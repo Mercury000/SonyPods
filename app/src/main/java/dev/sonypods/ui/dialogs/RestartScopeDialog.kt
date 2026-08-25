@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.annotation.StringRes
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import com.mercury.sonypods.R
@@ -31,7 +32,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 data class RestartScope(
     val packageName: String,
-    val label: String,
+    /** Display label resource; resolved where the dialog renders it. */
+    @get:StringRes val labelRes: Int,
 )
 
 @Composable
@@ -105,7 +107,7 @@ private fun RestartScopeRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = scope.label,
+                text = stringResource(scope.labelRes),
                 color = MiuixTheme.colorScheme.onSurface,
                 style = MiuixTheme.textStyles.headline1,
             )

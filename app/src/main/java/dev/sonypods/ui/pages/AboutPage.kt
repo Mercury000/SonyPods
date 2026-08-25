@@ -38,31 +38,31 @@ fun AboutPage(
         item {
             Card {
                 BasicComponent(
-                    title = "SonyPods",
+                    title = stringResource(R.string.about_sonypods),
                     summary = "https://github.com/Mercury000/SonyPods",
                     onClick = { context.openLink("https://github.com/Mercury000/SonyPods") }
                 )
                 BasicComponent(
-                    title = "OpenBuds",
+                    title = stringResource(R.string.about_openbuds),
                     summary = "https://github.com/IgnotusJee/OpenBuds",
                     onClick = { context.openLink("https://github.com/IgnotusJee/OpenBuds") }
                 )
                 BasicComponent(
-                    title = "OppoPods-Enhanced",
+                    title = stringResource(R.string.about_oppopods_enhanced),
                     summary = "https://github.com/1812z/OppoPods",
                     onClick = { context.openLink("https://github.com/1812z/OppoPods") }
                 )
                 BasicComponent(
-                    title = "OppoPods",
+                    title = stringResource(R.string.about_oppopods),
                     summary = "https://github.com/Leaf-lsgtky/OppoPods",
                     onClick = { context.openLink("https://github.com/Leaf-lsgtky/OppoPods") }
                 )
                 BasicComponent(
                     title = stringResource(R.string.based_on),
-                    summary = "HyperPods by Art_Chen"
+                    summary = stringResource(R.string.about_hyperpods)
                 )
                 BasicComponent(
-                    title = "Github",
+                    title = stringResource(R.string.about_github),
                     summary = "https://github.com/Art-Chen/HyperPods",
                     onClick = { context.openLink("https://github.com/Art-Chen/HyperPods") }
                 )

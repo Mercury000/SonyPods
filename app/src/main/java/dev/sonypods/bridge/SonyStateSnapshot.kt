@@ -607,7 +607,7 @@ data class SonyStateSnapshot(
                     supportsFileTransfer = state.multipointState.supportsFileTransfer,
                     playbackRight = state.multipointState.playbackRight,
                     activeSourceAddress = state.multipointState.activeSourceAddress,
-                    result = state.multipointState.result,
+                    resultCode = state.multipointState.resultCode,
                     resultAddress = state.multipointState.resultAddress,
                     connectedDevices = state.multipointState.connectedDevices.map { device ->
                         MultipointDeviceSnapshot(device.address, device.name, device.deviceClass, device.connectedStatus)
@@ -617,7 +617,7 @@ data class SonyStateSnapshot(
                     },
                     sourceSwitchEnabled = state.multipointState.sourceSwitchEnabled,
                     fixedSourceAddress = state.multipointState.fixedSourceAddress,
-                    sourceSwitchResult = state.multipointState.sourceSwitchResult,
+                    sourceSwitchResultCode = state.multipointState.sourceSwitchResultCode,
                     musicHandOverEnabled = state.multipointState.musicHandOverEnabled,
                     multipointEnabled = state.multipointState.multipointEnabled,
                     multipointTogglePending = state.multipointState.pendingMultipointToggle != null,
@@ -735,7 +735,6 @@ data class SonyStateSnapshot(
             supportsFileTransfer = if (getBoolean("file_transfer_known", false)) getBoolean("file_transfer") else null,
             playbackRight = getInt("playback_right", 0),
             activeSourceAddress = getString("active_source_address"),
-            result = getString("result"),
             resultAddress = getString("result_address"),
             connectedDevices = getParcelableArrayList<Bundle>("connected_devices").orEmpty().map { device ->
                 MultipointDeviceSnapshot(
@@ -755,7 +754,7 @@ data class SonyStateSnapshot(
             },
             sourceSwitchEnabled = if (getBoolean("source_switch_known", false)) getBoolean("source_switch_enabled") else null,
             fixedSourceAddress = getString("fixed_source_address"),
-            sourceSwitchResult = getString("source_switch_result"),
+            resultCode = if (getBoolean("mp_result_known", false)) getInt("mp_result_code") else null,
             musicHandOverEnabled = if (getBoolean("music_hand_over_known", false)) getBoolean("music_hand_over_enabled") else null,
             multipointEnabled = if (getBoolean("multipoint_enabled_known", false)) getBoolean("multipoint_enabled") else null,
             multipointTogglePending = getBoolean("multipoint_toggle_pending", false),
@@ -776,7 +775,10 @@ data class SonyStateSnapshot(
             }
             putInt("playback_right", playbackRight)
             activeSourceAddress?.let { putString("active_source_address", it) }
-            result?.let { putString("result", it) }
+            resultCode?.let {
+                putBoolean("mp_result_known", true)
+                putInt("mp_result_code", it)
+            }
             resultAddress?.let { putString("result_address", it) }
             putParcelableArrayList("connected_devices", ArrayList(connectedDevices.map { it.toBundle() }))
             putParcelableArrayList("history_devices", ArrayList(historyDevices.map { it.toBundle() }))
@@ -785,7 +787,7 @@ data class SonyStateSnapshot(
                 putBoolean("source_switch_enabled", it)
             }
             fixedSourceAddress?.let { putString("fixed_source_address", it) }
-            sourceSwitchResult?.let { putString("source_switch_result", it) }
+            sourceSwitchResultCode?.let { putInt("source_switch_result_code", it) }
             musicHandOverEnabled?.let {
                 putBoolean("music_hand_over_known", true)
                 putBoolean("music_hand_over_enabled", it)
@@ -829,13 +831,15 @@ data class MultipointSnapshot(
     /** connectedStatus value of the playback-right holder, 0 = none. */
     val playbackRight: Int = 0,
     val activeSourceAddress: String? = null,
-    val result: String? = null,
+    /** Raw multipoint action result code; the UI layer maps it to localized copy. */
+    val resultCode: Int? = null,
     val resultAddress: String? = null,
     val connectedDevices: List<MultipointDeviceSnapshot> = emptyList(),
     val historyDevices: List<MultipointDeviceSnapshot> = emptyList(),
     val sourceSwitchEnabled: Boolean? = null,
     val fixedSourceAddress: String? = null,
-    val sourceSwitchResult: String? = null,
+    /** Raw SourceSwitchControlResult code; localized by the UI layer if rendered. */
+    val sourceSwitchResultCode: Int? = null,
     val musicHandOverEnabled: Boolean? = null,
     /** "同时连接2台设备" — V2 Table1 GS multipoint toggle; null = unknown. */
     val multipointEnabled: Boolean? = null,

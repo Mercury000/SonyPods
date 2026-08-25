@@ -1,17 +1,25 @@
 package dev.sonypods.protocol
 
+import com.mercury.sonypods.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QuickAccessServiceCatalogTest {
     @Test
-    fun labels_matchSoundConnectServiceIds() {
-        assertEquals("网易云音乐", QuickAccessServiceCatalog.label(0x09))
-        assertEquals("QQ音乐", QuickAccessServiceCatalog.label(0x07))
-        assertEquals("腾讯小微", QuickAccessServiceCatalog.label(0x04))
-        assertEquals("服务（0x0B）", QuickAccessServiceCatalog.label(0x0B))
+    fun nameRes_matchSoundConnectServiceIds() {
+        assertEquals(R.string.qa_service_netease_music, QuickAccessServiceCatalog.nameRes(0x09))
+        assertEquals(R.string.qa_service_qq_music, QuickAccessServiceCatalog.nameRes(0x07))
+        assertEquals(R.string.qa_service_tencent_xiaowei, QuickAccessServiceCatalog.nameRes(0x04))
+    }
+
+    @Test
+    fun nameRes_unknownCodeReturnsNull_forUiSideFallback() {
+        // Region-specific / newer raw IDs render through the UI-side
+        // qa_service_unknown_fmt resource, not a catalog entry.
+        assertNull(QuickAccessServiceCatalog.nameRes(0x0B))
     }
 
     @Test

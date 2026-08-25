@@ -15,6 +15,7 @@ import android.graphics.drawable.Icon
 import android.os.Handler
 import android.os.Looper
 import com.xzakota.hyper.notification.focus.FocusNotification
+import dev.sonypods.utils.ModuleText
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.hook.Log
 import dev.sonypods.utils.PodImageLoader
@@ -326,7 +327,7 @@ object FocusIslandUtil {
                     appIconPkg = appIconTransparent
                     picProfile = picCase
                     picProfileDark = picCase
-                    title = "已连接"
+                    title = ModuleText.get(moduleContext, R.string.island_connected)
                     content = deviceName ?: "SonyPods"
                 }
                 island {

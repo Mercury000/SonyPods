@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.mercury.sonypods.R
 import dev.sonypods.protocol.ConnectionQualityMode
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -23,11 +25,11 @@ fun ConnectionQualityConfirmDialog(
     onCancel: () -> Unit,
 ) {
     OverlayDialog(
-        title = "更改蓝牙连接质量",
+        title = stringResource(R.string.connection_quality_change_title),
         summary = if (target == ConnectionQualityMode.SOUND_QUALITY_PRIOR) {
-            "重新连接到音频设备。此外，如果更改为声音质量优先，可能无法使用声音质量设置。是否更改？"
+            stringResource(R.string.connection_quality_confirm_sound_body)
         } else {
-            "重新连接到音频设备。是否更改？"
+            stringResource(R.string.connection_quality_confirm_connection_body)
         },
         show = true,
         onDismissRequest = onCancel,
@@ -37,12 +39,12 @@ fun ConnectionQualityConfirmDialog(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TextButton(
-                text = "取消",
+                text = stringResource(R.string.cancel),
                 onClick = onCancel,
                 modifier = Modifier.weight(1f),
             )
             TextButton(
-                text = "确认",
+                text = stringResource(R.string.confirm),
                 onClick = onConfirm,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.textButtonColorsPrimary(),

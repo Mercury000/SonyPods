@@ -26,6 +26,8 @@ import android.widget.RelativeLayout
 import android.widget.TextView
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import com.mercury.sonypods.R
+import dev.sonypods.utils.ModuleText
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.utils.PodImageLoader
 
@@ -1399,7 +1401,7 @@ object OfficialFastConnectDialogHook : HookContext() {
 
         val boxLabel = findViewByResourceName(roots, activity, "textViewBox") as? TextView
         boxLabel?.let {
-            it.text = "电量"
+            it.text = ModuleText.get(activity, R.string.battery_label)
             it.visibility = View.VISIBLE
         }
 

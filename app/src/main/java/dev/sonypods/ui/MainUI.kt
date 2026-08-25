@@ -751,7 +751,7 @@ fun MainUI(
                         scrollBehavior = aboutScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                             }
                         }
                     )
@@ -801,7 +801,7 @@ fun MainUI(
                         scrollBehavior = themeScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                             }
                         }
                     )
@@ -862,12 +862,12 @@ fun MainUI(
                         scrollBehavior = debugScrollBehavior,
                         navigationIcon = {
                             IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                             }
                         },
                         actions = {
                             IconButton(onClick = { clearLogsRequest++ }) {
-                                Icon(imageVector = MiuixIcons.Delete, contentDescription = "Clear logs")
+                                Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
                             }
                         }
                     )

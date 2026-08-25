@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -23,6 +24,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mercury.sonypods.R
 import dev.sonypods.bridge.QuickAccessActionSnapshot
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.data.GestureOperationAction
@@ -84,7 +86,7 @@ internal fun GestureOperationsPage(
         if (keys.isEmpty()) {
             item {
                 Text(
-                    text = "正在读取耳机支持的手势操作…",
+                    text = stringResource(R.string.gesture_reading),
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
@@ -133,7 +135,7 @@ private fun GestureKeyCard(
         if (key.availablePresets.isNotEmpty()) {
             OverlayDropdownPreference(
                 title = gestureKeyLabel(key.key, key.type),
-                items = key.availablePresets.map(::gesturePresetLabel),
+                items = key.availablePresets.map { gesturePresetLabel(it) },
                 selectedIndex = key.availablePresets.indexOf(key.currentPreset).coerceAtLeast(0),
                 onSelectedIndexChange = { index ->
                     key.availablePresets.getOrNull(index)?.let {
@@ -191,7 +193,7 @@ private fun QuickAccessCard(
 ) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(
-            title = "Quick Access",
+            title = stringResource(R.string.qa_card_title),
         )
         actions.forEachIndexed { index, action ->
             val current = currentFunctionCodes.getOrNull(index)
@@ -210,7 +212,7 @@ private fun QuickAccessCard(
             if (functions.isNotEmpty()) {
                 OverlayDropdownPreference(
                     title = gestureActionLabel(action.actionCode),
-                    items = functions.map(::quickAccessFunctionLabel),
+                    items = functions.map { quickAccessFunctionLabel(it) },
                     selectedIndex = functions.indexOf(current).coerceAtLeast(0),
                     onSelectedIndexChange = { selected ->
                         functions.getOrNull(selected)?.let { onFunctionChange(index, it) }
@@ -228,15 +230,15 @@ private fun AmbientGestureCard(
     onSelectionChange: (Set<GestureNoiseControlMode>) -> Unit,
 ) {
     val options = buildList {
-        add(GestureNoiseControlMode.NOISE_CANCELLING to "降噪")
-        if (supportsNcss) add(GestureNoiseControlMode.NOISE_CANCELLING_SPEECH to "降噪增强（NCSS）")
-        add(GestureNoiseControlMode.AMBIENT_SOUND to "环境声音")
-        add(GestureNoiseControlMode.OFF to "关闭")
+        add(GestureNoiseControlMode.NOISE_CANCELLING to stringResource(R.string.nc_short))
+        if (supportsNcss) add(GestureNoiseControlMode.NOISE_CANCELLING_SPEECH to stringResource(R.string.ncss_short))
+        add(GestureNoiseControlMode.AMBIENT_SOUND to stringResource(R.string.gesture_ambient))
+        add(GestureNoiseControlMode.OFF to stringResource(R.string.off))
     }
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(
-            title = "环境声音控制",
-            summary = "每次按下触摸感应器切换所选设置（至少选择两种）",
+            title = stringResource(R.string.anc_control_title),
+            summary = stringResource(R.string.anc_control_summary),
         )
         Column(
             modifier = Modifier
@@ -268,7 +270,7 @@ private fun AmbientGestureCard(
             }
             if (selection.size < 2) {
                 Text(
-                    text = "至少选择两种设置",
+                    text = stringResource(R.string.anc_pick_two),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     color = MiuixTheme.colorScheme.error,
                     fontSize = 12.sp,
@@ -355,112 +357,122 @@ private fun AssignableSettingsFunction.supportsGestureNcss(): Boolean = this in 
     AssignableSettingsFunction.NCSS_OFF,
 )
 
+@Composable
 private fun gestureKeyLabel(key: AssignableSettingsKey, type: AssignableSettingsType): String = when {
-    type == AssignableSettingsType.FACE_TAP -> "面部轻击"
+    type == AssignableSettingsType.FACE_TAP -> stringResource(R.string.gesture_face_tap)
     else -> when (key) {
-        AssignableSettingsKey.LEFT_SIDE -> "左耳"
-        AssignableSettingsKey.RIGHT_SIDE -> "右耳"
-        AssignableSettingsKey.CUSTOM -> "自定义"
-        AssignableSettingsKey.C -> "C 按键"
-        AssignableSettingsKey.NC_AMB_KEY -> "降噪/环境声按键"
-        AssignableSettingsKey.NC_AMBIENT_KEY -> "降噪/环境声按键 2"
-        AssignableSettingsKey.OUT_OF_RANGE -> "未知按键"
+        AssignableSettingsKey.LEFT_SIDE -> stringResource(R.string.gesture_key_left)
+        AssignableSettingsKey.RIGHT_SIDE -> stringResource(R.string.side_right)
+        AssignableSettingsKey.CUSTOM -> stringResource(R.string.gesture_key_custom)
+        AssignableSettingsKey.C -> stringResource(R.string.gesture_key_c)
+        AssignableSettingsKey.NC_AMB_KEY -> stringResource(R.string.gesture_key_nc_amb)
+        AssignableSettingsKey.NC_AMBIENT_KEY -> stringResource(R.string.gesture_key_nc_amb_2)
+        AssignableSettingsKey.OUT_OF_RANGE -> stringResource(R.string.gesture_key_unknown)
     }
 }
 
+@Composable
 private fun gestureActionLabel(action: AssignableSettingsAction): String = gestureActionLabel(action.code.toInt() and 0xFF)
 
+@Composable
 private fun gestureActionLabel(actionCode: Int): String = when (actionCode) {
-    0x00 -> "单击"
-    0x01 -> "双击"
-    0x02 -> "三击"
-    0x03 -> "重复点击"
-    0x10 -> "单击并按住"
-    0x11 -> "双击并按住"
-    0x21 -> "长按开始激活"
-    0x22 -> "激活期间长按"
-    else -> "未知动作（0x%02X）".format(actionCode)
+    0x00 -> stringResource(R.string.tap_single)
+    0x01 -> stringResource(R.string.tap_double)
+    0x02 -> stringResource(R.string.tap_triple)
+    0x03 -> stringResource(R.string.tap_repeat)
+    0x10 -> stringResource(R.string.gesture_act_single_hold)
+    0x11 -> stringResource(R.string.gesture_act_double_hold)
+    0x21 -> stringResource(R.string.gesture_act_hold_start)
+    0x22 -> stringResource(R.string.gesture_act_hold_active)
+    else -> stringResource(R.string.gesture_act_unknown_fmt, actionCode)
 }
 
+@Composable
 private fun gestureFunctionLabel(function: AssignableSettingsFunction): String = when (function) {
-    AssignableSettingsFunction.NO_FUNCTION -> "无操作"
-    AssignableSettingsFunction.NC_ASM_OFF -> "降噪/环境声音/关闭"
-    AssignableSettingsFunction.NC_ASM -> "降噪/环境声音"
-    AssignableSettingsFunction.NC_OFF -> "降噪/关闭"
-    AssignableSettingsFunction.ASM_OFF -> "环境声音/关闭"
-    AssignableSettingsFunction.QUICK_ATTENTION -> "快速注意"
-    AssignableSettingsFunction.NC_OPTIMIZER -> "降噪优化"
-    AssignableSettingsFunction.PLAY_PAUSE -> "播放/暂停"
-    AssignableSettingsFunction.NEXT_TRACK -> "下一曲"
-    AssignableSettingsFunction.PREV_TRACK -> "上一曲"
-    AssignableSettingsFunction.VOLUME_UP -> "音量增加"
-    AssignableSettingsFunction.VOLUME_DOWN -> "音量减少"
-    AssignableSettingsFunction.VOICE_RECOGNITION -> "语音助手"
-    AssignableSettingsFunction.GET_YOUR_NOTIFICATION -> "读取通知"
-    AssignableSettingsFunction.TALK_TO_GOOGLE_ASSISTANT -> "Google 助理"
-    AssignableSettingsFunction.STOP_GOOGLE_ASSISTANT -> "停止 Google 助理"
-    AssignableSettingsFunction.VOICE_INPUT_CANCEL -> "取消语音输入"
-    AssignableSettingsFunction.TALK_TO_TENCENT_XIAOWEI -> "腾讯小微"
-    AssignableSettingsFunction.CANCEL_VOICE_RECOGNITION -> "取消语音识别"
-    AssignableSettingsFunction.VOICE_INPUT_AMAZON_ALEXA -> "Amazon Alexa"
-    AssignableSettingsFunction.CANCEL_AMAZON_ALEXA -> "取消 Alexa"
-    AssignableSettingsFunction.CANCEL_TENCENT_XIAOWEI -> "取消腾讯小微"
-    AssignableSettingsFunction.NEXT_TRACK_STOP_GEMINI_LIVE -> "下一曲并停止 Gemini"
-    AssignableSettingsFunction.PREV_TRACK_STOP_GEMINI_LIVE -> "上一曲并停止 Gemini"
-    AssignableSettingsFunction.LAUNCH_MLP -> "启动 MLP"
-    AssignableSettingsFunction.TALK_TO_YOUR_MLP -> "MLP 助手"
-    AssignableSettingsFunction.SPTF_ONE_TOUCH -> "Spotify 点按"
-    AssignableSettingsFunction.QUICK_ACCESS1 -> "Quick Access 1"
-    AssignableSettingsFunction.QUICK_ACCESS2 -> "Quick Access 2"
-    AssignableSettingsFunction.TALK_TO_TENCENT_XIAOWEI_CANCEL -> "腾讯小微/取消"
-    AssignableSettingsFunction.Q_MSC_ONE_TOUCH -> "QQ Music 点按"
-    AssignableSettingsFunction.TEAMS -> "Teams"
-    AssignableSettingsFunction.TEAMS_VOICE_SKILLS -> "Teams 语音技能"
-    AssignableSettingsFunction.NC_NCSS_ASM_OFF -> "降噪/降噪增强/环境声音/关闭"
-    AssignableSettingsFunction.NC_NCSS_ASM -> "降噪/降噪增强/环境声音"
-    AssignableSettingsFunction.NC_NCSS_OFF -> "降噪/降噪增强/关闭"
-    AssignableSettingsFunction.NCSS_ASM_OFF -> "降噪增强/环境声音/关闭"
-    AssignableSettingsFunction.NC_NCSS -> "降噪/降噪增强"
-    AssignableSettingsFunction.NCSS_ASM -> "降噪增强/环境声音"
-    AssignableSettingsFunction.NCSS_OFF -> "降噪增强/关闭"
-    AssignableSettingsFunction.AMB_SETTING -> "环境声音设置"
-    AssignableSettingsFunction.STANDARD_VOICE_SOUND -> "标准语音声音"
-    AssignableSettingsFunction.LISTENING_MODE -> "聆听模式"
-    AssignableSettingsFunction.MIC_MUTE -> "麦克风静音"
-    AssignableSettingsFunction.GAME_UP -> "游戏模式"
-    AssignableSettingsFunction.CHAT_UP -> "聊天模式"
-    AssignableSettingsFunction.OUT_OF_RANGE -> "未知功能"
+    AssignableSettingsFunction.NO_FUNCTION -> stringResource(R.string.fn_no_op)
+    AssignableSettingsFunction.NC_ASM_OFF -> stringResource(R.string.fn_nc_asm_off)
+    AssignableSettingsFunction.NC_ASM -> stringResource(R.string.fn_nc_asm)
+    AssignableSettingsFunction.NC_OFF -> stringResource(R.string.fn_nc_off)
+    AssignableSettingsFunction.ASM_OFF -> stringResource(R.string.fn_asm_off)
+    AssignableSettingsFunction.QUICK_ATTENTION -> stringResource(R.string.fn_quick_attention)
+    AssignableSettingsFunction.NC_OPTIMIZER -> stringResource(R.string.fn_nc_optimizer)
+    AssignableSettingsFunction.PLAY_PAUSE -> stringResource(R.string.fn_play_pause)
+    AssignableSettingsFunction.NEXT_TRACK -> stringResource(R.string.fn_next_track)
+    AssignableSettingsFunction.PREV_TRACK -> stringResource(R.string.fn_prev_track)
+    AssignableSettingsFunction.VOLUME_UP -> stringResource(R.string.fn_volume_up)
+    AssignableSettingsFunction.VOLUME_DOWN -> stringResource(R.string.fn_volume_down)
+    AssignableSettingsFunction.VOICE_RECOGNITION -> stringResource(R.string.fn_voice_assistant)
+    AssignableSettingsFunction.GET_YOUR_NOTIFICATION -> stringResource(R.string.fn_read_notification)
+    AssignableSettingsFunction.TALK_TO_GOOGLE_ASSISTANT -> stringResource(R.string.fn_google_assistant)
+    AssignableSettingsFunction.STOP_GOOGLE_ASSISTANT -> stringResource(R.string.fn_stop_google_assistant)
+    AssignableSettingsFunction.VOICE_INPUT_CANCEL -> stringResource(R.string.fn_cancel_voice_input)
+    AssignableSettingsFunction.TALK_TO_TENCENT_XIAOWEI -> stringResource(R.string.fn_tencent_xiaowei)
+    AssignableSettingsFunction.CANCEL_VOICE_RECOGNITION -> stringResource(R.string.fn_cancel_voice_recognition)
+    AssignableSettingsFunction.VOICE_INPUT_AMAZON_ALEXA -> stringResource(R.string.fn_alexa)
+    AssignableSettingsFunction.CANCEL_AMAZON_ALEXA -> stringResource(R.string.fn_cancel_alexa)
+    AssignableSettingsFunction.CANCEL_TENCENT_XIAOWEI -> stringResource(R.string.fn_cancel_xiaowei)
+    AssignableSettingsFunction.NEXT_TRACK_STOP_GEMINI_LIVE -> stringResource(R.string.fn_next_stop_gemini)
+    AssignableSettingsFunction.PREV_TRACK_STOP_GEMINI_LIVE -> stringResource(R.string.fn_prev_stop_gemini)
+    AssignableSettingsFunction.LAUNCH_MLP -> stringResource(R.string.fn_launch_mlp)
+    AssignableSettingsFunction.TALK_TO_YOUR_MLP -> stringResource(R.string.fn_mlp_assistant)
+    AssignableSettingsFunction.SPTF_ONE_TOUCH -> stringResource(R.string.fn_spotify_tap)
+    AssignableSettingsFunction.QUICK_ACCESS1 -> stringResource(R.string.fn_quick_access_1)
+    AssignableSettingsFunction.QUICK_ACCESS2 -> stringResource(R.string.fn_quick_access_2)
+    AssignableSettingsFunction.TALK_TO_TENCENT_XIAOWEI_CANCEL -> stringResource(R.string.fn_xiaowei_cancel)
+    AssignableSettingsFunction.Q_MSC_ONE_TOUCH -> stringResource(R.string.fn_qq_music_tap)
+    AssignableSettingsFunction.TEAMS -> stringResource(R.string.fn_teams)
+    AssignableSettingsFunction.TEAMS_VOICE_SKILLS -> stringResource(R.string.fn_teams_voice)
+    AssignableSettingsFunction.NC_NCSS_ASM_OFF -> stringResource(R.string.fn_nc_ncss_asm_off)
+    AssignableSettingsFunction.NC_NCSS_ASM -> stringResource(R.string.fn_nc_ncss_asm)
+    AssignableSettingsFunction.NC_NCSS_OFF -> stringResource(R.string.fn_nc_ncss_off)
+    AssignableSettingsFunction.NCSS_ASM_OFF -> stringResource(R.string.fn_ncss_asm_off)
+    AssignableSettingsFunction.NC_NCSS -> stringResource(R.string.fn_nc_ncss)
+    AssignableSettingsFunction.NCSS_ASM -> stringResource(R.string.fn_ncss_asm)
+    AssignableSettingsFunction.NCSS_OFF -> stringResource(R.string.fn_ncss_off)
+    AssignableSettingsFunction.AMB_SETTING -> stringResource(R.string.fn_amb_setting)
+    AssignableSettingsFunction.STANDARD_VOICE_SOUND -> stringResource(R.string.fn_standard_voice)
+    AssignableSettingsFunction.LISTENING_MODE -> stringResource(R.string.fn_listening_mode)
+    AssignableSettingsFunction.MIC_MUTE -> stringResource(R.string.fn_mic_mute)
+    AssignableSettingsFunction.GAME_UP -> stringResource(R.string.fn_game_mode)
+    AssignableSettingsFunction.CHAT_UP -> stringResource(R.string.fn_chat_mode)
+    AssignableSettingsFunction.OUT_OF_RANGE -> stringResource(R.string.fn_unknown)
 }
 
+@Composable
 private fun gesturePresetLabel(preset: AssignableSettingsPreset): String = when (preset) {
-    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL -> "环境声音控制"
-    AssignableSettingsPreset.VOLUME_CONTROL -> "音量控制"
-    AssignableSettingsPreset.PLAYBACK_CONTROL -> "播放控制"
-    AssignableSettingsPreset.TRACK_CONTROL -> "曲目控制"
-    AssignableSettingsPreset.PLAYBACK_CONTROL_VOICE_ASSISTANT_LIMITATION -> "播放控制（语音助手限制）"
-    AssignableSettingsPreset.VOICE_RECOGNITION -> "语音识别"
-    AssignableSettingsPreset.GOOGLE_ASSIST -> "Google 助理"
-    AssignableSettingsPreset.AMAZON_ALEXA -> "Amazon Alexa"
-    AssignableSettingsPreset.TENCENT_XIAOWEI -> "腾讯小微"
-    AssignableSettingsPreset.MS -> "Microsoft"
-    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS -> "环境声音控制/Quick Access"
-    AssignableSettingsPreset.QUICK_ACCESS -> "Quick Access"
-    AssignableSettingsPreset.TENCENT_XIAOWEI_Q_MSC -> "腾讯小微 Q MSC"
-    AssignableSettingsPreset.TEAMS -> "Teams"
-    AssignableSettingsPreset.GOOGLE_ASSISTANT_BT_CLASSIC_ONLY -> "Google 助理（经典蓝牙）"
-    AssignableSettingsPreset.AMAZON_ALEXA_BT_CLASSIC_ONLY -> "Alexa（经典蓝牙）"
-    AssignableSettingsPreset.TENCENT_XIAOWEI_BT_CLASSIC_ONLY -> "腾讯小微（经典蓝牙）"
-    AssignableSettingsPreset.QUICK_ACCESS_BT_CLASSIC_ONLY -> "Quick Access（经典蓝牙）"
-    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS_BT_CLASSIC_ONLY -> "环境声音控制/Quick Access（经典蓝牙）"
-    AssignableSettingsPreset.TENCENT_XIAOWEI_Q_MSC_BT_CLASSIC_ONLY -> "腾讯小微 Q MSC（经典蓝牙）"
-    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_MIC -> "环境声音/麦克风"
-    AssignableSettingsPreset.LISTENING_MODE_QUICK_ACCESS -> "聆听模式/Quick Access"
-    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_LISTENING_MODE -> "环境声音/聆听模式"
-    AssignableSettingsPreset.CHAT_MIX -> "游戏/聊天混音"
-    AssignableSettingsPreset.CUSTOM1 -> "自定义 1"
-    AssignableSettingsPreset.CUSTOM2 -> "自定义 2"
-    AssignableSettingsPreset.NO_FUNCTION -> "无操作"
-    AssignableSettingsPreset.OUT_OF_RANGE -> "未知操作组"
+    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL -> stringResource(R.string.anc_control_title)
+    AssignableSettingsPreset.VOLUME_CONTROL -> stringResource(R.string.preset_volume_control)
+    AssignableSettingsPreset.PLAYBACK_CONTROL -> stringResource(R.string.preset_playback_control)
+    AssignableSettingsPreset.TRACK_CONTROL -> stringResource(R.string.preset_track_control)
+    AssignableSettingsPreset.PLAYBACK_CONTROL_VOICE_ASSISTANT_LIMITATION -> stringResource(R.string.preset_playback_voice_limit)
+    AssignableSettingsPreset.VOICE_RECOGNITION -> stringResource(R.string.preset_voice_recognition)
+    AssignableSettingsPreset.GOOGLE_ASSIST -> stringResource(R.string.fn_google_assistant)
+    AssignableSettingsPreset.AMAZON_ALEXA -> stringResource(R.string.fn_alexa)
+    AssignableSettingsPreset.TENCENT_XIAOWEI -> stringResource(R.string.fn_tencent_xiaowei)
+    AssignableSettingsPreset.MS -> stringResource(R.string.fn_microsoft)
+    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS -> stringResource(R.string.preset_amb_quick_access)
+    AssignableSettingsPreset.QUICK_ACCESS -> stringResource(R.string.qa_card_title)
+    AssignableSettingsPreset.TENCENT_XIAOWEI_Q_MSC -> stringResource(R.string.preset_xiaowei_qmsc)
+    AssignableSettingsPreset.TEAMS -> stringResource(R.string.fn_teams)
+    AssignableSettingsPreset.GOOGLE_ASSISTANT_BT_CLASSIC_ONLY -> stringResource(R.string.preset_google_bt)
+    AssignableSettingsPreset.AMAZON_ALEXA_BT_CLASSIC_ONLY -> stringResource(R.string.preset_alexa_bt)
+    AssignableSettingsPreset.TENCENT_XIAOWEI_BT_CLASSIC_ONLY -> stringResource(R.string.preset_xiaowei_bt)
+    AssignableSettingsPreset.QUICK_ACCESS_BT_CLASSIC_ONLY -> stringResource(R.string.preset_quick_access_bt)
+    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_QUICK_ACCESS_BT_CLASSIC_ONLY -> stringResource(R.string.preset_amb_qa_bt)
+    AssignableSettingsPreset.TENCENT_XIAOWEI_Q_MSC_BT_CLASSIC_ONLY -> stringResource(R.string.preset_xiaowei_qmsc_bt)
+    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_MIC -> stringResource(R.string.preset_ambient_mic)
+    AssignableSettingsPreset.LISTENING_MODE_QUICK_ACCESS -> stringResource(R.string.preset_listening_qa)
+    AssignableSettingsPreset.AMBIENT_SOUND_CONTROL_LISTENING_MODE -> stringResource(R.string.preset_ambient_listening)
+    AssignableSettingsPreset.CHAT_MIX -> stringResource(R.string.preset_chat_mix)
+    AssignableSettingsPreset.CUSTOM1 -> stringResource(R.string.custom_1)
+    AssignableSettingsPreset.CUSTOM2 -> stringResource(R.string.custom_2)
+    AssignableSettingsPreset.NO_FUNCTION -> stringResource(R.string.fn_no_op)
+    AssignableSettingsPreset.OUT_OF_RANGE -> stringResource(R.string.preset_unknown)
 }
 
-private fun quickAccessFunctionLabel(code: Int): String = QuickAccessServiceCatalog.label(code)
+@Composable
+private fun quickAccessFunctionLabel(code: Int): String {
+    val res = QuickAccessServiceCatalog.nameRes(code)
+        ?: return stringResource(R.string.qa_service_unknown_fmt, code)
+    return stringResource(res)
+}

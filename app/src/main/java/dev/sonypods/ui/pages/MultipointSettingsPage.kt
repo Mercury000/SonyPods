@@ -14,11 +14,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mercury.sonypods.R
 import dev.sonypods.bridge.MultipointDeviceSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
 import dev.sonypods.bridge.SonyStateSnapshot
@@ -65,7 +67,7 @@ internal fun MultipointSettingsPage(
     actions: SonyDetailActions,
 ) {
     val state = uiState.multipoint
-    val headphoneName = uiState.displayName.ifBlank { "耳机" }
+    val headphoneName = uiState.displayName.ifBlank { stringResource(R.string.mp_default_headphone_name) }
     val sourceSwitchSupported = state.sourceSwitchEnabled != null
     val sourceKeepEnabled = state.sourceSwitchEnabled == true
     val multipointToggleSupported = state.multipointEnabled != null
@@ -104,8 +106,8 @@ internal fun MultipointSettingsPage(
             if (multipointToggleSupported) {
                 Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                     SwitchPreference(
-                        title = "同时连接2台设备",
-                        summary = if (leAudioRestricted) "在通过 LE Audio 连接时，此功能不可用" else null,
+                        title = stringResource(R.string.mp_connect_two_title),
+                        summary = if (leAudioRestricted) stringResource(R.string.feature_unavailable_over_le_audio) else null,
                         checked = state.multipointEnabled == true,
                         onCheckedChange = { enabled ->
                             if (!state.multipointTogglePending && !leAudioRestricted) {
@@ -121,9 +123,9 @@ internal fun MultipointSettingsPage(
         item("description") {
             Text(
                 text = if (!multipointDisabled && sourceSwitchSupported) {
-                    "耳机可以同时连接 2 台蓝牙设备。\n要手动切换播放设备，请在已连接设备列表中点按目标设备；也可以通过设备菜单固定播放设备。"
+                    stringResource(R.string.mp_intro_body_1)
                 } else {
-                    "耳机可以同时连接 2 台蓝牙设备。"
+                    stringResource(R.string.mp_intro_body_2)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -135,7 +137,7 @@ internal fun MultipointSettingsPage(
 
         if (!multipointDisabled) {
             item("connected-header") {
-                SmallTitle(text = "已连接", modifier = Modifier.fillMaxWidth())
+                SmallTitle(text = stringResource(R.string.mp_connected), modifier = Modifier.fillMaxWidth())
             }
 
             item("connected-card") {
@@ -172,7 +174,7 @@ internal fun MultipointSettingsPage(
 
         if (!multipointDisabled && state.historyDevices.isNotEmpty()) {
             item("history-header") {
-                SmallTitle(text = "已配对", modifier = Modifier.fillMaxWidth())
+                SmallTitle(text = stringResource(R.string.mp_paired), modifier = Modifier.fillMaxWidth())
             }
             item("history-card") {
                 Card(modifier = Modifier.padding(horizontal = 12.dp)) {
@@ -199,7 +201,7 @@ internal fun MultipointSettingsPage(
                 Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                     if (state.pairingMode) {
                         Text(
-                            text = "请在要连接设备的蓝牙设置中选择「$headphoneName」。",
+                            text = stringResource(R.string.mp_scan_hint, headphoneName),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -207,7 +209,7 @@ internal fun MultipointSettingsPage(
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
                         TextButton(
-                            text = "停止搜索",
+                            text = stringResource(R.string.mp_stop_scan),
                             onClick = { actions.onMultipointPairingModeChange(false) },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -216,7 +218,7 @@ internal fun MultipointSettingsPage(
                         )
                     } else {
                         BasicComponent(
-                            title = "连接新设备",
+                            title = stringResource(R.string.mp_connect_new),
                             titleColor = top.yukonga.miuix.kmp.basic.BasicComponentDefaults.titleColor(
                                 color = MiuixTheme.colorScheme.primary,
                             ),
@@ -246,13 +248,13 @@ internal fun MultipointSettingsPage(
 
     // Official Msg_MultiPoint_ConfirmToDisconnect: "Disconnect %s?".
     OverlayDialog(
-        title = "断开连接",
-        summary = pendingDisconnect?.let { "要断开与 ${it.name.ifBlank { it.address }} 的连接吗？" },
+        title = stringResource(R.string.mp_disconnect),
+        summary = pendingDisconnect?.let { stringResource(R.string.mp_disconnect_confirm_name, it.name.ifBlank { it.address }) },
         show = pendingDisconnect != null,
         onDismissRequest = { pendingDisconnect = null },
     ) {
         DialogButtons(
-            confirmText = "断开",
+            confirmText = stringResource(R.string.mp_disconnect_action),
             onCancel = { pendingDisconnect = null },
             onConfirm = {
                 pendingDisconnect?.let { actions.onMultipointDisconnect(it.address) }
@@ -263,16 +265,16 @@ internal fun MultipointSettingsPage(
 
     // Official Msg_MultiPoint_DeviceRemoveConfirmation.
     OverlayDialog(
-        title = "取消配对",
+        title = stringResource(R.string.mp_unpair),
         summary = pendingUnpair?.let { device ->
             val label = device.name.ifBlank { device.address }
-            "要取消 $label 的配对吗？\n取消配对后如需重新连接，请先在 $label 上取消与 $headphoneName 的配对，然后重新进行配对。"
+            stringResource(R.string.mp_unpair_confirm_body, label, headphoneName)
         },
         show = pendingUnpair != null,
         onDismissRequest = { pendingUnpair = null },
     ) {
         DialogButtons(
-            confirmText = "取消配对",
+            confirmText = stringResource(R.string.mp_unpair),
             onCancel = { pendingUnpair = null },
             onConfirm = {
                 pendingUnpair?.let { actions.onMultipointUnpair(it.address) }
@@ -283,13 +285,13 @@ internal fun MultipointSettingsPage(
 
     // Official Msg_MultiPoint_CannotEnterPairngMode_Title/_Description.
     OverlayDialog(
-        title = "需要断开当前连接的设备",
-        summary = "已连接的设备数量达到上限。请先断开其中一台设备，然后再连接新设备。",
+        title = stringResource(R.string.mp_disconnect_required_title),
+        summary = stringResource(R.string.mp_disconnect_required_body),
         show = showMaxReached,
         onDismissRequest = { showMaxReached = false },
     ) {
         TextButton(
-            text = "知道了",
+            text = stringResource(R.string.mp_got_it),
             onClick = { showMaxReached = false },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.textButtonColorsPrimary(),
@@ -298,13 +300,13 @@ internal fun MultipointSettingsPage(
 
     // Official Msg_MultiPoint_change_player (models without source switch).
     OverlayDialog(
-        title = "切换播放设备",
-        summary = "此耳机不支持在 App 中切换播放设备，请直接在要播放的设备上开始播放。",
+        title = stringResource(R.string.mp_switch_playback_title),
+        summary = stringResource(R.string.mp_switch_playback_body),
         show = showSwitchUnsupported,
         onDismissRequest = { showSwitchUnsupported = false },
     ) {
         TextButton(
-            text = "知道了",
+            text = stringResource(R.string.mp_got_it),
             onClick = { showSwitchUnsupported = false },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.textButtonColorsPrimary(),
@@ -329,17 +331,17 @@ private fun ConnectedSlotRow(
     val holdsPlayback = device != null && state.playbackRight > 0 &&
         device.connectedStatus == state.playbackRight
     BasicComponent(
-        title = device?.name?.ifBlank { device.address } ?: "未连接",
+        title = device?.name?.ifBlank { device.address } ?: stringResource(R.string.mp_not_connected),
         summary = when {
             device == null -> null
             inProgressLabel(state, device) != null -> inProgressLabel(state, device)
-            holdsPlayback && sourceKeepEnabled -> "已固定为播放设备"
-            holdsPlayback -> "正在播放"
+            holdsPlayback && sourceKeepEnabled -> stringResource(R.string.mp_fixed_as_playback)
+            holdsPlayback -> stringResource(R.string.cd_now_playing)
             else -> null
         },
         startAction = {
             Text(
-                text = "$slot.",
+                text = stringResource(R.string.mp_slot_number, slot),
                 fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
@@ -350,7 +352,7 @@ private fun ConnectedSlotRow(
                 // 裸 Icon 需要显式垂直居中才能与其对齐。
                 Icon(
                     imageVector = MiuixIcons.VolumeUp,
-                    contentDescription = "正在播放",
+                    contentDescription = stringResource(R.string.cd_now_playing),
                     modifier = Modifier
                         .align(Alignment.CenterVertically)
                         .size(20.dp),
@@ -363,23 +365,23 @@ private fun ConnectedSlotRow(
                         items = buildList {
                             if (sourceSwitchSupported) {
                                 if (holdsPlayback && !sourceKeepEnabled) {
-                                    add(DropdownItem(text = "固定播放设备", onClick = onFixPlayback))
+                                    add(DropdownItem(text = stringResource(R.string.mp_fix_playback), onClick = onFixPlayback))
                                 }
                                 if (!holdsPlayback) {
-                                    add(DropdownItem(text = "切换播放设备并固定", onClick = { onSwitchAndFix(device) }))
+                                    add(DropdownItem(text = stringResource(R.string.mp_switch_and_fix), onClick = { onSwitchAndFix(device) }))
                                 }
                                 if (holdsPlayback && sourceKeepEnabled) {
-                                    add(DropdownItem(text = "取消固定", onClick = onUnfix))
+                                    add(DropdownItem(text = stringResource(R.string.mp_unfix), onClick = onUnfix))
                                 }
                             }
-                            add(DropdownItem(text = "断开连接", onClick = { onDisconnect(device) }))
-                            add(DropdownItem(text = "取消配对", onClick = { onUnpair(device) }))
+                            add(DropdownItem(text = stringResource(R.string.mp_disconnect), onClick = { onDisconnect(device) }))
+                            add(DropdownItem(text = stringResource(R.string.mp_unpair), onClick = { onUnpair(device) }))
                         },
                     ),
                 ) {
                     Icon(
                         imageVector = MiuixIcons.More,
-                        contentDescription = "更多选项",
+                        contentDescription = stringResource(R.string.cd_more_options),
                         tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
                     )
                 }
@@ -407,12 +409,12 @@ private fun HistoryDeviceRow(
         endActions = {
             OverlayIconDropdownMenu(
                 entry = DropdownEntry(
-                    items = listOf(DropdownItem(text = "取消配对", onClick = onUnpair)),
+                    items = listOf(DropdownItem(text = stringResource(R.string.mp_unpair), onClick = onUnpair)),
                 ),
             ) {
                 Icon(
                     imageVector = MiuixIcons.More,
-                    contentDescription = "更多选项",
+                    contentDescription = stringResource(R.string.cd_more_options),
                     tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
                 )
             }
@@ -422,11 +424,42 @@ private fun HistoryDeviceRow(
     )
 }
 
-/** Per-row in-progress text from the latest connectivity NTFY (e.g. "正在连接"). */
+/**
+ * Per-row in-progress text from the latest connectivity NTFY. The engine only
+ * carries the raw result code; the localized copy lives in string resources and
+ * the in-flight set is decided by code, never by sniffing display text.
+ */
+private val MP_RESULT_IN_PROGRESS_CODES = setOf(0x02, 0x12, 0x22, 0x32)
+
+@Composable
+private fun multipointResultLabel(code: Int): String {
+    val res = when (code) {
+        0x00 -> R.string.mp_result_disconnect_ok
+        0x01 -> R.string.mp_result_disconnect_failed
+        0x02 -> R.string.mp_result_disconnect_in_progress
+        0x03 -> R.string.mp_result_disconnect_busy
+        0x10 -> R.string.mp_result_connect_ok
+        0x11 -> R.string.mp_result_connect_failed
+        0x12 -> R.string.mp_result_connect_in_progress
+        0x13 -> R.string.mp_result_connect_busy
+        0x20 -> R.string.mp_result_unregister_ok
+        0x21 -> R.string.mp_result_unregister_failed
+        0x22 -> R.string.mp_result_unregister_in_progress
+        0x23 -> R.string.mp_result_unregister_busy
+        0x30 -> R.string.mp_result_pair_ok
+        0x31 -> R.string.mp_result_pair_failed
+        0x32 -> R.string.mp_result_pair_in_progress
+        0x33 -> R.string.mp_result_pair_busy
+        else -> return stringResource(R.string.mp_result_unknown_fmt, code)
+    }
+    return stringResource(res)
+}
+
+@Composable
 private fun inProgressLabel(state: MultipointSnapshot, device: MultipointDeviceSnapshot): String? =
-    state.result
-        ?.takeIf { state.resultAddress.equals(device.address, ignoreCase = true) && it.startsWith("正在") }
-        ?.plus("…")
+    state.resultCode
+        ?.takeIf { state.resultAddress.equals(device.address, ignoreCase = true) && it in MP_RESULT_IN_PROGRESS_CODES }
+        ?.let { "${multipointResultLabel(it)}…" }
 
 @Composable
 private fun DialogButtons(
@@ -439,7 +472,7 @@ private fun DialogButtons(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         TextButton(
-            text = "取消",
+            text = stringResource(R.string.cancel),
             onClick = onCancel,
             modifier = Modifier.weight(1f),
         )

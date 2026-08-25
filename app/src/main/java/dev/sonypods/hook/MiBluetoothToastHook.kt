@@ -27,6 +27,7 @@ import dev.sonypods.utils.PodImageLoader
 import dev.sonypods.utils.SystemApisUtils
 import dev.sonypods.utils.SystemApisUtils.cancelAsUser
 import dev.sonypods.utils.SystemApisUtils.notifyAsUser
+import dev.sonypods.utils.ModuleText
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -108,7 +109,7 @@ object MiBluetoothToastHook : HookContext() {
                             "${if (batteryParams.case!!.isCharging) "⚡ " else " "}\n"
                 else ""
                 // Over-ear headphones report a single level; label it "电量" rather than "左".
-                val leftLabel = if (singleBattery) "电量" else context.resources.getString(miheadset_notification_LeftEar)
+                val leftLabel = if (singleBattery) ModuleText.get(context, R.string.battery_label) else context.resources.getString(miheadset_notification_LeftEar)
                 val leftEar = if (batteryParams.left != null && batteryParams.left!!.isConnected)
                     "$leftLabel${batteryParams.left!!.battery}%" +
                         (if (batteryParams.left!!.isCharging) "⚡" else "")
@@ -252,7 +253,7 @@ object MiBluetoothToastHook : HookContext() {
                 // AOD 息屏显示：左右耳电量拼合后注入 aodTitle
                 val aodParts = mutableListOf<String>()
                 if (batteryParams.left?.isConnected == true)
-                    aodParts.add(if (singleBattery) "电量${batteryParams.left!!.battery}%" else "L ${batteryParams.left!!.battery}%")
+                    aodParts.add(if (singleBattery) "${ModuleText.get(context, R.string.battery_label)}${batteryParams.left!!.battery}%" else "L ${batteryParams.left!!.battery}%")
                 if (batteryParams.right?.isConnected == true)
                     aodParts.add("R ${batteryParams.right!!.battery}%")
                 val aodTitle = aodParts.joinToString(" | ")

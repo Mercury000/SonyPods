@@ -181,36 +181,6 @@ private fun List<CapabilityValueCache>.replaceCapabilityValue(value: CapabilityV
         it.domain == value.domain && it.inquiredTypeCode == value.inquiredTypeCode
     } + value
 
-/** SC `SourceSwitchControlResult`: SUCCESS 0x00 … FAIL_GIVE_PRIORITY_TO_VOICE_ASSISTANT 0x04. */
-private fun sourceSwitchResultLabel(code: Int): String = when (code) {
-    0x00 -> "切换成功"
-    0x01 -> "切换失败"
-    0x02 -> "通话中，暂时无法切换"
-    0x03 -> "目标设备未连接音频（A2DP）"
-    0x04 -> "语音助手使用中，暂时无法切换"
-    else -> "未知结果（0x%02X）".format(code)
-}
-
-private fun multipointResultLabel(code: Int): String = when (code) {
-    0x00 -> "断开成功"
-    0x01 -> "断开失败"
-    0x02 -> "正在断开"
-    0x03 -> "断开忙"
-    0x10 -> "连接成功"
-    0x11 -> "连接失败"
-    0x12 -> "正在连接"
-    0x13 -> "连接忙"
-    0x20 -> "取消注册成功"
-    0x21 -> "取消注册失败"
-    0x22 -> "正在取消注册"
-    0x23 -> "取消注册忙"
-    0x30 -> "配对成功"
-    0x31 -> "配对失败"
-    0x32 -> "正在配对"
-    0x33 -> "配对忙"
-    else -> "未知结果（0x%02X）".format(code)
-}
-
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
     val ignoreOppositeUntilMs: Long,
@@ -413,11 +383,14 @@ data class MultipointState(
     val playbackRight: Int = 0,
     /** Address of the device holding the playback right, if any. */
     val activeSourceAddress: String? = null,
-    val result: String? = null,
+    /** Raw RET/NTFY result code from the multipoint action commands; the UI
+     * layer owns the display strings — the engine never formats copy. */
+    val resultCode: Int? = null,
     val resultAddress: String? = null,
     val sourceSwitchEnabled: Boolean? = null,
     val fixedSourceAddress: String? = null,
-    val sourceSwitchResult: String? = null,
+    /** Raw SourceSwitchControlResult code; rendered (if ever) by the UI layer. */
+    val sourceSwitchResultCode: Int? = null,
     val musicHandOverEnabled: Boolean? = null,
     /** "同时连接2台设备" — the V2 Table1 General Setting multipoint toggle
      * (GS slot matched by title "MULTIPOINT_SETTING"); null = slot unknown. */
@@ -3683,7 +3656,7 @@ class SonyHeadphoneRepository private constructor(
             val current = it.multipointState
             if (current.inquiredType != null && current.inquiredType != response.inquiredType) it else it.copy(
                 multipointState = current.copy(
-                    result = multipointResultLabel(response.result),
+                    resultCode = response.result,
                     resultAddress = response.address,
                     raw = response.raw.unsignedList(),
                 ),
@@ -3700,7 +3673,7 @@ class SonyHeadphoneRepository private constructor(
         _state.update {
             it.copy(multipointState = it.multipointState.copy(
                 fixedSourceAddress = response.address,
-                sourceSwitchResult = sourceSwitchResultLabel(response.result),
+                sourceSwitchResultCode = response.result,
                 raw = response.raw.unsignedList(),
             ))
         }

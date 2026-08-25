@@ -114,7 +114,7 @@ fun PodDetailPage(
                     ) {
                         Image(
                             painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
-                            contentDescription = "Earphones",
+                            contentDescription = stringResource(R.string.cd_earphones),
                             modifier = Modifier
                                 .fillMaxWidth(0.62f)
                                 .widthIn(max = 280.dp),
@@ -165,7 +165,7 @@ fun PodDetailPage(
         item {
             Image(
                 painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
-                contentDescription = "Earphones",
+                contentDescription = stringResource(R.string.cd_earphones),
                 modifier = Modifier
                     .fillMaxWidth(0.7f)
                     .padding(vertical = 16.dp),
@@ -248,8 +248,8 @@ private fun LazyListScope.podControlItems(
         item {
             Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                 BasicComponent(
-                    title = "手势操作",
-                    summary = if (uiState.gestureOperationKeys.isEmpty()) "读取耳机支持的触控与按键操作" else "自定义触控、按键和面部轻击操作",
+                    title = stringResource(R.string.card_gesture_title),
+                    summary = if (uiState.gestureOperationKeys.isEmpty()) stringResource(R.string.gesture_summary_reading) else stringResource(R.string.gesture_summary_custom),
                     onClick = actions.onOpenGestureOperations,
                 )
             }
@@ -302,9 +302,9 @@ private fun ConnectionQualityCard(
             // 无 enabled 参数：叠一层透明拦截，禁止打开选择菜单
             Box {
                 OverlayDropdownPreference(
-                    title = "Bluetooth连接质量",
-                    summary = "该设置仅在通过 Classic Audio 连接时启用",
-                    items = listOf("不可用"),
+                    title = stringResource(R.string.connection_quality_title),
+                    summary = stringResource(R.string.connection_quality_lea_restricted_summary),
+                    items = listOf(stringResource(R.string.connection_quality_unavailable)),
                     selectedIndex = 0,
                     onSelectedIndexChange = { },
                     modifier = Modifier.alpha(0.38f),
@@ -320,11 +320,13 @@ private fun ConnectionQualityCard(
             }
         } else {
             val options = listOf(
-                ConnectionQualityMode.SOUND_QUALITY_PRIOR to "声音质量优先",
-                ConnectionQualityMode.CONNECTION_QUALITY_PRIOR to "稳定连接优先",
+                ConnectionQualityMode.SOUND_QUALITY_PRIOR to
+                    stringResource(R.string.connection_quality_sound_prior),
+                ConnectionQualityMode.CONNECTION_QUALITY_PRIOR to
+                    stringResource(R.string.connection_quality_connection_prior),
             )
             OverlayDropdownPreference(
-                title = "Bluetooth连接质量",
+                title = stringResource(R.string.connection_quality_title),
                 items = options.map { it.second },
                 selectedIndex = options.indexOfFirst { it.first == current }.coerceAtLeast(0),
                 onSelectedIndexChange = { index ->
@@ -368,21 +370,20 @@ private fun UpscalingCard(
 }
 
 /** UpsclType → official title (DSEEHX_Title / DSEE_Title / DSEEHX_AI_Title / DSEEULT_Title). */
+@Composable
 private fun upscalingTitle(typeCode: Int): String = when (typeCode) {
-    0 -> "DSEE HX"
-    2 -> "DSEE Extreme"
-    3 -> "DSEE Ultimate"
-    else -> "DSEE"
+    0 -> stringResource(R.string.dsee_hx)
+    2 -> stringResource(R.string.dsee_extreme)
+    3 -> stringResource(R.string.dsee_ultimate)
+    else -> stringResource(R.string.dsee)
 }
 
 /** Official per-generation descriptions (SC `*_Description` resources). */
+@Composable
 private fun upscalingDescription(typeCode: Int): String = when (typeCode) {
-    0 ->
-        "修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，让您能享受到媲美高解析度的音质。"
-    2, 3 ->
-        "利用人工智能技术增强流媒体或MP3等压缩音频源，以呈现清晰且富有动态感的声音。"
-    else ->
-        "修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，以还原出宽广、自然的音频效果。"
+    0 -> stringResource(R.string.dsee_hx_description)
+    2, 3 -> stringResource(R.string.dsee_ultimate_description)
+    else -> stringResource(R.string.dsee_description)
 }
 
 @Composable
@@ -399,12 +400,12 @@ private fun LeAudioCard(
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         SwitchPreference(
-            title = "LE Audio",
+            title = stringResource(R.string.card_le_audio_title),
             summary = when {
-                uiState.leAudioSwitchPending -> "正在更改 LE Audio"
-                usingLc3 -> "LE Audio优先，当前使用 LC3 音频"
-                enabled -> "LE Audio优先，当前使用经典音频"
-                else -> "仅经典音频"
+                uiState.leAudioSwitchPending -> stringResource(R.string.lea_switch_pending)
+                usingLc3 -> stringResource(R.string.lea_status_lc3)
+                enabled -> stringResource(R.string.lea_status_classic)
+                else -> stringResource(R.string.lea_status_classic_only)
             },
             checked = enabled,
             onCheckedChange = { target ->
@@ -425,16 +426,16 @@ private fun LeAudioCard(
             // Nothing bonded for the permission to apply to, so there is nothing to toggle yet.
             val needsPairing = uiState.leAudioIdentityAddress == null
             SwitchPreference(
-                title = "低功耗音频",
+                title = stringResource(R.string.card_le_audio_toggle_title),
                 summary = when {
-                    pairing -> uiState.leAudioDevicePairMessage.ifEmpty { "正在配对…" }
+                    pairing -> uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pairing) }
                     uiState.leAudioDevicePairStage == "FAILED" ->
-                        uiState.leAudioDevicePairMessage.ifEmpty { "配对失败，点击重试" }
-                    policy == true && usingLc3 -> "已开启，音频通过 LC3 传输"
-                    policy == true -> "已开启，等待系统建立 LC3"
-                    policy == false -> "已关闭，音频回落到经典蓝牙"
-                    needsPairing -> "需要重置耳机进入配对模式，点击查看步骤"
-                    else -> "未读取到系统开关状态"
+                        uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pair_failed_retry) }
+                    policy == true && usingLc3 -> stringResource(R.string.lea_on_lc3)
+                    policy == true -> stringResource(R.string.lea_on_waiting_lc3)
+                    policy == false -> stringResource(R.string.lea_off_fallback)
+                    needsPairing -> stringResource(R.string.lea_needs_reset)
+                    else -> stringResource(R.string.lea_state_unknown)
                 },
                 checked = policy == true,
                 onCheckedChange = { target ->
@@ -543,7 +544,7 @@ private fun MultipointEntryContent(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "同时连接2台设备",
+            text = stringResource(R.string.mp_connect_two_title),
             modifier = Modifier.weight(1f).alpha(contentAlpha),
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
@@ -568,7 +569,9 @@ private fun MultipointEntryContent(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = if (leAudioRestricted) "在通过 LE Audio 连接时，此功能不可用" else "关闭",
+                text = stringResource(
+                    if (leAudioRestricted) R.string.feature_unavailable_over_le_audio else R.string.off
+                ),
                 modifier = Modifier.padding(horizontal = 16.dp).alpha(contentAlpha),
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
@@ -588,7 +591,7 @@ private fun MultipointEntryContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "$slot.",
+                    text = stringResource(R.string.mp_slot_number, slot),
                     modifier = Modifier.widthIn(min = 22.dp),
                     fontSize = 14.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
@@ -596,14 +599,14 @@ private fun MultipointEntryContent(
                 if (holdsPlayback) {
                     Icon(
                         imageVector = MiuixIcons.VolumeUp,
-                        contentDescription = "正在播放",
+                        contentDescription = stringResource(R.string.cd_now_playing),
                         modifier = Modifier.size(18.dp).padding(end = 2.dp),
                         tint = MiuixTheme.colorScheme.primary,
                     )
                     Spacer(modifier = Modifier.widthIn(min = 4.dp))
                 }
                 Text(
-                    text = device?.name?.ifBlank { device.address } ?: "未连接",
+                    text = device?.name?.ifBlank { device.address } ?: stringResource(R.string.mp_not_connected),
                     fontSize = 14.sp,
                     color = if (device != null) {
                         MiuixTheme.colorScheme.onSurface
@@ -653,7 +656,8 @@ private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
                 val bandRange = uiState.eqBandMin..uiState.eqBandMax
                 bandSteps.forEachIndexed { index, step ->
                     LabeledLevelSlider(
-                        label = uiState.eqBandLabels.getOrNull(index) ?: "Band ${index + 1}",
+                        label = uiState.eqBandLabels.getOrNull(index)
+                            ?: stringResource(R.string.eq_band_fmt, index + 1),
                         value = step,
                         range = bandRange,
                         onValueChange = { actions.onCustomEqBandChange(index, it) },

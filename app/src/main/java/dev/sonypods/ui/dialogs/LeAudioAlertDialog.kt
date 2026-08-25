@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.mercury.sonypods.R
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -26,9 +28,9 @@ fun LeAudioAlertDialog(
     onCancel: () -> Unit,
 ) {
     val limitations = if (itemCodes.isNotEmpty()) {
-        itemCodes.distinct().map(::leAudioLimitationLabel)
+        itemCodes.distinct().map { leAudioLimitationLabel(it) }
     } else if (!deviceAlert && targetEnabled) {
-        defaultLeAudioLimitations
+        defaultLeAudioLimitations()
     } else {
         fixedLeAudioLimitations(messageType)
     }
@@ -36,9 +38,9 @@ fun LeAudioAlertDialog(
 
     OverlayDialog(
         title = when {
-            !deviceAlert -> "需要再次配对"
-            targetEnabled -> "LE Audio连接"
-            else -> "经典音频连接"
+            !deviceAlert -> stringResource(R.string.lea_repair_needed)
+            targetEnabled -> stringResource(R.string.lea_mode_le)
+            else -> stringResource(R.string.lea_mode_classic)
         },
         summary = summary,
         show = show,
@@ -49,7 +51,7 @@ fun LeAudioAlertDialog(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("注意\n如更改为[LE Audio优先]，以下功能将无法使用。")
+                Text(stringResource(R.string.lea_unavailable_note))
                 limitations.forEach { Text("• $it") }
             }
         }
@@ -57,9 +59,9 @@ fun LeAudioAlertDialog(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(text = "取消", onClick = onCancel, modifier = Modifier.weight(1f))
+            TextButton(text = stringResource(R.string.cancel), onClick = onCancel, modifier = Modifier.weight(1f))
             TextButton(
-                text = "确定",
+                text = stringResource(R.string.confirm),
                 onClick = onConfirm,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.textButtonColorsPrimary(),
@@ -68,6 +70,7 @@ fun LeAudioAlertDialog(
     }
 }
 
+@Composable
 private fun leAudioAlertSummary(
     targetEnabled: Boolean,
     inquiredType: Int?,
@@ -75,25 +78,25 @@ private fun leAudioAlertSummary(
     deviceAlert: Boolean,
 ): String {
     if (!deviceAlert) {
-        return "再次配对以便将耳机连接更改为[LE Audio优先]。\n同时重新连接至耳机。要继续吗？"
+        return stringResource(R.string.lea_confirm_repair_le)
     }
     if (targetEnabled) {
         return when (messageType) {
-            45, 15 -> "将耳机的连接待机模式更改为[LE Audio优先]。要继续吗？"
+            45, 15 -> stringResource(R.string.lea_confirm_standby_le)
             47, 52, 54, 56, 64, 12, 16 ->
-                "进入配对模式并将耳机连接更改为[LE Audio优先]。要继续吗？"
-            17 -> "将耳机连接更改为[LE Audio优先]。要继续吗？"
-            else -> "再次配对以便将耳机连接更改为[LE Audio优先]。\n同时重新连接至耳机。要继续吗？"
+                stringResource(R.string.lea_confirm_pairing_le)
+            17 -> stringResource(R.string.lea_confirm_le)
+            else -> stringResource(R.string.lea_confirm_repair_le)
         }
     }
     return when (messageType) {
-        44, 14 -> "将耳机的连接待机模式更改为[仅经典音频]。要继续吗？"
-        46 -> "进入配对模式并将耳机连接更改为[仅经典音频]。要继续吗？"
-        116 -> "从LE Audio切换为经典音频的音质优先模式。要继续吗？"
-        117 -> "从LE Audio切换为经典音频的连接质量优先模式。要继续吗？"
-        118 -> "将经典音频更改为音质优先模式。要继续吗？"
-        119 -> "将经典音频更改为连接质量优先模式。要继续吗？"
-        else -> "将耳机连接更改为[仅经典音频]。同时重新连接至耳机。要继续吗？"
+        44, 14 -> stringResource(R.string.lea_confirm_standby_classic)
+        46 -> stringResource(R.string.lea_confirm_pairing_classic)
+        116 -> stringResource(R.string.lea_confirm_switch_sound)
+        117 -> stringResource(R.string.lea_confirm_switch_connection)
+        118 -> stringResource(R.string.lea_confirm_classic_sound)
+        119 -> stringResource(R.string.lea_confirm_classic_connection)
+        else -> stringResource(R.string.lea_confirm_classic_reconnect)
     }
 }
 
@@ -104,55 +107,58 @@ private fun leAudioAlertSummary(
  * fixed list here produces incorrect warnings on models with different
  * capability combinations.
  */
+@Composable
 private fun fixedLeAudioLimitations(messageType: Int?): List<String> = when (messageType) {
     // The fixed message type is the device's capability combination. These
     // labels mirror the combinations selected by Sound Connect's fixed UI;
     // flexible alerts use the device-supplied item list above instead.
-    47, 49 -> listOf("语音助手", "连接模式")
-    52, 53 -> listOf("可分配设置", "语音助手", "Quick Access功能", "连接模式")
-    54, 55 -> listOf("语音助手", "连接模式", "设备配对管理")
-    56, 57 -> listOf("语音助手", "连接模式", "Quick Access功能")
-    64, 65 -> listOf("语音助手", "连接模式", "Quick Access功能", "设备配对管理")
+    47, 49 -> listOf(stringResource(R.string.lea_feat_voice_assistant), stringResource(R.string.lea_feat_connection_mode))
+    52, 53 -> listOf(stringResource(R.string.lea_feat_assignable), stringResource(R.string.lea_feat_voice_assistant), stringResource(R.string.lea_feat_quick_access), stringResource(R.string.lea_feat_connection_mode))
+    54, 55 -> listOf(stringResource(R.string.lea_feat_voice_assistant), stringResource(R.string.lea_feat_connection_mode), stringResource(R.string.lea_feat_pairing_mgmt))
+    56, 57 -> listOf(stringResource(R.string.lea_feat_voice_assistant), stringResource(R.string.lea_feat_connection_mode), stringResource(R.string.lea_feat_quick_access))
+    64, 65 -> listOf(stringResource(R.string.lea_feat_voice_assistant), stringResource(R.string.lea_feat_connection_mode), stringResource(R.string.lea_feat_quick_access), stringResource(R.string.lea_feat_pairing_mgmt))
     else -> emptyList()
 }
 
-private val defaultLeAudioLimitations = listOf(
-    "LDAC音频播放",
-    "空间声音和头部跟踪",
-    "同时连接到2台设备",
-    "语音助手",
-    "Quick Access功能",
-    "Sound AR功能",
-    "部分Scene-based Listening功能",
-    "Auto Switch",
+@Composable
+private fun defaultLeAudioLimitations(): List<String> = listOf(
+    stringResource(R.string.lea_feat_ldac),
+    stringResource(R.string.lea_feat_spatial_head_tracking),
+    stringResource(R.string.lea_feat_multipoint),
+    stringResource(R.string.lea_feat_voice_assistant),
+    stringResource(R.string.lea_feat_quick_access),
+    stringResource(R.string.lea_feat_sound_ar),
+    stringResource(R.string.lea_feat_scene_listening),
+    stringResource(R.string.lea_feat_auto_switch),
 )
 
+@Composable
 private fun leAudioLimitationLabel(code: Int): String = when (code) {
-    0 -> "均衡器"
-    1 -> "DSEE"
-    2 -> "Speak-to-Chat"
-    3 -> "自动音量控制"
-    4 -> "通过语音激活语音助手"
-    5 -> "GATT功能"
-    6 -> "LDAC音频播放"
-    7 -> "音质优先"
-    8 -> "Google Assistant"
-    9 -> "语音助手"
-    10 -> "软件更新"
-    11 -> "同时连接到2台设备"
-    12 -> "语音助手唤醒词"
-    13 -> "BGM模式"
-    14 -> "电池保护模式"
-    15 -> "头部跟踪"
-    16 -> "LE Audio"
-    17 -> "沉浸式音频"
-    18 -> "Link Auto Switch"
-    19 -> "部分Auto Play功能"
-    20 -> "降噪功能"
-    21 -> "Sound AR功能"
-    22 -> "Voice UI"
-    23 -> "Quick Access功能"
-    24 -> "连接模式"
-    25 -> "Auto Play"
-    else -> "其他受限功能（0x%02X）".format(code and 0xFF)
+    0 -> stringResource(R.string.lea_feat_equalizer)
+    1 -> stringResource(R.string.lea_feat_dsee)
+    2 -> stringResource(R.string.lea_feat_speak_to_chat)
+    3 -> stringResource(R.string.lea_feat_auto_volume)
+    4 -> stringResource(R.string.lea_feat_voice_activation)
+    5 -> stringResource(R.string.lea_feat_gatt)
+    6 -> stringResource(R.string.lea_feat_ldac)
+    7 -> stringResource(R.string.lea_feat_sound_prior)
+    8 -> stringResource(R.string.lea_feat_google_assistant)
+    9 -> stringResource(R.string.lea_feat_voice_assistant)
+    10 -> stringResource(R.string.lea_feat_software_update)
+    11 -> stringResource(R.string.lea_feat_multipoint)
+    12 -> stringResource(R.string.lea_feat_wake_word)
+    13 -> stringResource(R.string.lea_feat_bgm_mode)
+    14 -> stringResource(R.string.lea_feat_battery_safe)
+    15 -> stringResource(R.string.lea_feat_head_tracking)
+    16 -> stringResource(R.string.card_le_audio_title)
+    17 -> stringResource(R.string.lea_feat_immersive_audio)
+    18 -> stringResource(R.string.lea_feat_link_auto_switch)
+    19 -> stringResource(R.string.lea_feat_auto_play)
+    20 -> stringResource(R.string.lea_feat_noise_cancelling)
+    21 -> stringResource(R.string.lea_feat_sound_ar)
+    22 -> stringResource(R.string.lea_feat_voice_ui)
+    23 -> stringResource(R.string.lea_feat_quick_access)
+    24 -> stringResource(R.string.lea_feat_connection_mode)
+    25 -> stringResource(R.string.lea_auto_play)
+    else -> stringResource(R.string.lea_restricted_other_fmt, code and 0xFF)
 }

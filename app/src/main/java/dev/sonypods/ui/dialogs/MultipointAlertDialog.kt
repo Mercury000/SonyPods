@@ -6,15 +6,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.mercury.sonypods.R
 import dev.sonypods.protocol.SonyTandemV2Table1Protocol.ALERT_MESSAGE_TYPE_MULTIPOINT_LDAC_DISABLE
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import androidx.compose.ui.res.stringResource
 
 /**
  * Confirmation dialog for the device-driven multipoint reconnection alert
- * (official "需要重新连接" flow). Mirrors SC `MultipointSettingChangeCautionDialogFragment`:
+ * (official stringResource(R.string.mp_reconnect_required_title) flow). Mirrors SC `MultipointSettingChangeCautionDialogFragment`:
  * title = Msg_MultiPoint_Confirm_Reconnection_Title, message differs by alert type
  * (7 = turning off, 6 = turning on / LDAC disable).
  */
@@ -26,11 +28,11 @@ fun MultipointAlertDialog(
     onCancel: () -> Unit,
 ) {
     OverlayDialog(
-        title = "需要重新连接",
+        title = stringResource(R.string.mp_reconnect_required_title),
         summary = if (messageType == ALERT_MESSAGE_TYPE_MULTIPOINT_LDAC_DISABLE) {
-            "音频设备将重新连接。开启该设置后将无法使用 LDAC，即使选择音质优先也是如此。要重新连接吗？"
+            stringResource(R.string.mp_ldac_off_body)
         } else {
-            "音频设备暂时断开连接，将自动重新连接。"
+            stringResource(R.string.mp_auto_reconnect_body)
         },
         show = show,
         onDismissRequest = onCancel,
@@ -40,12 +42,12 @@ fun MultipointAlertDialog(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TextButton(
-                text = "取消",
+                text = stringResource(R.string.cancel),
                 onClick = onCancel,
                 modifier = Modifier.weight(1f),
             )
             TextButton(
-                text = "确认",
+                text = stringResource(R.string.confirm),
                 onClick = onConfirm,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.textButtonColorsPrimary(),

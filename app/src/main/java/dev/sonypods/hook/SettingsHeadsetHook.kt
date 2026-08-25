@@ -1,5 +1,6 @@
 package dev.sonypods.hook
 import com.mercury.sonypods.R
+import dev.sonypods.utils.ModuleText
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -744,7 +745,7 @@ object SettingsHeadsetHook : HookContext() {
             if (!batteryLabelOriginals.containsKey(label)) {
                 batteryLabelOriginals[label] = label.text
             }
-            label.text = "电量"
+            label.text = ModuleText.get(rootView.context, R.string.battery_label)
         } else {
             batteryLabelOriginals.remove(label)?.let { label.text = it }
         }

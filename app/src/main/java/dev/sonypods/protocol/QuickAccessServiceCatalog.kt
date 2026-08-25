@@ -1,5 +1,8 @@
 package dev.sonypods.protocol
 
+import androidx.annotation.StringRes
+import com.mercury.sonypods.R
+
 /**
  * Sound Connect's Quick Access service directory.
  *
@@ -7,35 +10,38 @@ package dev.sonypods.protocol
  * service after it is no longer selected.  Sound Connect keeps the SAR service
  * directory available independently, so this catalog must not be treated as a
  * device-capability-only list.
+ *
+ * Display names live in string resources ([QuickAccessService.nameRes]); this
+ * engine-side catalog only carries codes and resource IDs.
  */
 data class QuickAccessService(
     val code: Int,
-    val displayName: String,
+    @StringRes val nameRes: Int,
 )
 
 object QuickAccessServiceCatalog {
     /** Known SAR service IDs used by Sound Connect 13.x. */
     val entries: List<QuickAccessService> = listOf(
-        QuickAccessService(0x00, "无操作"),
-        QuickAccessService(0x01, "Spotify"),
-        QuickAccessService(0x02, "Endel"),
-        QuickAccessService(0x03, "Amazon Music"),
-        QuickAccessService(0x04, "腾讯小微"),
-        QuickAccessService(0x05, "喜马拉雅"),
-        QuickAccessService(0x06, "酷狗音乐"),
-        QuickAccessService(0x07, "QQ音乐"),
-        QuickAccessService(0x08, "Eye Navi"),
-        QuickAccessService(0x09, "网易云音乐"),
-        QuickAccessService(0x0A, "Apple Music"),
-        QuickAccessService(0x0C, "YouTube Music"),
+        QuickAccessService(0x00, R.string.qa_service_none),
+        QuickAccessService(0x01, R.string.qa_service_spotify),
+        QuickAccessService(0x02, R.string.qa_service_endel),
+        QuickAccessService(0x03, R.string.qa_service_amazon_music),
+        QuickAccessService(0x04, R.string.qa_service_tencent_xiaowei),
+        QuickAccessService(0x05, R.string.qa_service_ximalaya),
+        QuickAccessService(0x06, R.string.qa_service_kugou_music),
+        QuickAccessService(0x07, R.string.qa_service_qq_music),
+        QuickAccessService(0x08, R.string.qa_service_eye_navi),
+        QuickAccessService(0x09, R.string.qa_service_netease_music),
+        QuickAccessService(0x0A, R.string.qa_service_apple_music),
+        QuickAccessService(0x0C, R.string.qa_service_youtube_music),
     )
 
     private val knownCodes: Set<Int> = entries.mapTo(linkedSetOf()) { it.code }
-    private val labels: Map<Int, String> = entries.associate { it.code to it.displayName }
 
     fun isKnown(code: Int): Boolean = code in knownCodes
 
-    fun label(code: Int): String = labels[code] ?: "服务（0x%02X）".format(code and 0xFF)
+    /** Resource ID for a known service code, null for raw/region-specific IDs. */
+    fun nameRes(code: Int): Int? = entries.firstOrNull { it.code == code }?.nameRes
 
     /**
      * Build the selector list without losing services that are not currently

@@ -395,7 +395,7 @@ private fun ModuleTabPage(
                 actions = {
                     if (logLevel == ConfigManager.LOG_LEVEL_DEBUG) {
                         IconButton(onClick = onOpenTandemDebug) {
-                            Icon(imageVector = MiuixIcons.Months, contentDescription = "Tandem debug")
+                            Icon(imageVector = MiuixIcons.Months, contentDescription = stringResource(R.string.cd_tandem_debug))
                         }
                     }
                     IconButton(
@@ -403,7 +403,7 @@ private fun ModuleTabPage(
                             if (!restartingScopes) onShowRestartScopeDialog()
                         }
                     ) {
-                        Icon(imageVector = MiuixIcons.Refresh, contentDescription = "Restart scope")
+                        Icon(imageVector = MiuixIcons.Refresh, contentDescription = stringResource(R.string.cd_restart_scope))
                     }
                 },
             )
@@ -473,8 +473,8 @@ private fun EarphonesTabShell(
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
     val onSubPage = showGestureOperations || showMultipointSettings
     val pageTitle = when {
-        showGestureOperations -> "手势操作"
-        showMultipointSettings -> "同时连接2台设备"
+        showGestureOperations -> stringResource(R.string.card_gesture_title)
+        showMultipointSettings -> stringResource(R.string.mp_connect_two_title)
         else -> mainTitle.ifEmpty { stringResource(R.string.pod_info) }
     }
     Scaffold(
@@ -494,7 +494,7 @@ private fun EarphonesTabShell(
                     scrollBehavior = scrollBehavior,
                     navigationIcon = {
                         IconButton(onClick = onBackToDevicePicker) {
-                            Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                            Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                         }
                     },
                     actions = {
@@ -522,11 +522,11 @@ private fun EarphonesTabShell(
                     navigationIcon = {
                         if (onSubPage) {
                             IconButton(onClick = onBackFromSubPage) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                             }
                         } else if (showEarphoneDetail) {
                             IconButton(onClick = onBackToDevicePicker) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = "Back")
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
                             }
                         }
                     },
@@ -723,9 +723,9 @@ private fun EarphoneDetailActions(
     }
 }
 private val restartScopeOptions = listOf(
-    RestartScope("com.android.bluetooth", "Bluetooth"),
-    RestartScope("com.android.settings", "Settings"),
-    RestartScope("com.milink.service", "MiLink Service"),
-    RestartScope("com.xiaomi.bluetooth", "Mi Bluetooth"),
-    RestartScope("com.sony.songpal.mdr", "Sony | Sound Connect"),
+    RestartScope("com.android.bluetooth", R.string.scope_bluetooth),
+    RestartScope("com.android.settings", R.string.scope_settings),
+    RestartScope("com.milink.service", R.string.scope_milink),
+    RestartScope("com.xiaomi.bluetooth", R.string.scope_mi_bluetooth),
+    RestartScope("com.sony.songpal.mdr", R.string.scope_sound_connect),
 )
