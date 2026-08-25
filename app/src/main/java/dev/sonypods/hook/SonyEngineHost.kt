@@ -529,7 +529,8 @@ object SonyEngineHost {
             connectInFlightAddress = null
             if (!force) return
         }
-        val sameAttemptInFlight = connectInFlightAddress?.equals(address, ignoreCase = true) == true &&
+        val sameAttemptInFlight = !force &&
+            connectInFlightAddress?.equals(address, ignoreCase = true) == true &&
             now - lastConnectAttemptMs < CONNECT_IN_FLIGHT_TIMEOUT_MS
         if (sameAttemptInFlight) return
         if (!force && now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
@@ -571,9 +572,47 @@ object SonyEngineHost {
             Log.d(TAG, "reconcile skipped: ${allConnected.size} non-Sony A2DP device(s) connected")
             return
         }
-        val device = allConnected?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) } ?: return
+        val device = allConnected?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
+            ?: gattConnectedSonyDevice()
+            ?: return
         Log.d(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
         connectDevice(device, force = true)
+    }
+
+    /**
+     * LE Audio hand-over drops A2DP entirely, so right after the system toggles 低功耗音频
+     * the A2DP lookup above finds nothing while the headset is still connected — over the
+     * LE ACL. The Tandem session then rides that same ACL.
+     *
+     * The returned device must be the identity that carries Tandem: SonyBleClient.connect
+     * deliberately keeps the requested address when it is LE-Audio-connected (mirroring
+     * Sound Connect's pairing-record identifier), so handing it the pure-LE identity would
+     * open a session that can never carry control. Prefer a connected non-LE identity,
+     * fold an LE-only one through the bonded alias table, and skip when unresolvable.
+     */
+    private fun gattConnectedSonyDevice(): BluetoothDevice? {
+        val context = appContext ?: return null
+        val manager = context.getSystemService(BluetoothManager::class.java) ?: return null
+        val adapter = manager.adapter ?: return null
+        val connected = runCatching { manager.getConnectedDevices(BluetoothProfile.GATT) }
+            .getOrNull()
+            .orEmpty()
+        val sony = connected.filter { HeadsetStateDispatcher.isSonyPod(it) }
+        if (sony.isEmpty()) return null
+        SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
+        sony.firstOrNull { candidate ->
+            !SonyDeviceService.isLeAudioIdentity(candidate) &&
+                SonyDeviceService.resolveControlAddress(candidate.address)
+                    .equals(candidate.address, ignoreCase = true)
+        }?.let { return it }
+        val leIdentity = sony.first()
+        val control = SonyDeviceService.resolveControlAddress(leIdentity.address)
+            ?.takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
+            ?: run {
+                Log.d(TAG, "reconcile skip: only LE identity ${leIdentity.address} connected and no control alias")
+                return null
+            }
+        return runCatching { adapter.getRemoteDevice(control) }.getOrNull()
     }
 
     @SuppressLint("MissingPermission")
