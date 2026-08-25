@@ -107,11 +107,11 @@ fun PodDetailPage(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 item {
-                    Column(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                        contentAlignment = Alignment.TopCenter,
                     ) {
                         Image(
                             painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
@@ -123,7 +123,7 @@ fun PodDetailPage(
                         )
                         SoundQualityBadges(
                             uiState = uiState,
-                            modifier = Modifier.padding(top = 10.dp),
+                            modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     }
                 }
@@ -164,17 +164,20 @@ fun PodDetailPage(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Image(
-                painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
-                contentDescription = stringResource(R.string.cd_earphones),
-                modifier = Modifier
-                    .fillMaxWidth(0.7f)
-                    .padding(vertical = 16.dp),
-                contentScale = ContentScale.FillWidth
-            )
-        }
-        item {
-            SoundQualityBadges(uiState = uiState)
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Image(
+                    painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
+                    contentDescription = stringResource(R.string.cd_earphones),
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .padding(vertical = 16.dp),
+                    contentScale = ContentScale.FillWidth
+                )
+                SoundQualityBadges(
+                    uiState = uiState,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
         }
 
         podControlItems(
@@ -925,10 +928,13 @@ private fun playbackName(value: String?, unknownRes: Int): String = when {
 }
 
 /**
- * Live sound-quality badges under the headset picture: the codec the link is
- * using right now plus the DSEE mark while it is actively processing. Both are
- * hidden for anything the headset has not confirmed — UNSETTLED/OTHER codecs,
- * an unknown generation, or a DSEE status that is not VALID (`u60.a`).
+ * Live sound-quality badges overlaid on the blank band below the headset
+ * picture: the codec the link is using right now plus the DSEE mark while it
+ * is actively processing. Both are hidden for anything the headset has not
+ * confirmed — UNSETTLED/OTHER codecs, an unknown generation, or a DSEE status
+ * that is not VALID (`u60.a`). The composable measures nothing when empty and,
+ * when placed inside the picture item's Box, adds zero layout height — the
+ * image-to-battery spacing stays identical whether badges show or not.
  */
 @Composable
 private fun SoundQualityBadges(uiState: SonyStateSnapshot, modifier: Modifier = Modifier) {
@@ -943,7 +949,6 @@ private fun SoundQualityBadges(uiState: SonyStateSnapshot, modifier: Modifier = 
     val codecRes = uiState.soundQualityCodec?.let { codecBadgeRes(it, dark) }
     val dseeRes = uiState.dseeGeneration?.takeIf { uiState.dseeActive }?.let { dseeBadgeRes(it, dark) }
     if (leaRes == null && codecRes == null && dseeRes == null) {
-        Spacer(modifier)
         return
     }
     Row(
