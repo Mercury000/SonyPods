@@ -50,6 +50,7 @@ object SettingsHeadsetHook : HookContext() {
     private var currentAddress: String? = null
     private var currentName: String? = null
     private var currentFormFactor: String? = null
+    private var currentFirmware: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
     private var currentTransparencyVocalEnhancement = false
@@ -447,6 +448,9 @@ object SettingsHeadsetHook : HookContext() {
                             snapshot.formFactor
                                 ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
                                 ?.let { currentFormFactor = it }
+                            snapshot.firmwareVersion
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { currentFirmware = it }
                             currentBattery = snapshotBattery(snapshot)
                             // Reconcile the ANC/transparency-vocal state from the engine's live
                             // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
@@ -935,6 +939,10 @@ object SettingsHeadsetHook : HookContext() {
         values[0] = left
         values[1] = right
         values[2] = box
+        // Slot 3 carries the firmware as "<code>+<display>"; MiuiHeadsetFragment.refreshStatus
+        // routes a non-empty value to updateStatus(), which fills versionName. Code 0 keeps every
+        // Xiaomi version-gated feature (wind noise >= 30259 etc.) off for Sony hardware.
+        values[3] = currentFirmware?.takeIf { it.isNotBlank() }?.let { "0+$it" }.orEmpty()
         values[7] = settingsAncLevel()
         values[8] = "false"
         values[11] = "00"
@@ -1073,6 +1081,7 @@ object SettingsHeadsetHook : HookContext() {
             .putString("address", currentAddress)
             .putString("name", currentName)
             .putString("form_factor", currentFormFactor)
+            .putString("firmware", currentFirmware)
             .putInt("anc", currentAnc)
             .putBoolean("transparency_vocal_enhancement", currentTransparencyVocalEnhancement)
             .putInt("left_battery", currentBattery.left?.battery ?: 0)
@@ -1093,6 +1102,9 @@ object SettingsHeadsetHook : HookContext() {
         currentName = prefs.getString("name", currentName)
         if (currentFormFactor == null) {
             currentFormFactor = prefs.getString("form_factor", null)
+        }
+        if (currentFirmware.isNullOrBlank()) {
+            currentFirmware = prefs.getString("firmware", null)
         }
         SonyDeviceService.rememberAddress(currentAddress)
         // Live snapshot data wins; persisted ANC/voice are only a bootstrap until the
