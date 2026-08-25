@@ -179,6 +179,21 @@ data class SonyStateSnapshot(
     val playbackMusicVolumeStep: Int = 0,
     /** Live sound-quality badge values (COMMON domain); codec null or OTHER/UNSETTLED hides it. */
     val soundQualityCodec: SoundQualityCodec? = null,
+    /**
+     * The system's per-device LDAC switch, read from and written to the A2DP profile service.
+     *
+     * Supported means this bond's A2DP selectable capabilities actually list LDAC — the same test
+     * the stack applies before accepting a codec preference. Enabled means LDAC is the codec
+     * currently carrying media; null when nothing could be read, which is also the state while
+     * A2DP is down (under LC3 there is no A2DP codec to switch). Switching covers the stack's
+     * settling window after a write, during which the row is held so it cannot bounce.
+     *
+     * Filled in by the bluetooth-process host as it publishes, like the LE Audio facts above: the
+     * repository never sees them.
+     */
+    val ldacSupported: Boolean = false,
+    val ldacEnabled: Boolean? = null,
+    val ldacSwitching: Boolean = false,
     val dseeGeneration: DseeGeneration? = null,
     val dseeActive: Boolean = false,
     val scanState: String? = null,
@@ -285,6 +300,12 @@ data class SonyStateSnapshot(
             putBoolean(KEY_LEA_SYS_ACTIVE_KNOWN, true)
             putBoolean(KEY_LEA_SYS_ACTIVE, it)
         }
+        putBoolean(KEY_LDAC_SUPPORTED, ldacSupported)
+        ldacEnabled?.let {
+            putBoolean(KEY_LDAC_ENABLED_KNOWN, true)
+            putBoolean(KEY_LDAC_ENABLED, it)
+        }
+        putBoolean(KEY_LDAC_SWITCHING, ldacSwitching)
         quickAccessLeftRight?.let { putString(KEY_QA_LR, it) }
         quickAccessNcAmb?.let { putString(KEY_QA_NC, it) }
         quickAccessKeyCode?.let { putInt(KEY_QA_KEY, it) }
@@ -385,6 +406,10 @@ data class SonyStateSnapshot(
         private const val KEY_LEA_SYS_CONNECTED = "lea_sys_connected"
         private const val KEY_LEA_SYS_ACTIVE_KNOWN = "lea_sys_active_known"
         private const val KEY_LEA_SYS_ACTIVE = "lea_sys_active"
+        private const val KEY_LDAC_SUPPORTED = "ldac_supported"
+        private const val KEY_LDAC_ENABLED_KNOWN = "ldac_enabled_known"
+        private const val KEY_LDAC_ENABLED = "ldac_enabled"
+        private const val KEY_LDAC_SWITCHING = "ldac_switching"
 
         /** `LeaTargetStreamingStatus.VIA_LE_AUDIO_UNICAST` as the headset reports it. */
         const val LEA_STREAMING_UNICAST = "VIA_LE_AUDIO_UNICAST"
@@ -495,6 +520,13 @@ data class SonyStateSnapshot(
             } else {
                 null
             },
+            ldacSupported = bundle.getBoolean(KEY_LDAC_SUPPORTED, false),
+            ldacEnabled = if (bundle.getBoolean(KEY_LDAC_ENABLED_KNOWN, false)) {
+                bundle.getBoolean(KEY_LDAC_ENABLED, false)
+            } else {
+                null
+            },
+            ldacSwitching = bundle.getBoolean(KEY_LDAC_SWITCHING, false),
             quickAccessLeftRight = bundle.getString(KEY_QA_LR),
             quickAccessNcAmb = bundle.getString(KEY_QA_NC),
             quickAccessKeyCode = bundle.optInt(KEY_QA_KEY),
@@ -588,9 +620,9 @@ data class SonyStateSnapshot(
                 leAudioDevicePairStage = state.leAudioDevicePairState.stage.name,
                 leAudioDevicePairMessage = state.leAudioDevicePairState.message,
                 leAudioDevicePairedAddress = state.leAudioDevicePairState.bondedAddress,
-                // leAudioIdentityAddress, leAudioPolicyAllowed and leAudioSystem* are the stack's
-                // own facts, not the repository's: the bluetooth-process host fills them in as it
-                // publishes, since only it can read the LE Audio profile service.
+                // leAudioIdentityAddress, leAudioPolicyAllowed, leAudioSystem* and the ldac* fields
+                // are the stack's own facts, not the repository's: the bluetooth-process host fills
+                // them in as it publishes, since only it can read the profile services.
                 quickAccessLeftRight = state.quickAccessState.lrKeyFunction,
                 quickAccessNcAmb = state.quickAccessState.ncAmbKeyFunction,
                 quickAccessKeyCode = state.quickAccessState.key?.code?.toInt()?.and(0xFF),

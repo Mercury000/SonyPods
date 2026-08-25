@@ -404,6 +404,13 @@
     <string name="lea_off_fallback">Off; audio fell back to classic Bluetooth</string>
     <string name="lea_needs_reset">Reset the headphones to pairing mode — tap for steps</string>
     <string name="lea_state_unknown">System toggle state unavailable</string>
+    <string name="card_ldac_title">LDAC</string>
+    <string name="ldac_on">On; media streams over LDAC</string>
+    <string name="ldac_off">Off; media streams over SBC/AAC</string>
+    <string name="ldac_switching">Switching codec…</string>
+    <string name="ldac_unavailable">Codec state unavailable while A2DP is down</string>
+    <string name="ldac_enable_confirm_title">Turn LDAC on?</string>
+    <string name="ldac_enable_confirm_body">LDAC raises the bitrate for better sound. In congested environments the link may stutter or drop; turn it off again if that happens.</string>
     <string name="dbg_send">Send</string>
     <string name="dbg_waiting_logs">Waiting for Tandem logs…</string>
     <string name="dbg_log_copied">Log copied</string>

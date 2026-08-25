@@ -3,6 +3,8 @@ package dev.sonypods.hook
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.content.SharedPreferences
+import android.bluetooth.BluetoothCodecConfig
+import android.bluetooth.BluetoothCodecStatus
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.os.SystemClock
@@ -77,6 +79,16 @@ object SonyEngineHost {
     private const val LE_AUDIO_GROUP_ID_INVALID = -1
     /** HyperOS's own wait between forbidding LE Audio and restoring the classic profiles. */
     private const val CLASSIC_RESTORE_DELAY_MS = 500L
+    /** The profile service's own key for this codec in its per-device user-preference store. */
+    private const val LDAC_CODEC_NAME = "LDAC"
+    /**
+     * How long the LDAC row is held after a write.
+     *
+     * The codec is renegotiated asynchronously and the stack's own auto-off check runs 1.3 s after
+     * the change, so the reading is not final before then; the system's own switch disables its
+     * checkbox for the same 3 s.
+     */
+    private const val LDAC_SETTLE_MS = 3_000L
 
     private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scope = newGenerationScope()
@@ -98,6 +110,10 @@ object SonyEngineHost {
 
     /** Last logged LE Audio policy reading, so the per-emission read logs only on change. */
     private var lastLeAudioPolicyLog: String? = null
+
+    /** The LDAC position asked for, held until [ldacWriteSettlesAtMs] so the row cannot bounce. */
+    private var ldacWriteTarget: Boolean? = null
+    private var ldacWriteSettlesAtMs = 0L
 
     /** Whether the missing-AdapterService warning has already been emitted this generation. */
     private var adapterServiceWarned = false
@@ -256,7 +272,7 @@ object SonyEngineHost {
 
         scope.launch {
             repo.state.collect { uiState ->
-                val snapshot = withLeAudioPolicy(SonyStateSnapshot.fromUiState(uiState))
+                val snapshot = withSystemFacts(SonyStateSnapshot.fromUiState(uiState))
                 val pendingAlert = snapshot.multipoint.pendingAlertMessageType
                 val lastPending = lastSnapshot?.multipoint?.pendingAlertMessageType
                 val same = snapshot == lastSnapshot
@@ -364,6 +380,8 @@ object SonyEngineHost {
         adapterService = null
         adapterServiceWarned = false
         lastLeAudioPolicyLog = null
+        ldacWriteTarget = null
+        ldacWriteSettlesAtMs = 0L
         prefs = null
         prefsProvider = null
         // Keep connection identity across a rejected reload. A replacement
@@ -465,7 +483,7 @@ object SonyEngineHost {
     fun republishLeAudioState(reason: String) {
         val context = appContext ?: return
         val base = lastSnapshot ?: return
-        val updated = withLeAudioPolicy(base)
+        val updated = withSystemFacts(base)
         if (updated == base) return
         lastSnapshot = updated
         cloudFallback?.onState(updated)
@@ -1221,6 +1239,14 @@ object SonyEngineHost {
 
 
     /**
+     * Adds every fact only this process can see to a repository-built snapshot: the system's LE
+     * Audio permission and its LDAC switch, both of which live in the profile services rather than
+     * in the headset.
+     */
+    private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot =
+        withLdac(withLeAudioPolicy(base))
+
+    /**
      * Adds the facts only this process can see to a repository-built snapshot.
      *
      * `leAudioIdentityAddress` is the identity the permission would be written to, and doubles as
@@ -1267,16 +1293,156 @@ object SonyEngineHost {
         Log.i(TAG, "LE Audio policy $summary")
     }
 
+    // ── System per-device LDAC switch ──
 
     /**
-     * [snapshot] with the system-side LE Audio permission re-read.
+     * Everything the stack knows about this device's LDAC, or nothing when A2DP is not up.
      *
-     * Nothing notifies us when that permission changes — system settings writes it straight into
-     * the stack — so a replay request is the moment to look again.
+     * [supported] is the stack's own test: LDAC among the selectable capabilities is what
+     * `A2dpCodecConfig.isMiuiCodecConfigSelectable` requires before it will accept a preference for
+     * it. [enabled] is the codec actually carrying media, which is what the system's own checkbox
+     * shows — it recomputes its position from the current codec on every CODEC_CONFIG_CHANGED
+     * rather than from the stored preference.
+     */
+    private data class LdacState(val supported: Boolean, val enabled: Boolean?)
+
+    private fun a2dpService(): Any? =
+        profileService("getA2dpService", "com.android.bluetooth.a2dp.A2dpService")
+
+    // The int codec types are deprecated in the SDK in favour of BluetoothCodecType, but they are
+    // what this stack itself stores and compares: its own codec-preference path builds a config from
+    // the int type and picks the winner by comparing those ints. Reading anything else would not be
+    // reading the same fact the switch writes.
+    @Suppress("DEPRECATION")
+    private fun ldacState(address: String): LdacState {
+        val context = appContext ?: return LdacState(false, null)
+        val service = a2dpService() ?: return LdacState(false, null)
+        val device = remoteDevice(context, address) ?: return LdacState(false, null)
+        val status = runCatching {
+            service.javaClass
+                .getMethod("getCodecStatus", BluetoothDevice::class.java)
+                .apply { isAccessible = true }
+                .invoke(service, device) as? BluetoothCodecStatus
+        }.getOrElse {
+            Log.w(TAG, "getCodecStatus failed for $address", it)
+            null
+        } ?: return LdacState(false, null)
+        val supported = status.codecsSelectableCapabilities.any {
+            it.codecType == BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC
+        }
+        // No current config is "unknown", not "off": a link that has not settled on a codec yet
+        // must not be reported as LDAC being off.
+        val enabled = status.codecConfig?.let {
+            it.codecType == BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC
+        }
+        return LdacState(supported, enabled)
+    }
+
+    /**
+     * Adds the LDAC switch's position to a snapshot.
+     *
+     * While a write is settling the target is reported instead of the reading: the stack needs about
+     * a second to renegotiate, and reporting the old codec in the meantime would spring the row
+     * back before it moved again. The system's own switch solves this the same way, by holding its
+     * checkbox for [LDAC_SETTLE_MS] after a write.
+     */
+    private fun withLdac(base: SonyStateSnapshot): SonyStateSnapshot {
+        val address = base.deviceAddress ?: return base
+        val settling = ldacWriteSettlesAtMs > SystemClock.elapsedRealtime()
+        if (!settling) ldacWriteTarget = null
+        val state = ldacState(address)
+        val target = ldacWriteTarget.takeIf { settling }
+        return base.copy(
+            // A device whose A2DP is down answers nothing, and mid-write the reading is stale — but
+            // the switch was only offered because the codec list had LDAC, so keep the row present.
+            ldacSupported = state.supported || target != null,
+            ldacEnabled = target ?: state.enabled,
+            ldacSwitching = settling,
+        )
+    }
+
+    /**
+     * Handles [SonyBridge.CMD_SET_LDAC_ENABLED] exactly as the stack's own codec switch does.
+     *
+     * Two writes, and both are needed. `defaultSetCodec` is what moves the codec: it builds the
+     * one-codec preference (priority 1000000 on, -1 off, every other field left as a wildcard) and
+     * hands it to `setCodecConfigPreference`, which validates it against the device's selectable
+     * capabilities and dispatches it to the native stack, where it persists per device.
+     * `setUserCodecStatus` records the user's choice in the profile service's own store, and that
+     * record is not decoration: on every codec change the service checks it, and an LDAC link whose
+     * stored status is 0 is force-switched away 1.3 s later. Writing only the codec would therefore
+     * be undone, and writing only the status would do nothing until the next reconnect.
+     *
+     * Both are the profile service's own methods, called in the process that owns it — no settings
+     * app, no system properties, no reimplementation of the codec-config construction.
+     */
+    private fun setLdacEnabled(enabled: Boolean) {
+        val context = appContext ?: return
+        val base = lastSnapshot ?: return
+        val address = base.deviceAddress ?: return
+        val service = a2dpService()
+        if (service == null) {
+            Log.w(TAG, "A2DP service is not up; LDAC enabled=$enabled not written")
+            return
+        }
+        val device = remoteDevice(context, address) ?: return
+        val wrote = runCatching {
+            service.javaClass
+                .getMethod(
+                    "setUserCodecStatus",
+                    BluetoothDevice::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType,
+                )
+                .apply { isAccessible = true }
+                .invoke(service, device, LDAC_CODEC_NAME, if (enabled) 1 else 0)
+            service.javaClass
+                .getMethod(
+                    "defaultSetCodec",
+                    String::class.java,
+                    BluetoothDevice::class.java,
+                    Boolean::class.javaPrimitiveType,
+                )
+                .apply { isAccessible = true }
+                .invoke(service, LDAC_CODEC_NAME, device, enabled)
+            true
+        }.getOrElse {
+            Log.w(TAG, "LDAC write enabled=$enabled failed for $address", it)
+            false
+        }
+        if (!wrote) return
+        Log.i(TAG, "LDAC enabled=$enabled written for $address")
+        ldacWriteTarget = enabled
+        ldacWriteSettlesAtMs = SystemClock.elapsedRealtime() + LDAC_SETTLE_MS
+        publishLdac(context)
+        // The codec change lands asynchronously; re-read once the hold expires so the row shows
+        // what the stack settled on rather than what was asked for.
+        scope.launch {
+            delay(LDAC_SETTLE_MS)
+            publishLdac(context)
+        }
+    }
+
+    /** Re-read the LDAC facts and push them out; nothing in the repository carries them. */
+    private fun publishLdac(context: Context) {
+        val base = lastSnapshot ?: return
+        val updated = withLdac(base)
+        if (updated == base) return
+        lastSnapshot = updated
+        cloudFallback?.onState(updated)
+        publish(context, updated)
+    }
+
+    /**
+     * [snapshot] with the system-side facts re-read.
+     *
+     * Nothing notifies us when the LE Audio permission or the codec preference changes — system
+     * settings writes both straight into the stack — so a replay request is the moment to look
+     * again.
      */
     private fun refreshedSnapshot(): SonyStateSnapshot {
         val current = lastSnapshot ?: return SonyStateSnapshot()
-        val updated = withLeAudioPolicy(current)
+        val updated = withSystemFacts(current)
         if (updated != current) lastSnapshot = updated
         return updated
     }
@@ -1334,7 +1500,7 @@ object SonyEngineHost {
                 setClassicAudioEnabled(group, enabled = true)
             }
         }
-        val updated = withLeAudioPolicy(base)
+        val updated = withSystemFacts(base)
         if (updated == base) return
         lastSnapshot = updated
         cloudFallback?.onState(updated)
@@ -1635,6 +1801,8 @@ object SonyEngineHost {
                 repo.unpairLeAudioDevice(intent.getStringExtra(SonyBridge.EXTRA_STRING))
             SonyBridge.CMD_SET_LE_AUDIO_POLICY ->
                 setLeAudioPolicy(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_LDAC_ENABLED ->
+                setLdacEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_FIXED_SOURCE ->
                 intent.getStringExtra(SonyBridge.EXTRA_STRING)?.let(repo::setFixedSource)
             SonyBridge.CMD_SET_MUSIC_HAND_OVER ->

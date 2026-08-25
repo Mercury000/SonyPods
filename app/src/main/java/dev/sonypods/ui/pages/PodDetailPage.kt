@@ -55,6 +55,7 @@ import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.dialogs.ConnectionQualityConfirmDialog
+import dev.sonypods.ui.dialogs.LdacEnableConfirmDialog
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.localizedName
@@ -238,6 +239,12 @@ private fun LazyListScope.podControlItems(
         }
     }
 
+    if (uiState.ldacSupported) {
+        item {
+            LdacCard(uiState = uiState, actions = actions)
+        }
+    }
+
     if (uiState.supportsLeAudio) {
         item {
             LeAudioCard(uiState = uiState, actions = actions)
@@ -365,6 +372,55 @@ private fun UpscalingCard(
             summary = upscalingDescription(uiState.upscalingTypeCode),
             checked = uiState.upscalingEnabled == true,
             onCheckedChange = actions.onUpscalingEnabledChange,
+        )
+    }
+}
+
+/**
+ * 系统侧单设备 LDAC 开关。
+ *
+ * 读写都在蓝牙进程里走 A2DP profile service 自己的方法（用户偏好 + 编解码器优先级），
+ * 与系统设置里那个勾选框是同一套状态，因此两边显示一致。开启方向先确认（同官方），
+ * 关闭方向直接写入；写入后短暂置灰，等协商结果落定再显示真实状态。
+ *
+ * 卡片只在能力表列出 LDAC 时出现——也就是 A2DP 已连接且该设备确实支持。但音频走
+ * LE Audio（LC3）时 A2DP 不再承载媒体，开关写下去也不生效；与系统设置一致，此时置灰
+ * 并把 summary 换成「仅在通过 Classic Audio 连接时启用」，不允许操作（同连接质量卡片）。
+ */
+@Composable
+private fun LdacCard(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    var confirming by remember { mutableStateOf(false) }
+    val leaActive = uiState.usingLeAudio
+    val enabled = uiState.ldacEnabled == true
+
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        SwitchPreference(
+            title = stringResource(R.string.card_ldac_title),
+            summary = when {
+                leaActive -> stringResource(R.string.connection_quality_lea_restricted_summary)
+                uiState.ldacSwitching -> stringResource(R.string.ldac_switching)
+                enabled -> stringResource(R.string.ldac_on)
+                uiState.ldacEnabled == false -> stringResource(R.string.ldac_off)
+                else -> stringResource(R.string.ldac_unavailable)
+            },
+            checked = enabled,
+            onCheckedChange = { target ->
+                if (target) confirming = true else actions.onLdacEnabledChange(false)
+            },
+            enabled = !uiState.ldacSwitching && !leaActive,
+        )
+    }
+
+    if (confirming) {
+        LdacEnableConfirmDialog(
+            onConfirm = {
+                confirming = false
+                actions.onLdacEnabledChange(true)
+            },
+            onCancel = { confirming = false },
         )
     }
 }

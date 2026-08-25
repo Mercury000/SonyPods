@@ -45,6 +45,8 @@ data class SonyDetailActions(
     val onLeAudioPairingGuide: () -> Unit = {},
     /** Flips the system's per-device LE Audio permission; never touches the bond. */
     val onLeAudioPolicyChange: (Boolean) -> Unit = {},
+    /** Flips this device's LDAC through the A2DP profile service, as the system's switch does. */
+    val onLdacEnabledChange: (Boolean) -> Unit = {},
     val onMultipointAlertReply: (Boolean) -> Unit = {},
     val onFixedSourceChange: (String) -> Unit = {},
     val onMusicHandOverChange: (Boolean) -> Unit = {},

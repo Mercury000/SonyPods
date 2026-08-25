@@ -405,6 +405,13 @@
     <string name="lea_off_fallback">已关闭，音频回落到经典蓝牙</string>
     <string name="lea_needs_reset">需要重置耳机进入配对模式，点击查看步骤</string>
     <string name="lea_state_unknown">未读取到系统开关状态</string>
+    <string name="card_ldac_title">LDAC</string>
+    <string name="ldac_on">已开启，音频通过 LDAC 传输</string>
+    <string name="ldac_off">已关闭，音频通过 SBC/AAC 传输</string>
+    <string name="ldac_switching">正在切换编解码器…</string>
+    <string name="ldac_unavailable">A2DP 未连接，读取不到编解码器状态</string>
+    <string name="ldac_enable_confirm_title">开启 LDAC？</string>
+    <string name="ldac_enable_confirm_body">LDAC 会提高码率以改善音质。在环境干扰较强时链路可能出现卡顿或断连，若出现请关闭。</string>
     <string name="dbg_send">发送</string>
     <string name="dbg_waiting_logs">等待 Tandem 日志...</string>
     <string name="dbg_log_copied">已复制日志</string>

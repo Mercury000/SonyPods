@@ -92,6 +92,8 @@ object SonyBridge {
     const val CMD_LE_AUDIO_DEVICE_UNPAIR = "le_audio_device_unpair"
     /** Allow or forbid the LE Audio profile on the bonded LE identity — the system's own switch. */
     const val CMD_SET_LE_AUDIO_POLICY = "set_le_audio_policy"
+    /** Turn this device's LDAC on or off through the A2DP profile service — the system's own switch. */
+    const val CMD_SET_LDAC_ENABLED = "set_ldac_enabled"
     const val CMD_SET_FIXED_SOURCE = "set_fixed_source"
     const val CMD_SET_MUSIC_HAND_OVER = "set_music_hand_over"
     const val CMD_PLAYBACK_PREVIOUS = "playback_previous"
@@ -257,6 +259,13 @@ object SonyBridge {
      */
     fun setLeAudioPolicyAllowed(context: Context, allowed: Boolean) =
         sendCommand(context, CMD_SET_LE_AUDIO_POLICY) { putExtra(EXTRA_BOOL, allowed) }
+
+    /**
+     * Flips this device's LDAC the way the system's own codec switch does: the stored per-device
+     * user preference plus the A2DP codec priority.
+     */
+    fun setLdacEnabled(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_LDAC_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
 
     fun setFixedSource(context: Context, address: String) =
         sendCommand(context, CMD_SET_FIXED_SOURCE) { putExtra(EXTRA_STRING, address) }
