@@ -406,6 +406,26 @@ object SettingsHeadsetHook : HookContext() {
             val level = commandArgs[0] as? String ?: ""
             sonyAncFromLevelCommand(level)
         }
+        runCatching {
+            hookAfter(
+                findMethod(
+                    "com.android.settings.bluetooth.MiuiHeadsetFragment",
+                    "updateAncUi",
+                    String::class.java,
+                    Boolean::class.javaPrimitiveType!!,
+                ),
+            ) {
+                if (!isSonyFragment(instance)) return@hookAfter
+                val rootView = getObjectField(instance, "mRootView") as? View ?: return@hookAfter
+                // Sony has no NC depth tiers: every MIUI level maps onto plain noise
+                // cancelling, so the four-step bar would only pretend to do something.
+                // Keep the mode row and the transparency slider; hide just the depth
+                // bar and its labels (updateAncUi is synchronous, so this sticks).
+                listOf("ancAdjust", "ancAdjustText").forEach { name ->
+                    findView(rootView, name)?.visibility = View.GONE
+                }
+            }
+        }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.updateAncUi depth-hide skipped", it) }
     }
 
     private fun hookFragmentAncCommand(methodName: String, vararg parameterTypes: Class<*>, mode: (List<Any?>) -> Int?) {
