@@ -222,6 +222,12 @@ object SonyBridge {
     fun setUpscalingEnabled(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_UPSCALING_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
 
+    const val CMD_SET_CONNECTION_QUALITY = "set_connection_quality"
+
+    /** [modeName] is a [dev.sonypods.protocol.ConnectionQualityMode] name. */
+    fun setConnectionQuality(context: Context, modeName: String) =
+        sendCommand(context, CMD_SET_CONNECTION_QUALITY) { putExtra(EXTRA_STRING, modeName) }
+
     /** Reply to the device's pending reconnection alert; true = confirm (execute), false = cancel. */
     fun replyMultipointAlert(context: Context, positive: Boolean) =
         sendCommand(context, CMD_REPLY_MULTIPOINT_ALERT) { putExtra(EXTRA_BOOL, positive) }

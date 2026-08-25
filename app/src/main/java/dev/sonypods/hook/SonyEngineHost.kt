@@ -1614,6 +1614,17 @@ object SonyEngineHost {
                 repo.setLeAudioEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_UPSCALING_ENABLED ->
                 repo.setUpscalingEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+            SonyBridge.CMD_SET_CONNECTION_QUALITY -> {
+                val modeName = intent.getStringExtra(SonyBridge.EXTRA_STRING)
+                val mode = runCatching {
+                    dev.sonypods.protocol.ConnectionQualityMode.valueOf(modeName.orEmpty())
+                }.getOrNull()
+                if (mode == null) {
+                    Log.w(TAG, "connection quality command ignored: unknown mode $modeName")
+                } else {
+                    repo.setConnectionQuality(mode)
+                }
+            }
             SonyBridge.CMD_REPLY_MULTIPOINT_ALERT ->
                 repo.replyMultipointAlert(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_REPLY_LE_AUDIO_ALERT ->

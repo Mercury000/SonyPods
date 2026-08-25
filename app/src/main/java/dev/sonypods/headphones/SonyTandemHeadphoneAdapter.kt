@@ -215,6 +215,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             if (profile.supports(HeadphoneFeature.UPSCALING)) {
                 addAll(buildRefreshUpscalingCommands(profile))
             }
+            if (profile.supports(HeadphoneFeature.CONNECTION_QUALITY)) {
+                addAll(buildRefreshConnectionQualityCommands(profile))
+            }
             if (profile.supports(HeadphoneFeature.QUICK_ACCESS)) {
                 val codec = codecFor(profile, HeadphoneFeature.QUICK_ACCESS)
                 codec.buildGetQuickAccessCapability()?.let {
@@ -822,6 +825,32 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 codecFor(profile, HeadphoneFeature.DEVICE_INFO)
                     .buildGetUpscaling(inquiredTypeCode.toByte()) ?: return emptyList(),
                 profile.channelFor(HeadphoneFeature.UPSCALING),
+            ),
+        )
+    }
+
+    /**
+     * AUDIO-domain Bluetooth 连接质量 refresh: the current PriorMode value plus
+     * the EnableDisable availability — official drives the options' greyed state
+     * from that STATUS frame (`cf0.t0`/`cf0.m`), so both are asked every burst.
+     */
+    private fun buildRefreshConnectionQualityCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            return emptyList()
+        }
+        val inquiredTypeCode = profile.capabilities.connectionQualityInquiredTypeCode ?: return emptyList()
+        val codec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
+        val channel = profile.channelFor(HeadphoneFeature.CONNECTION_QUALITY)
+        return listOf(
+            HeadphoneCommand(
+                "GET connection quality",
+                codec.buildGetConnectionQuality(inquiredTypeCode.toByte()) ?: return emptyList(),
+                channel,
+            ),
+            HeadphoneCommand(
+                "GET connection quality availability",
+                codec.buildGetConnectionQualityAvailability(inquiredTypeCode.toByte()) ?: return emptyList(),
+                channel,
             ),
         )
     }

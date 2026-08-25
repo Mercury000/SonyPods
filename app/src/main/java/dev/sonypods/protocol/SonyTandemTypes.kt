@@ -209,6 +209,31 @@ sealed interface ParsedTandemResponse {
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
+    /**
+     * AUDIO_RET/NTFY_PARAM for the connection-quality inquired types
+     * (`cf0.i0` RET / `cf0.u` NTFY): [mode] is PriorMode. The LE-era 0x05 NTFY
+     * appends a fourth byte announcing which audio stream is switching
+     * (SC `SwitchingStream`); it rides in [switchingStreamCode] when present.
+     */
+    data class ConnectionQuality(
+        val mode: ConnectionQualityMode,
+        val switchingStreamCode: Int?,
+        val inquiredTypeCode: Int,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /**
+     * AUDIO_RET/NTFY_STATUS for a connection-quality inquired type
+     * (`cf0.t0` / `cf0.m`): the EnableDisable byte that decides whether the
+     * setting is currently usable — official greys the options while DISABLED.
+     */
+    data class ConnectionQualityAvailability(
+        val enabled: Boolean,
+        val isUnsolicited: Boolean,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
     /** Structured PLAY_RET_CAPABILITY (v1 and v2). */
     data class PlaybackCapability(
         val inquiredTypeCode: Int,

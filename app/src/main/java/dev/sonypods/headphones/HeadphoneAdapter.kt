@@ -42,6 +42,7 @@ enum class HeadphoneFeature {
     CLEAR_BASS,
     LEA_STATUS,
     UPSCALING,
+    CONNECTION_QUALITY,
     QUICK_ACCESS,
     WEARING_STATUS,
     GESTURE_OPERATIONS,
@@ -156,6 +157,14 @@ data class HeadphoneCapabilities(
      * (UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON) for the newer one.
      * Null = the support-function list did not advertise upscaling. */
     val upscalingInquiredTypeCode: Int? = null,
+    /** AUDIO inquired type the Bluetooth 连接质量 toggle uses, picked with SC's
+     * card-branch priority: 0x05 (CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO) over
+     * 0x00 (CONNECTION_MODE) over 0x02 (…_WITH_LDAC_STATUS). Null = the
+     * support-function list advertised none of them. */
+    val connectionQualityInquiredTypeCode: Int? = null,
+    /** 支持列表宣告 0x4D（连接质量在 LE Audio 下不可用）：卡片保留但置灰，
+     * 右侧显示「不可用」。会话级状态——随当前传输的能力表变化。 */
+    val connectionQualityRestrictedByLea: Boolean = false,
     /** UpscalingType byte from AUDIO_RET_CAPABILITY (`cf0.e0`) — the DSEE
      * generation: DSEE_HX=0, DSEE=1, DSEE_HX_AI/Extreme=2, DSEE_ULTIMATE=3.
      * The official title/description strings are picked from this, not from

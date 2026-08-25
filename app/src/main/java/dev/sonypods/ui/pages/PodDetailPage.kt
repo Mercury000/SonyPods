@@ -3,6 +3,8 @@ package dev.sonypods.ui.pages
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
@@ -45,12 +47,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
+import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
+import dev.sonypods.ui.dialogs.ConnectionQualityConfirmDialog
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.localizedName
@@ -222,6 +226,12 @@ private fun LazyListScope.podControlItems(
         PlaybackCard(uiState = uiState, actions = actions)
     }
 
+    if (uiState.supportsConnectionQuality) {
+        item {
+            ConnectionQualityCard(uiState = uiState, actions = actions)
+        }
+    }
+
     if (uiState.supportsUpscaling) {
         item {
             UpscalingCard(uiState = uiState, actions = actions)
@@ -264,6 +274,76 @@ private fun LazyListScope.podControlItems(
 
     item {
         Spacer(modifier = Modifier.height(bottomContentPadding))
+    }
+}
+
+/**
+ * Bluetooth 连接质量（AUDIO 域 CONNECTION_MODE 系）。复刻官方两档选择：
+ * 声音质量优先 / 稳定连接优先。点击未选中项先弹确认框（文案同官方），
+ * 确认后才发送；选中态只由耳机应答（RET/NTFY）驱动。
+ *
+ * 两种不可用形态都不隐藏卡片：
+ * - 能力表宣告 0x4D（LE Audio 下不可用）→ 选择器位置显示「不可用」并置灰；
+ * - AUDIO_STATUS EnableDisable=DISABLE → 选择器置灰。
+ */
+@Composable
+private fun ConnectionQualityCard(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    val current = uiState.connectionQualityModeName
+        ?.let { name -> runCatching { ConnectionQualityMode.valueOf(name) }.getOrNull() }
+    val disabled = uiState.connectionQualityRestrictedByLea ||
+        uiState.connectionQualityEnabled == false
+    var pendingMode by remember { mutableStateOf<ConnectionQualityMode?>(null) }
+
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        if (disabled) {
+            // 无 enabled 参数：叠一层透明拦截，禁止打开选择菜单
+            Box {
+                OverlayDropdownPreference(
+                    title = "Bluetooth连接质量",
+                    summary = "该设置仅在通过 Classic Audio 连接时启用",
+                    items = listOf("不可用"),
+                    selectedIndex = 0,
+                    onSelectedIndexChange = { },
+                    modifier = Modifier.alpha(0.38f),
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { },
+                )
+            }
+        } else {
+            val options = listOf(
+                ConnectionQualityMode.SOUND_QUALITY_PRIOR to "声音质量优先",
+                ConnectionQualityMode.CONNECTION_QUALITY_PRIOR to "稳定连接优先",
+            )
+            OverlayDropdownPreference(
+                title = "Bluetooth连接质量",
+                items = options.map { it.second },
+                selectedIndex = options.indexOfFirst { it.first == current }.coerceAtLeast(0),
+                onSelectedIndexChange = { index ->
+                    val target = options.getOrNull(index)?.first ?: return@OverlayDropdownPreference
+                    if (target != current) pendingMode = target
+                },
+            )
+        }
+    }
+
+    pendingMode?.let { target ->
+        ConnectionQualityConfirmDialog(
+            target = target,
+            onConfirm = {
+                actions.onConnectionQualityChange(target)
+                pendingMode = null
+            },
+            onCancel = { pendingMode = null },
+        )
     }
 }
 
@@ -694,21 +774,34 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
                 }
-                IconButton(onClick = actions.onPlaybackPrevious) {
+                // 连接质量切换的重连窗口内播放控制置灰（官方以引导页/进度框接管，
+                // 语义等价：此期间传输按钮不可用）。
+                val transportLocked = uiState.connectionQualitySwitching
+                val transportAlpha = if (transportLocked) 0.38f else 1f
+                IconButton(
+                    onClick = actions.onPlaybackPrevious.takeIf { !transportLocked } ?: {},
+                    modifier = Modifier.alpha(transportAlpha),
+                ) {
                     Icon(
                         imageVector = AppIcons.SkipPrevious,
                         contentDescription = stringResource(R.string.playback_previous),
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = actions.onPlaybackPlayPause) {
+                IconButton(
+                    onClick = actions.onPlaybackPlayPause.takeIf { !transportLocked } ?: {},
+                    modifier = Modifier.alpha(transportAlpha),
+                ) {
                     Icon(
                         imageVector = if (playing) AppIcons.Pause else AppIcons.Play,
                         contentDescription = stringResource(R.string.playback_play_pause),
                         modifier = Modifier.size(28.dp),
                     )
                 }
-                IconButton(onClick = actions.onPlaybackNext) {
+                IconButton(
+                    onClick = actions.onPlaybackNext.takeIf { !transportLocked } ?: {},
+                    modifier = Modifier.alpha(transportAlpha),
+                ) {
                     Icon(
                         imageVector = AppIcons.SkipNext,
                         contentDescription = stringResource(R.string.playback_next),

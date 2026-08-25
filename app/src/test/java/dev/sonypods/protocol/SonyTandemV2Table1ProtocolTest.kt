@@ -1711,4 +1711,56 @@ class SonyTandemV2Table1ProtocolTest {
             ) is ParsedTandemResponse.Unknown
         )
     }
+
+    /** AUDIO_RET_PARAM (E7) for CONNECTION_MODE: [inq][PriorMode], three bytes total. */
+    @Test
+    fun connectionQuality_ret_classicConnectionMode_parsesMode() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE7.toByte(), 0x00, 0x00)
+        ) as ParsedTandemResponse.ConnectionQuality
+
+        assertFalse(parsed.isUnsolicited)
+        assertEquals(ConnectionQualityMode.SOUND_QUALITY_PRIOR, parsed.mode)
+        assertEquals(0x00, parsed.inquiredTypeCode)
+        assertEquals(null, parsed.switchingStreamCode)
+    }
+
+    /** LE-era NTFY (E9, inq 0x05) carries a fourth SwitchingStream byte. */
+    @Test
+    fun connectionQuality_ntfy_leDualWithSwitchingStream_parses() {
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE9.toByte(), 0x05, 0x01, 0x02)
+        ) as ParsedTandemResponse.ConnectionQuality
+
+        assertTrue(parsed.isUnsolicited)
+        assertEquals(ConnectionQualityMode.CONNECTION_QUALITY_PRIOR, parsed.mode)
+        assertEquals(0x05, parsed.inquiredTypeCode)
+        assertEquals(0x02, parsed.switchingStreamCode)
+    }
+
+    /** Out-of-range PriorMode values reject the whole frame like SC's factories. */
+    @Test
+    fun connectionQuality_param_unknownPriorMode_isUnknown() {
+        assertTrue(
+            SonyTandemV2Table1Protocol.parse(
+                byteArrayOf(0x0E, 0xE7.toByte(), 0x00, 0x7F)
+            ) is ParsedTandemResponse.Unknown
+        )
+    }
+
+    /** STATUS (E3 RET / E5 NTFY) carries the EnableDisable availability byte. */
+    @Test
+    fun connectionQuality_status_disabled_greysOptions() {
+        val ret = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE3.toByte(), 0x00, 0x01)
+        ) as ParsedTandemResponse.ConnectionQualityAvailability
+        val ntfy = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xE5.toByte(), 0x05, 0x00)
+        ) as ParsedTandemResponse.ConnectionQualityAvailability
+
+        assertFalse(ret.enabled)
+        assertFalse(ret.isUnsolicited)
+        assertTrue(ntfy.enabled)
+        assertTrue(ntfy.isUnsolicited)
+    }
 }

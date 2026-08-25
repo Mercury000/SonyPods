@@ -1,6 +1,7 @@
 package dev.sonypods.headphones
 
 import dev.sonypods.protocol.AmbientSoundMode
+import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
@@ -37,6 +38,13 @@ interface TandemCodec {
     fun buildSetUpscaling(inquiredTypeCode: Byte, on: Boolean): ByteArray? = null
     /** AUDIO_GET_CAPABILITY for the upscaling inquired types (DSEE generation). */
     fun buildGetUpscalingCapability(inquiredTypeCode: Byte): ByteArray? = null
+    /** AUDIO 域 Bluetooth 连接质量；null on protocols without the domain. */
+    fun buildGetConnectionQuality(inquiredTypeCode: Byte): ByteArray? = null
+    fun buildSetConnectionQuality(
+        inquiredTypeCode: Byte,
+        mode: ConnectionQualityMode,
+    ): ByteArray? = null
+    fun buildGetConnectionQualityAvailability(inquiredTypeCode: Byte): ByteArray? = null
     fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray? = null
     fun buildGetDisplayFirmwareVersion(): ByteArray? = null
     fun buildGetBatteryStatus(type: PowerInquiredType): ByteArray? = null
@@ -325,6 +333,17 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildGetUpscalingCapability(inquiredTypeCode: Byte): ByteArray =
         SonyTandemV2Table1Protocol.buildGetUpscalingCapability(inquiredTypeCode)
+
+    override fun buildGetConnectionQuality(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetConnectionQuality(inquiredTypeCode)
+
+    override fun buildSetConnectionQuality(
+        inquiredTypeCode: Byte,
+        mode: ConnectionQualityMode,
+    ): ByteArray = SonyTandemV2Table1Protocol.buildSetConnectionQuality(inquiredTypeCode, mode)
+
+    override fun buildGetConnectionQualityAvailability(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetConnectionQualityAvailability(inquiredTypeCode)
 
     override fun buildGetDeviceInfo(type: DeviceInfoType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetDeviceInfo(type)

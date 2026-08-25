@@ -159,6 +159,21 @@ enum class PlaybackControl(val code: Byte) {
     PLAY(0x07),
 }
 
+/**
+ * AUDIO 域连接质量取值（SC `audio/param/PriorMode`）。LOW_LATENCY 只出现在
+ * LE Audio 场景的 0x05 变体里，解析层保留它以保证不丢帧，UI 只暴露两档。
+ */
+enum class ConnectionQualityMode(val code: Byte) {
+    SOUND_QUALITY_PRIOR(0x00),
+    CONNECTION_QUALITY_PRIOR(0x01),
+    LOW_LATENCY_PRIOR_BETA(0x02);
+
+    companion object {
+        fun fromCode(code: Int): ConnectionQualityMode? =
+            entries.firstOrNull { it.code == code.toByte() }
+    }
+}
+
 enum class PlayInquiredType(val code: Byte) {
     PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT(0x01),
     PLAYBACK_CONTROL_WITH_CALL_VOLUME_ADJUSTMENT_AND_FUNCTION_CHANGE(0x02),

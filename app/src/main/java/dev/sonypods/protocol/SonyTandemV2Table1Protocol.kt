@@ -205,6 +205,23 @@ object SonyTandemV2Table1Protocol {
     private const val VALUE_ENABLE: Byte = 0x00
     private const val VALUE_CHANGED: Byte = 0x01
 
+    // ── AUDIO domain status sub-commands (SC `cf0.q0/s0/t0/m` family) ──
+    // Availability rides GET/RET/NTFY_STATUS with [inq][EnableDisable]; it gates
+    // whether the connection-quality options are currently usable.
+    private const val AUDIO_GET_STATUS: Byte = 0xE2.toByte()
+    private const val AUDIO_RET_STATUS: Byte = 0xE3.toByte()
+    private const val AUDIO_NTFY_STATUS: Byte = 0xE5.toByte()
+
+    // ── AudioInquiredType entries carrying the Bluetooth 连接质量 setting ──
+    // CONNECTION_MODE=0x00 (classic), _WITH_LDAC_STATUS=0x02 (LDAC models),
+    // CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO=0x05 (the LE-era dual-mode variant).
+    private const val AUDIO_INQ_CONNECTION_MODE: Byte = 0x00
+    private const val AUDIO_INQ_CONNECTION_MODE_WITH_LDAC_STATUS: Byte = 0x02
+    private const val AUDIO_INQ_CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO: Byte = 0x05
+
+    /** EnableDisable for the STATUS frames: ENABLE=0, DISABLE=1. */
+    private const val ENABLE_DISABLE_ENABLE: Byte = 0x00
+
     // ── NCASM V2 enums (Sound Connect 13.2.1, `ncasm/param` package) ──
     // NcAsmOnOffValue: OFF=0x00, ON=0x01 (NOT the inverted generic V2
     // `OnOffSettingValue` convention — SC uses NcAsmOnOffValue everywhere in the
@@ -252,6 +269,24 @@ object SonyTandemV2Table1Protocol {
     /** AUDIO_GET_PARAM for one of the upscaling inquired types (0x01 / 0x0B). */
     fun buildGetUpscaling(inquiredTypeCode: Byte): ByteArray =
         SonyTandemFrame.message(AUDIO_GET_PARAM, byteArrayOf(inquiredTypeCode))
+
+    /** AUDIO_GET_PARAM for one of the connection-quality inquired types (0x00/02/05). */
+    fun buildGetConnectionQuality(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemFrame.message(AUDIO_GET_PARAM, byteArrayOf(inquiredTypeCode))
+
+    /** AUDIO_GET_STATUS: the EnableDisable availability for a connection-quality type. */
+    fun buildGetConnectionQualityAvailability(inquiredTypeCode: Byte): ByteArray =
+        SonyTandemFrame.message(AUDIO_GET_STATUS, byteArrayOf(inquiredTypeCode))
+
+    /**
+     * AUDIO_SET_PARAM switching 声音质量优先 / 稳定连接优先 — [mode] maps onto
+     * PriorMode exactly as SC's `r60.b.mo98226b` does (LOW_LATENCY included so
+     * the wire format stays complete even though the UI never offers it).
+     */
+    fun buildSetConnectionQuality(
+        inquiredTypeCode: Byte,
+        mode: ConnectionQualityMode,
+    ): ByteArray = SonyTandemFrame.message(AUDIO_SET_PARAM, byteArrayOf(inquiredTypeCode, mode.code))
 
     /**
      * AUDIO_GET_CAPABILITY (0xE0) for one of the upscaling inquired types. Its
@@ -852,6 +887,15 @@ object SonyTandemV2Table1Protocol {
             AUDIO_RET_PARAM -> parseAudioParam(payload, raw, isUnsolicited = false)
             AUDIO_NTFY_PARAM -> parseAudioParam(payload, raw, isUnsolicited = true)
             AUDIO_RET_CAPABILITY -> parseUpscalingCapability(payload, raw)
+            AUDIO_GET_STATUS -> parseConnectionQualityAvailability(
+                payload, raw, isUnsolicited = false,
+            ) { it.size == 2 }
+            AUDIO_RET_STATUS -> parseConnectionQualityAvailability(
+                payload, raw, isUnsolicited = false,
+            ) { it.size == 2 }
+            AUDIO_NTFY_STATUS -> parseConnectionQualityAvailability(
+                payload, raw, isUnsolicited = true,
+            ) { it.size == 2 }
             LEA_RET_STATUS, LEA_NTFY_STATUS -> if (
                 payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
             ) {
@@ -1262,22 +1306,89 @@ object SonyTandemV2Table1Protocol {
         }
 
     /**
-     * AUDIO_RET_PARAM / AUDIO_NTFY_PARAM for the upscaling inquired types:
-     * `[inq][UpscalingTypeAutoOff]`, exactly three bytes on the wire like SC's
-     * `cf0.o0` (length and value-range violations reject the whole frame).
+     * AUDIO_RET_PARAM / AUDIO_NTFY_PARAM dispatch by inquired type: the
+     * connection-quality types (0x00/02/05) carry a PriorMode value, the
+     * upscaling types (0x01/0x0B) an UpscalingTypeAutoOff — anything else is
+     * rejected whole like SC's per-type factories do.
      */
     private fun parseAudioParam(payload: ByteArray, raw: ByteArray, isUnsolicited: Boolean): ParsedTandemResponse {
         val inquiredType = payload.firstOrNull()?.unsigned
-        if (payload.size != 2 || (inquiredType != AUDIO_INQ_UPSCALING.unsigned &&
-                    inquiredType != AUDIO_INQ_UPSCALING_WITH_REASON.unsigned)
-        ) {
+        return when (inquiredType) {
+            AUDIO_INQ_CONNECTION_MODE.unsigned,
+            AUDIO_INQ_CONNECTION_MODE_WITH_LDAC_STATUS.unsigned,
+            AUDIO_INQ_CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO.unsigned,
+            -> parseConnectionQualityParam(payload, raw, isUnsolicited)
+
+            AUDIO_INQ_UPSCALING.unsigned,
+            AUDIO_INQ_UPSCALING_WITH_REASON.unsigned,
+            -> parseUpscalingParam(payload, raw, isUnsolicited)
+
+            else -> ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+    }
+
+    /**
+     * Connection-quality PARAM frame (`cf0.i0` / `cf0.u`): `[inq][PriorMode]`,
+     * three bytes on the wire for RET and the classic NTFY. The LE-era 0x05 NTFY
+     * appends SwitchingStream as a fourth byte announcing which audio stream is
+     * migrating — accepted and surfaced, never used to reject the frame.
+     */
+    private fun parseConnectionQualityParam(
+        payload: ByteArray,
+        raw: ByteArray,
+        isUnsolicited: Boolean,
+    ): ParsedTandemResponse {
+        val mode = payload.getOrNull(1)?.let { ConnectionQualityMode.fromCode(it.unsigned) }
+            ?: return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        val switchingStream = payload.getOrNull(2)?.unsigned
+        if (payload.size > 3) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+        return ParsedTandemResponse.ConnectionQuality(
+            mode = mode,
+            switchingStreamCode = switchingStream,
+            inquiredTypeCode = payload.firstOrNull()!!.unsigned,
+            isUnsolicited = isUnsolicited,
+            raw = raw,
+        )
+    }
+
+    /** Upscaling PARAM frame (`cf0.o0`): `[inq][UpscalingTypeAutoOff]`, exactly two bytes. */
+    private fun parseUpscalingParam(payload: ByteArray, raw: ByteArray, isUnsolicited: Boolean): ParsedTandemResponse {
+        if (payload.size != 2) {
             return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
         }
         return when (payload[1]) {
-            UPSCALING_OFF -> ParsedTandemResponse.Upscaling(false, inquiredType!!, isUnsolicited, raw)
-            UPSCALING_AUTO -> ParsedTandemResponse.Upscaling(true, inquiredType!!, isUnsolicited, raw)
+            UPSCALING_OFF -> ParsedTandemResponse.Upscaling(false, payload[0].unsigned, isUnsolicited, raw)
+            UPSCALING_AUTO -> ParsedTandemResponse.Upscaling(true, payload[0].unsigned, isUnsolicited, raw)
             else -> ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
         }
+    }
+
+    /**
+     * AUDIO status frame for a connection-quality inquired type (`cf0.t0` /
+     * `cf0.m`): `[inq][EnableDisable]`. Only frames whose inquired type carries
+     * this feature are consumed; other AUDIO statuses fall through as Unknown.
+     * [lengthCheck] enforces each base class's exact wire length.
+     */
+    private fun parseConnectionQualityAvailability(
+        payload: ByteArray,
+        raw: ByteArray,
+        isUnsolicited: Boolean,
+        lengthCheck: (ByteArray) -> Boolean,
+    ): ParsedTandemResponse {
+        val inquiredType = payload.firstOrNull()?.unsigned
+        val knownConnectionQualityType = inquiredType == AUDIO_INQ_CONNECTION_MODE.unsigned ||
+            inquiredType == AUDIO_INQ_CONNECTION_MODE_WITH_LDAC_STATUS.unsigned ||
+            inquiredType == AUDIO_INQ_CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO.unsigned ||
+            // 0x0B rides the same STATUS sub-domain for the newer DSEE generation;
+            // its availability is not consumed today but must not parse as Unknown.
+            inquiredType == AUDIO_INQ_UPSCALING_WITH_REASON.unsigned
+        if (!knownConnectionQualityType || !lengthCheck(payload)) {
+            return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
+        }
+        val enabled = payload[1] == ENABLE_DISABLE_ENABLE
+        return ParsedTandemResponse.ConnectionQualityAvailability(enabled, isUnsolicited, raw)
     }
 
     /**

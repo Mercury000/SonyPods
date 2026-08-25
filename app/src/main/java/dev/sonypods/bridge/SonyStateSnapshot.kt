@@ -107,6 +107,13 @@ data class SonyStateSnapshot(
     val supportsUpscaling: Boolean = false,
     val upscalingEnabled: Boolean? = null,
     val upscalingTypeCode: Int = -1,
+    /** Bluetooth 连接质量（AUDIO 域 CONNECTION_MODE 系）：当前 PriorMode 名、
+     * 可用性（null=未应答，按可用对待），以及能力表宣告的 inquired 类型码。 */
+    val connectionQualityModeName: String? = null,
+    val connectionQualityEnabled: Boolean? = null,
+    val supportsConnectionQuality: Boolean = false,
+    val connectionQualityRestrictedByLea: Boolean = false,
+    val connectionQualitySwitching: Boolean = false,
     val leaStreamingStatusL: String? = null,
     val leaStreamingStatusR: String? = null,
     val leAudioPending: Boolean = false,
@@ -248,6 +255,11 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_UPSCALING, supportsUpscaling)
         upscalingEnabled?.let { putBoolean(KEY_UPSCALING_ENABLED, it) }
         putInt(KEY_UPSCALING_TYPE, upscalingTypeCode)
+        connectionQualityModeName?.let { putString(KEY_CONNECTION_QUALITY_MODE, it) }
+        connectionQualityEnabled?.let { putBoolean(KEY_CONNECTION_QUALITY_ENABLED, it) }
+        putBoolean(KEY_SUPPORTS_CONNECTION_QUALITY, supportsConnectionQuality)
+        putBoolean(KEY_CONNECTION_QUALITY_RESTRICTED, connectionQualityRestrictedByLea)
+        putBoolean(KEY_CONNECTION_QUALITY_SWITCHING, connectionQualitySwitching)
         leaStatus?.let { putString(KEY_LEA, it) }
         leaStreamingStatusL?.let { putString(KEY_LEA_STREAMING_L, it) }
         leaStreamingStatusR?.let { putString(KEY_LEA_STREAMING_R, it) }
@@ -349,6 +361,11 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_UPSCALING = "supports_upscaling"
         private const val KEY_UPSCALING_ENABLED = "upscaling_enabled"
         private const val KEY_UPSCALING_TYPE = "upscaling_type"
+        private const val KEY_CONNECTION_QUALITY_MODE = "connection_quality_mode"
+        private const val KEY_CONNECTION_QUALITY_ENABLED = "connection_quality_enabled"
+        private const val KEY_SUPPORTS_CONNECTION_QUALITY = "supports_connection_quality"
+        private const val KEY_CONNECTION_QUALITY_RESTRICTED = "connection_quality_restricted"
+        private const val KEY_CONNECTION_QUALITY_SWITCHING = "connection_quality_switching"
         private const val KEY_LEA = "lea"
         private const val KEY_LEA_STREAMING_L = "lea_streaming_l"
         private const val KEY_LEA_STREAMING_R = "lea_streaming_r"
@@ -443,6 +460,13 @@ data class SonyStateSnapshot(
                 bundle.getBoolean(KEY_UPSCALING_ENABLED)
             } else null,
             upscalingTypeCode = bundle.getInt(KEY_UPSCALING_TYPE, -1),
+            connectionQualityModeName = bundle.getString(KEY_CONNECTION_QUALITY_MODE),
+            connectionQualityEnabled = if (bundle.containsKey(KEY_CONNECTION_QUALITY_ENABLED)) {
+                bundle.getBoolean(KEY_CONNECTION_QUALITY_ENABLED)
+            } else null,
+            supportsConnectionQuality = bundle.getBoolean(KEY_SUPPORTS_CONNECTION_QUALITY, false),
+            connectionQualityRestrictedByLea = bundle.getBoolean(KEY_CONNECTION_QUALITY_RESTRICTED, false),
+            connectionQualitySwitching = bundle.getBoolean(KEY_CONNECTION_QUALITY_SWITCHING, false),
             leaStatus = bundle.getString(KEY_LEA),
             leaStreamingStatusL = bundle.getString(KEY_LEA_STREAMING_L),
             leaStreamingStatusR = bundle.getString(KEY_LEA_STREAMING_R),
@@ -546,6 +570,13 @@ data class SonyStateSnapshot(
                 upscalingEnabled = state.upscalingEnabled,
                 upscalingTypeCode = state.connectedProfile
                     ?.capabilities?.upscalingTypeCode ?: -1,
+                connectionQualityModeName = state.connectionQualityMode?.name,
+                connectionQualityEnabled = state.connectionQualityEnabled,
+                supportsConnectionQuality = state.connectedProfile
+                    ?.supports(dev.sonypods.headphones.HeadphoneFeature.CONNECTION_QUALITY) == true,
+                connectionQualityRestrictedByLea = state.connectedProfile
+                    ?.capabilities?.connectionQualityRestrictedByLea == true,
+                connectionQualitySwitching = state.connectionQualitySwitching,
                 leaStreamingStatusL = state.leaState.streamingStatusL,
                 leaStreamingStatusR = state.leaState.streamingStatusR,
                 leAudioPending = state.leAudioPendingAlert != null,

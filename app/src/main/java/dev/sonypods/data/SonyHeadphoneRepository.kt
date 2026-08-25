@@ -50,6 +50,7 @@ import dev.sonypods.config.GesturePresetCapabilityCache
 import dev.sonypods.config.QuickAccessActionCapabilityCache
 import dev.sonypods.config.QuickAccessCapabilityCache
 import dev.sonypods.protocol.AmbientSoundMode
+import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.DseeEffectState
 import dev.sonypods.protocol.DseeGeneration
@@ -126,6 +127,9 @@ private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
 private const val PLAYBACK_METADATA_REFETCH_DELAY_MS = 50L
+
+/** 连接质量切换重连窗口的硬上限；官方连接进度框同为 30s 自动关闭。 */
+private const val CONNECTION_QUALITY_SWITCH_TIMEOUT_MS = 30_000L
 private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
 /** Keep the optimistic GS value alive while the device asks for reconnection
  * confirmation and while the link is being re-established. */
@@ -532,6 +536,15 @@ data class SonyHeadphoneUiState(
     /** DSEE / DSEE Extreme (AUDIO-domain upscaling) toggle; null until answered
      * or unsupported — the UI only draws it when the profile advertises it. */
     val upscalingEnabled: Boolean? = null,
+    /** Bluetooth 连接质量（AUDIO 域 CONNECTION_MODE 系）：当前 PriorMode；
+     * null = 尚未应答或不支持。UI 只在能力表宣告时绘制选择器。 */
+    val connectionQualityMode: ConnectionQualityMode? = null,
+    /** 该设置的可用性（AUDIO_STATUS EnableDisable）；null = 未应答。
+     * 官方在 DISABLE 时将选项整组置灰。 */
+    val connectionQualityEnabled: Boolean? = null,
+    /** SET 已发出、尚未收到 RET/NTFY：官方此窗口内用引导页/进度框接管界面，
+     * 播放控制不可用；我们以等价方式置灰播放控制。 */
+    val connectionQualitySwitching: Boolean = false,
     val endpointDiagnostic: EndpointDiagnosticState? = null,
     val table2Diagnostic: Table2DiagnosticState? = null,
     val supportedFeatures: List<FeatureStatus> = featureStatusesFor(null),
@@ -690,6 +703,13 @@ class SonyHeadphoneRepository private constructor(
     private val playbackMetadataRefetchRunnable = Runnable {
         if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
             refreshPlaybackState()
+        }
+    }
+    /** 连接质量切换窗口的硬上限：官方连接进度框同为 30s 自动关闭。 */
+    private val connectionQualitySwitchTimeoutRunnable = Runnable {
+        if (_state.value.connectionQualitySwitching) {
+            _state.update { it.copy(connectionQualitySwitching = false) }
+            appendLog("Connection quality switch window closed (30s timeout)")
         }
     }
     private var pendingPlaybackStatus: PendingPlaybackStatus? = null
@@ -2625,6 +2645,9 @@ class SonyHeadphoneRepository private constructor(
                 soundQualityState = if (connected) it.soundQualityState else SoundQualityState(),
                 leAudioSwitchPending = if (connected) it.leAudioSwitchPending else false,
                 upscalingEnabled = if (connected) it.upscalingEnabled else null,
+                connectionQualityMode = if (connected) it.connectionQualityMode else null,
+                connectionQualityEnabled = if (connected) it.connectionQualityEnabled else null,
+                connectionQualitySwitching = false,
             )
         }
     }
@@ -2686,6 +2709,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.PlaybackMetadataInvalidated -> applyPlaybackMetadataInvalidated(parsed)
             is ParsedTandemResponse.PlaybackVolume -> applyPlaybackVolume(parsed)
             is ParsedTandemResponse.Upscaling -> applyUpscaling(parsed)
+            is ParsedTandemResponse.ConnectionQuality -> applyConnectionQuality(parsed)
+            is ParsedTandemResponse.ConnectionQualityAvailability -> applyConnectionQualityAvailability(parsed)
             is ParsedTandemResponse.UpscalingCapability -> applyUpscalingCapability(parsed)
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
@@ -3071,6 +3096,16 @@ class SonyHeadphoneRepository private constructor(
         if (_state.value.playbackState.track.isNullOrBlank()) {
             mainHandler.postDelayed(playbackMetadataRefetchRunnable, PLAYBACK_METADATA_REFETCH_DELAY_MS)
         }
+        // 连接质量切换的重连窗口：耳机重新报出可用状态（音频已恢复）才解除
+        // 播放控制置灰；30s 硬上限与官方连接进度框一致。
+        if (_state.value.connectionQualitySwitching &&
+            response.status in setOf(PlaybackStatus.PLAYING, PlaybackStatus.PAUSED) &&
+            response.enabled != false
+        ) {
+            mainHandler.removeCallbacks(connectionQualitySwitchTimeoutRunnable)
+            _state.update { it.copy(connectionQualitySwitching = false) }
+            appendLog("Connection quality switch window closed: audio restored")
+        }
     }
 
     private fun applyPlaybackCapability(response: ParsedTandemResponse.PlaybackCapability) {
@@ -3176,6 +3211,34 @@ class SonyHeadphoneRepository private constructor(
         _state.update { it.copy(upscalingEnabled = response.enabled) }
     }
 
+    /** AUDIO_RET/NTFY_PARAM (CONNECTION_MODE 系)：官方不做乐观更新——
+     * 选中态只在耳机确认（RET）或主动通知（NTFY，含流迁移方向）后变化。 */
+    private fun applyConnectionQuality(response: ParsedTandemResponse.ConnectionQuality) {
+        appendLog(
+            "Connection quality ${if (response.isUnsolicited) "NTFY" else "RET"} " +
+                "inq=0x%02X mode=%s%s"
+                    .format(
+                        response.inquiredTypeCode,
+                        response.mode,
+                        response.switchingStreamCode?.let { " switching=0x%02X".format(it) }.orEmpty(),
+                    )
+        )
+        // 模式确认（RET 几乎立即到达）不等于切换完成：重连窗口要等音频恢复，
+        // 由 PLAY 状态帧或 30s 超时关闭（官方连接进度框同为 30s 上限）。
+        _state.update { it.copy(connectionQualityMode = response.mode) }
+    }
+
+    /** AUDIO_RET/NTFY_STATUS：EnableDisable 可用性——DISABLE 时选项整组置灰。 */
+    private fun applyConnectionQualityAvailability(
+        response: ParsedTandemResponse.ConnectionQualityAvailability,
+    ) {
+        appendLog(
+            "Connection quality availability ${if (response.isUnsolicited) "NTFY" else "RET"} " +
+                "enabled=${response.enabled}"
+        )
+        _state.update { it.copy(connectionQualityEnabled = response.enabled) }
+    }
+
     /** AUDIO_RET_CAPABILITY: records the DSEE generation (`cf0.e0`) the headset
      * reports; the detail row's official title/description derive from it. */
     private fun applyUpscalingCapability(response: ParsedTandemResponse.UpscalingCapability) {
@@ -3219,6 +3282,35 @@ class SonyHeadphoneRepository private constructor(
                     .buildSetUpscaling(inquiredTypeCode.toByte(), enabled)
                     ?: return,
                 channel = profile.channelFor(HeadphoneFeature.UPSCALING),
+            )
+        )
+    }
+
+    /**
+     * 切换 Bluetooth 连接质量（AUDIO_SET_PARAM + PriorMode）。刻意**不做乐观
+     * 更新**：官方在确认对话框通过后仅发送，选中态等 RET/NTFY 带回新值才变——
+     * 失败（重试耗尽/被拒）时 UI 自然停在原值上。
+     */
+    fun setConnectionQuality(mode: ConnectionQualityMode) {
+        val profile = _state.value.connectedProfile ?: return
+        if (!profile.supports(HeadphoneFeature.CONNECTION_QUALITY)) return
+        if (_state.value.connectionQualityEnabled == false) {
+            appendLog("Connection quality change ignored: setting currently unavailable")
+            return
+        }
+        if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) != HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) return
+        val inquiredTypeCode = profile.capabilities.connectionQualityInquiredTypeCode ?: return
+        _state.update { it.copy(connectionQualitySwitching = true) }
+        mainHandler.removeCallbacks(connectionQualitySwitchTimeoutRunnable)
+        mainHandler.postDelayed(connectionQualitySwitchTimeoutRunnable, CONNECTION_QUALITY_SWITCH_TIMEOUT_MS)
+        sendCommandIfReady(
+            HeadphoneCommand(
+                label = "SET connection quality ${mode.name}",
+                bytes = TandemCodecRegistry
+                    .codecFor(profile.protocolFor(HeadphoneFeature.DEVICE_INFO))
+                    .buildSetConnectionQuality(inquiredTypeCode.toByte(), mode)
+                    ?: return,
+                channel = profile.channelFor(HeadphoneFeature.CONNECTION_QUALITY),
             )
         )
     }

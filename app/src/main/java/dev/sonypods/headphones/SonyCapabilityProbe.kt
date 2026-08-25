@@ -236,6 +236,15 @@ object SonyCapabilityProbe {
         // one, and neither means the device has no DSEE toggle at all.
         var upscalingPlain = false
         var upscalingWithStatusReason = false
+        // SC's card-branch priority (`d0.mo24713c`): the LE-era dual-mode variant
+        // wins over the classic one over the LDAC-status one; none means no
+        // Bluetooth 连接质量 setting at all.
+        var qualityLeDual = false
+        var qualityPlain = false
+        var qualityLdacStatus = false
+        // 官方分支③的判定来源：耳机宣告「连接质量在 LE Audio 下不可用」（0x4D）。
+        // 此时卡片保留但置灰——与「直接隐藏」不同，这是会话级运行时状态。
+        var qualityLeaRestricted = false
         val leaControlSupported = functions.any {
             it.v2Type() == SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING
         }
@@ -248,6 +257,12 @@ object SonyCapabilityProbe {
                 SonyV2FunctionType.UPSCALING_AUTO_OFF -> upscalingPlain = true
                 SonyV2FunctionType.UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON ->
                     upscalingWithStatusReason = true
+                SonyV2FunctionType.CONNECTION_MODE_CLASSIC_AUDIO_LE_AUDIO -> qualityLeDual = true
+                SonyV2FunctionType.CONNECTION_MODE_SOUND_QUALITY_CONNECTION_QUALITY -> qualityPlain = true
+                SonyV2FunctionType.CONNECTION_MODE_SOUND_QUALITY_SOUND_WITH_LDAC_STATUS_QUALITY_CONNECTION_QUALITY ->
+                    qualityLdacStatus = true
+                SonyV2FunctionType.CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION ->
+                    qualityLeaRestricted = true
                 else -> Unit
             }
             when (function.domain(profile)) {
@@ -411,6 +426,16 @@ object SonyCapabilityProbe {
             features.add(HeadphoneFeature.UPSCALING)
         }
 
+        val connectionQualityInquiredTypeCode = when {
+            qualityLeDual -> 0x05
+            qualityPlain -> 0x00
+            qualityLdacStatus -> 0x02
+            else -> null
+        }
+        if (connectionQualityInquiredTypeCode != null || qualityLeaRestricted) {
+            features.add(HeadphoneFeature.CONNECTION_QUALITY)
+        }
+
         // Live sound-quality badges: SC registers both indicator features on
         // their FunctionType presence alone (`u70.p1` / `t70.d`), so a model
         // without the entry simply never shows that badge. V1 and V2 byte codes
@@ -442,6 +467,10 @@ object SonyCapabilityProbe {
             // The DSEE generation byte only arrives via the AUDIO_RET_CAPABILITY
             // probe; a restored/fallback tableset keeps whatever was cached.
             upscalingTypeCode = fallback.upscalingTypeCode,
+            connectionQualityInquiredTypeCode = connectionQualityInquiredTypeCode
+                ?: fallback.connectionQualityInquiredTypeCode,
+            // 限制标记是会话级的（随当前传输的能力表变化），不从 fallback 继承。
+            connectionQualityRestrictedByLea = qualityLeaRestricted,
             codecIndicatorSupported = codecIndicatorSupported,
             upscalingIndicatorSupported = upscalingIndicatorSupported,
             eqConfig = eqConfig,
@@ -603,6 +632,7 @@ object SonyCapabilityProbe {
         HeadphoneFeature.POWER_OFF,
         HeadphoneFeature.LEA_STATUS,
         HeadphoneFeature.UPSCALING,
+        HeadphoneFeature.CONNECTION_QUALITY,
         HeadphoneFeature.QUICK_ACCESS,
         HeadphoneFeature.WEARING_STATUS,
         HeadphoneFeature.GESTURE_OPERATIONS,
