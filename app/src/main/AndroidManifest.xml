@@ -44,6 +44,7 @@
         <!-- Module settings entry remains enabled when the launcher alias is hidden. -->
         <activity android:name="dev.sonypods.MainActivity"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustNothing"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"
             android:exported="true">
             <intent-filter>
