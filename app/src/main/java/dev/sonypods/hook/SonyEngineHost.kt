@@ -2193,10 +2193,25 @@ object SonyEngineHost {
         val address = snapshot.deviceAddress ?: return
         val level = snapshot.systemBatteryLevel ?: return
         val service = adapterService() ?: return
-        val device = remoteDevice(context, address) ?: return
-        runCatching {
-            callMethod(service, "setBatteryLevel", device, level, false)
-            Log.d(TAG, "battery injected level=$level address=$address")
-        }.onFailure { Log.w(TAG, "setBatteryLevel failed level=$level", it) }
+        // The stack keeps a battery cache per identity, and stock UI (the bluetooth landing
+        // page) may read the LE Audio identity's entry — which the headset also updates
+        // natively with its own, differently-sourced reading. Inject into both identities so
+        // every reader sees the same Tandem-derived value.
+        val targets = buildList {
+            add(address)
+            SonyDeviceService.leAudioAliasSnapshot().entries
+                .firstOrNull { it.value.equals(address, ignoreCase = true) }
+                ?.key?.let(::add)
+        }
+        targets.forEach { target ->
+            val device = remoteDevice(context, target) ?: return@forEach
+            runCatching {
+                callMethod(service, "setBatteryLevel", device, level, false)
+                val readBack = runCatching {
+                    device.javaClass.getMethod("getBatteryLevel").invoke(device) as? Int
+                }.getOrNull()
+                Log.d(TAG, "battery injected level=$level readBack=$readBack address=$target")
+            }.onFailure { Log.w(TAG, "setBatteryLevel failed level=$level address=$target", it) }
+        }
     }
 }
