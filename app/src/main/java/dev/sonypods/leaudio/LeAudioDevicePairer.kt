@@ -629,6 +629,12 @@ class LeAudioDevicePairer(
             }
             log("LE Audio aliases: ${SonyDeviceService.leAudioAliasSnapshot()}")
         }
+        // After bonding, ask LeAudioService to connect each bonded member so the
+        // headset actually switches to LC3 and the Classic control channel comes up.
+        bonded.forEach { leAddress ->
+            allowLeAudioProfile(leAddress)
+            connectLeAudio(leAddress, allowDiscoveryRetry = false)
+        }
         val primary = bonded.firstOrNull()
         cleanUp()
         setStage(Stage.SUCCESS, message, primary)
