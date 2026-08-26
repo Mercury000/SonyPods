@@ -54,6 +54,7 @@ import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
+import dev.sonypods.ui.pages.VisibilitySettingsPage
 import dev.sonypods.ui.dialogs.MultipointAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioPairingHelpDialog
@@ -85,6 +86,7 @@ sealed interface Screen : NavKey {
     data object About : Screen
     data object Theme : Screen
     data object TandemDebug : Screen
+    data object Visibility : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
@@ -166,6 +168,7 @@ fun MainUI(
     val islandDurationSeconds = remember { mutableStateOf(appConfig.islandDurationSeconds) }
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
     val startupTab = remember { mutableStateOf(appConfig.startupTab) }
+    val visibility = remember { mutableStateOf(appConfig.visibility) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
 
     val sonyConnected = sonyState.connected
@@ -593,6 +596,7 @@ fun MainUI(
                 displayTitle = displayTitle,
                 sonyState = sonyState,
                 sonyActions = sonyActions,
+                visibility = visibility.value,
                 earphonePrefs = earphonePrefs.value,
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,
@@ -641,6 +645,7 @@ fun MainUI(
                     startupTab.value = it
                     ConfigManager.updateStartupTab(prefs, xposedService, it)
                 },
+                onOpenVisibility = { backStack.add(Screen.Visibility) },
                 appLanguage = appLanguage,
                 onAppLanguageChange = {
                     appLanguage.value = it
@@ -830,6 +835,64 @@ fun MainUI(
                         onBlurBottomBarChange = onBlurBottomBarChange,
                         blurTopBar = blurTopBar,
                         onBlurTopBarChange = onBlurTopBarChange,
+                    )
+                }
+            }
+        }
+        entry<Screen.Visibility> {
+            val visibilityScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val visibilityTopBarBackdrop = if (blurTopBar.value) {
+                rememberLayerBackdrop {
+                    drawRect(backgroundColor)
+                    drawContent()
+                }
+            } else {
+                null
+            }
+
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = stringResource(R.string.visibility_settings_title),
+                        largeTitle = stringResource(R.string.visibility_settings_title),
+                        modifier = if (visibilityTopBarBackdrop != null) {
+                            Modifier.textureBlur(
+                                backdrop = visibilityTopBarBackdrop,
+                                shape = RectangleShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                        color = if (visibilityTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
+                        scrollBehavior = visibilityScrollBehavior,
+                        navigationIcon = {
+                            IconButton(onClick = { backStack.removeLast() }) {
+                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                            }
+                        }
+                    )
+                }
+            ) { padding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(backgroundColor)
+                        .then(if (visibilityTopBarBackdrop != null) Modifier.layerBackdrop(visibilityTopBarBackdrop) else Modifier)
+                        .padding(padding),
+                ) {
+                    VisibilitySettingsPage(
+                        modifier = Modifier
+                            .overScrollVertical()
+                            .nestedScroll(visibilityScrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(bottom = pageBottomContentPadding),
+                        visibility = visibility.value,
+                        onVisibilityChange = { newVisibility ->
+                            visibility.value = newVisibility
+                            ConfigManager.updateVisibility(prefs, xposedService, newVisibility)
+                            // The Bluetooth-page badge switch is consumed by the hook in
+                            // the Settings process, which listens for config broadcasts.
+                            broadcastConfigChanged(context, "com.android.settings")
+                        },
                     )
                 }
             }

@@ -19,6 +19,7 @@ import android.widget.TextView
 import com.mercury.sonypods.BuildConfig
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.config.ConfigManager
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.DseeGeneration
@@ -898,6 +899,14 @@ object SettingsHeadsetHook : HookContext() {
             val dseeRes = currentDseeGeneration?.takeIf { currentDseeActive }?.let { dseeBadgeRes(it, dark) }
             val resIds = listOf(leaRes, codecRes, dseeRes)
             val state = badgeOverlayStates[host] ?: BadgeOverlayState().also { badgeOverlayStates[host] = it }
+            // Arrives with the pushed config (ACTION_CONFIG_CHANGED already refreshes
+            // fragments), so a toggle clears the overlay without waiting for a status event.
+            if (!ConfigManager.visibility().bluetoothBadge) {
+                state.drawables.forEach { host.overlay.remove(it) }
+                state.drawables.clear()
+                state.resIds = emptyList()
+                return@runCatching
+            }
             state.resIds = resIds
             state.drawables.forEach { host.overlay.remove(it) }
             state.drawables.clear()

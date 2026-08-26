@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
+import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.EqPresetId
@@ -84,6 +85,8 @@ fun PodDetailPage(
     podName: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions = SonyDetailActions(),
+    /** Per-card show/hide switches from the module settings' visibility section. */
+    visibility: VisibilityConfig = VisibilityConfig(),
     listState: LazyListState,
     boxImagePath: String? = null,
     /** Changes whenever the cached image record is rewritten, even if its path is stable. */
@@ -121,10 +124,12 @@ fun PodDetailPage(
                                 .widthIn(max = 280.dp),
                             contentScale = ContentScale.FillWidth
                         )
-                        SoundQualityBadges(
-                            uiState = uiState,
-                            modifier = Modifier.align(Alignment.BottomCenter),
-                        )
+                        if (visibility.detailBadge) {
+                            SoundQualityBadges(
+                                uiState = uiState,
+                                modifier = Modifier.align(Alignment.BottomCenter),
+                            )
+                        }
                     }
                 }
                 item {
@@ -147,6 +152,7 @@ fun PodDetailPage(
                 podControlItems(
                     uiState = uiState,
                     actions = actions,
+                    visibility = visibility,
                     bottomContentPadding = bottomContentPadding,
                     includeBattery = false,
                     includeDeviceStatus = false,
@@ -173,16 +179,19 @@ fun PodDetailPage(
                         .padding(vertical = 16.dp),
                     contentScale = ContentScale.FillWidth
                 )
-                SoundQualityBadges(
-                    uiState = uiState,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
+                if (visibility.detailBadge) {
+                    SoundQualityBadges(
+                        uiState = uiState,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
             }
         }
 
         podControlItems(
             uiState = uiState,
             actions = actions,
+            visibility = visibility,
             bottomContentPadding = bottomContentPadding
         )
     }
@@ -205,6 +214,7 @@ private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
 private fun LazyListScope.podControlItems(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
+    visibility: VisibilityConfig,
     bottomContentPadding: Dp,
     includeBattery: Boolean = true,
     includeAnc: Boolean = true,
@@ -222,39 +232,54 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    item {
-        EqCard(uiState = uiState, actions = actions)
+    if (visibility.eq) {
+        item {
+            EqCard(uiState = uiState, actions = actions)
+        }
     }
 
-    item {
-        PlaybackCard(uiState = uiState, actions = actions)
+    if (visibility.playback) {
+        item {
+            PlaybackCard(uiState = uiState, actions = actions)
+        }
     }
 
-    if (uiState.supportsConnectionQuality) {
+    // While LE Audio carries the audio these cards degrade to a greyed-out note;
+    // the paired switches let the user hide them outright for that duration.
+    val hideConnectionQuality = uiState.connectionQualityRestrictedByLea &&
+        !visibility.leaRestrictedConnectionQuality
+    val hideLdac = uiState.usingLeAudio && !visibility.leaRestrictedLdac
+    val hideMultipoint = uiState.connectedViaLeAudio && !visibility.leaRestrictedMultipoint
+
+    if (uiState.supportsConnectionQuality && !hideConnectionQuality) {
         item {
             ConnectionQualityCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (uiState.supportsUpscaling) {
+    if (uiState.supportsUpscaling && visibility.dsee) {
         item {
             UpscalingCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (uiState.ldacSupported) {
+    if (uiState.ldacSupported && !hideLdac) {
         item {
             LdacCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (uiState.supportsLeAudio) {
+    if (uiState.supportsLeAudio && visibility.leAudioCard) {
         item {
-            LeAudioCard(uiState = uiState, actions = actions)
+            LeAudioCard(
+                uiState = uiState,
+                actions = actions,
+                showLeAudioToggle = visibility.leAudioToggle,
+            )
         }
     }
 
-    if (uiState.supportsGestureOperations) {
+    if (uiState.supportsGestureOperations && visibility.gestures) {
         item {
             Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                 BasicComponent(
@@ -266,7 +291,7 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (uiState.supportsMultipoint) {
+    if (uiState.supportsMultipoint && !hideMultipoint) {
         item {
             MultipointEntryCard(
                 state = uiState.multipoint,
@@ -276,7 +301,7 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (includeDeviceStatus) {
+    if (includeDeviceStatus && visibility.firmware) {
         item {
             DeviceStatusCard(uiState = uiState)
         }
@@ -449,6 +474,7 @@ private fun upscalingDescription(typeCode: Int): String = when (typeCode) {
 private fun LeAudioCard(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
+    showLeAudioToggle: Boolean = true,
 ) {
     val enabled = uiState.leaStatus == "ENABLE"
     // Two witnesses, either conclusive: the stack routing this headset's LE Audio group, or the
@@ -478,7 +504,7 @@ private fun LeAudioCard(
         // non-discoverable one the system pairing screen never lists, and only then does the row
         // lead into the pairing flow. Shown while LC3 is in use as well, since turning it off is
         // the whole point of surfacing it.
-        if (enabled && !uiState.leAudioSwitchPending) {
+        if (showLeAudioToggle && enabled && !uiState.leAudioSwitchPending) {
             val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
                 uiState.leAudioDevicePairStage == "PAIRING"
             val policy = uiState.leAudioPolicyAllowed

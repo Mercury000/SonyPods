@@ -48,6 +48,7 @@ fun SettingsPage(
     onAncCycleModesChange: (Set<String>) -> Unit = {},
     startupTab: MutableState<Int> = mutableStateOf(ConfigManager.STARTUP_TAB_MODULE),
     onStartupTabChange: (Int) -> Unit = {},
+    onOpenVisibility: () -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     notificationClickAction: MutableState<Int> = mutableStateOf(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP),
@@ -198,6 +199,11 @@ fun SettingsPage(
                     items = startupTabOptions,
                     selectedIndex = startupTabValues.indexOf(startupTab.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onStartupTabChange(startupTabValues[it]) }
+                )
+                BasicComponent(
+                    title = stringResource(R.string.visibility_settings_title),
+                    summary = stringResource(R.string.visibility_settings_summary),
+                    onClick = onOpenVisibility,
                 )
             }
         }

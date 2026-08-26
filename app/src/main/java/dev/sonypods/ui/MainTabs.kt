@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.EarphonePref
+import dev.sonypods.config.VisibilityConfig
 import io.github.libxposed.service.XposedService
 import com.mercury.sonypods.R
 import dev.sonypods.ui.dialogs.RestartScope
@@ -81,6 +82,8 @@ internal fun MainTabsScaffold(
     displayTitle: String,
     sonyState: SonyStateSnapshot,
     sonyActions: SonyDetailActions,
+    /** Detail-page card/badge switches, resolved once in MainUI. */
+    visibility: VisibilityConfig,
     earphonePrefs: List<EarphonePref>,
     connectedDeviceAddress: String,
     connectingDeviceAddress: String?,
@@ -101,6 +104,7 @@ internal fun MainTabsScaffold(
     onAncCycleModesChange: (Set<String>) -> Unit,
     startupTab: MutableState<Int>,
     onStartupTabChange: (Int) -> Unit,
+    onOpenVisibility: () -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
     notificationClickAction: MutableState<Int>,
@@ -269,6 +273,7 @@ internal fun MainTabsScaffold(
                         displayTitle = displayTitle,
                         sonyState = sonyState,
                         sonyActions = sonyActions,
+                        visibility = visibility,
                         boxImagePath = currentEarphonePref?.boxImagePath,
                         boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
                         connectedDeviceAddress = connectedDeviceAddress,
@@ -303,6 +308,7 @@ internal fun MainTabsScaffold(
                         onAncCycleModesChange = onAncCycleModesChange,
                         startupTab = startupTab,
                         onStartupTabChange = onStartupTabChange,
+                        onOpenVisibility = onOpenVisibility,
                         appLanguage = appLanguage,
                         onAppLanguageChange = onAppLanguageChange,
                         notificationClickAction = notificationClickAction,
@@ -445,6 +451,7 @@ private fun EarphonesTabShell(
     displayTitle: String,
     sonyState: SonyStateSnapshot,
     sonyActions: SonyDetailActions,
+    visibility: VisibilityConfig,
     boxImagePath: String?,
     boxImageRevision: Long,
     connectedDeviceAddress: String,
@@ -559,6 +566,7 @@ private fun EarphonesTabShell(
                     onOpenGestureOperations = onOpenGestureOperations,
                     onOpenMultipointSettings = onOpenMultipointSettings,
                 ),
+                visibility = visibility,
                 boxImagePath = boxImagePath,
                 boxImageRevision = boxImageRevision,
                 connectedDeviceAddress = connectedDeviceAddress,
@@ -593,6 +601,7 @@ private fun SettingsTabPage(
     onAncCycleModesChange: (Set<String>) -> Unit,
     startupTab: MutableState<Int>,
     onStartupTabChange: (Int) -> Unit,
+    onOpenVisibility: () -> Unit,
     appLanguage: MutableState<Int>,
     onAppLanguageChange: (Int) -> Unit,
     notificationClickAction: MutableState<Int>,
@@ -671,6 +680,7 @@ private fun SettingsTabPage(
                 onAncCycleModesChange = onAncCycleModesChange,
                 startupTab = startupTab,
                 onStartupTabChange = onStartupTabChange,
+                onOpenVisibility = onOpenVisibility,
                 appLanguage = appLanguage,
                 onAppLanguageChange = onAppLanguageChange,
                 notificationClickAction = notificationClickAction,

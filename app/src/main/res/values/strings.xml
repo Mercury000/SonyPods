@@ -91,6 +91,12 @@
     <string name="log_level_debug">Debug</string>
     <string name="startup_tab">Startup page</string>
     <string name="startup_tab_summary">Choose which page opens when entering the app</string>
+    <string name="visibility_settings_title">Visibility</string>
+    <string name="visibility_settings_summary">Choose which cards and badges are shown</string>
+    <string name="visibility_section_bluetooth_page">Bluetooth page</string>
+    <string name="visibility_section_module_page">Module page</string>
+    <string name="visibility_section_lea_restricted">Unsupported while LE Audio is on</string>
+    <string name="sound_quality_badges">Sound quality badges</string>
     <string name="hide_desktop_icon">Hide Desktop Icon</string>
     <string name="hide_desktop_icon_summary">Hide the launcher icon; open from module manager after hiding</string>
     <string name="cycle_anc">Cycle ANC</string>

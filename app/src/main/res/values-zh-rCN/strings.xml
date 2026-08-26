@@ -92,6 +92,12 @@
     <string name="log_level_debug">调试</string>
     <string name="startup_tab">启动页</string>
     <string name="startup_tab_summary">选择进入模块时显示的页面</string>
+    <string name="visibility_settings_title">显隐设置</string>
+    <string name="visibility_settings_summary">控制各页面卡片与徽标的显示</string>
+    <string name="visibility_section_bluetooth_page">蓝牙页</string>
+    <string name="visibility_section_module_page">模块页</string>
+    <string name="visibility_section_lea_restricted">因LE Audio开启而不支持时</string>
+    <string name="sound_quality_badges">音质徽标</string>
     <string name="hide_desktop_icon">隐藏桌面图标</string>
     <string name="hide_desktop_icon_summary">隐藏启动器图标；隐藏后请从模块管理器打开</string>
     <string name="cycle_anc">切换降噪</string>

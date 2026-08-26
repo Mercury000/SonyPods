@@ -7,6 +7,38 @@ import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/**
+ * Per-surface show/hide switches for the module's cards and badges. Every flag
+ * defaults to true (current behaviour); a false value only ever removes a UI
+ * element — it can never make one appear when its own support condition fails.
+ */
+@Serializable
+data class VisibilityConfig(
+    /** Sound-quality badges overlaid on the system Bluetooth settings page. */
+    val bluetoothBadge: Boolean = true,
+    /** Sound-quality badge row on the module's earphone detail page. */
+    val detailBadge: Boolean = true,
+    val eq: Boolean = true,
+    val playback: Boolean = true,
+    val connectionQuality: Boolean = true,
+    val dsee: Boolean = true,
+    val ldac: Boolean = true,
+    /** LE Audio card as a whole. */
+    val leAudioCard: Boolean = true,
+    /** The low-power-audio switch inside the LE Audio card. */
+    val leAudioToggle: Boolean = true,
+    val gestures: Boolean = true,
+    val multipoint: Boolean = true,
+    val firmware: Boolean = true,
+    /**
+     * While LE Audio carries the audio these three cards degrade to a greyed-out
+     * note; a false value hides them outright for the duration instead.
+     */
+    val leaRestrictedConnectionQuality: Boolean = true,
+    val leaRestrictedLdac: Boolean = true,
+    val leaRestrictedMultipoint: Boolean = true,
+)
+
 @Serializable
 data class AppConfig(
     val fakeDeviceId: String = ConfigManager.DEFAULT_FAKE_DEVICE_ID,
@@ -36,6 +68,7 @@ data class AppConfig(
     val ancImplementationCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val ancCycleModes: Set<String> = ConfigManager.DEFAULT_ANC_CYCLE_MODES,
     val startupTab: Int = ConfigManager.STARTUP_TAB_MODULE,
+    val visibility: VisibilityConfig = VisibilityConfig(),
 )
 
 object ConfigManager {
@@ -214,6 +247,13 @@ object ConfigManager {
     fun ancCycleModes(): Set<String> = current().ancCycleModes.normalizedAncCycleModes()
 
     fun startupTab(): Int = current().startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES)
+
+    fun visibility(): VisibilityConfig = current().visibility
+
+    fun updateVisibility(prefs: SharedPreferences, service: XposedService?, visibility: VisibilityConfig) {
+        val config = current().copy(visibility = visibility)
+        save(prefs, service, config)
+    }
 
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
@@ -643,6 +683,9 @@ object ConfigManager {
             }
             if (oldConfig.startupTab != newConfig.startupTab) {
                 add("startupTab=${oldConfig.startupTab}->${newConfig.startupTab}")
+            }
+            if (oldConfig.visibility != newConfig.visibility) {
+                add("visibility")
             }
         }
     }

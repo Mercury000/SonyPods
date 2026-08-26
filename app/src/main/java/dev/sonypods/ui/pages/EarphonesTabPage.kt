@@ -19,6 +19,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import dev.sonypods.bridge.SonyStateSnapshot
 import com.mercury.sonypods.R
+import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.ui.SonyDetailActions
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -30,6 +31,7 @@ internal fun EarphonesTabPage(
     displayTitle: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
+    visibility: VisibilityConfig,
     boxImagePath: String?,
     boxImageRevision: Long,
     connectedDeviceAddress: String,
@@ -94,6 +96,7 @@ internal fun EarphonesTabPage(
                 podName = displayTitle.ifEmpty { stringResource(R.string.pod_info) },
                 uiState = uiState,
                 actions = actions,
+                visibility = visibility,
                 listState = detailListState,
                 boxImagePath = boxImagePath,
                 boxImageRevision = boxImageRevision,
