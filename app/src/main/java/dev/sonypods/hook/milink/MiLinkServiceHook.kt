@@ -42,7 +42,6 @@ object MiLinkServiceHook : HookContext() {
     private const val UPDATE_TYPE_ANC = 8
     internal var context: Context? = null
     private var receiverRegistered = false
-    private var configReceiver: BroadcastReceiver? = null
     private var stateSeeded = false
     internal var currentAddress: String? = null
     internal var currentName: String? = null
@@ -74,10 +73,7 @@ object MiLinkServiceHook : HookContext() {
 
     override fun onBeforeReload() {
         stateMirror.close()
-        configReceiver?.let { receiver ->
-            unregisterReceiverForReload(context, receiver)
-        }
-        configReceiver = null
+        unregisterRemoteConfigChangeListener()
         receiverRegistered = false
         lastAncBatteryController = null
         lastProfileContext = null
@@ -323,15 +319,10 @@ object MiLinkServiceHook : HookContext() {
         runCatching { loadState() }
             .onFailure { Log.d(TAG, "loadState skipped (storage locked); will seed from snapshot", it) }
         stateMirror.register(context)
-        runCatching {
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == SonyPodsAction.ACTION_CONFIG_CHANGED) applyPushedConfig(intent)
-                }
-            }
-            context?.registerReceiver(receiver, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
-            configReceiver = receiver
-        }
+        // Config changes arrive through the native remote-pref change callback
+        // (HookContext.registerRemoteConfigChangeListener) instead of a custom broadcast;
+        // the base implementation refreshes the shared ConfigManager cache.
+        registerRemoteConfigChangeListener()
         receiverRegistered = true
     }
 

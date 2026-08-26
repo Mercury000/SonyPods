@@ -35,7 +35,6 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private var lastSonyDevice: BluetoothDevice? = null
     private var context: Context? = null
     private var receiverRegistered = false
-    private var configReceiver: BroadcastReceiver? = null
     private var currentBattery: BatteryParams? = null
     private var currentAnc = 1
     private var currentTransparencyVocalEnhancement = false
@@ -102,10 +101,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     override fun onBeforeReload() {
         handler.removeCallbacksAndMessages(null)
         stateMirror.close()
-        configReceiver?.let { receiver ->
-            unregisterReceiverForReload(context, receiver)
-        }
-        configReceiver = null
+        unregisterRemoteConfigChangeListener()
         receiverRegistered = false
         callbacks.clear()
     }
@@ -243,21 +239,17 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
         stateMirror.register(context)
-        var configRegistered = false
-        runCatching {
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
-                    applyPushedConfig(intent)
-                    notifyRealStatus("config-changed")
-                }
-            }
-            context?.registerReceiver(receiver, IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED), Context.RECEIVER_EXPORTED)
-            configReceiver = receiver
-            configRegistered = true
-        }.onFailure { Log.w(TAG, "config receiver registration failed", it) }
-        receiverRegistered = configRegistered
+        // Config changes arrive through the native remote-pref change callback
+        // (HookContext.registerRemoteConfigChangeListener) instead of a custom broadcast.
+        registerRemoteConfigChangeListener()
+        receiverRegistered = true
         Log.d(TAG, "registered status mirror context=$context")
+    }
+
+    override fun onRemoteConfigChanged() {
+        // Island/notification rendering inputs depend on config; republish the current
+        // status on the main thread like the broadcast path did.
+        handler.post { notifyRealStatus("config-changed") }
     }
 
     private fun installHeadsetBinderHooks(binderClass: Class<*>) {

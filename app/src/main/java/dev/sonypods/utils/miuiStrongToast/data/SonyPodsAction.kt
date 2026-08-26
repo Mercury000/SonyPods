@@ -47,7 +47,4 @@ object SonyPodsAction {
     // an implicit manifest filter; the MiLink hook supplies the explicit component.
     const val ACTION_OPEN_EARPHONE_DETAIL = "dev.sonypods.action.open_earphone_detail"
     const val EXTRA_TARGET_DEVICE_ADDRESS = "target_device_address"
-
-    // App config sync towards hook processes
-    const val ACTION_CONFIG_CHANGED = "dev.sonypods.action.config_changed"
 }

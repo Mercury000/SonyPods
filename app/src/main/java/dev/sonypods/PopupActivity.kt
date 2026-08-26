@@ -40,6 +40,7 @@ import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
 import kotlinx.coroutines.delay
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.ui.AppTheme
 import dev.sonypods.ui.components.AncSwitch
@@ -60,7 +61,7 @@ class PopupActivity : ComponentActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         AppLocale.rememberDeviceLocale(newBase)
-        val language = newBase.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        val language = newBase.getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE)
             .getInt("app_language", AppLocale.SYSTEM)
         super.attachBaseContext(AppLocale.apply(newBase, language))
     }
@@ -68,8 +69,7 @@ class PopupActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val appConfig = ConfigManager.refreshFromPrefs(prefs)
+        val appConfig = ConfigManager.current()
         val bluetoothDevice = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
         if (appConfig.notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
             openNotificationTarget(appConfig.notificationClickAction, bluetoothDevice)
@@ -78,16 +78,18 @@ class PopupActivity : ComponentActivity() {
         }
 
         setContent {
-            val colorSchemeMode = when (prefs.getInt("theme_mode", 0)) {
+            val uiPrefs = remember {
+                getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE)
+            }
+            val colorSchemeMode = when (uiPrefs.getInt("theme_mode", 0)) {
                 1 -> ColorSchemeMode.Light
                 2 -> ColorSchemeMode.Dark
                 else -> ColorSchemeMode.System
             }
-            AppTheme(colorSchemeMode = colorSchemeMode, accentMode = prefs.getInt("accent_mode", 0)) {
+            AppTheme(colorSchemeMode = colorSchemeMode, accentMode = uiPrefs.getInt("accent_mode", 0)) {
                 PopupContent(
                     onMore = {
-                        val latestConfig = ConfigManager.refreshFromPrefs(prefs)
-                        openMoreTarget(latestConfig.moreClickAction, bluetoothDevice)
+                        openMoreTarget(ConfigManager.current().moreClickAction, bluetoothDevice)
                         finish()
                     },
                     onDone = { finish() }
@@ -181,7 +183,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
     val showDialog = remember { mutableStateOf(false) }
 
-    val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE) }
     val themeMode = remember { prefs.getInt("theme_mode", 0) }
     val systemDark = isSystemInDarkTheme()
     val isDarkMode = when (themeMode) {

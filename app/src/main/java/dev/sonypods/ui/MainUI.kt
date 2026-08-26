@@ -150,8 +150,7 @@ fun MainUI(
         null
     }
 
-    val prefs = remember { context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
-    val appConfig = remember { ConfigManager.refreshFromPrefs(prefs) }
+    val appConfig = remember { ConfigManager.current() }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
     val notificationEnabled = remember { mutableStateOf(appConfig.notificationEnabled) }
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
@@ -169,7 +168,7 @@ fun MainUI(
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
     val startupTab = remember { mutableStateOf(appConfig.startupTab) }
     val visibility = remember { mutableStateOf(appConfig.visibility) }
-    val earphonePrefs = remember { mutableStateOf(PodImagePrefs.load(prefs)) }
+    val earphonePrefs = remember { mutableStateOf(PodImagePrefs.loadCurrent()) }
 
     val sonyConnected = sonyState.connected
     val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
@@ -330,8 +329,6 @@ fun MainUI(
             connectingDeviceAddress = null
             showConnectErrorDialog = false
             earphonePrefs.value = PodImagePrefs.upsertConnected(
-                prefs = prefs,
-                service = xposedService,
                 address = connectedDeviceAddress,
                 name = displayTitle,
             )
@@ -376,21 +373,9 @@ fun MainUI(
                     SonyPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE -> {
                         lastBluetoothServiceAliveMs = SystemClock.elapsedRealtime()
                         bluetoothServiceResponsive = true
-                        // The engine (re)started — e.g. after a scope restart. Re-push the
-                        // current config so its authoritative cache is current even if the push
-                        // that accompanied the original change was missed. Prefer the
-                        // framework-backed remote-preferences store (the cross-process source of
-                        // truth that survives a scope restart); fall back to the local store only
-                        // if the LSPosed service is unavailable. Remote prefs remain the persistent
-                        // source of truth the engine reads at startup; this just guarantees delivery.
-                        val remote = xposedService
-                        val source = if (remote != null) {
-                            runCatching { remote.getRemotePreferences(ConfigManager.PREFS_NAME) }.getOrNull() ?: prefs
-                        } else {
-                            prefs
-                        }
-                        ConfigManager.refreshFromPrefs(source)
-                        broadcastConfigChanged(context, "com.android.bluetooth")
+                        // No config re-push here: the engine reads the framework-backed
+                        // remote-pref store itself at startup and observes changes through
+                        // its own OnSharedPreferenceChangeListener.
                     }
 
                     BluetoothAdapter.ACTION_STATE_CHANGED,
@@ -403,8 +388,27 @@ fun MainUI(
     }
 
     DisposableEffect(Unit) {
+        var configStore: android.content.SharedPreferences? = null
+        // The control service downloads the cloud model image asynchronously; reload
+        // the cached metadata so the built-in catalog image appears without a restart.
+        val storeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
+            if (key == PodImagePrefs.PREF_KEY_EARPHONES || key == null) {
+                earphonePrefs.value = PodImagePrefs.load(changed)
+            }
+        }
         val serviceListener: (io.github.libxposed.service.XposedService?) -> Unit = { service ->
             xposedService = service
+            val store = service?.let {
+                runCatching { it.getRemotePreferences(ConfigManager.PREFS_NAME) }.getOrNull()
+            }
+            if (store !== configStore) {
+                configStore?.let { runCatching { it.unregisterOnSharedPreferenceChangeListener(storeListener) } }
+                configStore = store
+                store?.let {
+                    runCatching { it.registerOnSharedPreferenceChangeListener(storeListener) }
+                    earphonePrefs.value = PodImagePrefs.load(it)
+                }
+            }
         }
         SonyPodsApp.addServiceListener(serviceListener)
 
@@ -414,15 +418,6 @@ fun MainUI(
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
-        // The control service downloads the cloud model image asynchronously; reload
-        // the cached path so the built-in catalog image appears without a restart.
-        val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
-            if (key == PodImagePrefs.PREF_KEY_EARPHONES) {
-                earphonePrefs.value = PodImagePrefs.load(changed)
-            }
-        }
-        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
-
         sendBluetoothModuleBroadcast(context, SonyPodsAction.ACTION_PODS_UI_INIT)
 
         onDispose {
@@ -430,9 +425,34 @@ fun MainUI(
             try {
                 context.unregisterReceiver(broadcastReceiver)
             } catch (_: Exception) {}
-            prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+            configStore?.let { runCatching { it.unregisterOnSharedPreferenceChangeListener(storeListener) } }
             SonyPodsApp.removeServiceListener(serviceListener)
         }
+    }
+
+    // The LSPosed service can bind after this composable was first composed (e.g. the
+    // framework connected while the UI was already on screen). ConfigManager.attachStore
+    // runs before listeners fire, so once the service is non-null the cache reflects the
+    // persisted config — mirror it into the settings states here.
+    LaunchedEffect(xposedService) {
+        if (xposedService == null) return@LaunchedEffect
+        val c = ConfigManager.current()
+        notificationClickAction.value = c.notificationClickAction
+        notificationEnabled.value = c.notificationEnabled
+        popupOnConnect.value = c.popupOnConnect
+        connectDialogMode.value = c.connectDialogMode
+        popupAllowlist.value = c.popupAllowlist
+        popupDenylist.value = c.popupDenylist
+        suppressPopupInGameOrLandscape.value = c.suppressPopupInGameOrLandscape
+        moreClickAction.value = c.moreClickAction
+        fusionMoreClickAction.value = c.fusionMoreClickAction
+        logLevel.value = c.logLevel
+        fakeDeviceId.value = c.fakeDeviceId
+        islandMode.value = c.superIslandMode
+        islandDurationSeconds.value = c.islandDurationSeconds
+        ancCycleModes.value = c.ancCycleModes
+        startupTab.value = c.startupTab
+        visibility.value = c.visibility
     }
 
     // Hook liveness ping: the bluetooth-process hook answers UI_INIT with SERVICE_ALIVE.
@@ -613,37 +633,27 @@ fun MainUI(
                 logLevel = logLevel,
                 onLogLevelChange = {
                     logLevel.value = it
-                    ConfigManager.updateLogLevel(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.milink.service")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateLogLevel(it)
                 },
                 islandMode = islandMode,
                 onIslandModeChange = {
                     islandMode.value = it
-                    ConfigManager.updateIslandMode(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateIslandMode(it)
                 },
                 islandDurationSeconds = islandDurationSeconds,
                 onIslandDurationSecondsChange = {
                     islandDurationSeconds.value = it
-                    ConfigManager.updateIslandDurationSeconds(prefs, xposedService, it)
-                    // The island renderer lives in com.xiaomi.bluetooth; the engine
-                    // (com.android.bluetooth) reads the same config for surfaces.
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateIslandDurationSeconds(it)
                 },
                 ancCycleModes = ancCycleModes,
                 onAncCycleModesChange = {
                     ancCycleModes.value = it
-                    ConfigManager.updateAncCycleModes(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
+                    ConfigManager.updateAncCycleModes(it)
                 },
                 startupTab = startupTab,
                 onStartupTabChange = {
                     startupTab.value = it
-                    ConfigManager.updateStartupTab(prefs, xposedService, it)
+                    ConfigManager.updateStartupTab(it)
                 },
                 onOpenVisibility = { backStack.add(Screen.Visibility) },
                 appLanguage = appLanguage,
@@ -654,69 +664,53 @@ fun MainUI(
                 notificationClickAction = notificationClickAction,
                 onNotificationClickActionChange = {
                     notificationClickAction.value = it
-                    ConfigManager.updateNotificationClickAction(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateNotificationClickAction(it)
                 },
                 notificationEnabled = notificationEnabled,
                 onNotificationEnabledChange = {
                     notificationEnabled.value = it
-                    ConfigManager.updateNotificationEnabled(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateNotificationEnabled(it)
                 },
                 popupOnConnect = popupOnConnect,
                 onPopupOnConnectChange = {
                     popupOnConnect.value = it
-                    ConfigManager.updatePopupOnConnect(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updatePopupOnConnect(it)
                 },
                 connectDialogMode = connectDialogMode,
                 onConnectDialogModeChange = {
                     connectDialogMode.value = it
-                    ConfigManager.updateConnectDialogMode(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateConnectDialogMode(it)
                 },
                 popupAllowlist = popupAllowlist,
                 onPopupAllowlistChange = {
                     popupAllowlist.value = it
-                    ConfigManager.updatePopupAllowlist(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updatePopupAllowlist(it)
                 },
                 popupDenylist = popupDenylist,
                 onPopupDenylistChange = {
                     popupDenylist.value = it
-                    ConfigManager.updatePopupDenylist(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updatePopupDenylist(it)
                 },
                 suppressPopupInGameOrLandscape = suppressPopupInGameOrLandscape,
                 onSuppressPopupInGameOrLandscapeChange = {
                     suppressPopupInGameOrLandscape.value = it
-                    ConfigManager.updateSuppressPopupInGameOrLandscape(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateSuppressPopupInGameOrLandscape(it)
                 },
                 moreClickAction = moreClickAction,
                 onMoreClickActionChange = {
                     moreClickAction.value = it
-                    ConfigManager.updateMoreClickAction(prefs, xposedService, it)
+                    ConfigManager.updateMoreClickAction(it)
                 },
                 fusionMoreClickAction = fusionMoreClickAction,
                 onFusionMoreClickActionChange = {
                     fusionMoreClickAction.value = it
-                    ConfigManager.updateFusionMoreClickAction(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.milink.service")
+                    ConfigManager.updateFusionMoreClickAction(it)
                 },
                 onOpenTandemDebug = { backStack.add(Screen.TandemDebug) },
                 fakeDeviceId = fakeDeviceId,
                 onFakeDeviceIdChange = {
                     fakeDeviceId.value = it
-                    ConfigManager.updateFakeDeviceId(prefs, xposedService, it)
-                    broadcastConfigChanged(context, "com.android.bluetooth")
-                    broadcastConfigChanged(context, "com.android.settings")
-                    broadcastConfigChanged(context, "com.milink.service")
-                    broadcastConfigChanged(context, "com.xiaomi.bluetooth")
+                    ConfigManager.updateFakeDeviceId(it)
                 },
                 onOpenTheme = { backStack.add(Screen.Theme) },
                 onOpenAbout = { backStack.add(Screen.About) },
@@ -888,10 +882,7 @@ fun MainUI(
                         visibility = visibility.value,
                         onVisibilityChange = { newVisibility ->
                             visibility.value = newVisibility
-                            ConfigManager.updateVisibility(prefs, xposedService, newVisibility)
-                            // The Bluetooth-page badge switch is consumed by the hook in
-                            // the Settings process, which listens for config broadcasts.
-                            broadcastConfigChanged(context, "com.android.settings")
+                            ConfigManager.updateVisibility(newVisibility)
                         },
                     )
                 }
@@ -1058,13 +1049,3 @@ private fun setLauncherIconHidden(context: Context, hidden: Boolean) {
     context.packageManager.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
 }
 
-private fun broadcastConfigChanged(context: Context, packageName: String) {
-    Intent(SonyPodsAction.ACTION_CONFIG_CHANGED).apply {
-        setPackage(packageName)
-        addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-        // Carry the authoritative config by value so the engine process applies it
-        // directly, independent of remote-preferences propagation.
-        putExtra(ConfigManager.PREF_KEY_CONFIG_JSON, ConfigManager.currentAsJson())
-        context.sendBroadcast(this)
-    }
-}

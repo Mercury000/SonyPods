@@ -84,6 +84,7 @@ object SettingsHeadsetHook : HookContext() {
             unregisterReceiverForReload(context, receiver)
         }
         stateReceiver = null
+        unregisterRemoteConfigChangeListener()
         receiverRegistered = false
         reloadBatteryViews = WeakHashMap(batteryViews)
         reloadBatteryValuesCache = WeakHashMap(batteryValuesCache)
@@ -460,7 +461,6 @@ object SettingsHeadsetHook : HookContext() {
             addAction(SonyPodsAction.ACTION_PODS_BATTERY_CHANGED)
             addAction(SonyPodsAction.ACTION_PODS_ANC_CHANGED)
             addAction(SonyPodsAction.ACTION_PODS_AMBIENT_VOICE_CHANGED)
-            addAction(SonyPodsAction.ACTION_CONFIG_CHANGED)
         }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -514,10 +514,6 @@ object SettingsHeadsetHook : HookContext() {
                             updateFragments()
                         }
                     }
-                    SonyPodsAction.ACTION_CONFIG_CHANGED -> {
-                        applyPushedConfig(intent)
-                        updateFragments()
-                    }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {
                         hasLiveSnapshot = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
@@ -556,9 +552,18 @@ object SettingsHeadsetHook : HookContext() {
         context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         stateReceiver = receiver
         receiverRegistered = true
+        // Config changes arrive through the native remote-pref change callback
+        // (HookContext.registerRemoteConfigChangeListener) instead of a custom broadcast.
+        registerRemoteConfigChangeListener()
         rebindExistingBatteryViews()
         requestBluetoothStatus("receiver-register")
         Log.d(TAG, "registered status receiver context=$context")
+    }
+
+    override fun onRemoteConfigChanged() {
+        // Battery layouts and injected fragments render from config (visibility flags,
+        // fake device id); refresh them on the main thread like the broadcast path did.
+        android.os.Handler(android.os.Looper.getMainLooper()).post { updateFragments() }
     }
 
     private fun requestBluetoothStatus(reason: String) {
@@ -899,8 +904,8 @@ object SettingsHeadsetHook : HookContext() {
             val dseeRes = currentDseeGeneration?.takeIf { currentDseeActive }?.let { dseeBadgeRes(it, dark) }
             val resIds = listOf(leaRes, codecRes, dseeRes)
             val state = badgeOverlayStates[host] ?: BadgeOverlayState().also { badgeOverlayStates[host] = it }
-            // Arrives with the pushed config (ACTION_CONFIG_CHANGED already refreshes
-            // fragments), so a toggle clears the overlay without waiting for a status event.
+            // A visibility toggle refreshes fragments via the remote-pref change
+            // callback, so this clears the overlay without waiting for a status event.
             if (!ConfigManager.visibility().bluetoothBadge) {
                 state.drawables.forEach { host.overlay.remove(it) }
                 state.drawables.clear()

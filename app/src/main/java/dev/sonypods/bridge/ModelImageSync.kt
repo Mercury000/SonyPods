@@ -53,8 +53,7 @@ object ModelImageSync {
         val key = "$address|$url"
 
         val appContext = context.applicationContext ?: context
-        val prefs = appContext.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val existing = PodImagePrefs.find(prefs, address)
+        val existing = PodImagePrefs.findCurrent(address)
         val upToDate = existing?.autoImageUrl == url &&
             existing.boxImagePath?.let { File(it).isFile && File(it).length() > 0L } == true
         if (upToDate) {
@@ -86,7 +85,6 @@ object ModelImageSync {
                 val stored = runCatching {
                     PodImagePrefs.saveImageBytes(
                         context = appContext,
-                        prefs = prefs,
                         service = SonyPodsApp.xposedService,
                         address = address,
                         name = snapshot.deviceName.orEmpty(),

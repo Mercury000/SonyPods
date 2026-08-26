@@ -230,7 +230,7 @@ class HookEntry : XposedModule() {
                 active.contexts().filterIsInstance<OfficialFastConnectDialogHook>().forEach { it.startAfterReload(context) }
                 active.contexts().filterIsInstance<MiBluetoothToastHook>().forEach { it.startAfterReload(context) }
                 // Same process also hosts the upstream headset hook, whose
-                // ACTION_CONFIG_CHANGED receiver keeps the new generation's
+                // remote-pref change listener keeps the new generation's
                 // ConfigManager live — without this, config changes made after a
                 // hot reload (island mode/duration) never reach the island renderer.
                 active.contexts().filterIsInstance<BluetoothUpstreamHeadsetHook>().forEach { it.startAfterReload(context) }
@@ -291,7 +291,7 @@ class HookEntry : XposedModule() {
                 }
             }.getOrNull()
         }
-        ConfigManager.init(hook.prefs)
+        ConfigManager.attachStore(hook.prefs)
         hook.onHook()
         lifecycle("loadHook complete type=${hook.javaClass.name} scope=$packageName process=$processName")
     }

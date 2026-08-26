@@ -35,6 +35,20 @@ data class EarphonePref(
     }
 }
 
+/**
+ * Per-device earphone metadata (which model image belongs to which Bluetooth address).
+ *
+ * Persisted ONLY in the framework-backed remote-preference store ([ConfigManager.PREFS_NAME]
+ * group): the hooked processes read `earphone_prefs_json` from it to resolve images for the
+ * notification/island/settings surfaces, and the module app reads and writes the same store
+ * via its XposedService handle. No local SharedPreferences copy is kept anywhere; before the
+ * LSPosed service binds, saves are buffered in memory by [pendingJson] and flushed by
+ * [attachStore].
+ *
+ * The image BYTES themselves live in libxposed Remote Files (see [remoteImageFileName] /
+ * [writeBytesToRemote]); the paths stored here point at the app's cache copy used for
+ * Compose rendering.
+ */
 object PodImagePrefs {
     private const val TAG = "SonyPods-PodImage"
     const val AUTHORITY = "com.mercury.sonypods.podimages"
@@ -46,32 +60,53 @@ object PodImagePrefs {
         encodeDefaults = true
     }
 
-    fun load(prefs: SharedPreferences): List<EarphonePref> {
-        val raw = prefs.getString(PREF_KEY_EARPHONES, null) ?: return emptyList()
-        return runCatching {
-            json.decodeFromString(ListSerializer(EarphonePref.serializer()), raw)
-        }.getOrDefault(emptyList())
+    @Volatile
+    private var store: SharedPreferences? = null
+
+    @Volatile
+    private var pendingJson: String? = null
+
+    /** Bind the app-side handle on the shared store and flush anything buffered pre-bind. */
+    fun attachStore(prefs: SharedPreferences?) {
+        if (prefs == null) return
+        store = prefs
+        pendingJson?.let { pending ->
+            pendingJson = null
+            writeToStore(prefs, pending)
+            Log.d(TAG, "flushed buffered earphone metadata (${pending.length} bytes)")
+        }
     }
 
-    fun find(prefs: SharedPreferences, address: String): EarphonePref? {
+    // ── Hook side (read-only store passed explicitly) and generic readers ──
+
+    fun load(prefs: SharedPreferences?): List<EarphonePref> {
+        val raw = prefs?.getString(PREF_KEY_EARPHONES, null) ?: return emptyList()
+        return decode(raw)
+    }
+
+    fun find(prefs: SharedPreferences?, address: String): EarphonePref? {
         if (address.isBlank()) return null
         return load(prefs).firstOrNull { it.address.equals(address, ignoreCase = true) }
     }
 
-    fun findOrLatest(prefs: SharedPreferences, address: String): EarphonePref? {
+    fun findOrLatest(prefs: SharedPreferences?, address: String): EarphonePref? {
         return find(prefs, address) ?: load(prefs).maxByOrNull { it.lastConnectedAt }
     }
+
+    // ── App process (uses the bound store handle) ──
+
+    fun loadCurrent(): List<EarphonePref> = load(store)
+
+    fun findCurrent(address: String): EarphonePref? = find(store, address)
 
     fun imageDir(context: Context): File = File(context.filesDir, IMAGE_DIR).apply { mkdirs() }
 
     fun upsertConnected(
-        prefs: SharedPreferences,
-        service: XposedService?,
         address: String,
         name: String,
     ): List<EarphonePref> {
-        if (address.isBlank()) return load(prefs)
-        val current = load(prefs)
+        if (address.isBlank()) return loadCurrent()
+        val current = loadCurrent()
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
         // Drop records created by the removed custom-image feature. Catalog images keep
         // their URL marker and are refreshed by ModelImageSync when needed.
@@ -82,27 +117,19 @@ object PodImagePrefs {
             lastConnectedAt = System.currentTimeMillis(),
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        // Publish earphone metadata to BOTH local prefs and the framework-backed remote
-        // prefs. The hook process (com.android.bluetooth / com.xiaomi.bluetooth) reads
-        // earphone_prefs_json from remote prefs to resolve which image belongs to which
-        // device address — without it, PodImagePrefs.find returns null and the notification
-        // falls back to the stock image. This is safe now that config_json is written to
-        // remote prefs separately (ConfigManager.writeRemoteConfig); readConfig never reads
-        // earphone_prefs_json, so it cannot default the engine config.
-        return saveBoth(prefs, service, normalized)
+        return persist(normalized)
     }
 
     fun saveImageBytes(
         context: Context,
-        prefs: SharedPreferences,
         service: XposedService?,
         address: String,
         name: String,
         images: Map<PodImageResource, ByteArray>,
         autoImageUrl: String? = null,
     ): List<EarphonePref> {
-        if (address.isBlank()) return load(prefs)
-        val current = load(prefs)
+        if (address.isBlank()) return loadCurrent()
+        val current = loadCurrent()
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
         // Never carry image paths from the removed custom-image records into the
         // automatic catalog cache.
@@ -122,37 +149,30 @@ object PodImagePrefs {
             imageRevision = if (imageUpdated) updated.imageRevision + 1L else updated.imageRevision,
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        return saveBoth(prefs, service, normalized)
+        return persist(normalized)
     }
 
-    private fun save(prefs: SharedPreferences, earphones: List<EarphonePref>): List<EarphonePref> {
+    private fun decode(raw: String): List<EarphonePref> = runCatching {
+        json.decodeFromString(ListSerializer(EarphonePref.serializer()), raw)
+    }.getOrDefault(emptyList())
+
+    private fun persist(earphones: List<EarphonePref>): List<EarphonePref> {
         val normalized = earphones.distinctBy { it.address.uppercase() }
-        prefs.edit()
-            .putString(PREF_KEY_EARPHONES, json.encodeToString(ListSerializer(EarphonePref.serializer()), normalized))
-            .apply()
+        val encoded = json.encodeToString(ListSerializer(EarphonePref.serializer()), normalized)
+        val target = store
+        if (target != null) {
+            writeToStore(target, encoded)
+        } else {
+            pendingJson = encoded
+            Log.w(TAG, "earphone metadata save before store bind; buffering until LSPosed service connects")
+        }
         return normalized
     }
 
-    /**
-     * Persist earphone metadata to local prefs AND the framework-backed remote-prefs store.
-     * The hook process reads earphone_prefs_json from remote prefs to resolve per-device
-     * images; without the remote write it would only see stale/empty metadata and fall back
-     * to the stock image in the notification/island. See [upsertConnected] for why this is
-     * safe alongside config_json.
-     */
-    private fun saveBoth(
-        prefs: SharedPreferences,
-        service: XposedService?,
-        earphones: List<EarphonePref>,
-    ): List<EarphonePref> {
-        val normalized = save(prefs, earphones)
+    private fun writeToStore(target: SharedPreferences, encoded: String) {
         runCatching {
-            service?.getRemotePreferences(ConfigManager.PREFS_NAME)
-                ?.edit()
-                ?.putString(PREF_KEY_EARPHONES, json.encodeToString(ListSerializer(EarphonePref.serializer()), normalized))
-                ?.apply()
-        }.onFailure { Log.w(TAG, "saveBoth: remote prefs write failed", it) }
-        return normalized
+            target.edit().putString(PREF_KEY_EARPHONES, encoded).apply()
+        }.onFailure { Log.w(TAG, "earphone metadata write failed", it) }
     }
 
     /** Stable Remote File name shared by the module writer and Hook-side readers. */
@@ -178,22 +198,16 @@ object PodImagePrefs {
         }.onFailure { Log.w(TAG, "writeBytesToRemote failed for $name", it) }.getOrDefault(false)
     }
 
-    private fun writeImageToRemote(service: XposedService?, name: String, bytes: ByteArray) {
-        val s = service ?: return
-        writeBytesToRemote(s, name, bytes)
-    }
-
     /**
-     * Synchronize local pod images into the Remote Files store, so the hook process can
+     * Synchronize cached pod images into the Remote Files store, so the hook process can
      * read images saved before or while the app's Xposed service was unavailable. This
      * is intentionally idempotent and runs on every service bind: a static state receiver
      * can download an image before the service callback arrives.
      */
-    fun migrateImagesToRemote(context: Context, service: XposedService?) {
+    fun migrateImagesToRemote(service: XposedService?) {
         val s = service ?: return
-        val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
         var migrated = 0
-        load(prefs).forEach { earphone ->
+        loadCurrent().forEach { earphone ->
             PodImageResource.entries.forEach { res ->
                 val path = earphone.imagePath(res) ?: return@forEach
                 val file = File(path)
@@ -223,7 +237,7 @@ object PodImagePrefs {
             temp.copyTo(file, overwrite = true)
             temp.delete()
         }
-        writeImageToRemote(service, file.name, bytes)
+        service?.let { writeBytesToRemote(it, file.name, bytes) }
         return file.absolutePath
     }
 

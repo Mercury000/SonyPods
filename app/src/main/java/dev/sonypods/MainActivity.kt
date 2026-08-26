@@ -16,7 +16,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
-import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.ui.App
 import dev.sonypods.ui.AppLocale
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         AppLocale.rememberDeviceLocale(newBase)
-        val language = newBase.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+        val language = newBase.getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE)
             .getInt("app_language", AppLocale.SYSTEM)
         super.attachBaseContext(AppLocale.apply(newBase, language))
     }
@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val prefs = remember { getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE) }
+            val prefs = remember { getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE) }
             val themeMode = remember { mutableStateOf(prefs.getInt("theme_mode", 0)) }
             val accentMode = remember { mutableStateOf(prefs.getInt("accent_mode", 0)) }
             val floatingBottomBar = remember { mutableStateOf(prefs.getBoolean("floating_bottom_bar", false)) }

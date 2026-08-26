@@ -168,7 +168,6 @@ object SonyEngineHost {
     private var transportRecoveryAddress: String? = null
 
     private var commandReceiver: BroadcastReceiver? = null
-    private var configReceiver: BroadcastReceiver? = null
     private var capabilityCacheReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
     private var remotePreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
@@ -198,7 +197,6 @@ object SonyEngineHost {
             // later AdapterService/A2DP callbacks.
             appContext?.let {
                 registerCommandReceiver(it)
-                registerConfigReceiver(it)
                 registerCapabilityCacheReceiver(it)
                 registerUnlockReceiver(it)
             }
@@ -266,7 +264,6 @@ object SonyEngineHost {
         }
 
         registerCommandReceiver(ctx)
-        registerConfigReceiver(ctx)
         registerCapabilityCacheReceiver(ctx)
         announceEngineReadyToOfficialApp(ctx)
 
@@ -305,11 +302,12 @@ object SonyEngineHost {
             }
         }
         // Deferred config re-read. The LSPosed remote-prefs bridge may not be ready at
-        // package-load time, so the init read (HookEntry -> ConfigManager.init) can come
-        // back empty and leave cachedConfig at its default (ANC cycle includes OFF). Re-read
-        // a couple of times shortly after start so the persisted cycle config is picked up
-        // even after a scope restart with the module app never opened. Reads are harmless:
-        // the hook-side store is read-only, so this can never clobber the user's config.
+        // package-load time, so the init read (HookEntry -> ConfigManager.attachStore)
+        // can come back empty and leave cachedConfig at its default (ANC cycle includes
+        // OFF). Re-read a couple of times shortly after start so the persisted cycle
+        // config is picked up even after a scope restart with the module app never
+        // opened. Reads are harmless: the hook-side store is read-only, so this can
+        // never clobber the user's config.
         scope.launch {
             for (delayMs in listOf(3_000L, 8_000L)) {
                 delay(delayMs)
@@ -339,11 +337,10 @@ object SonyEngineHost {
         scope = newGenerationScope()
         oldScope.cancel()
         val ctx = appContext
-        listOf(commandReceiver, configReceiver, capabilityCacheReceiver, unlockReceiver)
+        listOf(commandReceiver, capabilityCacheReceiver, unlockReceiver)
             .filterNotNull()
             .forEach { receiver -> ctx?.let { runCatching { it.unregisterReceiver(receiver) } } }
         commandReceiver = null
-        configReceiver = null
         capabilityCacheReceiver = null
         unlockReceiver = null
 
@@ -354,7 +351,6 @@ object SonyEngineHost {
         remotePreferenceListener = null
         remotePreferenceStore = null
         remoteConfigListenerRegistered = false
-        configReceiverRegistered = false
         capabilityCacheReceiverRegistered = false
 
         val repo = repository
@@ -1606,44 +1602,6 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "engine-ready broadcast to Sound Connect failed", it) }
     }
 
-    private var configReceiverRegistered = false
-
-    /**
-     * Apply config pushed from the app by value. The app attaches the full serialized
-     * [dev.sonypods.config.AppConfig] to [SonyPodsAction.ACTION_CONFIG_CHANGED]; we apply
-     * it directly to the shared [ConfigManager] cache so changes made in the app (e.g. ANC
-     * cycle modes) take effect in the engine immediately. The persisted authority at startup
-     * is the remote-preference store (HookEntry -> ConfigManager.init); live updates arrive
-     * here by value.
-     *
-     * NOTE: this receiver must NOT write back to remote prefs. In the hooked process
-     * `XposedModule.getRemotePreferences(...)` is **read-only** — calling `.edit()` on it
-     * throws `UnsupportedOperationException: Read only implementation`, which (uncaught in
-     * onReceive) kills the `com.android.bluetooth` main thread and drops the Bluetooth link.
-     * Durability across a scope restart comes solely from the app process writing the config
-     * via `XposedService.getRemotePreferences` (which is writable); the engine only reads it.
-     */
-    private fun registerConfigReceiver(context: Context) {
-        if (configReceiverRegistered) return
-        runCatching {
-            val receiver = object : BroadcastReceiver() {
-                    override fun onReceive(ctx: Context?, intent: Intent?) {
-                        if (intent?.action != SonyPodsAction.ACTION_CONFIG_CHANGED) return
-                        val json = intent.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON) ?: return
-                        ConfigManager.applyConfigJson(json)
-                    }
-                }
-            context.registerReceiver(
-                receiver,
-                IntentFilter(SonyPodsAction.ACTION_CONFIG_CHANGED),
-                Context.RECEIVER_EXPORTED,
-            )
-            configReceiver = receiver
-            configReceiverRegistered = true
-            Log.d(TAG, "config push receiver registered")
-        }.onFailure { Log.w(TAG, "config push receiver registration failed", it) }
-    }
-
     private var capabilityCacheReceiverRegistered = false
 
     /**
@@ -1720,13 +1678,13 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
-                // IMPORTANT: do NOT call currentPrefs()?.let { refreshFromPrefs(it) } here.
-                // XposedModule.getRemotePreferences() in the hooked process (com.android.bluetooth)
-                // returns a SharedPreferences backed by *that process's own* data directory —
-                // it is NOT the module app's store. In practice it always returns an empty object
-                // (class=a1, keys=[]), so reading it clobbers the config that applyConfigJson
-                // already delivered correctly via broadcast. The live config in cachedConfig is
-                // authoritative; trust it without re-reading.
+                // cachedConfig is authoritative here: it is seeded from the remote-pref
+                // store at engine start (HookEntry -> ConfigManager.attachStore), kept
+                // live by the native OnSharedPreferenceChangeListener and the deferred
+                // re-reads above, so no re-read is needed on this path. Do NOT call
+                // currentPrefs()?.let { refreshFromPrefs(it) } speculatively — before the
+                // framework bridge is ready a fresh fetch returns an empty snapshot and
+                // would clobber the live config with defaults.
                 val enabledNames = ConfigManager.ancCycleModes()
                 // Build the ordered cycle from the user's chosen subset.
                 // .ifEmpty fallback only fires when cachedConfig itself has no valid mode names

@@ -5,6 +5,7 @@ import android.util.Log
 import dev.sonypods.config.CapabilityProbeCache
 import dev.sonypods.config.CloudModelInfoSync
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
@@ -13,10 +14,10 @@ import java.util.concurrent.CopyOnWriteArraySet
 class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
     override fun onCreate() {
         super.onCreate()
-        // Load the app-local configuration before the service callback can rewrite
-        // the remote store. Otherwise an early bind would publish AppConfig's
-        // in-memory defaults and overwrite the user's persisted settings.
-        ConfigManager.init(getSharedPreferences(ConfigManager.PREFS_NAME, MODE_PRIVATE))
+        // App-local appearance keys (theme/accent/language) move out of the legacy shared
+        // prefs file into their own file before any activity reads them. The legacy file
+        // itself survives until migrateToRemote has drained it below.
+        LegacyConfigMigrator.migrateUiPrefs(this)
         // Fetch/update the app-owned cloud cache independently of the Hook process.
         // Hooked processes consume the published Remote File, never this app Pref.
         CloudModelInfoSync.initialize(this)
@@ -26,21 +27,28 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
     override fun onServiceBind(service: XposedService) {
         Log.d(TAG, "LSPosed service bound api=${service.apiVersion} framework=${service.frameworkName}/${service.frameworkVersionCode}")
         xposedService = service
-        notifyListeners(service)
         CloudModelInfoSync.onServiceBound(this, service)
-        // Publish the initialized local config using the current schema. Must run before
-        // flushPendingRemote so a pending write always lands on the current schema.
-        ConfigManager.syncToRemote(service)
-        // Flush any config that was saved while the service was unavailable, so the
-        // engine's remote-prefs store is authoritative and survives a scope restart.
-        ConfigManager.flushPendingRemote(service)
+        // Migration must run before anything reads or writes the shared store: for
+        // installs predating remote-only persistence it seeds config/earphone metadata
+        // from the legacy local file and then deletes that file, so no local prefs
+        // copy of hook-consumed data survives.
+        LegacyConfigMigrator.migrateToRemote(this, service)
+        val remotePrefs = runCatching { service.getRemotePreferences(ConfigManager.PREFS_NAME) }
+            .onFailure { Log.w(TAG, "getRemotePreferences failed", it) }
+            .getOrNull()
+        // Adopt the store (reads the persisted config into the cache) and flush any
+        // saves buffered while the service was unavailable. Config is fully loaded
+        // BEFORE listeners fire so the UI never renders defaults over real values.
+        ConfigManager.attachStore(remotePrefs)
+        PodImagePrefs.attachStore(remotePrefs)
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
-        PodImagePrefs.migrateImagesToRemote(this, service)
+        PodImagePrefs.migrateImagesToRemote(service)
         // Flush any capability-probe cache the engine pushed while the service was
         // unavailable, so the shared remote-prefs store is authoritative across a scope
         // restart (the engine reads it back on the next connection).
         CapabilityProbeCache.flushPending(service)
+        notifyListeners(service)
     }
 
     override fun onServiceDied(service: XposedService) {

@@ -2,7 +2,6 @@ package dev.sonypods.hook
 
 import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import dev.sonypods.bridge.SonyStateSnapshot
@@ -89,24 +88,50 @@ abstract class HookContext {
 
     fun fakeSupport(): String = ConfigManager.fakeSupport()
 
-    fun refreshConfig() {
-        // Intentionally a no-op: re-reading the hooked-side remote prefs is unreliable
-        // (it does not receive the app's writes) and would clobber the live config held
-        // in cachedConfig. The authoritative config is read from the module's own
-        // SharedPreferences at engine start, and kept live via applyConfigJson.
-    }
+    private var remoteConfigListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var remoteConfigListenerSource: SharedPreferences? = null
 
     /**
-     * Apply config pushed from the app by value. The app attaches the full serialized
-     * [dev.sonypods.config.AppConfig] to [SonyPodsAction.ACTION_CONFIG_CHANGED]; when
-     * present we apply it directly (no dependency on remote-preferences propagation).
-     * When no JSON payload is attached (older app build) we keep the current cached
-     * config rather than re-reading the hooked-side remote prefs, which are not a
-     * reliable cross-process channel here.
+     * Native config-change path (canonical libxposed pattern, see libxposed/example
+     * ModuleMainKt): the framework notifies this hooked process whenever the module app
+     * writes the shared remote-preference store. This replaces the former custom
+     * ACTION_CONFIG_CHANGED broadcast — the store itself is the propagation channel.
+     *
+     * The shared [ConfigManager] cache is refreshed from a freshly fetched store snapshot,
+     * then the concrete hook can react via [onRemoteConfigChanged]. Registration is
+     * idempotent; pair with [unregisterRemoteConfigChangeListener] in onBeforeReload.
      */
-    fun applyPushedConfig(intent: Intent?) {
-        val json = intent?.getStringExtra(ConfigManager.PREF_KEY_CONFIG_JSON)
-        if (json != null) ConfigManager.applyConfigJson(json)
+    protected fun registerRemoteConfigChangeListener() {
+        if (remoteConfigListener != null) return
+        val source = runCatching { prefsProvider() }.getOrElse { prefs }
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            // Re-fetch: getRemotePreferences returns a snapshot at call time, and a fresh
+            // fetch reflects the latest data the framework holds.
+            val fresh = runCatching { prefsProvider() }.getOrElse { source }
+            runCatching { ConfigManager.refreshFromPrefs(fresh) }
+                .onFailure { android.util.Log.w("SonyPods-HookContext", "remote config refresh failed", it) }
+            onRemoteConfigChanged()
+        }
+        runCatching { source.registerOnSharedPreferenceChangeListener(listener) }
+            .onSuccess {
+                remoteConfigListener = listener
+                remoteConfigListenerSource = source
+            }
+            .onFailure {
+                android.util.Log.w("SonyPods-HookContext", "remote config listener registration failed", it)
+            }
+    }
+
+    /** Called after the shared config cache was refreshed from the remote-pref store. */
+    protected open fun onRemoteConfigChanged() {}
+
+    protected fun unregisterRemoteConfigChangeListener() {
+        val listener = remoteConfigListener ?: return
+        remoteConfigListenerSource?.let { source ->
+            runCatching { source.unregisterOnSharedPreferenceChangeListener(listener) }
+        }
+        remoteConfigListener = null
+        remoteConfigListenerSource = null
     }
 
     internal fun readRemoteFileText(name: String): String? =

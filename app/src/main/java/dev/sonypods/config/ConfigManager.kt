@@ -3,7 +3,6 @@ package dev.sonypods.config
 import android.content.SharedPreferences
 import android.util.Log
 import com.mercury.sonypods.BuildConfig
-import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -71,10 +70,25 @@ data class AppConfig(
     val visibility: VisibilityConfig = VisibilityConfig(),
 )
 
+/**
+ * Cross-process configuration authority.
+ *
+ * The single persistence layer is the framework-backed remote-preference store
+ * ([PREFS_NAME] group), following the canonical libxposed pattern: the module app
+ * writes the serialized [AppConfig] under [PREF_KEY_CONFIG_JSON] with `.apply()`;
+ * hooked processes read it via `XposedModule.getRemotePreferences` and observe changes
+ * through `registerOnSharedPreferenceChangeListener`. No side keeps a local
+ * SharedPreferences copy of these keys — legacy local storage is handled exclusively
+ * by [LegacyConfigMigrator], which is also the only consumer of the direct per-key
+ * constants below.
+ */
 object ConfigManager {
     private const val TAG = "SonyPods-Config"
     const val PREFS_NAME = "sonypods_settings"
     const val PREF_KEY_CONFIG_JSON = "config_json"
+
+    // Legacy direct keys. Never written anymore; parsed only by LegacyConfigMigrator
+    // when seeding the remote store from a pre-remote-pref install.
     const val PREF_KEY_FAKE_DEVICE_ID = "fake_device_id"
     const val PREF_KEY_LOG_LEVEL = "log_level"
     // Deliberately uses a new key. The old island_mode/island_show_timings keys
@@ -86,8 +100,8 @@ object ConfigManager {
     const val PREF_KEY_POPUP_ON_CONNECT = "popup_on_connect"
     const val PREF_KEY_CONNECT_DIALOG_MODE = "connect_dialog_mode"
     /**
-     * Read only for the one-time migration in [readConfig]. The switch this key backed
-     * became "the module's own package sits in [PREF_KEY_POPUP_DENYLIST]".
+     * Read only by [LegacyConfigMigrator]. The switch this key backed became
+     * "the module's own package sits in [PREF_KEY_POPUP_DENYLIST]".
      */
     const val PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND = "suppress_popup_on_connect_when_foreground"
     const val PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE = "suppress_popup_in_game_or_landscape"
@@ -156,53 +170,58 @@ object ConfigManager {
     @Volatile
     private var cachedConfig: AppConfig = AppConfig()
 
+    /** The bound cross-process store. Writable app-side, read-only hook-side. */
+    @Volatile
+    private var store: SharedPreferences? = null
+
     /**
      * Config awaiting a remote-prefs write because the LSPosed service was unavailable
-     * at save time. Flushed by [flushPendingRemote] once the service (re)binds, so the
-     * cross-process store stays authoritative and survives scope restarts even if the
-     * first save raced the service connection. Only relevant in the app process; the
-     * hook process always has the service and never buffers.
+     * at save time (app process only). Flushed by [attachStore] once the service
+     * (re)binds, so the cross-process store stays authoritative even if a save raced
+     * the service connection. Memory-only by design: no local prefs file may reappear.
      */
     @Volatile
-    private var pendingRemoteConfig: AppConfig? = null
+    private var pendingConfig: AppConfig? = null
 
-    fun init(prefs: SharedPreferences) {
-        val oldConfig = cachedConfig
-        cachedConfig = readConfig(prefs, "init")
-        logConfigChange("init", oldConfig, cachedConfig)
+    internal fun encode(config: AppConfig): String = json.encodeToString(AppConfig.serializer(), config)
+
+    internal fun decode(raw: String): AppConfig? =
+        runCatching { json.decodeFromString(AppConfig.serializer(), raw) }.getOrNull()
+
+    /**
+     * Bind the cross-process store and adopt whatever it holds.
+     *
+     * Hook processes pass their read-only `XposedModule.getRemotePreferences` handle;
+     * the app passes the writable `XposedService` one after running
+     * [LegacyConfigMigrator.migrateToRemote]. A failed bind leaves the cache untouched.
+     */
+    @Synchronized
+    fun attachStore(prefs: SharedPreferences?) {
+        if (prefs == null) {
+            Log.w(TAG, "attachStore skipped: no remote-pref store available")
+            return
+        }
+        store = prefs
+        refreshFromPrefs(prefs)
+        pendingConfig?.let { pending ->
+            pendingConfig = null
+            writeToStore(prefs, pending)
+            Log.d(TAG, "flushed buffered config fakeDeviceId=${pending.fakeDeviceId}")
+        }
     }
 
     fun refreshFromPrefs(prefs: SharedPreferences): AppConfig {
         val oldConfig = cachedConfig
-        return readConfig(prefs, "refreshFromPrefs").also {
-            cachedConfig = it
-            logConfigChange("refreshFromPrefs", oldConfig, it)
+        val raw = runCatching { prefs.getString(PREF_KEY_CONFIG_JSON, null) }.getOrNull()
+        val loaded = raw?.let(::decode) ?: AppConfig().also {
+            if (raw != null) Log.w(TAG, "config_json failed to decode; using defaults")
         }
-    }
-
-    /**
-     * Apply a config pushed from the app process by value (serialized [AppConfig] JSON),
-     * bypassing the remote-preferences store entirely. Used by the cross-process config
-     * broadcast so a change made in the app takes effect in the engine immediately, even
-     * when the remote-prefs write did not propagate (e.g. XposedService unavailable at save
-     * time). Updates the shared [cachedConfig] without touching any SharedPreferences.
-     * Returns true if the JSON was applied.
-     */
-    fun applyConfigJson(json: String): Boolean {
-        val parsed = runCatching { this.json.decodeFromString(AppConfig.serializer(), json) }.getOrNull() ?: run {
-            Log.w(TAG, "applyConfigJson: failed to decode config json, ignoring")
-            return false
-        }
-        val oldConfig = cachedConfig
-        cachedConfig = parsed.normalized()
-        logConfigChange("applyConfigJson", oldConfig, cachedConfig)
-        return true
+        cachedConfig = loaded.normalized()
+        logConfigChange("refreshFromPrefs", oldConfig, cachedConfig)
+        return cachedConfig
     }
 
     fun current(): AppConfig = cachedConfig
-
-    /** Serialize the current config to JSON for cross-process push via broadcast. */
-    fun currentAsJson(): String = json.encodeToString(AppConfig.serializer(), cachedConfig)
 
     fun fakeDeviceId(): String = current().fakeDeviceId.normalizedFakeDeviceId()
 
@@ -250,310 +269,83 @@ object ConfigManager {
 
     fun visibility(): VisibilityConfig = current().visibility
 
-    fun updateVisibility(prefs: SharedPreferences, service: XposedService?, visibility: VisibilityConfig) {
-        val config = current().copy(visibility = visibility)
-        save(prefs, service, config)
-    }
-
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
-    fun updateFakeDeviceId(prefs: SharedPreferences, fakeDeviceId: String) {
-        val config = current().copy(fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId())
-        save(prefs, config)
+    fun updateFakeDeviceId(fakeDeviceId: String) = save { it.copy(fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId()) }
+
+    fun updateLogLevel(logLevel: Int) = save { it.copy(logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)) }
+
+    fun updateIslandMode(islandMode: Int) = save { it.copy(superIslandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)) }
+
+    fun updateIslandDurationSeconds(seconds: Int) = save { it.copy(islandDurationSeconds = seconds.normalizedIslandDuration()) }
+
+    fun updateNotificationClickAction(action: Int) = save {
+        it.copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
     }
 
-    fun updateFakeDeviceId(prefs: SharedPreferences, service: XposedService?, fakeDeviceId: String) {
-        val config = current().copy(fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId())
-        save(prefs, service, config)
+    fun updateNotificationEnabled(enabled: Boolean) = save { it.copy(notificationEnabled = enabled) }
+
+    fun updatePopupOnConnect(enabled: Boolean) = save { it.copy(popupOnConnect = enabled) }
+
+    fun updateConnectDialogMode(mode: Int) = save {
+        it.copy(connectDialogMode = mode.coerceIn(CONNECT_DIALOG_MODE_MODULE, CONNECT_DIALOG_MODE_OFFICIAL))
     }
 
-    fun updateLogLevel(prefs: SharedPreferences, service: XposedService?, logLevel: Int) {
-        val config = current().copy(logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG))
-        save(prefs, service, config)
+    fun updateSuppressPopupInGameOrLandscape(enabled: Boolean) = save { it.copy(suppressPopupInGameOrLandscape = enabled) }
+
+    fun updatePopupAllowlist(packages: Set<String>) = save { it.copy(popupAllowlist = packages.normalizedPackageSet()) }
+
+    fun updatePopupDenylist(packages: Set<String>) = save { it.copy(popupDenylist = packages.normalizedPackageSet()) }
+
+    fun updateMoreClickAction(action: Int) = save { it.copy(moreClickAction = action.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)) }
+
+    fun updateFusionMoreClickAction(action: Int) = save {
+        it.copy(fusionMoreClickAction = action.coerceIn(FUSION_MORE_CLICK_SYSTEM_SETTINGS, FUSION_MORE_CLICK_MODULE))
     }
 
-    fun updateIslandMode(prefs: SharedPreferences, service: XposedService?, islandMode: Int) {
-        val config = current().copy(superIslandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE))
-        save(prefs, service, config)
-    }
+    fun updateAdaptiveCapabilityOverride(override: Int) =
+        save { it.copy(adaptiveCapabilityOverride = override.normalizedCapabilityOverride()) }
 
-    fun updateIslandDurationSeconds(prefs: SharedPreferences, service: XposedService?, seconds: Int) {
-        val config = current().copy(islandDurationSeconds = seconds.normalizedIslandDuration())
-        save(prefs, service, config)
-    }
+    fun updateSpatialAudioCapabilityOverride(override: Int) =
+        save { it.copy(spatialAudioCapabilityOverride = override.normalizedCapabilityOverride()) }
 
-    fun updateNotificationClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
-        val config = current().copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
-        save(prefs, service, config)
-    }
+    fun updateSpatialSoundSwitchCapabilityOverride(override: Int) =
+        save { it.copy(spatialSoundSwitchCapabilityOverride = override.normalizedCapabilityOverride()) }
 
-    fun updateNotificationEnabled(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
-        val config = current().copy(notificationEnabled = enabled)
-        save(prefs, service, config)
-    }
+    fun updateAncImplementationCapabilityOverride(override: Int) =
+        save { it.copy(ancImplementationCapabilityOverride = override.normalizedCapabilityOverride()) }
 
-    fun updatePopupOnConnect(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
-        val config = current().copy(popupOnConnect = enabled)
-        save(prefs, service, config)
-    }
+    fun updateAncCycleModes(modes: Set<String>) = save { it.copy(ancCycleModes = modes.normalizedAncCycleModes()) }
 
-    fun updateConnectDialogMode(prefs: SharedPreferences, service: XposedService?, mode: Int) {
-        val config = current().copy(
-            connectDialogMode = mode.coerceIn(CONNECT_DIALOG_MODE_MODULE, CONNECT_DIALOG_MODE_OFFICIAL),
-        )
-        save(prefs, service, config)
-    }
+    fun updateStartupTab(tab: Int) = save { it.copy(startupTab = tab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES)) }
 
-    fun updateSuppressPopupInGameOrLandscape(prefs: SharedPreferences, service: XposedService?, enabled: Boolean) {
-        val config = current().copy(suppressPopupInGameOrLandscape = enabled)
-        save(prefs, service, config)
-    }
+    fun updateVisibility(visibility: VisibilityConfig) = save { it.copy(visibility = visibility) }
 
-    fun updatePopupAllowlist(prefs: SharedPreferences, service: XposedService?, packages: Set<String>) {
-        val config = current().copy(popupAllowlist = packages.normalizedPackageSet())
-        save(prefs, service, config)
-    }
-
-    fun updatePopupDenylist(prefs: SharedPreferences, service: XposedService?, packages: Set<String>) {
-        val config = current().copy(popupDenylist = packages.normalizedPackageSet())
-        save(prefs, service, config)
-    }
-
-    fun updateMoreClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
-        val config = current().copy(moreClickAction = action.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE))
-        save(prefs, service, config)
-    }
-
-    fun updateFusionMoreClickAction(prefs: SharedPreferences, service: XposedService?, action: Int) {
-        val config = current().copy(
-            fusionMoreClickAction = action.coerceIn(
-                FUSION_MORE_CLICK_SYSTEM_SETTINGS,
-                FUSION_MORE_CLICK_MODULE,
-            )
-        )
-        save(prefs, service, config)
-    }
-
-    fun updateAdaptiveCapabilityOverride(prefs: SharedPreferences, service: XposedService?, override: Int) {
-        val config = current().copy(adaptiveCapabilityOverride = override.normalizedCapabilityOverride())
-        save(prefs, service, config)
-    }
-
-    fun updateSpatialAudioCapabilityOverride(prefs: SharedPreferences, service: XposedService?, override: Int) {
-        val config = current().copy(spatialAudioCapabilityOverride = override.normalizedCapabilityOverride())
-        save(prefs, service, config)
-    }
-
-    fun updateSpatialSoundSwitchCapabilityOverride(prefs: SharedPreferences, service: XposedService?, override: Int) {
-        val config = current().copy(spatialSoundSwitchCapabilityOverride = override.normalizedCapabilityOverride())
-        save(prefs, service, config)
-    }
-
-    fun updateAncImplementationCapabilityOverride(prefs: SharedPreferences, service: XposedService?, override: Int) {
-        val config = current().copy(ancImplementationCapabilityOverride = override.normalizedCapabilityOverride())
-        save(prefs, service, config)
-    }
-
-    fun updateAncCycleModes(prefs: SharedPreferences, service: XposedService?, modes: Set<String>) {
-        val config = current().copy(ancCycleModes = modes.normalizedAncCycleModes())
-        save(prefs, service, config)
-    }
-
-    fun updateStartupTab(prefs: SharedPreferences, service: XposedService?, tab: Int) {
-        val config = current().copy(startupTab = tab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES))
-        save(prefs, service, config)
-    }
-
-    fun save(prefs: SharedPreferences, config: AppConfig) {
+    /** Mutate, normalize, cache, and persist the config to the cross-process store. */
+    private fun save(mutate: (AppConfig) -> AppConfig) {
         val oldConfig = cachedConfig
-        val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
+        val normalized = mutate(cachedConfig).normalized()
         cachedConfig = normalized
-        writePrefs(prefs, normalized)
         logConfigChange("save", oldConfig, normalized)
-    }
-
-    fun save(prefs: SharedPreferences, service: XposedService?, config: AppConfig) {
-        val oldConfig = cachedConfig
-        val normalized = config.copy(fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId())
-        cachedConfig = normalized
-        writePrefs(prefs, normalized)
-        if (service != null) {
-            // getRemotePreferences() is non-null in libxposed 101/102; a non-null service
-            // always yields a usable cross-process store. This (app-side) store is WRITABLE,
-            // unlike the engine-side one, so it is the durable authority the engine reads at
-            // startup via ConfigManager.init.
-            val remotePrefs = service.getRemotePreferences(PREFS_NAME)
-            writeRemoteConfig(remotePrefs, normalized)
-            val hasConfigJson = runCatching { remotePrefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)
-            Log.d(TAG, "save remote prefs class=${remotePrefs.javaClass.name} hasConfigJson=$hasConfigJson fakeDeviceId=${normalized.fakeDeviceId}")
-            pendingRemoteConfig = null
+        val target = store
+        if (target != null) {
+            writeToStore(target, normalized)
         } else {
-            // The engine reads remote prefs at startup (after a scope restart), so a
-            // missing write here would make the persisted config revert to defaults.
-            // Buffer it and flush when the service binds.
-            pendingRemoteConfig = normalized
-            Log.w(TAG, "save remote prefs skipped: LSPosed service is null; buffering for flush on bind")
+            pendingConfig = normalized
+            Log.w(TAG, "save before store bind; buffering until LSPosed service connects")
         }
-        logConfigChange("save", oldConfig, normalized)
     }
 
     /**
-     * Write any config buffered because the LSPosed service was null at save time.
-     * Call from [dev.sonypods.SonyPodsApp.onServiceBind] so the cross-process store is
-     * always current, even if a save raced the service connection.
+     * Single-key async write, matching the libxposed example: the serialized [AppConfig]
+     * under [PREF_KEY_CONFIG_JSON] with `.apply()` (the framework's async remote write).
      */
-    fun flushPendingRemote(service: XposedService?) {
-        val pending = pendingRemoteConfig ?: return
-        service ?: return
-        val remotePrefs = service.getRemotePreferences(PREFS_NAME)
-        writeRemoteConfig(remotePrefs, pending)
-        pendingRemoteConfig = null
-        Log.d(TAG, "flushed buffered remote config fakeDeviceId=${pending.fakeDeviceId}")
-    }
-
-    /**
-     * Rewrite the current config to the remote-preference store on every service bind.
-     *
-     * Besides repairing a missing/stale store, this intentionally rewrites the serialized
-     * config with the current schema so removed keys are not carried forward.
-     */
-    fun syncToRemote(service: XposedService?) {
-        service ?: return
+    private fun writeToStore(target: SharedPreferences, config: AppConfig) {
         runCatching {
-            val remotePrefs = service.getRemotePreferences(PREFS_NAME)
-            writeRemoteConfig(remotePrefs, cachedConfig)
-            Log.d(TAG, "syncToRemote: rewrote current config schema ancCycleModes=${cachedConfig.ancCycleModes}")
-        }.onFailure { Log.w(TAG, "syncToRemote failed", it) }
-    }
-
-    private fun writePrefs(prefs: SharedPreferences, config: AppConfig) {
-        prefs.edit()
-            .putString(PREF_KEY_CONFIG_JSON, json.encodeToString(AppConfig.serializer(), config))
-            .putString(PREF_KEY_FAKE_DEVICE_ID, config.fakeDeviceId)
-            .putInt(PREF_KEY_LOG_LEVEL, config.logLevel)
-            .putInt(PREF_KEY_SUPER_ISLAND_MODE, config.superIslandMode)
-            .remove("island_mode")
-            .remove("island_show_timings")
-            .putInt(PREF_KEY_ISLAND_DURATION_SECONDS, config.islandDurationSeconds)
-            .putInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
-            .putBoolean(PREF_KEY_POPUP_ON_CONNECT, config.popupOnConnect)
-            .putInt(PREF_KEY_CONNECT_DIALOG_MODE, config.connectDialogMode)
-            .putBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, config.suppressPopupInGameOrLandscape)
-            .putStringSet(PREF_KEY_POPUP_ALLOWLIST, config.popupAllowlist)
-            .putStringSet(PREF_KEY_POPUP_DENYLIST, config.popupDenylist)
-            .remove(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND)
-            .putInt(PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
-            .putInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, config.fusionMoreClickAction)
-            .putInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, config.adaptiveCapabilityOverride)
-            .putInt(PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE, config.spatialAudioCapabilityOverride)
-            .putInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, config.spatialSoundSwitchCapabilityOverride)
-            .putInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, config.ancImplementationCapabilityOverride)
-            .putStringSet(PREF_KEY_ANC_CYCLE_MODES, config.ancCycleModes)
-            .putInt(PREF_KEY_STARTUP_TAB, config.startupTab)
-            .commit()
-    }
-
-    /**
-     * Write the config to the framework-backed remote-preference store, following the
-     * canonical libxposed pattern (see libxposed/example): a single authoritative key — the
-     * serialized [AppConfig] — written with `.apply()` (the framework's async remote write).
-     * The hooked app reads it back via `getRemotePreferences` and observes changes through
-     * `registerOnSharedPreferenceChangeListener`. Direct/legacy keys are NOT mirrored to
-     * remote prefs; [readConfig] falls back to config_json when they are absent, so this
-     * single key is sufficient. Using `.apply()` (not `.commit()`) matches the reference
-     * implementation and avoids a synchronous IPC write that can fail silently.
-     */
-    private fun writeRemoteConfig(remotePrefs: SharedPreferences, config: AppConfig) {
-        remotePrefs.edit()
-            .putString(PREF_KEY_CONFIG_JSON, json.encodeToString(AppConfig.serializer(), config))
-            .apply()
-    }
-
-    private fun readConfig(prefs: SharedPreferences, source: String): AppConfig {
-        val directFakeDeviceId = prefs.getString(PREF_KEY_FAKE_DEVICE_ID, null)
-        val directLogLevel = prefs.getInt(PREF_KEY_LOG_LEVEL, Int.MIN_VALUE)
-        val directSuperIslandMode = prefs.getInt(PREF_KEY_SUPER_ISLAND_MODE, Int.MIN_VALUE)
-        val directIslandDurationSeconds = prefs.getInt(PREF_KEY_ISLAND_DURATION_SECONDS, Int.MIN_VALUE)
-        val directNotificationClickAction = prefs.getInt(PREF_KEY_NOTIFICATION_CLICK_ACTION, Int.MIN_VALUE)
-        val directPopupOnConnect = if (prefs.contains(PREF_KEY_POPUP_ON_CONNECT)) {
-            prefs.getBoolean(PREF_KEY_POPUP_ON_CONNECT, false)
-        } else {
-            null
-        }
-        val directConnectDialogMode = prefs.getInt(PREF_KEY_CONNECT_DIALOG_MODE, Int.MIN_VALUE)
-        val directSuppressPopupInGameOrLandscape = if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE)) {
-            prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE, true)
-        } else {
-            null
-        }
-        val directPopupAllowlist = prefs.getStringSet(PREF_KEY_POPUP_ALLOWLIST, null)?.toSet()
-        // One-time migration off the "suppress popup while the module is open" switch,
-        // whose meaning is now "the module's own package is on the deny list". Only a
-        // user who explicitly turned it OFF needs carrying over; everyone else lands on
-        // DEFAULT_POPUP_DENYLIST, which already holds that package.
-        val directPopupDenylist = prefs.getStringSet(PREF_KEY_POPUP_DENYLIST, null)?.toSet()
-            ?: if (prefs.contains(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND) &&
-                !prefs.getBoolean(PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND, true)
-            ) {
-                emptySet()
-            } else {
-                null
-            }
-        val directMoreClickAction = prefs.getInt(PREF_KEY_MORE_CLICK_ACTION, Int.MIN_VALUE)
-        val directFusionMoreClickAction = prefs.getInt(PREF_KEY_FUSION_MORE_CLICK_ACTION, Int.MIN_VALUE)
-        val directAdaptiveCapabilityOverride = prefs.getInt(PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
-        val directSpatialAudioCapabilityOverride = prefs.getInt(PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
-        val directSpatialSoundSwitchCapabilityOverride = prefs.getInt(PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
-        val directAncImplementationCapabilityOverride = prefs.getInt(PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE, Int.MIN_VALUE)
-        val directAncCycleModes = prefs.getStringSet(PREF_KEY_ANC_CYCLE_MODES, null)?.toSet()
-        val directStartupTab = prefs.getInt(PREF_KEY_STARTUP_TAB, Int.MIN_VALUE)
-        val raw = prefs.getString(PREF_KEY_CONFIG_JSON, null)
-        logPrefsSnapshot(source, prefs, directFakeDeviceId, raw)
-        val config = raw?.let {
-            runCatching { json.decodeFromString(AppConfig.serializer(), it) }.getOrNull()
-        } ?: AppConfig()
-        val migratedMoreClickAction = if (prefs.getBoolean("open_heytap", false)) MORE_CLICK_HEYTAP else config.moreClickAction
-        if (!directFakeDeviceId.isNullOrBlank()) {
-            return config.copy(
-                fakeDeviceId = directFakeDeviceId.normalizedFakeDeviceId(),
-                logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
-                superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
-                islandDurationSeconds = directIslandDurationSeconds.takeIf { it != Int.MIN_VALUE } ?: config.islandDurationSeconds,
-                notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
-                popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
-                connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
-                suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
-                popupAllowlist = directPopupAllowlist ?: config.popupAllowlist,
-                popupDenylist = directPopupDenylist ?: config.popupDenylist,
-                moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
-                fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
-                adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
-                spatialAudioCapabilityOverride = directSpatialAudioCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialAudioCapabilityOverride,
-                spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
-                ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
-                ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
-                startupTab = directStartupTab.takeIf { it != Int.MIN_VALUE } ?: config.startupTab,
-            ).normalized()
-        }
-        return config.copy(
-            fakeDeviceId = config.fakeDeviceId.normalizedFakeDeviceId(),
-            logLevel = directLogLevel.takeIf { it != Int.MIN_VALUE } ?: config.logLevel,
-            superIslandMode = directSuperIslandMode.takeIf { it != Int.MIN_VALUE } ?: config.superIslandMode,
-            notificationClickAction = directNotificationClickAction.takeIf { it != Int.MIN_VALUE } ?: config.notificationClickAction,
-            popupOnConnect = directPopupOnConnect ?: config.popupOnConnect,
-            connectDialogMode = directConnectDialogMode.takeIf { it != Int.MIN_VALUE } ?: config.connectDialogMode,
-            suppressPopupInGameOrLandscape = directSuppressPopupInGameOrLandscape ?: config.suppressPopupInGameOrLandscape,
-            popupAllowlist = directPopupAllowlist ?: config.popupAllowlist,
-            popupDenylist = directPopupDenylist ?: config.popupDenylist,
-            moreClickAction = directMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: migratedMoreClickAction,
-            fusionMoreClickAction = directFusionMoreClickAction.takeIf { it != Int.MIN_VALUE } ?: config.fusionMoreClickAction,
-            adaptiveCapabilityOverride = directAdaptiveCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.adaptiveCapabilityOverride,
-            spatialAudioCapabilityOverride = directSpatialAudioCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialAudioCapabilityOverride,
-            spatialSoundSwitchCapabilityOverride = directSpatialSoundSwitchCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.spatialSoundSwitchCapabilityOverride,
-            ancImplementationCapabilityOverride = directAncImplementationCapabilityOverride.takeIf { it != Int.MIN_VALUE } ?: config.ancImplementationCapabilityOverride,
-            ancCycleModes = directAncCycleModes ?: config.ancCycleModes,
-            startupTab = directStartupTab.takeIf { it != Int.MIN_VALUE } ?: config.startupTab,
-        ).normalized()
+            target.edit()
+                .putString(PREF_KEY_CONFIG_JSON, encode(config))
+                .apply()
+        }.onFailure { Log.e(TAG, "remote config write failed", it) }
     }
 
     private fun AppConfig.normalized(): AppConfig = copy(
@@ -588,9 +380,9 @@ object ConfigManager {
      * Intentionally does NOT fall back to [DEFAULT_ANC_CYCLE_MODES] when the result is empty:
      * that would silently override a user who deliberately deselected all modes (edge case) or,
      * more critically, would expand a valid two-mode subset (e.g. NC+ASM) back to all three
-     * modes whenever this function is called on a freshly-read SharedPreferences that happens
-     * to be empty (LSPosed remote-prefs bridge not yet ready at package-load time). The
-     * empty-set fallback belongs at the point where the cycle list is actually consumed
+     * modes whenever this function is called on a freshly-read store that happens to be empty
+     * (LSPosed remote-prefs bridge not yet ready at package-load time). The empty-set fallback
+     * belongs at the point where the cycle list is actually consumed
      * (SonyEngineHost.CMD_CYCLE_NOISE_CONTROL), not here.
      */
     private fun Set<String>.normalizedAncCycleModes(): Set<String> =
@@ -614,15 +406,6 @@ object ConfigManager {
         } else {
             Log.d(TAG, "$source config changed: ${changes.joinToString()}")
         }
-    }
-
-    private fun logPrefsSnapshot(source: String, prefs: SharedPreferences, directFakeDeviceId: String?, rawConfig: String?) {
-        val all = runCatching { prefs.all }.getOrElse { error -> mapOf("<getAllError>" to error.message) }
-        Log.d(
-            TAG,
-            "$source prefs snapshot class=${prefs.javaClass.name} keys=${all.keys.sorted()} " +
-                "$PREF_KEY_FAKE_DEVICE_ID=$directFakeDeviceId $PREF_KEY_CONFIG_JSON=$rawConfig all=$all"
-        )
     }
 
     private fun changedFields(oldConfig: AppConfig, newConfig: AppConfig): List<String> {

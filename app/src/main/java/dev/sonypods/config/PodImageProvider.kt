@@ -15,8 +15,10 @@ class PodImageProvider : ContentProvider() {
         if (mode != "r") throw SecurityException("Pod images are read-only")
         val context = context ?: return null
         val fileName = uri.lastPathSegment ?: return null
-        val prefs = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val allowedNames = PodImagePrefs.load(prefs).flatMap { earphone ->
+        // The allowlist comes from the framework-backed remote-prefs store — the only
+        // place earphone metadata is persisted. Before the LSPosed service binds the
+        // allowlist is empty and every lookup is declined.
+        val allowedNames = PodImagePrefs.loadCurrent().flatMap { earphone ->
             PodImageResource.entries.mapNotNull { resource ->
                 earphone.imagePath(resource)?.let { File(it).name }
             }
