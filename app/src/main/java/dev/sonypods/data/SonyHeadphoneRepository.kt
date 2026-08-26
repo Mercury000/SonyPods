@@ -11,7 +11,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
-import android.content.SharedPreferences
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.ble.SonyBleClient
 import dev.sonypods.ble.SonyBleClientListener
@@ -703,17 +702,11 @@ class SonyHeadphoneRepository private constructor(
 
     // ── Capability-probe cache (SC `exchanged_capabilities` semantics) ──
 
-    /**
-     * Framework-backed remote-preference provider (hook-side, read-only). Wired by
-     * the host; null when the engine runs outside a hooked process (plain app).
-     */
+    /** Durable writer for the encoded cache map. The engine is the only consumer of
+     * the probe cache, so persistence lives in the host process's own data directory;
+     * the writer is wired by [dev.sonypods.hook.SonyEngineHost]. */
     @Volatile
-    private var prefsProvider: (() -> SharedPreferences?)? = null
-
-    /** Sink for the encoded cache map; the host broadcasts it to the app process,
-     * which is the only side allowed to write the shared remote-prefs store. */
-    @Volatile
-    private var cacheSink: ((String) -> Unit)? = null
+    private var cacheWriter: ((String) -> Unit)? = null
 
     /** Hook-host fallback invoked only when the current model has no catalog image. */
     @Volatile
@@ -873,27 +866,13 @@ class SonyHeadphoneRepository private constructor(
         onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
         pendingQuickAccessFunctionCodes = null
-        prefsProvider = null
-        cacheSink = null
+        cacheWriter = null
         modelCatalogFallbackRequester = null
     }
 
-    /**
-     * Wire the framework-backed remote-preference provider (hook-side read-only
-     * store). Called by the host once the LSPosed remote-prefs bridge is up.
-     */
-    fun attachPrefsProvider(provider: (() -> SharedPreferences?)?) {
-        prefsProvider = provider
-        // Seed the in-process overlay from whatever the store already has (e.g. a
-        // cache persisted before a scope restart), so a reconnect shortly after the
-        // bridge comes up benefits without waiting for a fresh probe.
-        refreshCapabilityCacheFromPrefs()
-    }
-
-    /** Wire the sink that carries the encoded cache to the app process for durable
-     * persistence into the shared remote-prefs store. */
-    fun attachCapabilityCacheSink(sink: ((String) -> Unit)?) {
-        cacheSink = sink
+    /** Wire the durable cache writer (host-process local file). */
+    fun attachCapabilityCacheWriter(writer: ((String) -> Unit)?) {
+        cacheWriter = writer
     }
 
     /**
@@ -935,29 +914,24 @@ class SonyHeadphoneRepository private constructor(
         return refreshed
     }
 
-    /** Re-read the cache map from the remote-prefs store into the in-process overlay. */
-    fun refreshCapabilityCacheFromPrefs() {
-        val entries = CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())
-        if (entries.isNotEmpty()) {
-            capabilityCache.putAll(entries)
-            appendLog("Capability cache loaded ${entries.size} entries from prefs", writeLogcat = false)
-        }
-    }
-
-    /** Install a cache map pushed from the app process by value (survives an empty
-     * remote-prefs read in the hook process). */
+    /** Install a cache map restored from the host-process persistence file. */
     fun installCapabilityCache(json: String) {
         val entries = CapabilityProbeCache.decode(json)
         if (entries.isNotEmpty()) {
             capabilityCache.clear()
             capabilityCache.putAll(entries)
-            appendLog("Capability cache installed ${entries.size} entries via broadcast", writeLogcat = false)
+            appendLog("Capability cache installed ${entries.size} entries from persisted store", writeLogcat = false)
         }
     }
 
     private fun readCapabilityCache(address: String): CapabilityCacheEntry? {
-        capabilityCache[address]?.let { return it }
-        return CapabilityProbeCache.readAll(runCatching { prefsProvider?.invoke() }.getOrNull())[address]
+        return capabilityCache[address]
+    }
+
+    /** Encode and hand the current cache map to the durable writer. The in-process
+     * overlay is already up to date at every call site, so nothing to reinstall. */
+    private fun persistCapabilityCache() {
+        cacheWriter?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
     /**
@@ -1446,7 +1420,7 @@ class SonyHeadphoneRepository private constructor(
         )
         capabilityCache[address] = entry
         appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+        persistCapabilityCache()
     }
 
     /** Update one device's persisted capability entry without losing fields from
@@ -1456,7 +1430,7 @@ class SonyHeadphoneRepository private constructor(
         val updated = transform(current).copy(savedAtMs = System.currentTimeMillis())
         if (updated == current) return
         capabilityCache[address] = updated
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+        persistCapabilityCache()
     }
 
     /** Update the small amount of multipoint state that is useful before the
@@ -1475,7 +1449,7 @@ class SonyHeadphoneRepository private constructor(
         )
         if (updated == current) return
         capabilityCache[address] = updated
-        cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+        persistCapabilityCache()
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -3097,7 +3071,7 @@ class SonyHeadphoneRepository private constructor(
         val existing = capabilityCache[address] ?: return
         if (existing.playVolumeStep != response.musicVolumeStep) {
             capabilityCache[address] = existing.copy(playVolumeStep = response.musicVolumeStep)
-            cacheSink?.invoke(CapabilityProbeCache.encode(capabilityCache))
+            persistCapabilityCache()
         }
         updateCapabilityCache(address) { entry ->
             entry.copy(

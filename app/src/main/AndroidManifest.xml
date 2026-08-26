@@ -62,11 +62,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <!-- Receives the capability-probe cache pushed by the engine so it can be
-             persisted into the shared remote-prefs store (the only writable side). -->
-        <receiver
-            android:name="dev.sonypods.config.CapabilityCacheReceiver"
-            android:exported="true" />
 <!-- Receives engine state while the app has no activity so catalog images
              are downloaded immediately after a connection. -->
         <receiver

@@ -19,6 +19,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.device.SonyDeviceService
+import java.io.File
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -52,6 +53,8 @@ import kotlinx.coroutines.cancel
  */
 object SonyEngineHost {
     private const val TAG = "SonyPods-Engine"
+    /** Probe-cache persistence file in the host process's own data directory. */
+    private const val CAPABILITY_CACHE_FILE = "sonypods_capability_cache.json"
     /** Audio Stream Control Service: only an LE Audio identity carries it. */
     private val ASCS_SERVICE_UUID: java.util.UUID =
         java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
@@ -168,7 +171,6 @@ object SonyEngineHost {
     private var transportRecoveryAddress: String? = null
 
     private var commandReceiver: BroadcastReceiver? = null
-    private var capabilityCacheReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
     private var remotePreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var remotePreferenceStore: SharedPreferences? = null
@@ -197,7 +199,6 @@ object SonyEngineHost {
             // later AdapterService/A2DP callbacks.
             appContext?.let {
                 registerCommandReceiver(it)
-                registerCapabilityCacheReceiver(it)
                 registerUnlockReceiver(it)
             }
             registerRemoteConfigListener()
@@ -247,24 +248,20 @@ object SonyEngineHost {
             fallback?.ensureCatalogFor(modelName)
         }
         repository = repo
-        // Wire the remote-prefs store (read-only side) for the capability-probe
-        // cache, and the sink that carries cache writes to the app process, which is
-        // the only side allowed to persist into the shared store.
-        repo.attachPrefsProvider { currentPrefs() }
-        repo.attachCapabilityCacheSink { json ->
-            runCatching {
-                ctx.sendBroadcast(
-                    Intent(SonyBridge.ACTION_CAPABILITY_CACHE).apply {
-                        putExtra(SonyBridge.EXTRA_CAPABILITY_JSON, json)
-                        setPackage("com.mercury.sonypods")
-                        addFlags(Intent.FLAG_RECEIVER_FOREGROUND or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                    }
-                )
-            }.onFailure { Log.w(TAG, "capability cache broadcast to app failed", it) }
+        // The probe cache is consumed only by this process's repository, so it
+        // persists into THIS process's data directory — no app-process detour, no
+        // waking the module app for every probe write. A local file survives scope
+        // restarts just as well as the former shared-store round trip did.
+        val capabilityCacheFile = File(ctx.filesDir, CAPABILITY_CACHE_FILE)
+        runCatching {
+            if (capabilityCacheFile.isFile) repo.installCapabilityCache(capabilityCacheFile.readText())
+        }.onFailure { Log.w(TAG, "capability cache restore failed", it) }
+        repo.attachCapabilityCacheWriter { json ->
+            runCatching { capabilityCacheFile.writeText(json) }
+                .onFailure { Log.w(TAG, "capability cache persist failed", it) }
         }
 
         registerCommandReceiver(ctx)
-        registerCapabilityCacheReceiver(ctx)
         announceEngineReadyToOfficialApp(ctx)
 
         scope.launch {
@@ -313,7 +310,6 @@ object SonyEngineHost {
                 delay(delayMs)
                 runCatching {
                     currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
-                    repository?.refreshCapabilityCacheFromPrefs()
                     Log.d(TAG, "deferred config re-read done; ancCycleModes=${ConfigManager.ancCycleModes()}")
                 }.onFailure { Log.w(TAG, "deferred config re-read failed", it) }
             }
@@ -337,11 +333,10 @@ object SonyEngineHost {
         scope = newGenerationScope()
         oldScope.cancel()
         val ctx = appContext
-        listOf(commandReceiver, capabilityCacheReceiver, unlockReceiver)
+        listOf(commandReceiver, unlockReceiver)
             .filterNotNull()
             .forEach { receiver -> ctx?.let { runCatching { it.unregisterReceiver(receiver) } } }
         commandReceiver = null
-        capabilityCacheReceiver = null
         unlockReceiver = null
 
         val prefsStore = remotePreferenceStore ?: currentPrefs()
@@ -351,7 +346,6 @@ object SonyEngineHost {
         remotePreferenceListener = null
         remotePreferenceStore = null
         remoteConfigListenerRegistered = false
-        capabilityCacheReceiverRegistered = false
 
         val repo = repository
         repository = null
@@ -398,7 +392,6 @@ object SonyEngineHost {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             runCatching {
                 currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
-                repository?.refreshCapabilityCacheFromPrefs()
                 Log.d(TAG, "remote config changed; refreshed; ancCycleModes=${ConfigManager.ancCycleModes()}")
             }.onFailure { Log.w(TAG, "remote config change refresh failed", it) }
         }
@@ -1600,34 +1593,6 @@ object SonyEngineHost {
                 }
             )
         }.onFailure { Log.w(TAG, "engine-ready broadcast to Sound Connect failed", it) }
-    }
-
-    private var capabilityCacheReceiverRegistered = false
-
-    /**
-     * App -> engine value push of the capability-probe cache (the app echoes the
-     * engine's own write after persisting it, so the in-process overlay stays
-     * current even when the hook-side remote-prefs read is not yet reliable).
-     */
-    private fun registerCapabilityCacheReceiver(context: Context) {
-        if (capabilityCacheReceiverRegistered) return
-        runCatching {
-            val receiver = object : BroadcastReceiver() {
-                    override fun onReceive(ctx: Context?, intent: Intent?) {
-                        if (intent?.action != SonyBridge.ACTION_CAPABILITY_CACHE) return
-                        val json = intent.getStringExtra(SonyBridge.EXTRA_CAPABILITY_JSON) ?: return
-                        repository?.installCapabilityCache(json)
-                    }
-                }
-            context.registerReceiver(
-                receiver,
-                IntentFilter(SonyBridge.ACTION_CAPABILITY_CACHE),
-                Context.RECEIVER_EXPORTED,
-            )
-            capabilityCacheReceiver = receiver
-            capabilityCacheReceiverRegistered = true
-            Log.d(TAG, "capability cache push receiver registered")
-        }.onFailure { Log.w(TAG, "capability cache push receiver registration failed", it) }
     }
 
     private fun handleCommand(intent: Intent) {

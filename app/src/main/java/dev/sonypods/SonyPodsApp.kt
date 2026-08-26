@@ -2,7 +2,6 @@ package dev.sonypods
 
 import android.app.Application
 import android.util.Log
-import dev.sonypods.config.CapabilityProbeCache
 import dev.sonypods.config.CloudModelInfoSync
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.LegacyConfigMigrator
@@ -44,10 +43,6 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
         PodImagePrefs.migrateImagesToRemote(service)
-        // Flush any capability-probe cache the engine pushed while the service was
-        // unavailable, so the shared remote-prefs store is authoritative across a scope
-        // restart (the engine reads it back on the next connection).
-        CapabilityProbeCache.flushPending(service)
         notifyListeners(service)
     }
 

@@ -21,18 +21,10 @@ object SonyBridge {
     /** Consumers -> engine: a control command, see [EXTRA_COMMAND]. */
     const val ACTION_COMMAND = "dev.sonypods.action.command"
 
-    /** Engine -> official app hook: reassert a live lease after bluetooth-process restart. */
-    const val ACTION_ENGINE_READY = "dev.sonypods.action.engine_ready"
-
     /**
-     * Engine -> app (durable persistence) and app -> engine (value push):
-     * the encoded capability-probe cache. The payload is [EXTRA_CAPABILITY_JSON].
-     * The engine broadcasts it to the app, which persists it into the shared
-     * remote-prefs store (the only side where that store is writable) and echoes
-     * it back so the engine's in-process overlay stays current even when the
-     * hook-side remote-prefs read comes back empty.
+     * Engine -> official app hook: reassert a live lease after bluetooth-process restart.
      */
-    const val ACTION_CAPABILITY_CACHE = "dev.sonypods.action.capability_cache"
+    const val ACTION_ENGINE_READY = "dev.sonypods.action.engine_ready"
 
     const val ACTION_DEBUG_LOG = "dev.sonypods.action.debug_log"
 
@@ -47,7 +39,6 @@ object SonyBridge {
     const val EXTRA_QUICK_ACCESS_ACTION_INDEX = "quick_access_action_index"
     const val EXTRA_QUICK_ACCESS_FUNCTION_CODE = "quick_access_function_code"
     const val EXTRA_PRESET_CODE = "gesture_preset_code"
-    const val EXTRA_CAPABILITY_JSON = "capability_cache_json"
     const val EXTRA_OFFICIAL_LEASE_ID = "official_lease_id"
     const val EXTRA_OFFICIAL_LEASE_TOKEN = "official_lease_token"
     const val EXTRA_OFFICIAL_SENDER_PACKAGE = "official_sender_package"
@@ -306,21 +297,4 @@ object SonyBridge {
             }
         )
     }.isSuccess
-
-    /**
-     * Push the encoded capability-probe cache to the engine (app -> engine value
-     * push, mirroring the config broadcast; used by the app receiver to echo the
-     * engine's own write back so the in-process overlay stays current).
-     */
-    fun sendCapabilityCache(context: Context, json: String) {
-        runCatching {
-            context.sendBroadcast(
-                Intent(ACTION_CAPABILITY_CACHE).apply {
-                    putExtra(EXTRA_CAPABILITY_JSON, json)
-                    setPackage(ENGINE_PACKAGE)
-                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                }
-            )
-        }
-    }
 }
