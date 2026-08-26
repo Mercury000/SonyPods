@@ -168,6 +168,7 @@ class LeAudioDevicePairer(
         log("device-side pairing cancelled")
         closeLeDiscoveryClients()
         cleanUp()
+        abandonPendingBond()
         setStage(Stage.IDLE, "", null)
     }
 
@@ -849,7 +850,6 @@ class LeAudioDevicePairer(
         }
         activeCallback = null
         closeGattProvoke()
-        abandonPendingBond()
         unregisterReceiver()
         candidates.clear()
     }
