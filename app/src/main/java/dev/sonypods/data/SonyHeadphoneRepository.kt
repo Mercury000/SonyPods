@@ -3061,11 +3061,6 @@ class SonyHeadphoneRepository private constructor(
         } else {
             updatePlaybackStatusFromAudioManager()
         }
-        // A status flip is also the earliest hint that AVRCP has delivered track
-        // info to the headset; refresh the fallback while the names are empty.
-        if (_state.value.playbackState.track.isNullOrBlank()) {
-            mainHandler.postDelayed(playbackMetadataRefetchRunnable, PLAYBACK_METADATA_REFETCH_DELAY_MS)
-        }
         // 连接质量切换的重连窗口：耳机重新报出可用状态（音频已恢复）才解除
         // 播放控制置灰；30s 硬上限与官方连接进度框一致。
         if (_state.value.connectionQualitySwitching &&
