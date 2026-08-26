@@ -161,7 +161,7 @@ object MiBluetoothToastHook : HookContext() {
                 // reachable ("user not unlocked"). Post the notification anyway with a
                 // system icon rather than dropping it for the whole session.
                 val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, imagePrefs, address) }.getOrNull()
-                    ?: runCatching { BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box) }.getOrNull()
+                    ?: runCatching { PodImageLoader.defaultLogoBitmap(moduleContext) }.getOrNull()
                 if (headsetBitmap == null) {
                     Log.d("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
                 }

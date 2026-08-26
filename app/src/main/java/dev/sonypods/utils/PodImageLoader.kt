@@ -2,14 +2,20 @@ package dev.sonypods.utils
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.BitmapFactory
+import androidx.core.content.ContextCompat
 import com.mercury.sonypods.R
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
 
 object PodImageLoader {
     private const val MODULE_PACKAGE = "com.mercury.sonypods"
+
+    /** Edge length of the default SONY logotype bitmap, in pixels. */
+    private const val DEFAULT_LOGO_SIZE_PX = 320
 
     /**
      * Hook-only image reader backed by libxposed Remote Files. Set by [dev.sonypods.hook.HookEntry]
@@ -25,33 +31,42 @@ object PodImageLoader {
     @Volatile
     var temporaryImageReader: ((address: String) -> Bitmap?)? = null
 
+    /**
+     * The SONY logotype shown when no cached catalog image exists. Dark ink on light
+     * surfaces, white ink on dark ones — the passed context's effective configuration
+     * decides, which inside the module also honours the manual theme override (AppTheme
+     * rewrites the LocalContext uiMode). Rendered onto a square transparent canvas,
+     * vertically centered, so it occupies the same footprint as the product-shot art it
+     * stands in for.
+     */
+    fun defaultLogoBitmap(context: Context): Bitmap? {
+        val night = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
+        val resId = if (night) R.drawable.sony_logo_on_dark else R.drawable.sony_logo_on_light
+        return runCatching {
+            val drawable = ContextCompat.getDrawable(context, resId) ?: return null
+            // BitmapFactory cannot decode vector XML; rasterize manually. The drawable's
+            // viewport is already square with the mark centered.
+            val size = DEFAULT_LOGO_SIZE_PX
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            drawable.setBounds(0, 0, size, size)
+            drawable.draw(canvas)
+            bitmap
+        }.getOrNull()
+    }
+
     fun loadBitmap(
         context: Context,
         prefs: SharedPreferences,
         address: String,
         resource: PodImageResource,
-        fallbackResId: Int,
     ): Bitmap? {
         loadCached(prefs, address, listOf(resource))?.let { return it }
         val moduleContext = runCatching {
             context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
         }.getOrNull() ?: return null
-        return BitmapFactory.decodeResource(moduleContext.resources, fallbackResId)
-    }
-
-    fun loadBitmapWithFallback(
-        context: Context,
-        prefs: SharedPreferences,
-        address: String,
-        resource: PodImageResource,
-        fallbackResource: PodImageResource,
-        fallbackResId: Int,
-    ): Bitmap? {
-        loadCached(prefs, address, listOf(resource, fallbackResource))?.let { return it }
-        val moduleContext = runCatching {
-            context.createPackageContext(MODULE_PACKAGE, Context.CONTEXT_IGNORE_SECURITY)
-        }.getOrNull() ?: return null
-        return BitmapFactory.decodeResource(moduleContext.resources, fallbackResId)
+        return defaultLogoBitmap(moduleContext)
     }
 
     /**
@@ -88,7 +103,7 @@ object PodImageLoader {
     }
 
     fun loadBoxBitmap(context: Context, prefs: SharedPreferences, address: String): Bitmap? {
-        return loadBitmap(context, prefs, address, PodImageResource.BOX, R.drawable.img_box)
+        return loadBitmap(context, prefs, address, PodImageResource.BOX)
     }
 
 }

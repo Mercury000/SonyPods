@@ -208,7 +208,16 @@ private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
                 .getOrNull()
                 ?.let { bitmap -> BitmapPainter(bitmap.asImageBitmap()) }
         }
-    } ?: painterResource(R.drawable.img_box)
+    } ?: painterResource(defaultLogoRes())
+}
+
+/** Effective night mode: AppTheme rewrites the LocalContext uiMode, so the manual
+ * light/dark override is honoured here, not just the system setting. */
+@Composable
+private fun defaultLogoRes(): Int {
+    val dark = LocalConfiguration.current.uiMode and
+        Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    return if (dark) R.drawable.sony_logo_on_dark else R.drawable.sony_logo_on_light
 }
 
 private fun LazyListScope.podControlItems(
