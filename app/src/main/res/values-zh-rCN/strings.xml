@@ -491,4 +491,5 @@
     <string name="pairer_rebond_timeout">重新配对超时，耳机可能需要进入配对模式</string>
     <string name="pairer_success_all">LE Audio 身份已配对（%1$d 只）</string>
     <string name="pairer_success_partial">仅配对了 %1$d 只，另一只未响应，可能只有一侧处于配对模式</string>
+    <string name="lea_pair_collecting">已发现一只耳机，继续扫描另一只（剩余 %1$d 秒）…</string>
 </resources>

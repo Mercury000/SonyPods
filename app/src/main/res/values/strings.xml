@@ -490,4 +490,5 @@
     <string name="pairer_rebond_timeout">Re-bonding timed out; the headset may need to be put into pairing mode</string>
     <string name="pairer_success_all">LE Audio identities bonded (%1$d)</string>
     <string name="pairer_success_partial">Only %1$d bonded; the other bud did not respond and may not have been in pairing mode</string>
+    <string name="lea_pair_collecting">Found one bud; keeping the scan open for the other (%1$d s)…</string>
 </resources>

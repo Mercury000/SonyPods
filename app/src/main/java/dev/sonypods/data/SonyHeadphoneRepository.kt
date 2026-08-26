@@ -611,6 +611,14 @@ class SonyHeadphoneRepository private constructor(
 
             override fun onFinished(success: Boolean, message: String) {
                 appendLog("LE Audio switch ${if (success) "finished" else "failed"}: $message")
+                if (disableUnpairPending) {
+                    // The headset has confirmed (or definitively refused) the switch; the
+                    // module-created LE identity has served its purpose either way.
+                    disableUnpairPending = false
+                    appendLog("dropping the module-created LE Audio bond")
+                    leAudioDevicePairer.cancel()
+                    unpairLeAudioDevice()
+                }
                 _state.update { current ->
                     current.copy(
                         // A device Alert is a separate 0x98 transaction. Do not
@@ -668,6 +676,7 @@ class SonyHeadphoneRepository private constructor(
             }
         },
     )
+    private var disableUnpairPending = false
     private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
@@ -1793,13 +1802,25 @@ class SonyHeadphoneRepository private constructor(
         _state.update { it.copy(leAudioSwitchPending = true) }
         val current = _state.value
         if (enabled) {
+            disableUnpairPending = false
             leAudioCoordinator.start(current.leaState.pairedHistory)
         } else {
-            // Drop our LE bond before the headset leaves LE Audio, so the stack is not
-            // reconnecting an LE identity that is about to stop announcing.
-            leAudioDevicePairer.cancel()
-            unpairLeAudioDevice()
+            // The official transaction must run first: it delivers the setting change over
+            // the control channel and raises the reset guide. Dropping the LE bond before
+            // that would cut the very link the transaction rides on — the Tandem session can
+            // be on either identity — and the switch would finish silently with no guide and
+            // no reconnect guidance. The bond is dropped after the headset confirms, or by
+            // the fallback below when it never answers.
+            disableUnpairPending = true
             leAudioCoordinator.disable()
+            mainHandler.postDelayed({
+                if (disableUnpairPending) {
+                    disableUnpairPending = false
+                    appendLog("LE Audio disable was not confirmed; dropping the LE bond anyway")
+                    leAudioDevicePairer.cancel()
+                    unpairLeAudioDevice()
+                }
+            }, DISABLE_UNPAIR_FALLBACK_MS)
         }
     }
 
@@ -1846,6 +1867,8 @@ class SonyHeadphoneRepository private constructor(
             }
         }
         if (!positive) {
+            // The user aborted the switch at the guide; the LE bond must survive that.
+            disableUnpairPending = false
             leAudioCoordinator.cancel()
         }
         _state.update {
@@ -4192,6 +4215,10 @@ class SonyHeadphoneRepository private constructor(
         const val LEA_NTFY_STATUS = 0x45
         private const val LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING = 0x0C
         private const val LE_AUDIO_REFRESH_AFTER_SWITCH_MS = 1_000L
+
+        /** How long a disable may wait for the headset's own confirmation before the
+         * module-created LE bond is dropped without one. */
+        private const val DISABLE_UNPAIR_FALLBACK_MS = 12_000L
 
         fun mergeDevice(old: DiscoveredSonyDevice, new: DiscoveredSonyDevice): DiscoveredSonyDevice =
             old.copy(

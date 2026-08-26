@@ -73,6 +73,10 @@ class LeAudioDevicePairer(
     private var ctkdRepairAddress: String? = null
     /** The bonded classic identity of the set, when this run knows it by construction. */
     private var knownControlAddress: String? = null
+    /** Every viable member seen so far this run; the second earbud often advertises late. */
+    private val collected = LinkedHashMap<String, LeAudioAnnouncementParser.Candidate>()
+    /** When the first viable member appeared; the collection window is measured from it. */
+    private var firstViableAtMs = 0L
     private var gattProvoke: SonyLeAudioGattClient? = null
     private var receiverRegistered = false
     /** Scanning keeps cycling its passes until this deadline, giving the user time to
@@ -129,6 +133,8 @@ class LeAudioDevicePairer(
         // cache this very flow is about to pollute with ASCS).
         knownControlAddress = excludeAddresses.firstOrNull()
         candidates.clear()
+        collected.clear()
+        firstViableAtMs = 0L
         bondTarget = null
         picked = null
         pending.clear()
@@ -335,15 +341,39 @@ class LeAudioDevicePairer(
             "scan pass ${passIndex + 1} saw ${candidates.size} LE Audio announcement(s): " +
                 candidates.values.joinToString { describe(it) }
         )
-        if (viable.isEmpty()) {
+        // The two earbuds advertise on their own schedule; the second one routinely shows up
+        // seconds after the first. Collect across passes instead of bonding the moment one
+        // member is viable — a set that bonds with a member missing stays single-eared.
+        viable.forEach { collected.putIfAbsent(it.address.uppercase(), it) }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (collected.isNotEmpty() && firstViableAtMs == 0L) firstViableAtMs = now
+        val collecting = collected.isNotEmpty() &&
+            now - firstViableAtMs < MEMBER_COLLECT_MS &&
+            now < scanDeadline
+        if (collecting) {
             passIndex++
+            val remainingSec = ((firstViableAtMs + MEMBER_COLLECT_MS - now) / 1000L).toInt() + 1
+            setStage(
+                Stage.SCANNING,
+                ModuleText.get(appContext, R.string.lea_pair_collecting, remainingSec),
+                null,
+            )
             runScanPass()
+            return
+        }
+        if (collected.isEmpty()) {
+            fail(ModuleText.get(appContext, R.string.pairer_identity_not_found))
             return
         }
         // Every member of the coordinated set has to be bonded, not just the first one. A TWS
         // headset is two LE Audio devices in one CSIS group, and the stack builds a CIG with
         // one CIS per member: bonding a single earbud leaves the other one silent.
-        pending = viable.toMutableList()
+        pending = LeAudioAnnouncementParser.pairingCandidates(
+            candidates = collected.values.toList(),
+            targetName = targetName,
+            reportedLeAddresses = reportedLeAddresses,
+            excludeAddresses = excludeAddresses,
+        ).toMutableList()
         addKnownControlMember()
         log("${pending.size} coordinated-set member(s) to bond: ${pending.joinToString { it.address }}")
         bondNextMember()
@@ -807,6 +837,8 @@ class LeAudioDevicePairer(
         handler.removeCallbacks(gattProvokeRunnable)
         handler.removeCallbacks(ctkdTimeout)
         ctkdRepairAddress = null
+        collected.clear()
+        firstViableAtMs = 0L
         knownControlAddress = null
         activeCallback?.let { callback ->
             runCatching { adapter?.bluetoothLeScanner?.stopScan(callback) }
@@ -886,6 +918,10 @@ class LeAudioDevicePairer(
         const val SCAN_WINDOW_MS = 8_000L
         /** Long enough for the user to actually reset the headset after being told to. */
         const val SCAN_DEADLINE_MS = 120_000L
+        /** Keeps collecting set members this long after the first one is viable: the second
+         * earbud often starts advertising well after the first, and bonding early is what
+         * produced single-eared sets. */
+        const val MEMBER_COLLECT_MS = 12_000L
         const val GATT_PROVOKE_DELAY_MS = 6_000L
         const val BOND_TIMEOUT_MS = 30_000L
         const val LE_DISCOVERY_MS = 6_000L
