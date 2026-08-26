@@ -513,10 +513,14 @@ fun MainUI(
     fun onConnectedDeviceClick() {
         if (!sonyConnected) return
         clearExternalDetailRequest()
-        pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
         connectingDeviceAddress = null
-        showDevicePicker = false
+        if (canShowDetailPage) {
+            pendingAutoOpenAddress = null
+            showDevicePicker = false
+        } else {
+            pendingAutoOpenAddress = connectedDeviceAddress
+        }
         selectedTab = MainTab.Earphones
     }
 
