@@ -62,11 +62,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <provider
-            android:name="dev.sonypods.config.PodImageProvider"
-            android:authorities="com.mercury.sonypods.podimages"
-            android:exported="true"
-            android:grantUriPermissions="false" />
         <!-- Receives the capability-probe cache pushed by the engine so it can be
              persisted into the shared remote-prefs store (the only writable side). -->
         <receiver

@@ -13,11 +13,10 @@ object PodImageLoader {
 
     /**
      * Hook-only image reader backed by libxposed Remote Files. Set by [dev.sonypods.hook.HookEntry]
-     * in each hooked process; null in the module app process (which reads images via the
-     * PodImageProvider ContentProvider / local files). When non-null, [loadCached] reads the
-     * image via `openRemoteFile` first — this is what makes the notification (com.xiaomi.bluetooth)
-     * and the island (com.android.bluetooth) show the catalog image instead of the stock fallback,
-     * without depending on a cross-process ContentProvider query.
+     * in each hooked process; null in the module app process (which reads images via its own
+     * local files). When non-null, [loadCached] reads the image via `openRemoteFile` first —
+     * this is what makes the notification (com.xiaomi.bluetooth) and the island
+     * (com.android.bluetooth) show the catalog image instead of the stock fallback.
      */
     @Volatile
     var remoteImageReader: ((fileName: String) -> Bitmap?)? = null

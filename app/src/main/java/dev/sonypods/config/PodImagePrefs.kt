@@ -51,7 +51,6 @@ data class EarphonePref(
  */
 object PodImagePrefs {
     private const val TAG = "SonyPods-PodImage"
-    const val AUTHORITY = "com.mercury.sonypods.podimages"
     const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
 
@@ -181,9 +180,7 @@ object PodImagePrefs {
 
     /**
      * Write image bytes to the libxposed Remote Files store (the module's shared data dir)
-     * so the hook process can read them via [io.github.libxposed.api.XposedInterface.openRemoteFile]
-     * without depending on the PodImageProvider ContentProvider (which is unreachable from
-     * com.android.bluetooth / com.xiaomi.bluetooth before user unlock, and fragile cross-process).
+     * so the hook process can read them via [io.github.libxposed.api.XposedInterface.openRemoteFile].
      * Returns true on success. Truncates to the exact byte count so a smaller replacement image
      * cannot leave a stale tail from a previous larger one with the same filename.
      */
