@@ -9,6 +9,7 @@ import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.device.UnifiedDeviceIdentityService
 import dev.sonypods.hook.milink.MiLinkServiceHook
 import dev.sonypods.hook.reload.GenerationRuntime
 import dev.sonypods.utils.PodImageLoader
@@ -292,6 +293,9 @@ class HookEntry : XposedModule() {
             }.getOrNull()
         }
         ConfigManager.attachStore(hook.prefs)
+        // Pass the hook's context for foreground detection in the engine process
+        val engineContext = runCatching { hook.javaClass.getMethod("getContext").invoke(hook) as? android.content.Context }.getOrNull()
+        UnifiedDeviceIdentityService.initializeForEngine(hook.prefs, engineContext)
         hook.onHook()
         lifecycle("loadHook complete type=${hook.javaClass.name} scope=$packageName process=$processName")
     }

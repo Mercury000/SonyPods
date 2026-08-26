@@ -15,6 +15,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import com.mercury.sonypods.R
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.device.UnifiedDeviceIdentityService
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
@@ -555,6 +556,7 @@ class LeAudioDevicePairer(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun onMemberBonded(address: String) {
         handler.removeCallbacks(bondTimeout)
         handler.removeCallbacks(gattProvokeRunnable)
@@ -562,6 +564,14 @@ class LeAudioDevicePairer(
         bonded.add(address)
         allowLeAudioProfile(address)
         log("set member $address bonded (${bonded.size} so far)")
+
+        // Record identity during pairing (BluetoothDevice.type is reliable at this point)
+        val device = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
+        if (device != null) {
+            UnifiedDeviceIdentityService.recordFromBluetoothDevice(device)
+            log("recorded identity for $address from pairing")
+        }
+
         bondNextMember()
     }
 
@@ -608,6 +618,11 @@ class LeAudioDevicePairer(
                 adapter?.bondedDevices.orEmpty().forEach { member ->
                     SonyDeviceService.linkLeAudioIdentity(member.address, control)
                 }
+                // Record identity pair to UnifiedDeviceIdentityService
+                bonded.forEach { leAddress ->
+                    UnifiedDeviceIdentityService.recordIdentityPair(leAddress, control)
+                }
+                log("recorded identity pair: LE=$bonded, Control=$control")
             } else {
                 SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
             }
@@ -704,23 +719,12 @@ class LeAudioDevicePairer(
     /**
      * Whether the stack holds LE keys for [address].
      *
-     * `BluetoothDevice` exposes no such query, and bond state alone cannot answer it: a
-     * BR/EDR-only bond reports BOND_BONDED while the native LE Audio client still refuses the
-     * device as "not bonded". The stack's own key store is the authority, and the engine runs
-     * as the bluetooth uid that owns it.
+     * Delegates to [UnifiedDeviceIdentityService.hasLeKeys] for centralized bt_config.conf parsing.
      */
     private fun hasLeKeys(address: String): Boolean {
-        val keys = runCatching {
-            java.io.File(BT_CONFIG_PATH).useLines { lines ->
-                btConfigSectionHasLeKeys(lines, address)
-            }
-        }
-        keys.exceptionOrNull()?.let { log("could not read LE key state for $address: $it") }
-        val result = keys.getOrNull()
+        val result = UnifiedDeviceIdentityService.hasLeKeys(address)
         log("LE keys present for $address = $result")
-        // Unknown reads as "present" so an unreadable key store never triggers a destructive
-        // re-pair; the worst case is the same rejection the user already sees.
-        return result != false
+        return result
     }
 
     /**

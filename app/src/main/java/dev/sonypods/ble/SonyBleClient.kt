@@ -26,6 +26,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.device.UnifiedDeviceIdentityService
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.protocol.SonyGatt
 import dev.sonypods.protocol.hexString
@@ -711,7 +712,13 @@ class SonyBleClient(
         }
         if (device.sonyAd?.leGattControlFlag == true) return false
         val hasMdrSppUuid = remote.uuids.orEmpty().any { it.uuid == MDR_SPP_MARKER_UUID }
-        val classicCandidate = remote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
+        // Use UnifiedDeviceIdentityService for identity classification instead of raw device.type
+        val address = runCatching { remote.address }.getOrNull()
+        val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
+            else dev.sonypods.device.IdentityType.UNKNOWN
+        val classicCandidate = identityType == dev.sonypods.device.IdentityType.CLASSIC ||
+            identityType == dev.sonypods.device.IdentityType.DUAL ||
+            remote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
             remote.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
             device.source.startsWith("connected-a2dp") ||
             device.source.startsWith("connected-headset")
@@ -913,7 +920,13 @@ class SonyBleClient(
         selected: DiscoveredSonyDevice,
         selectedRemote: BluetoothDevice,
     ): BluetoothDevice? {
-        if (selectedRemote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
+        // Check if already a classic/dual identity using UnifiedDeviceIdentityService
+        val address = runCatching { selectedRemote.address }.getOrNull()
+        val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
+            else dev.sonypods.device.IdentityType.UNKNOWN
+        if (identityType == dev.sonypods.device.IdentityType.CLASSIC ||
+            identityType == dev.sonypods.device.IdentityType.DUAL ||
+            selectedRemote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
             selectedRemote.type == BluetoothDevice.DEVICE_TYPE_DUAL
         ) {
             return selectedRemote
@@ -922,7 +935,11 @@ class SonyBleClient(
         return adapter?.bondedDevices.orEmpty()
             .firstOrNull { device ->
                 val name = safeDeviceName(device).orEmpty()
-                device.type != BluetoothDevice.DEVICE_TYPE_LE &&
+                val deviceIdentityType = runCatching { device.address }.getOrNull()?.let {
+                    UnifiedDeviceIdentityService.getIdentityType(it)
+                } ?: dev.sonypods.device.IdentityType.UNKNOWN
+                deviceIdentityType != dev.sonypods.device.IdentityType.LE &&
+                    device.type != BluetoothDevice.DEVICE_TYPE_LE &&
                     (name.equals(targetName, ignoreCase = true) || SonyDeviceService.isSony(device))
             }
     }
@@ -1216,18 +1233,29 @@ class SonyBleClient(
             // hardcodes GattConnectionTransport.LE for the same reason.
             if (isLeAudioConnected(device)) {
                 BluetoothDevice.TRANSPORT_LE
-            } else when (device.type) {
-                BluetoothDevice.DEVICE_TYPE_LE -> BluetoothDevice.TRANSPORT_LE
-                BluetoothDevice.DEVICE_TYPE_CLASSIC,
-                BluetoothDevice.DEVICE_TYPE_DUAL -> BluetoothDevice.TRANSPORT_AUTO
-                else -> if (
-                    discovered.source == "ble-scan" ||
-                    discovered.sonyAd?.androidGattCapable == true ||
-                    discovered.sonyAd?.leGattControlFlag == true
-                ) {
-                    BluetoothDevice.TRANSPORT_LE
-                } else {
-                    BluetoothDevice.TRANSPORT_AUTO
+            } else {
+                // Use UnifiedDeviceIdentityService for identity classification
+                val address = runCatching { device.address }.getOrNull()
+                val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
+                    else dev.sonypods.device.IdentityType.UNKNOWN
+                when (identityType) {
+                    dev.sonypods.device.IdentityType.LE -> BluetoothDevice.TRANSPORT_LE
+                    dev.sonypods.device.IdentityType.CLASSIC,
+                    dev.sonypods.device.IdentityType.DUAL -> BluetoothDevice.TRANSPORT_AUTO
+                    else -> when (device.type) {
+                        BluetoothDevice.DEVICE_TYPE_LE -> BluetoothDevice.TRANSPORT_LE
+                        BluetoothDevice.DEVICE_TYPE_CLASSIC,
+                        BluetoothDevice.DEVICE_TYPE_DUAL -> BluetoothDevice.TRANSPORT_AUTO
+                        else -> if (
+                            discovered.source == "ble-scan" ||
+                            discovered.sonyAd?.androidGattCapable == true ||
+                            discovered.sonyAd?.leGattControlFlag == true
+                        ) {
+                            BluetoothDevice.TRANSPORT_LE
+                        } else {
+                            BluetoothDevice.TRANSPORT_AUTO
+                        }
+                    }
                 }
             }
         } else {
@@ -1669,7 +1697,12 @@ class SonyBleClient(
                 source = source,
                 bluetoothType = device.type,
                 advertisedServices = device.uuids?.map { it.uuid.toString() }.orEmpty(),
-                isLikelyControlEndpoint = device.type == BluetoothDevice.DEVICE_TYPE_LE ||
+                isLikelyControlEndpoint = runCatching {
+                    val idType = UnifiedDeviceIdentityService.getIdentityType(device.address)
+                    idType == dev.sonypods.device.IdentityType.CLASSIC ||
+                        idType == dev.sonypods.device.IdentityType.DUAL
+                }.getOrDefault(false) ||
+                    device.type == BluetoothDevice.DEVICE_TYPE_LE ||
                     device.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
                     name?.startsWith("LE_", ignoreCase = true) == true,
             )

@@ -104,15 +104,28 @@ object SonyDeviceService {
      * exposes nothing but the LE Audio service set and carries the LC3 audio. Both answer to
      * the same name, so name matching alone cannot tell them apart — the presence of a Sony
      * private service can.
+     *
+     * Uses [UnifiedDeviceIdentityService] as the primary source (from Remote Preferences),
+     * falling back to [BluetoothDevice.type] and UUID analysis if not available.
      */
     fun isLeAudioIdentity(device: BluetoothDevice?): Boolean {
         if (device == null) return false
-        // Transport type is carried by the bond record itself and needs no discovery, so a
-        // freshly started process can classify before any GATT cache exists. TYPE_DUAL(3)
-        // serves both transports and must not be called an LE-only identity.
+        val address = runCatching { device.address }.getOrNull() ?: return false
+
+        // Primary: Check UnifiedDeviceIdentityService (Remote Preferences + bt_config.conf)
+        val unifiedType = UnifiedDeviceIdentityService.getIdentityType(address)
+        if (unifiedType != IdentityType.UNKNOWN) {
+            return unifiedType == IdentityType.LE
+        }
+
+        // Fallback: Transport type is carried by the bond record itself and needs no discovery,
+        // so a freshly started process can classify before any GATT cache exists.
+        // TYPE_DUAL(3) serves both transports and must not be called an LE-only identity.
         val transport = runCatching { device.type }.getOrDefault(DEVICE_TYPE_UNKNOWN)
         if (transport == DEVICE_TYPE_LE) return true
         if (transport != DEVICE_TYPE_UNKNOWN) return false
+
+        // Fallback: UUID service analysis
         val serviceUuids = runCatching { device.uuids.orEmpty().map { it.uuid } }
             .getOrDefault(emptyList())
         return isLeAudioIdentity(serviceUuids)
@@ -128,10 +141,16 @@ object SonyDeviceService {
      *
      * Returns [address] unchanged when no LE Audio counterpart is known, so callers can use
      * this unconditionally.
+     *
+     * Reads from local [leAudioAliases] first, then falls back to
+     * [UnifiedDeviceIdentityService] for persisted identity data.
      */
     fun resolveControlAddress(address: String?): String? {
         val normalized = normalizeAddress(address) ?: return address
-        return leAudioAliases[normalized] ?: address
+        // 1. Local in-memory alias map (fast path)
+        leAudioAliases[normalized]?.let { return it }
+        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
+        return UnifiedDeviceIdentityService.resolveControlAddress(normalized)
     }
 
     /** Records that [leAddress] is the LE Audio identity of the headset at [controlAddress]. */
@@ -149,6 +168,9 @@ object SonyDeviceService {
         leAudioAliases.entries.removeIf { it.value == le }
         leAudioAliases[le] = control
         rememberAddress(control)
+
+        // Record to UnifiedDeviceIdentityService for persistence
+        UnifiedDeviceIdentityService.recordIdentityPair(le, control)
     }
 
     /**
@@ -211,7 +233,19 @@ object SonyDeviceService {
     private fun String.removeLePrefix(): String =
         removePrefix("LE_").removePrefix("le_").removePrefix("LE-").removePrefix("le-")
 
-    fun leAudioAliasSnapshot(): Map<String, String> = leAudioAliases.toMap()
+    /**
+     * Snapshot of all known LE Audio identity aliases.
+     *
+     * Merges local [leAudioAliases] with [UnifiedDeviceIdentityService] persistent data.
+     */
+    fun leAudioAliasSnapshot(): Map<String, String> {
+        val local = leAudioAliases.toMap()
+        val remote = UnifiedDeviceIdentityService.addressPairs()
+            .filter { it.first != it.second }
+            .associate { (le, control) -> le to control }
+        // Local aliases take precedence (they may have been updated more recently)
+        return remote + local
+    }
 
     /**
      * The LE Audio identity of the headset reachable at [controlAddress], if one is known.
@@ -219,18 +253,34 @@ object SonyDeviceService {
      * The inverse of [resolveControlAddress]. MiLink circulate hands a peer a single address
      * and the peer can only act on the identity it is itself bonded to, so a transfer that
      * was refused for one identity has to be retried against the other.
+     *
+     * Reads from local [leAudioAliases] first, then falls back to
+     * [UnifiedDeviceIdentityService] for persisted identity data.
      */
     fun leAudioIdentityFor(controlAddress: String?): String? {
         val control = normalizeAddress(controlAddress) ?: return null
-        return leAudioAliases.entries.firstOrNull { it.value == control }?.key
+        // 1. Local in-memory alias map (fast path)
+        leAudioAliases.entries.firstOrNull { it.value == control }?.key?.let { return it }
+        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
+        return UnifiedDeviceIdentityService.leAudioAddressFor(control)
     }
 
-    /** Both bonded identities of one headset, given either of them. */
+    /**
+     * Both bonded identities of one headset, given either of them.
+     *
+     * Reads from local [leAudioAliases] first, then falls back to
+     * [UnifiedDeviceIdentityService] for persisted identity data.
+     */
     fun identityAliasesOf(address: String?): List<String> {
         val normalized = normalizeAddress(address) ?: return emptyList()
+        // 1. Local in-memory alias map (fast path)
         val control = leAudioAliases[normalized]
         if (control != null) return listOf(control)
-        return listOfNotNull(leAudioIdentityFor(normalized))
+        val leFromLocal = leAudioIdentityFor(normalized)
+        if (leFromLocal != null) return listOf(leFromLocal)
+        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
+        val pair = UnifiedDeviceIdentityService.identityPairFor(normalized) ?: return emptyList()
+        return if (normalized == pair.first) listOf(pair.second) else listOf(pair.first)
     }
 
     fun rememberAddress(address: String?) {

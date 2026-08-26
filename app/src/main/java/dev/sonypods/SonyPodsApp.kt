@@ -6,6 +6,7 @@ import dev.sonypods.config.CloudModelInfoSync
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.device.UnifiedDeviceIdentityService
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArraySet
@@ -40,6 +41,7 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // BEFORE listeners fire so the UI never renders defaults over real values.
         ConfigManager.attachStore(remotePrefs)
         PodImagePrefs.attachStore(remotePrefs)
+        UnifiedDeviceIdentityService.initialize(remotePrefs)
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
         PodImagePrefs.migrateImagesToRemote(service)
