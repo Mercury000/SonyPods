@@ -53,9 +53,76 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
         hookActiveDeviceVerification()
         hookHostBoundProbe()
         hookBluetoothActiveDevice()
+        hookHeadsetDeviceType()
+        hookMxManagerSeed()
         hookProfileImplCache()
         hookDiscoveryLostSignal()
         hookCrossIdentityConnectRetry()
+    }
+
+    /**
+     * The device-type poison is born once per milink process: BluetoothServiceClient's first
+     * refresh can run while its mxBluetoothManager field is still null (the SDK binds async),
+     * isMiHeadset then answers false without ever reaching our checkIsMiTWS hook, and the
+     * resulting third_headset lives on in that process's cached CirculateServiceInfo — every
+     * later update rewrites it to the database even though all queries now answer correctly.
+     * Seed the field with a live manager at init and before every refresh so the very first
+     * classification already lands on our hooked answers; a stale type can then never form.
+     */
+    private fun hookMxManagerSeed() {
+        runCatching {
+            hook.hookAfter(
+                hook.findMethod(BLUETOOTH_SERVICE_CLIENT, "init"),
+                logicalRole = "bluetooth-client-mx-seed-init",
+            ) { seedMxManager(instance) }
+        }.onFailure {
+            Log.d(MiLinkServiceHook.TAG, "hook BluetoothServiceClient.init skipped", it)
+        }
+        runCatching {
+            hook.hookBefore(
+                hook.findMethod(BLUETOOTH_SERVICE_CLIENT, "refreshBluetoothDevice", Boolean::class.javaPrimitiveType!!),
+                logicalRole = "bluetooth-client-mx-seed-refresh",
+            ) { seedMxManager(instance) }
+        }.onFailure {
+            Log.d(MiLinkServiceHook.TAG, "hook BluetoothServiceClient.refreshBluetoothDevice skipped", it)
+        }
+    }
+
+    private fun seedMxManager(client: Any?) {
+        if (client == null) return
+        if (getObjectField(client, MX_MANAGER_FIELD) != null) return
+        val context: Context = hook.context ?: return
+        val manager = runCatching {
+            hook.findClass(MX_MANAGER)
+                .getMethod("getInstanceForIsMiTWS", Context::class.java)
+                .invoke(null, context)
+        }.getOrNull() ?: return
+        setObjectField(client, MX_MANAGER_FIELD, manager)
+        Log.i(MiLinkServiceHook.TAG, "seeded live mx manager before first classification")
+    }
+
+    /**
+     * The first BluetoothServiceClient refresh in a freshly started milink process races the
+     * MxBluetoothService bind: until the inner service connects, isMiHeadset answers false and
+     * the card is written as third_headset — no ANC or battery controls — until the next
+     * refresh self-heals it. Classify through the unified Sony judgment instead, which needs
+     * no mx state: a bonded Sony headset is a headset whatever the SDK's bind phase is doing.
+     */
+    private fun hookHeadsetDeviceType() {
+        runCatching {
+            hook.hookAfter(
+                hook.findMethod(BLUETOOTH_SERVICE_CLIENT, "getDeviceType", BluetoothDevice::class.java),
+                logicalRole = "bluetooth-client-device-type",
+            ) {
+                if (result == HEADSET_TYPE) return@hookAfter
+                val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookAfter
+                if (!hook.isSonyPod(device)) return@hookAfter
+                Log.i(MiLinkServiceHook.TAG, "device type forced to headset (mx bind window)")
+                result = HEADSET_TYPE
+            }
+        }.onFailure {
+            Log.d(MiLinkServiceHook.TAG, "hook BluetoothServiceClient.getDeviceType skipped", it)
+        }
     }
 
     /** Latest ProfileImpl instance, cached from its own hooks so later hooks can reach its sync state. */
@@ -378,6 +445,13 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
         const val ALIAS_SCAN_INTERVAL_MS = 10_000L
         const val SUCCESS = 100
         const val HOST_NOT_BOUND = 215
+
+        /** CirculateConstants.DeviceType.HEADSET — the card that carries ANC and battery. */
+        const val HEADSET_TYPE = "headset"
+
+        /** BluetoothServiceClient's lazy MxBluetoothManager holder; null until the SDK binds. */
+        const val MX_MANAGER = "com.xiaomi.mxbluetoothsdk.manager.MxBluetoothManager"
+        const val MX_MANAGER_FIELD = "mxBluetoothManager"
 
         /** DiscoveryHost's headset-lost update type; the LE stack's own broadcast is unreliable. */
         const val HOST_LOST_UPDATE_TYPE = 3

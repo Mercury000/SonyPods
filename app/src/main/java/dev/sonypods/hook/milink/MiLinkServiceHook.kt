@@ -333,6 +333,15 @@ object MiLinkServiceHook : HookContext() {
         snapshot.leAudioIdentityAddress?.let { le ->
             SonyDeviceService.linkLeAudioIdentity(le, snapshot.deviceAddress)
         }
+        // The headset occasionally drops its own links for well under a second (observed
+        // REMOTE_DEVICE_TERMINATED_POWER_OFF), and the engine then publishes connected=false
+        // with no battery or ANC before the self-reconnect lands. Overwriting the cache here
+        // blanks the fusion-center panel for that blink; the last known values are still the
+        // truth about the headset, so keep them and skip persisting/pushing the empties.
+        if (!snapshot.connected && snapshot.deviceAddress == null && currentAddress != null) {
+            Log.d(TAG, "transient disconnect snapshot; retaining panel state")
+            return
+        }
         snapshot.deviceAddress?.let {
             currentAddress = it
             SonyDeviceService.rememberAddress(it)
