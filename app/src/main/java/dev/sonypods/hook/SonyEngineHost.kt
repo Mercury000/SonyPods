@@ -19,6 +19,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.device.UnifiedDeviceIdentityService
 import java.io.File
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
@@ -590,13 +591,13 @@ object SonyEngineHost {
         if (sony.isEmpty()) return null
         SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
         sony.firstOrNull { candidate ->
-            !SonyDeviceService.isLeAudioIdentity(candidate) &&
-                SonyDeviceService.resolveControlAddress(candidate.address)
+            !UnifiedDeviceIdentityService.isLeAudioIdentity(candidate.address) &&
+                UnifiedDeviceIdentityService.resolveControlAddress(candidate.address)
                     .equals(candidate.address, ignoreCase = true)
         }?.let { return it }
         val leIdentity = sony.first()
-        val control = SonyDeviceService.resolveControlAddress(leIdentity.address)
-            ?.takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
+        val control = UnifiedDeviceIdentityService.resolveControlAddress(leIdentity.address)
+            .takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
             ?: run {
                 Log.d(TAG, "reconcile skip: only LE identity ${leIdentity.address} connected and no control alias")
                 return null

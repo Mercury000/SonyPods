@@ -745,14 +745,11 @@ class SonyBleClient(
     @SuppressLint("MissingPermission")
     private fun isLeAudioConnected(remote: BluetoothDevice): Boolean {
         val address = runCatching { remote.address }.getOrNull() ?: return false
-        val bonded = adapter?.bondedDevices.orEmpty()
-        SonyDeviceService.linkLeAudioIdentities(bonded)
         val candidates = buildSet {
             add(address.uppercase())
-            SonyDeviceService.resolveControlAddress(address)?.let { add(it.uppercase()) }
-            SonyDeviceService.leAudioAliasSnapshot().forEach { (le, control) ->
-                if (control.equals(address, ignoreCase = true)) add(le.uppercase())
-            }
+            val identity = UnifiedDeviceIdentityService.getIdentity(address)
+            identity?.pairedAddress?.let { add(it.uppercase()) }
+            UnifiedDeviceIdentityService.resolveControlAddress(address).let { add(it.uppercase()) }
         }
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val leAudioAddresses = mutableSetOf<String>()
@@ -1718,9 +1715,8 @@ class SonyBleClient(
     @SuppressLint("MissingPermission")
     private fun resolveControlTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
         val bonded = adapter?.bondedDevices.orEmpty()
-        SonyDeviceService.linkLeAudioIdentities(bonded)
-        val control = SonyDeviceService.resolveControlAddress(device.address)
-        if (control == null || control.equals(device.address, ignoreCase = true)) return device
+        val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
+        if (control.equals(device.address, ignoreCase = true)) return device
         val remote = bonded.firstOrNull { it.address.equals(control, ignoreCase = true) }
         log("Retargeting LE Audio identity ${device.address} to control identity $control")
         return device.copy(
