@@ -12,6 +12,7 @@ import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.hook.HookContext
@@ -59,6 +60,7 @@ object MiLinkServiceHook : HookContext() {
     internal var lastProfileContext: Any? = null
     private val spatialAudioHook = MiLinkSpatialAudioHook(this)
     private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
+    private val leAudioIdentityHook = MiLinkLeAudioIdentityHook(this)
 
     override fun onHook() {
         hookContextEntry()
@@ -67,6 +69,7 @@ object MiLinkServiceHook : HookContext() {
         hookHeadsetRuntimeDisplay()
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
         remoteProtocolHook.hookRemoteProtocol()
+        leAudioIdentityHook.hookIdentityUnification()
     }
 
     override fun onBeforeReload() {
@@ -333,6 +336,12 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun applySnapshot(snapshot: SonyStateSnapshot) {
+        // The engine derives this from the stack's own bond state — the same authority the
+        // LE Audio pairing flow uses. It is the only trustworthy source for which address is
+        // the headset's second identity, so record the pairing the moment a snapshot lands.
+        snapshot.leAudioIdentityAddress?.let { le ->
+            SonyDeviceService.linkLeAudioIdentity(le, snapshot.deviceAddress)
+        }
         snapshot.deviceAddress?.let {
             currentAddress = it
             SonyDeviceService.rememberAddress(it)
@@ -686,6 +695,12 @@ object MiLinkServiceHook : HookContext() {
         if (currentFormFactor == null) {
             currentFormFactor = prefs.getString("form_factor", null)
         }
+        // A dual-identity LE Audio headset is two addresses; recognising only the last
+        // connected one makes every hook decline the other identity until a fresh scan
+        // repopulates recognition — which is exactly the window in which MiLink classifies
+        // a reconnecting headset as third-party. Seed every address the module has seen.
+        runCatching { PodImagePrefs.load(this.prefs) }.getOrNull()
+            ?.forEach { SonyDeviceService.rememberAddress(it.address) }
         currentAnc = prefs.getInt("anc", currentAnc)
         currentSpatialAudioMode = prefs.getInt("spatial_audio_mode", currentSpatialAudioMode)
             .coerceIn(ConfigManager.SPATIAL_AUDIO_OFF, ConfigManager.SPATIAL_AUDIO_HEAD_TRACKING)

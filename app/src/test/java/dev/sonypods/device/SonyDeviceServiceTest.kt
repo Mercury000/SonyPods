@@ -110,6 +110,26 @@ class SonyDeviceServiceTest {
         assertEquals("02:00:00:00:00:23", SonyDeviceService.resolveControlAddress("02:00:00:00:00:23"))
     }
 
+    @Test
+    fun theControlAddressResolvesBackToItsLeIdentity() {
+        SonyDeviceService.linkLeAudioIdentity("02:00:00:00:00:24", "02:00:00:00:00:25")
+
+        assertEquals("02:00:00:00:00:24", SonyDeviceService.leAudioIdentityFor("02:00:00:00:00:25"))
+        // An address with no LE twin resolves to nothing rather than to itself.
+        assertEquals(null, SonyDeviceService.leAudioIdentityFor("02:00:00:00:00:26"))
+    }
+
+    @Test
+    fun identityAliasesCoverBothDirectionsOfAPairing() {
+        SonyDeviceService.linkLeAudioIdentity("02:00:00:00:00:27", "02:00:00:00:00:28")
+
+        // Asked from the LE side: the classic identity is the one that can act.
+        assertEquals(listOf("02:00:00:00:00:28"), SonyDeviceService.identityAliasesOf("02:00:00:00:00:27"))
+        // Asked from the control side: the LE twin is what a source may have published.
+        assertEquals(listOf("02:00:00:00:00:27"), SonyDeviceService.identityAliasesOf("02:00:00:00:00:28"))
+        assertTrue(SonyDeviceService.identityAliasesOf("02:00:00:00:00:29").isEmpty())
+    }
+
     private fun uuid16(short: Int): UUID =
         UUID.fromString(String.format("0000%04X-0000-1000-8000-00805F9B34FB", short))
 }

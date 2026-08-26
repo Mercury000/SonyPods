@@ -107,6 +107,12 @@ object SonyDeviceService {
      */
     fun isLeAudioIdentity(device: BluetoothDevice?): Boolean {
         if (device == null) return false
+        // Transport type is carried by the bond record itself and needs no discovery, so a
+        // freshly started process can classify before any GATT cache exists. TYPE_DUAL(3)
+        // serves both transports and must not be called an LE-only identity.
+        val transport = runCatching { device.type }.getOrDefault(DEVICE_TYPE_UNKNOWN)
+        if (transport == DEVICE_TYPE_LE) return true
+        if (transport != DEVICE_TYPE_UNKNOWN) return false
         val serviceUuids = runCatching { device.uuids.orEmpty().map { it.uuid } }
             .getOrDefault(emptyList())
         return isLeAudioIdentity(serviceUuids)
@@ -148,22 +154,76 @@ object SonyDeviceService {
         val sony = bonded.filter(::isSony)
         if (sony.isEmpty()) return
         val (leIdentities, controls) = sony.partition(::isLeAudioIdentity)
-        if (leIdentities.isEmpty() || controls.isEmpty()) return
-        leIdentities.forEach { le ->
-            val leName = runCatching { le.name }.getOrNull()
-            val match = controls.firstOrNull { control ->
-                val controlName = runCatching { control.name }.getOrNull()
-                leName != null && controlName != null &&
-                    controlName.equals(leName.removeLePrefix(), ignoreCase = true)
-            } ?: controls.singleOrNull()
-            match?.let { linkLeAudioIdentity(le.address, it.address) }
+        if (leIdentities.isNotEmpty() && controls.isNotEmpty()) {
+            leIdentities.forEach { le ->
+                val leName = runCatching { le.name }.getOrNull()
+                val match = controls.firstOrNull { control ->
+                    val controlName = runCatching { control.name }.getOrNull()
+                    leName != null && controlName != null &&
+                        controlName.equals(leName.removeLePrefix(), ignoreCase = true)
+                } ?: controls.singleOrNull()
+                match?.let { linkLeAudioIdentity(le.address, it.address) }
+            }
+            return
         }
+        // Some stacks report every dual-mode bond as TYPE_DUAL and their SDP caches never
+        // carry the ASCS service, leaving both members unclassified. Within an unresolved
+        // same-name pair, the member whose UUID cache is empty while its twin exposes
+        // classic services is the LE Audio identity — a classic bond always has SDP records.
+        sony.groupBy { it.namePairKey() }.values.asSequence()
+            .map { members -> members.distinctBy { normalizeAddress(it.address) } }
+            .filter { it.size == 2 }
+            .filter { pair -> pair.any { !isClassicOnlyBond(it) } }
+            .firstOrNull()
+            ?.let { pair ->
+                val (a, b) = pair
+                when {
+                    !hasCachedUuids(a) && hasCachedUuids(b) ->
+                        linkLeAudioIdentity(a.address, b.address)
+                    !hasCachedUuids(b) && hasCachedUuids(a) ->
+                        linkLeAudioIdentity(b.address, a.address)
+                    // Neither cache resolved: within an unambiguous same-name pair any
+                    // direction is safe — consumers use the alias map to find "the other
+                    // identity", not to decide which one is which transport.
+                    else -> linkLeAudioIdentity(a.address, b.address)
+                }
+            }
     }
+
+    private fun BluetoothDevice.namePairKey(): String =
+        runCatching { name }.getOrNull()?.removeLePrefix()?.lowercase(Locale.ROOT).orEmpty()
+
+    private fun hasCachedUuids(device: BluetoothDevice): Boolean =
+        runCatching { device.uuids.orEmpty().isNotEmpty() }.getOrDefault(false)
+
+    private fun isClassicOnlyBond(device: BluetoothDevice): Boolean =
+        runCatching { device.type == 1 /* BluetoothDevice.DEVICE_TYPE_CLASSIC */ }
+            .getOrDefault(false)
 
     private fun String.removeLePrefix(): String =
         removePrefix("LE_").removePrefix("le_").removePrefix("LE-").removePrefix("le-")
 
     fun leAudioAliasSnapshot(): Map<String, String> = leAudioAliases.toMap()
+
+    /**
+     * The LE Audio identity of the headset reachable at [controlAddress], if one is known.
+     *
+     * The inverse of [resolveControlAddress]. MiLink circulate hands a peer a single address
+     * and the peer can only act on the identity it is itself bonded to, so a transfer that
+     * was refused for one identity has to be retried against the other.
+     */
+    fun leAudioIdentityFor(controlAddress: String?): String? {
+        val control = normalizeAddress(controlAddress) ?: return null
+        return leAudioAliases.entries.firstOrNull { it.value == control }?.key
+    }
+
+    /** Both bonded identities of one headset, given either of them. */
+    fun identityAliasesOf(address: String?): List<String> {
+        val normalized = normalizeAddress(address) ?: return emptyList()
+        val control = leAudioAliases[normalized]
+        if (control != null) return listOf(control)
+        return listOfNotNull(leAudioIdentityFor(normalized))
+    }
 
     fun rememberAddress(address: String?) {
         normalizeAddress(address)?.let(knownAddresses::add)
@@ -177,4 +237,7 @@ object SonyDeviceService {
     }
 
     private val BLUETOOTH_ADDRESS = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
+
+    private const val DEVICE_TYPE_UNKNOWN = 0
+    private const val DEVICE_TYPE_LE = 2
 }
