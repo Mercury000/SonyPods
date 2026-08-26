@@ -228,7 +228,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                 hook.findMethod(PROFILE_CONTEXT, "disconnect", BluetoothDevice::class.java),
                 logicalRole = "profile-context-release-both-identities",
             ) {
-                if (result != SUCCESS || releasing.get()) return@hookAfter
+                if (result != SUCCESS || releasing.get() == true) return@hookAfter
                 val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookAfter
                 if (!hook.isSonyPod(device)) return@hookAfter
                 val address = runCatching { device.address }.getOrNull() ?: return@hookAfter
@@ -334,7 +334,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
             val remoteConnect = hook.findMethodByParamCount(HEADSET_REMOTE_IMPL, "connect", 3)
             hook.hookAfter(remoteConnect, logicalRole = "headset-remote-cross-identity-connect") {
                 val code = result as? Int ?: return@hookAfter
-                if (retrying.get() || code !in CROSS_IDENTITY_RETRY_CODES) return@hookAfter
+                if (retrying.get() == true || code !in CROSS_IDENTITY_RETRY_CODES) return@hookAfter
                 val address = args.getOrNull(1) as? String ?: return@hookAfter
                 if (!hook.isSonyAddress(address)) {
                     Log.d(MiLinkServiceHook.TAG, "retry skipped: address not Sony $code")

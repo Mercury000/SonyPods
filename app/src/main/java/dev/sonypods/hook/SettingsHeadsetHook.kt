@@ -905,7 +905,7 @@ object SettingsHeadsetHook : HookContext() {
             if (visible) {
                 resIds.forEach { id ->
                     if (id == null) return@forEach
-                    runCatching { res.getDrawable(id) }.getOrNull()?.let { state.drawables.add(it) }
+                    runCatching { res.getDrawable(id, null) }.getOrNull()?.let { state.drawables.add(it) }
                 }
                 // Overlay drawables live in host coordinates; reposition whenever the card
                 // moves (initial layout, battery layout switch, animation resizes).

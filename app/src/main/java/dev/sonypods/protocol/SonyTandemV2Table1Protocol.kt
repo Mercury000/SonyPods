@@ -1408,7 +1408,7 @@ object SonyTandemV2Table1Protocol {
         if (type !in UPSCALING_TYPES) {
             return ParsedTandemResponse.Unknown(DATA_MDR.unsigned, null, payload, raw)
         }
-        return ParsedTandemResponse.UpscalingCapability(inquiredType!!, type.unsigned, raw)
+        return ParsedTandemResponse.UpscalingCapability(inquiredType, type.unsigned, raw)
     }
 
     /** payload[0]=type, then exactly four [nameStatus, len, utf8…] elements in the
