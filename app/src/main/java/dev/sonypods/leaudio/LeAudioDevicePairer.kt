@@ -187,14 +187,28 @@ class LeAudioDevicePairer(
      * runs inside `com.android.bluetooth`, so it can call `AdapterService.removeBond` directly
      * and skip that hop. That entry point also drops the whole CSIS group's bonds, which is
      * what a coordinated set needs anyway.
+     *
+     * The class must be resolved through the **host** classloader: a bare `Class.forName`
+     * resolves against this module's loader, which cannot see host classes and fails with
+     * ClassNotFoundException — exactly what silently broke the CTKD re-pair once.
      */
     private fun removeBondReflective(device: BluetoothDevice): Boolean {
+        val loader = appContext.classLoader
         val viaAdapterService = runCatching {
-            val serviceClass = Class.forName("com.android.bluetooth.btservice.AdapterService")
-            val service = serviceClass
-                .getMethod("deprecatedGetAdapterService")
-                .invoke(null)
-                ?: error("AdapterService instance is not available")
+            val serviceClass = loader.loadClass("com.android.bluetooth.btservice.AdapterService")
+            val service = listOf("sAdapterService", "getAdapterService", "deprecatedGetAdapterService")
+                .mapNotNull { name ->
+                    runCatching {
+                        serviceClass.getDeclaredField(name).apply { isAccessible = true }.get(null)
+                    }.getOrElse {
+                        runCatching {
+                            serviceClass.getDeclaredMethod(name).apply { isAccessible = true }
+                                .invoke(null)
+                        }.getOrNull()
+                    }
+                }
+                .firstOrNull { it != null }
+            ?: error("AdapterService instance is not available")
             serviceClass
                 .getMethod("removeBond", BluetoothDevice::class.java)
                 .invoke(service, device) as? Boolean
