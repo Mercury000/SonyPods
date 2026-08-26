@@ -1332,7 +1332,15 @@ object SonyEngineHost {
      * shows — it recomputes its position from the current codec on every CODEC_CONFIG_CHANGED
      * rather than from the stored preference.
      */
-    private data class LdacState(val supported: Boolean, val enabled: Boolean?)
+    /**
+     * What the A2DP service currently says about [address]'s codec situation.
+     *
+     * [supported] is tri-state on purpose: `null` means the profile had no answer — which is
+     * the steady state while LE Audio carries the audio and A2DP is down. It must not be read
+     * as "unsupported": the stock switch keys on bond-level capability bits that stay set
+     * across transports, and so do we ([withLdac] falls back to that static answer).
+     */
+    private data class LdacState(val supported: Boolean?, val enabled: Boolean?)
 
     private fun a2dpService(): Any? =
         profileService("getA2dpService", "com.android.bluetooth.a2dp.A2dpService")
@@ -1343,9 +1351,9 @@ object SonyEngineHost {
     // reading the same fact the switch writes.
     @Suppress("DEPRECATION")
     private fun ldacState(address: String): LdacState {
-        val context = appContext ?: return LdacState(false, null)
-        val service = a2dpService() ?: return LdacState(false, null)
-        val device = remoteDevice(context, address) ?: return LdacState(false, null)
+        val context = appContext ?: return LdacState(null, null)
+        val service = a2dpService() ?: return LdacState(null, null)
+        val device = remoteDevice(context, address) ?: return LdacState(null, null)
         val status = runCatching {
             service.javaClass
                 .getMethod("getCodecStatus", BluetoothDevice::class.java)
@@ -1354,7 +1362,7 @@ object SonyEngineHost {
         }.getOrElse {
             Log.w(TAG, "getCodecStatus failed for $address", it)
             null
-        } ?: return LdacState(false, null)
+        } ?: return LdacState(null, null)
         val supported = status.codecsSelectableCapabilities.any {
             it.codecType == BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC
         }
@@ -1381,9 +1389,12 @@ object SonyEngineHost {
         val state = ldacState(address)
         val target = ldacWriteTarget.takeIf { settling }
         return base.copy(
-            // A device whose A2DP is down answers nothing, and mid-write the reading is stale — but
-            // the switch was only offered because the codec list had LDAC, so keep the row present.
-            ldacSupported = state.supported || target != null,
+            // "Supported" is a bond-level fact and must not depend on which transport is
+            // live: the miui headset capability bits the stock switch reads stay set while
+            // LE Audio carries the audio, when A2DP has no codec status to offer. An
+            // unreadable A2DP is therefore "unknown" and falls back to that static answer;
+            // only an actual read of the codec list may say false.
+            ldacSupported = state.supported ?: (target != null || base.connectedViaLeAudio),
             ldacEnabled = target ?: state.enabled,
             ldacSwitching = settling,
         )

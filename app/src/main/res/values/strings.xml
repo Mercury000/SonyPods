@@ -175,7 +175,6 @@
     <string name="connection_quality_sound_prior">Sound Quality Priority</string>
     <string name="connection_quality_connection_prior">Stable Connection Priority</string>
     <string name="connection_quality_unavailable">Unavailable</string>
-    <string name="connection_quality_lea_restricted_summary">This setting is only enabled when connected via Classic Audio</string>
     <string name="connection_quality_change_title">Change Bluetooth connection quality</string>
     <string name="connection_quality_confirm_sound_body">Reconnect to the audio device. Also, if you change to Sound Quality Priority, the sound quality settings may become unavailable. Change?</string>
     <string name="connection_quality_confirm_connection_body">Reconnect to the audio device. Change?</string>

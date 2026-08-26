@@ -176,7 +176,6 @@
     <string name="connection_quality_sound_prior">声音质量优先</string>
     <string name="connection_quality_connection_prior">稳定连接优先</string>
     <string name="connection_quality_unavailable">不可用</string>
-    <string name="connection_quality_lea_restricted_summary">该设置仅在通过 Classic Audio 连接时启用</string>
     <string name="connection_quality_change_title">更改蓝牙连接质量</string>
     <string name="connection_quality_confirm_sound_body">重新连接到音频设备。此外，如果更改为声音质量优先，可能无法使用声音质量设置。是否更改？</string>
     <string name="connection_quality_confirm_connection_body">重新连接到音频设备。是否更改？</string>

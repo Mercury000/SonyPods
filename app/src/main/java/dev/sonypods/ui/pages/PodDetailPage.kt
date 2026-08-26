@@ -338,7 +338,7 @@ private fun ConnectionQualityCard(
             Box {
                 OverlayDropdownPreference(
                     title = stringResource(R.string.connection_quality_title),
-                    summary = stringResource(R.string.connection_quality_lea_restricted_summary),
+                    summary = stringResource(R.string.feature_unavailable_over_le_audio),
                     items = listOf(stringResource(R.string.connection_quality_unavailable)),
                     selectedIndex = 0,
                     onSelectedIndexChange = { },
@@ -428,7 +428,7 @@ private fun LdacCard(
         SwitchPreference(
             title = stringResource(R.string.card_ldac_title),
             summary = when {
-                leaActive -> stringResource(R.string.connection_quality_lea_restricted_summary)
+                leaActive -> stringResource(R.string.feature_unavailable_over_le_audio)
                 uiState.ldacSwitching -> stringResource(R.string.ldac_switching)
                 enabled -> stringResource(R.string.ldac_on)
                 uiState.ldacEnabled == false -> stringResource(R.string.ldac_off)
