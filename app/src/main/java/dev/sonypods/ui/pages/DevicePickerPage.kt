@@ -149,20 +149,38 @@ fun DevicePickerPage(
     val btManager = context.getSystemService(BluetoothManager::class.java)
     val adapter = btManager?.adapter
     val bluetoothEnabled = adapter?.isEnabled == true
-    val pairedDevices = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken) {
+    val foldResult = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken) {
         if (!bluetoothEnabled) {
-            emptyList()
+            Pair(emptyList(), emptyMap())
         } else {
             val bonded = adapter.bondedDevices.toList()
             // A headset on LE Audio is bonded twice: once for LC3 audio and once for the
             // Tandem control channel. Listing both would offer the user an entry that cannot
             // be controlled, so the LE identity is folded into its control counterpart.
+            // UUID classification needs the stack's service cache to be warm; until it is,
+            // the engine-seeded alias map answers instead.
             SonyDeviceService.linkLeAudioIdentities(bonded)
-            bonded
+            val aliases = SonyDeviceService.leAudioAliasSnapshot()
+            val byAddress = bonded.associateBy { it.address.uppercase() }
+            val paired = bonded
                 .filterNot { SonyDeviceService.isLeAudioIdentity(it) }
+                .filterNot { device ->
+                    aliases[device.address.uppercase()]
+                        ?.let { control -> byAddress.containsKey(control.uppercase()) } == true
+                }
                 .sortedByDescending { isLikelySonyAudioDevice(it.name) }
+            val leByControl = aliases.entries
+                .mapNotNull { (le, control) ->
+                    val controlDevice = byAddress[control.uppercase()] ?: return@mapNotNull null
+                    if (!byAddress.containsKey(le.uppercase())) return@mapNotNull null
+                    controlDevice.address.uppercase() to le
+                }
+                .groupBy({ it.first }, { it.second })
+            Pair(paired, leByControl)
         }
     }
+    val pairedDevices = foldResult.first
+    val leAddressesByControl = foldResult.second
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -221,6 +239,9 @@ fun DevicePickerPage(
                     DeviceRow(
                         title = device.name ?: stringResource(R.string.unknown_device),
                         summary = device.address,
+                        secondarySummaries = leAddressesByControl[
+                            device.address.uppercase()
+                        ].orEmpty(),
                         connected = connected,
                         connecting = device.address == connectingDeviceAddress ||
                             (connected && !controlChannelReady),
@@ -299,6 +320,7 @@ private fun DeviceRow(
     connecting: Boolean,
     onClick: () -> Unit,
     onDisconnect: () -> Unit,
+    secondarySummaries: List<String> = emptyList(),
 ) {
     Card(
         modifier = Modifier
@@ -323,6 +345,16 @@ private fun DeviceRow(
                     style = MiuixTheme.textStyles.body2,
                     modifier = Modifier.padding(top = 2.dp),
                 )
+                // The folded-in LE identity keeps its address visible: some flows (pairing
+                // prompts, stack dumps) only ever name that address.
+                secondarySummaries.forEach { leAddress ->
+                    Text(
+                        text = leAddress,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        style = MiuixTheme.textStyles.body2,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
             if (connecting) {
                 InfiniteProgressIndicator()
