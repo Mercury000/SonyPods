@@ -139,6 +139,14 @@ object SonyDeviceService {
         val le = normalizeAddress(leAddress) ?: return
         val control = normalizeAddress(controlAddress) ?: return
         if (le == control) return
+        // Inversion guard: a "control" that already maps elsewhere IS an LE identity, so this
+        // call has the pair swapped (observed when a snapshot's policy read listed the classic
+        // bond while its address field carried the LE one). Storing it would redirect every
+        // later resolve to the wrong transport.
+        if (leAudioAliases.containsKey(control)) return
+        // A stale inverse entry (some X claiming this LE side is a control) poisons every
+        // later resolve; drop it as part of writing the corrected pairing.
+        leAudioAliases.entries.removeIf { it.value == le }
         leAudioAliases[le] = control
         rememberAddress(control)
     }

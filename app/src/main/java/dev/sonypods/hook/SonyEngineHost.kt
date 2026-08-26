@@ -1272,7 +1272,36 @@ object SonyEngineHost {
      * in the headset.
      */
     private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot =
-        withLdac(withLeAudioPolicy(base))
+        withControlIdentity(withLdac(withLeAudioPolicy(base)))
+
+    /**
+     * Publishes the control (classic) identity as the device address.
+     *
+     * After a CTKD re-pair or an LE-only reconnect the only live link can be the LE identity,
+     * and the raw session address is then that one — which no saved record is keyed on, so
+     * every saved-device surface blanks out. Resolve through the alias map (authoritative:
+     * fed by the pairer and the bond scans) and publish its control side instead. Guards keep
+     * this inert when the map has no entry, when it maps the address to itself, or when the
+     * control bond no longer exists.
+     */
+    private fun withControlIdentity(base: SonyStateSnapshot): SonyStateSnapshot {
+        val address = base.deviceAddress ?: return base
+        val control = SonyDeviceService.resolveControlAddress(address)
+            ?.takeIf { !it.equals(address, ignoreCase = true) }
+            ?: return base
+        val bondedNow = appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+            ?.bondedDevices.orEmpty()
+            .any { it.address.equals(control, ignoreCase = true) }
+        if (!bondedNow) return base
+        Log.i(TAG, "publishing control identity $control for live session on $address")
+        return base.copy(
+            deviceAddress = control,
+            // An identity field equal to the rewritten address would be an inverted pairing;
+            // drop it rather than feed the poison back to consumers.
+            leAudioIdentityAddress = base.leAudioIdentityAddress
+                ?.takeIf { !it.equals(control, ignoreCase = true) },
+        )
+    }
 
     /**
      * Adds the facts only this process can see to a repository-built snapshot.

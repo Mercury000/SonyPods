@@ -71,6 +71,8 @@ class LeAudioDevicePairer(
     private val leDiscoveryClients = mutableListOf<SonyLeAudioGattClient>()
     /** Address currently being re-paired to derive LE keys, if any. */
     private var ctkdRepairAddress: String? = null
+    /** The bonded classic identity of the set, when this run knows it by construction. */
+    private var knownControlAddress: String? = null
     private var gattProvoke: SonyLeAudioGattClient? = null
     private var receiverRegistered = false
     /** Scanning keeps cycling its passes until this deadline, giving the user time to
@@ -122,6 +124,10 @@ class LeAudioDevicePairer(
         this.targetName = targetName
         this.reportedLeAddresses = reportedLeAddresses
         this.excludeAddresses = excludeAddresses
+        // The excluded bonds ARE the classic identities of headsets being re-paired; knowing
+        // one up front lets the success path link aliases without re-classifying (whose uuid
+        // cache this very flow is about to pollute with ASCS).
+        knownControlAddress = excludeAddresses.firstOrNull()
         candidates.clear()
         bondTarget = null
         picked = null
@@ -362,6 +368,7 @@ class LeAudioDevicePairer(
             log("control identity $control already has LE keys; not re-pairing it")
             return
         }
+        knownControlAddress = control
         log("adding control identity $control as a set member; it has no LE keys yet")
         pending += target.copy(address = control)
     }
@@ -561,8 +568,19 @@ class LeAudioDevicePairer(
     private fun succeedAll(message: String) {
         // Record which identities belong to this headset while they are all in hand: from
         // here on the module must treat them as one device, not extra ones it cannot control.
+        // The classic member is known by construction — it is the address the caller told us
+        // to exclude — so link explicitly instead of re-classifying: the LE service discovery
+        // this flow just ran has put ASCS into the classic bond's uuid cache, and a cached
+        // ASCS is exactly what makes the classifier misread the control identity as LE.
         runCatching {
-            SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
+            val control = knownControlAddress
+            if (control != null) {
+                adapter?.bondedDevices.orEmpty().forEach { member ->
+                    SonyDeviceService.linkLeAudioIdentity(member.address, control)
+                }
+            } else {
+                SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
+            }
             log("LE Audio aliases: ${SonyDeviceService.leAudioAliasSnapshot()}")
         }
         val primary = bonded.firstOrNull()
@@ -789,6 +807,7 @@ class LeAudioDevicePairer(
         handler.removeCallbacks(gattProvokeRunnable)
         handler.removeCallbacks(ctkdTimeout)
         ctkdRepairAddress = null
+        knownControlAddress = null
         activeCallback?.let { callback ->
             runCatching { adapter?.bluetoothLeScanner?.stopScan(callback) }
         }
