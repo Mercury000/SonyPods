@@ -172,6 +172,19 @@ object SonyEngineHost {
 
     /** Address + which sides report; the connect animation replays when this changes. */
     private var lastConnectAnimationKey: String? = null
+
+    /**
+     * Pending LE Audio enable waiting for classic profiles to actually disconnect.
+     *
+     * When [setLeAudioPolicy] is called with `allowed=true`, it first disables A2DP/HFP/HID and
+     * stores the LE Audio enable continuation here.  [HeadsetStateDispatcher] invokes
+     * [onClassicProfileDisconnected] when the A2DP state machine reports STATE_DISCONNECTED for a
+     * Sony device, which fires this callback.  This ensures the stack has finished tearing down
+     * classic GATT connections before the LE Audio GATT layer sets up — preventing a race where
+     * a stale CLCB function pointer causes a SIGBUS in `bta_gattc_cfg_mtu_cmpl`.
+     */
+    @Volatile
+    private var pendingLeAudioEnable: (() -> Unit)? = null
     /**
      * A Tandem transport recovery is not a user-visible new connection.  Keep this
      * separate from the screen lifecycle: GATT/SPP can fail for any reason while the
@@ -338,6 +351,7 @@ object SonyEngineHost {
     fun shutdown() {
         if (!started && repository == null && commandReceiver == null) return
         started = false
+        pendingLeAudioEnable = null
         val oldScope = scope
         scope = newGenerationScope()
         oldScope.cancel()
@@ -1561,27 +1575,94 @@ object SonyEngineHost {
             "LE Audio switch allowed=$allowed dualMode=$dualMode group=" +
                 group.joinToString { runCatching { it.address }.getOrNull().orEmpty() },
         )
-        if (allowed && !dualMode) setClassicAudioEnabled(group, enabled = false)
-        if (devices.map { applyLeAudioPolicy(it, allowed) }.none { it }) {
-            // Nothing took the permission, so the profiles just given up are the only audio path
-            // this headset has left.
-            if (allowed && !dualMode) setClassicAudioEnabled(group, enabled = true)
-            return
-        }
-        if (!allowed && !dualMode) {
-            // HyperOS waits out CLASSIC_RESTORE_DELAY_MS on a thread of its own before restoring:
-            // LeAudioService is still tearing the LE Audio link down, and a classic policy written
-            // into that window is what the stack undoes on its way out.
-            scope.launch {
-                delay(CLASSIC_RESTORE_DELAY_MS)
-                setClassicAudioEnabled(group, enabled = true)
+        if (allowed && !dualMode) {
+            // Disable classic profiles first, then wait for the A2DP state machine to report
+            // STATE_DISCONNECTED before enabling LE Audio.  Writing the LE Audio policy while
+            // classic GATT connections are still tearing down causes the stack to race on CLCB
+            // allocation and SIGBUSes in bta_gattc_cfg_mtu_cmpl with a stale function pointer.
+            setClassicAudioEnabled(group, enabled = false)
+            val enableLeAudio = {
+                val applied = devices.map { applyLeAudioPolicy(it, true) }.any()
+                if (!applied) {
+                    // Nothing took the permission, so the profiles just given up are the only
+                    // audio path this headset has left.
+                    setClassicAudioEnabled(group, enabled = true)
+                } else {
+                    val updated = withSystemFacts(base)
+                    if (updated != base) {
+                        lastSnapshot = updated
+                        cloudFallback?.onState(updated)
+                        publish(context, updated)
+                    }
+                }
+                Unit
             }
+            // Check whether all targeted identities are already disconnected — if so, proceed
+            // immediately without waiting for a callback that may never arrive.
+            if (group.all { isClassicProfileDisconnected(it) }) {
+                Log.i(TAG, "classic profiles already disconnected; enabling LE Audio now")
+                enableLeAudio()
+            } else {
+                Log.i(TAG, "waiting for classic profiles to disconnect before enabling LE Audio")
+                pendingLeAudioEnable = enableLeAudio
+            }
+        } else {
+            // Cancel any pending classic-disconnect → LE Audio enable from a previous toggle.
+            if (!allowed) pendingLeAudioEnable = null
+            if (devices.map { applyLeAudioPolicy(it, allowed) }.none { it }) {
+                if (!allowed && !dualMode) setClassicAudioEnabled(group, enabled = true)
+                return
+            }
+            if (!allowed && !dualMode) {
+                // HyperOS waits out CLASSIC_RESTORE_DELAY_MS on a thread of its own before
+                // restoring: LeAudioService is still tearing the LE Audio link down, and a
+                // classic policy written into that window is what the stack undoes on its way out.
+                scope.launch {
+                    delay(CLASSIC_RESTORE_DELAY_MS)
+                    setClassicAudioEnabled(group, enabled = true)
+                }
+            }
+            val updated = withSystemFacts(base)
+            if (updated == base) return
+            lastSnapshot = updated
+            cloudFallback?.onState(updated)
+            publish(context, updated)
         }
-        val updated = withSystemFacts(base)
-        if (updated == base) return
-        lastSnapshot = updated
-        cloudFallback?.onState(updated)
-        publish(context, updated)
+    }
+
+    /**
+     * Checks whether A2DP, HFP and HID are all disconnected for [device].
+     *
+     * Used by [setLeAudioPolicy] to decide whether to proceed immediately with the LE Audio
+     * policy write or to defer it until [onClassicProfileDisconnected] fires.
+     */
+    private fun isClassicProfileDisconnected(device: BluetoothDevice): Boolean {
+        val context = appContext ?: return false
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            ?: return false
+        for (profileId in intArrayOf(BluetoothProfile.A2DP, BluetoothProfile.HEADSET, PROFILE_HID_HOST)) {
+            val connected = runCatching {
+                manager.getConnectedDevices(profileId)
+            }.getOrNull().orEmpty()
+            if (connected.any { it.address.equals(device.address, ignoreCase = true) }) return false
+        }
+        return true
+    }
+
+    /**
+     * Called by [HeadsetStateDispatcher] when A2DP reports STATE_DISCONNECTED for a Sony device.
+     *
+     * If a [pendingLeAudioEnable] callback is waiting, this fires it — the classic profiles have
+     * now torn down and it is safe to write the LE Audio policy without racing the GATT client
+     * layer's CLCB allocation.
+     */
+    @Synchronized
+    fun onClassicProfileDisconnected(device: BluetoothDevice) {
+        val pending = pendingLeAudioEnable ?: return
+        if (!HeadsetStateDispatcher.isSonyPod(device)) return
+        pendingLeAudioEnable = null
+        Log.i(TAG, "classic profiles disconnected for ${device.address}; enabling LE Audio")
+        pending()
     }
 
     /** Cancel both Xiaomi battery surfaces for a terminal Bluetooth disconnect. */

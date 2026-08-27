@@ -143,6 +143,9 @@ object HeadsetStateDispatcher : HookContext() {
                     // the following same-address transport reconnect looks new.  Only
                     // the terminal profile state is authoritative here.
                     if (currState == BluetoothHeadset.STATE_DISCONNECTED) {
+                        // Notify the engine before teardown so a pending LE Audio enable
+                        // can proceed now that classic profiles are down.
+                        SonyEngineHost.onClassicProfileDisconnected(device)
                         SonyEngineHost.disconnectDevice(device)
                     } else {
                         Log.d("SonyPods", "A2DP disconnecting; deferring Tandem teardown for ${device.address}")
