@@ -23,19 +23,25 @@ Theoretically supports all released Sony headphones
 - **Noise control** — Off / Noise Cancelling / Ambient Sound, ambient level (1–20) and voice focus
 - **Equalizer** — official presets + Clear Bass + custom bands
 - **Battery** — TWS left / right / case, single level for headbands
+- **DSEE Upscaling** — toggle DSEE / DSEE Extreme / DSEE Ultimate audio upscaling
+- **Bluetooth Connection Quality** — toggle between Prioritize Sound Quality and Prioritize Stable Connection
+- **LE Audio (LC3)** — toggle Low Energy Audio (LC3)
+- **Codec Badges** — real-time detection and display of active audio codecs (LDAC / LC3 / AAC / SBC, etc.) and DSEE status
+- **Headphone power off** — sends Sony USER_POWER_OFF on supported models
 - **Playback** — previous / play-pause / next
 - **Status** — LE Audio, Quick Access, wearing detection, firmware version
-- **Headphone power off** — sends Sony USER_POWER_OFF on supported models
+- **Dual-device management** — manage connections across multiple devices
+- **Gesture controls** — customize gesture operations, Quick Access, and more
 - **Tandem debug** — TX/RX log viewer and raw HEX sender
-- **Dual-device management** — Manage connections across multiple devices
-- **Gesture controls** — Customize gesture operations, Quick Access, and more
+
 ### HyperOS integration
 
 - **Model spoofing** — presents Sony headphones as supported Xiaomi earbuds to the system headset UI
+- **System settings integration** — injects firmware version and codec badges into Bluetooth device details; hides non-applicable noise cancellation depth sliders
 - **System battery injection** — battery synced into the system bluetooth stack
 - **Focus Island / notifications** — connect & battery island, AOD battery, ANC-cycle notification button
 - **Fusion device center** — battery and ANC state read/write
-- **Quick popup** — control popup from the notification and on connection
+- **Quick popup** — control popup from the notification and on connection (with app whitelist/blacklist support)
 - **Model images** — automatically matched from the Sound Connect model/colour catalog, without custom image configuration
 - **Device handoff** — supports Xiaomi Interconnect device handoff; the other device must first pair with the headset once and also have this module installed and enabled (not recommended together with dual-device connection, as they may conflict)
 
