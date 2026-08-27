@@ -221,7 +221,7 @@ class LeAudioDevicePairer(
                         }.getOrNull()
                     }
                 }
-                .firstOrNull { it != null }
+                .firstOrNull()
             ?: error("AdapterService instance is not available")
             serviceClass
                 .getMethod("removeBond", BluetoothDevice::class.java)

@@ -51,7 +51,6 @@ object LegacyConfigMigrator {
                 when (val value = legacy.all[key]) {
                     is Int -> editor.putInt(key, value).also { moved++ }
                     is Boolean -> editor.putBoolean(key, value).also { moved++ }
-                    else -> null
                 }
             }
             editor.apply()
