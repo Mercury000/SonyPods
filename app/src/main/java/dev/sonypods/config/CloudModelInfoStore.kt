@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import io.github.libxposed.service.XposedService
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -71,11 +72,26 @@ object CloudModelInfoStore {
         return publishJson(raw, service)
     }
 
+    /** Read and validate the catalog already published in Remote Files. */
+    fun readRemoteJson(service: XposedService?): String? {
+        val xposedService = service ?: return null
+        return runCatching {
+            xposedService.openRemoteFile(REMOTE_FILE_NAME).use { pfd ->
+                val bytes = FileInputStream(pfd.fileDescriptor).use { it.readBytes() }
+                if (bytes.isEmpty() || bytes.size > MAX_JSON_BYTES) return@runCatching null
+                bytes.toString(Charsets.UTF_8).takeIf { parseRecords(it).isNotEmpty() }
+            }
+        }.onFailure { Log.w(TAG, "reading remote model catalog failed", it) }
+            .getOrNull()
+    }
+
     /** Publish an already validated catalog JSON string into Remote Files. */
     fun publishJson(raw: String, service: XposedService?): Boolean {
         val xposedService = service ?: return false
         val bytes = raw.toByteArray(Charsets.UTF_8)
         if (bytes.isEmpty() || bytes.size > MAX_JSON_BYTES) return false
+        val existing = readRemoteJson(xposedService)?.toByteArray(Charsets.UTF_8)
+        if (existing?.contentEquals(bytes) == true) return false
         return runCatching {
             xposedService.openRemoteFile(REMOTE_FILE_NAME).use { pfd ->
                 FileOutputStream(pfd.fileDescriptor).use { output ->

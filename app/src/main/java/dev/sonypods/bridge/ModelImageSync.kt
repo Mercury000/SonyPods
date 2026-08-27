@@ -32,12 +32,32 @@ object ModelImageSync {
     private var connectionActive = false
     private var activeAddress: String? = null
 
+    @Volatile
+    private var pendingSnapshot: SonyStateSnapshot? = null
+
+    /**
+     * The manifest receiver can deliver a state snapshot while the app process is
+     * still waiting for the Xposed service. Metadata is remote-store backed, so
+     * attempting a cache lookup before the store is attached would look like a
+     * cache miss and download an image that is already present.
+     */
+    fun onServiceBound(context: Context) {
+        val snapshot = pendingSnapshot ?: return
+        pendingSnapshot = null
+        onState(context, snapshot)
+    }
+
     fun onState(
         context: Context,
         snapshot: SonyStateSnapshot,
         onComplete: () -> Unit = {},
     ) {
         updateConnection(snapshot)
+        if (!PodImagePrefs.isStoreAttached()) {
+            pendingSnapshot = snapshot
+            onComplete()
+            return
+        }
         if (!snapshot.connected) {
             onComplete()
             return

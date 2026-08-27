@@ -22,11 +22,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -69,15 +71,30 @@ class PopupActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val appConfig = ConfigManager.current()
         val bluetoothDevice = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-        if (appConfig.notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
-            openNotificationTarget(appConfig.notificationClickAction, bluetoothDevice)
-            finish()
-            return
-        }
 
         setContent {
+            var configReady by remember { mutableStateOf(ConfigManager.isStoreAttached()) }
+            DisposableEffect(Unit) {
+                // SonyPodsApp attaches the remote store before notifying listeners,
+                // so this transition cannot expose ConfigManager's process defaults.
+                val serviceListener: (io.github.libxposed.service.XposedService?) -> Unit = {
+                    configReady = ConfigManager.isStoreAttached()
+                }
+                SonyPodsApp.addServiceListener(serviceListener)
+                onDispose { SonyPodsApp.removeServiceListener(serviceListener) }
+            }
+            if (!configReady) return@setContent
+
+            val appConfig = ConfigManager.current()
+            if (appConfig.notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
+                LaunchedEffect(appConfig.notificationClickAction) {
+                    openNotificationTarget(appConfig.notificationClickAction, bluetoothDevice)
+                    finish()
+                }
+                return@setContent
+            }
+
             val uiPrefs = remember {
                 getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE)
             }

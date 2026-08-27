@@ -83,7 +83,7 @@ object CloudModelInfoSync {
         refreshMutex.withLock {
             val prefs = CloudModelInfoStore.preferences(context)
             val cached = CloudModelInfoStore.readCachedJson(prefs)
-            val records = CloudModelInfoStore.parseRecords(cached)
+            var records = CloudModelInfoStore.parseRecords(cached)
             val present = records.any { record ->
                 normalizeModelName(record.modelName) == normalizedModel &&
                     (imageUrl.isNullOrBlank() || record.imageUrl == imageUrl)
@@ -91,6 +91,21 @@ object CloudModelInfoSync {
             if (present) {
                 failedKeys.remove(attemptKey)
                 publishCached(context, prefs)
+                return
+            }
+
+            // The Hook and app processes share Remote Files, but not ordinary
+            // SharedPreferences. Adopt an already-published catalog before using
+            // the network, otherwise a valid Hook-side cache looks absent here.
+            val remoteRaw = CloudModelInfoStore.readRemoteJson(service)
+            records = CloudModelInfoStore.parseRecords(remoteRaw)
+            val remotePresent = records.any { record ->
+                normalizeModelName(record.modelName) == normalizedModel &&
+                    (imageUrl.isNullOrBlank() || record.imageUrl == imageUrl)
+            }
+            if (remotePresent) {
+                CloudModelInfoStore.saveCachedJson(prefs, records)
+                failedKeys.remove(attemptKey)
                 return
             }
 

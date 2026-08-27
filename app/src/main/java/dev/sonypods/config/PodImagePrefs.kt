@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 enum class PodImageResource(val fileSuffix: String) {
@@ -95,6 +96,9 @@ object PodImagePrefs {
     // ── App process (uses the bound store handle) ──
 
     fun loadCurrent(): List<EarphonePref> = load(store)
+
+    /** True after this process has adopted the framework-backed metadata store. */
+    fun isStoreAttached(): Boolean = store != null
 
     fun findCurrent(address: String): EarphonePref? = find(store, address)
 
@@ -185,6 +189,12 @@ object PodImagePrefs {
      * cannot leave a stale tail from a previous larger one with the same filename.
      */
     private fun writeBytesToRemote(s: XposedService, name: String, bytes: ByteArray): Boolean {
+        val unchanged = runCatching {
+            s.openRemoteFile(name).use { pfd ->
+                FileInputStream(pfd.fileDescriptor).use { it.readBytes() }.contentEquals(bytes)
+            }
+        }.getOrDefault(false)
+        if (unchanged) return false
         return runCatching {
             s.openRemoteFile(name).use { pfd ->
                 FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) }

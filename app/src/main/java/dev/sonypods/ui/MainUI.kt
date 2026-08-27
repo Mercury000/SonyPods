@@ -28,6 +28,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -43,6 +44,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberDecoratedNavEntries
 import androidx.navigation3.ui.NavDisplay
+import androidx.compose.runtime.key
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
@@ -118,8 +120,12 @@ fun MainUI(
     val tabs = remember { MainTab.entries.toList() }
     var selectedTab by remember { mutableStateOf(MainTab.Module) }
     var hasAppliedDefaultTab by remember { mutableStateOf(false) }
+    var mainTabsGeneration by remember { mutableIntStateOf(0) }
     var bluetoothState by remember { mutableStateOf(readBluetoothState(context)) }
     var xposedService by remember { mutableStateOf(SonyPodsApp.xposedService) }
+    var remoteDataReady by remember {
+        mutableStateOf(ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached())
+    }
     var showDevicePicker by remember { mutableStateOf(false) }
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
@@ -138,6 +144,7 @@ fun MainUI(
     var showConnectErrorDialog by remember { mutableStateOf(false) }
     var lastBluetoothServiceAliveMs by remember { mutableStateOf(0L) }
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
+    var hasRequestedStartupConnection by remember { mutableStateOf(false) }
     val backgroundColor = appBackground()
     val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
     val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
@@ -252,14 +259,27 @@ fun MainUI(
         )
     }
 
-    LaunchedEffect(Unit) {
-        if (!hasAppliedDefaultTab) {
-            selectedTab = if (startupTab.value == ConfigManager.STARTUP_TAB_EARPHONES) {
+    LaunchedEffect(remoteDataReady, startupTab.value, openEarphoneDetailAddress.value) {
+        if (remoteDataReady && !hasAppliedDefaultTab) {
+            // remoteDataReady becomes true in the service callback, while the Compose
+            // mirror below is updated by a later effect. Read the already-attached
+            // authoritative store here so the in-memory default cannot win that race.
+            val configuredStartupTab = ConfigManager.startupTab()
+            startupTab.value = configuredStartupTab
+            selectedTab = if (
+                !openEarphoneDetailAddress.value.isNullOrBlank() ||
+                configuredStartupTab == ConfigManager.STARTUP_TAB_EARPHONES
+            ) {
                 MainTab.Earphones
             } else {
                 MainTab.Module
             }
             hasAppliedDefaultTab = true
+            mainTabsGeneration++
+            Log.i(
+                "SonyPods",
+                "startup page applied config=$configuredStartupTab selected=$selectedTab connected=$sonyConnected",
+            )
         }
     }
 
@@ -328,10 +348,17 @@ fun MainUI(
             // pendingAutoOpenAddress navigation intent.
             connectingDeviceAddress = null
             showConnectErrorDialog = false
-            earphonePrefs.value = PodImagePrefs.upsertConnected(
-                address = connectedDeviceAddress,
-                name = displayTitle,
-            )
+            // The state broadcast can arrive before the app has adopted the
+            // framework-backed metadata store. Writing here in that window would
+            // buffer a new record without autoImageUrl and overwrite the existing
+            // image metadata when the store binds. ModelImageSync owns the
+            // connection-time metadata update until the store is available.
+            if (PodImagePrefs.isStoreAttached()) {
+                earphonePrefs.value = PodImagePrefs.upsertConnected(
+                    address = connectedDeviceAddress,
+                    name = displayTitle,
+                )
+            }
 
             if (canShowDetailPage && shouldAutoOpen) {
                 selectedTab = MainTab.Earphones
@@ -373,6 +400,15 @@ fun MainUI(
                     SonyPodsAction.ACTION_MODULE_BLUETOOTH_SERVICE_ALIVE -> {
                         lastBluetoothServiceAliveMs = SystemClock.elapsedRealtime()
                         bluetoothServiceResponsive = true
+                        // Opening the app always asks the engine to reconcile its control
+                        // session. This is transport lifecycle, independent of which
+                        // startup page the user selected. The liveness reply guarantees
+                        // that the Bluetooth-side hook is present before the command.
+                        if (!hasRequestedStartupConnection) {
+                            hasRequestedStartupConnection = true
+                            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
+                            Log.i("SonyPods", "startup control connection reconciliation requested")
+                        }
                         // No config re-push here: the engine reads the framework-backed
                         // remote-pref store itself at startup and observes changes through
                         // its own OnSharedPreferenceChangeListener.
@@ -409,6 +445,7 @@ fun MainUI(
                     earphonePrefs.value = PodImagePrefs.load(it)
                 }
             }
+            remoteDataReady = ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached()
         }
         SonyPodsApp.addServiceListener(serviceListener)
 
@@ -453,6 +490,8 @@ fun MainUI(
         ancCycleModes.value = c.ancCycleModes
         startupTab.value = c.startupTab
         visibility.value = c.visibility
+        earphonePrefs.value = PodImagePrefs.loadCurrent()
+        remoteDataReady = ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached()
     }
 
     // Hook liveness ping: the bluetooth-process hook answers UI_INIT with SERVICE_ALIVE.
@@ -598,9 +637,18 @@ fun MainUI(
 
     val entryProvider = entryProvider<Screen> {
         entry<Screen.Main> {
-            MainTabsScaffold(
-                tabs = tabs,
-                selectedTab = selectedTab,
+            if (!remoteDataReady || !hasAppliedDefaultTab) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(backgroundColor),
+                )
+                return@entry
+            }
+            key(mainTabsGeneration) {
+                MainTabsScaffold(
+                    tabs = tabs,
+                    selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
                 floatingBottomBar = floatingBottomBar.value,
                 blurBottomBar = blurBottomBar.value,
@@ -724,8 +772,9 @@ fun MainUI(
                 onDismissRestartScopeDialog = { showRestartScopeDialog = false },
                 onRestartScopes = { restartScopes(it) },
                 onBackToDevicePicker = { backToDevicePicker() },
-                onOpenSystemHeadsetSettings = { openSystemHeadsetSettings() },
-            )
+                    onOpenSystemHeadsetSettings = { openSystemHeadsetSettings() },
+                )
+            }
         }
         entry<Screen.About> {
             val aboutScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())

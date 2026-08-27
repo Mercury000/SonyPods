@@ -223,6 +223,9 @@ object ConfigManager {
 
     fun current(): AppConfig = cachedConfig
 
+    /** True after this process has adopted the framework-backed remote store. */
+    fun isStoreAttached(): Boolean = store != null
+
     fun fakeDeviceId(): String = current().fakeDeviceId.normalizedFakeDeviceId()
 
     fun logLevel(): Int = current().logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)
