@@ -5,6 +5,7 @@
     <string name="about">About SonyPods</string>
     <string name="settings">Settings</string>
     <string name="module">Module</string>
+    <string name="home">Home</string>
     <string name="earphones">Earphones</string>
     <string name="based_on">Based on</string>
     <string name="notification_click_action">Notification tap behavior</string>

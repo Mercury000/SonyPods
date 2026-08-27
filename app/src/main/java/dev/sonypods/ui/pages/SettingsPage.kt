@@ -120,7 +120,7 @@ fun SettingsPage(
     )
     val startupTabValues = listOf(ConfigManager.STARTUP_TAB_MODULE, ConfigManager.STARTUP_TAB_EARPHONES)
     val startupTabOptions = listOf(
-        stringResource(R.string.module),
+        stringResource(R.string.home),
         stringResource(R.string.earphones),
     )
     val ancCycleModeLabels = listOf(

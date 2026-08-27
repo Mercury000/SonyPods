@@ -6,6 +6,7 @@
     <string name="about">关于 SonyPods</string>
     <string name="settings">设置</string>
     <string name="module">模块</string>
+    <string name="home">首页</string>
     <string name="earphones">耳机</string>
     <string name="based_on">基于</string>
     <string name="notification_click_action">点击通知时行为</string>

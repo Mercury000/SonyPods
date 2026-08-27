@@ -340,8 +340,7 @@ fun MainUI(
             // is therefore intentionally treated as a connection-session intent,
             // not compared byte-for-byte with the address in the latest snapshot.
             val shouldAutoOpen = pendingAutoOpenAddress != null ||
-                autoOpenAfterScopeRestart ||
-                !hasAppliedDefaultTab
+                autoOpenAfterScopeRestart
 
             // The transport is connected even while the capability probe is in
             // flight; stop showing the row-level spinner but retain the separate
