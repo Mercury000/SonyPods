@@ -16,6 +16,7 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -36,7 +37,12 @@ class HookCloudModelFallback(
 ) {
     private val appContext = context.applicationContext ?: context
     private val job = SupervisorJob()
-    private val scope = CoroutineScope(job + Dispatchers.IO)
+    // Lives in the hooked host process, so an escaping exception kills that process, not just
+    // the fetch. SupervisorJob does not consume it; only a handler in the context does.
+    private val crashGuard = CoroutineExceptionHandler { _, error ->
+        Log.e(TAG, "hook fallback coroutine crashed", error)
+    }
+    private val scope = CoroutineScope(job + Dispatchers.IO + crashGuard)
     private val cacheDir = File(appContext.filesDir, CACHE_DIR).apply { mkdirs() }
     private val imageDir = File(cacheDir, IMAGE_DIR).apply { mkdirs() }
     private val catalogFile = File(cacheDir, CATALOG_FILE)

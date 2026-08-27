@@ -70,7 +70,8 @@ internal class SonySppTransport(
             }
             readerThread?.let { thread ->
                 if (thread !== current) {
-                    thread.interrupt()
+                    // Closing input/socket above is what unblocks read(); interrupting instead
+                    // risks firing inside a framework runBlocking and killing this process.
                     runCatching { thread.join(1_000L) }
                 }
             }
@@ -108,6 +109,12 @@ internal class SonySppTransport(
         } catch (e: IOException) {
             if (!closed.get()) {
                 notifyClosed(e.message)
+            }
+        } catch (t: Throwable) {
+            Thread.interrupted()
+            runCatching {
+                log("SPP reader aborted: ${t.javaClass.simpleName}: ${t.message}")
+                notifyClosed(t.message)
             }
         }
     }
@@ -251,6 +258,9 @@ internal class SonySppTransport(
                     notifyClosed("SPP remote endpoint did not ACK seq=${inverseSequence(expectedAck).u}")
                 }
                 if (retryScheduled) return@Thread
+            } catch (t: Throwable) {
+                Thread.interrupted()
+                runCatching { log("SPP ACK timer aborted: ${t.javaClass.simpleName}: ${t.message}") }
             } finally {
                 ackThreads.remove(Thread.currentThread())
             }

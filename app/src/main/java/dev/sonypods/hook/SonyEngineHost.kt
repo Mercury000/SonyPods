@@ -31,6 +31,7 @@ import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.headphones.HeadphoneFormFactor
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -94,7 +95,14 @@ object SonyEngineHost {
      */
     private const val LDAC_SETTLE_MS = 3_000L
 
-    private fun newGenerationScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // SupervisorJob only stops sibling cancellation; an exception escaping a launch still reaches
+    // the thread's default handler, and in com.android.bluetooth that takes the stack down.
+    private val coroutineCrashGuard = CoroutineExceptionHandler { _, error ->
+        Log.e(TAG, "engine coroutine crashed", error)
+    }
+
+    private fun newGenerationScope() =
+        CoroutineScope(SupervisorJob() + Dispatchers.Main + coroutineCrashGuard)
     private var scope = newGenerationScope()
 
     @Volatile

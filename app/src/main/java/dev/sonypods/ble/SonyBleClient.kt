@@ -838,7 +838,7 @@ class SonyBleClient(
                 }
                 socket.connect()
                 pendingSppSocket = null
-                if (sppConnectGeneration.get() != generation || Thread.currentThread().isInterrupted) {
+                if (sppConnectGeneration.get() != generation) {
                     runCatching { socket.close() }
                     return@Thread
                 }
@@ -900,6 +900,16 @@ class SonyBleClient(
                 val current = sppConnectGeneration.get() == generation
                 closeSpp(notify = current)
                 if (current) listener.onBluetoothUnavailable("Bluetooth connect permission failed for SPP")
+            } catch (t: Throwable) {
+                // This thread lives in com.android.bluetooth; anything escaping it reaches the
+                // system process' default handler and takes the whole Bluetooth stack down.
+                Thread.interrupted()
+                runCatching {
+                    log("SPP connect aborted: ${t.javaClass.simpleName}: ${t.message}")
+                    val current = sppConnectGeneration.get() == generation
+                    closeSpp(notify = current)
+                    if (current) listener.onBluetoothUnavailable("SPP connection failed: ${t.message}")
+                }
             } finally {
                 if (sppConnectThread === Thread.currentThread()) {
                     sppConnectThread = null
@@ -961,7 +971,9 @@ class SonyBleClient(
 
     private fun closeSpp(notify: Boolean) {
         sppConnectGeneration.incrementAndGet()
-        sppConnectThread?.interrupt()
+        // Interrupting the connect thread is fatal in this process: BluetoothSocket.connect()
+        // runs BluetoothStorageManager's runBlocking inline, which rethrows the interrupt and
+        // kills com.android.bluetooth. Closing the socket is what aborts a pending connect().
         sppConnectThread = null
         pendingSppSocket?.let { runCatching { it.close() } }
         pendingSppSocket = null
