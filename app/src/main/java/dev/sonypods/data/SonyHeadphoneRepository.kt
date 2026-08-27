@@ -2943,11 +2943,11 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun refreshNoiseControlStateAfterWrite(profile: ConnectedHeadphoneProfile) {
-        if (profile.capabilities.queryNoiseControlParams) {
-            refreshNoiseControlState()
-        } else {
-            appendLog("NC/ASM write sent; current mode is kept from local selection because this profile only reports capability status")
-        }
+        // Sony official app (c40.C6114e / c40.C6119j) never sends GET_PARAM after SET_PARAM.
+        // It maintains optimistic local state and relies entirely on asynchronous NCASM_NTFY_PARAM notifications.
+        // Actively querying immediately after writing causes race conditions where headphones (such as WF-1000XM5
+        // when out of ear or transitioning) return transient OFF / standby DSP states that clobber user selection.
+        appendLog("NC/ASM write sent; current mode is kept from local selection, awaiting device notification")
     }
 
     private fun refreshEqState() {
