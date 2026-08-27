@@ -190,10 +190,9 @@ object HeadsetStateDispatcher : HookContext() {
                 val device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
                 if (!isSonyPod(device)) return
                 val connected = action == BluetoothDevice.ACTION_ACL_CONNECTED
-                // Evaluated before the refresh debounce: when the headset powers off both
-                // identities drop within milliseconds, and it is the second drop — the one the
-                // debounce would swallow — that sees every link gone.
-                if (!connected) SonyEngineHost.onAclDisconnected(device)
+                // ACL link changes (e.g. single bud in/out of case or SPP socket reset) only
+                // trigger an event-driven battery/status refresh. Genuine physical disconnects
+                // are solely owned by A2DP and LE Audio profile state machine transitions.
                 val now = System.currentTimeMillis()
                 if (now - lastAclRefreshMs < 2000L) return
                 lastAclRefreshMs = now

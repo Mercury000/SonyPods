@@ -926,55 +926,6 @@ object SonyEngineHost {
         }
     }
 
-    /**
-     * Link-layer authority for a terminal disconnect, for the topologies no profile covers.
-     *
-     * `LeAudioService` only announces devices that hold a `LeAudioDeviceDescriptor`, so when a
-     * headset's control identity is not itself an LE Audio member, nothing ever reports its
-     * power-off: A2DP is gone under LC3 and the LE Audio transition belongs to the other
-     * identity. The surfaces then stay preserved for a recovery that never arrives.
-     *
-     * The stack does mark it, and this mirrors that rather than inventing a rule:
-     * `RemoteDevices.aclStateChangeCallback` broadcasts ACTION_ACL_DISCONNECTED and, at that same
-     * point, treats `AdapterService.getConnectionState(device) == 0` as the device being gone —
-     * that is where it resets the battery level and disconnects Xiaomi's BatteryService. The one
-     * widening is from the dropped address to every identity of the headset, because a
-     * coordinated set's members are separate `BluetoothDevice`s and one earbud returning to the
-     * case is not the headset leaving.
-     */
-    @SuppressLint("MissingPermission")
-    fun onAclDisconnected(device: BluetoothDevice) {
-        val address = runCatching { device.address }.getOrNull() ?: return
-        val context = appContext ?: return
-        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return
-        // The alias map is what folds a set member onto its control identity below; refresh it
-        // from the current bonds first, exactly as the LE Audio hook does before deciding.
-        SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
-        if (isLeAudioStillConnected(device)) {
-            Log.d(TAG, "ACL drop of $address not terminal: LE Audio is still connected")
-            return
-        }
-        val controlAddress = SonyDeviceService.resolveControlAddress(address) ?: address
-        val control = remoteDevice(context, controlAddress) ?: return
-        if (hasAnyLink(control)) {
-            Log.d(TAG, "ACL drop of $address not terminal: control identity $controlAddress is linked")
-            return
-        }
-        Log.d(TAG, "ACL drop of $address is terminal for control identity $controlAddress")
-        disconnectDevice(control, forceTeardown = true)
-    }
-
-    /**
-     * Whether any ACL to [device] remains, on either transport.
-     *
-     * `BluetoothDevice.isConnected()` is `getConnectionState(device) != STATE_DISCONNECTED`, so
-     * this is the same aggregate the stack itself consults — not a per-transport guess. An
-     * unreadable answer reports "still linked": that keeps the pre-existing behaviour instead of
-     * letting a reflection failure tear a session down.
-     */
-    private fun hasAnyLink(device: BluetoothDevice): Boolean = runCatching {
-        BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
-    }.getOrDefault(true)
 
     // ── System per-device LE Audio permission ("低功耗音频") ──
 
@@ -2222,12 +2173,20 @@ object SonyEngineHost {
     }
 
     /**
-     * The false Tandem snapshot is emitted before renderXiaomiSurfaces() gets a
-     * chance to establish transportRecoveryAddress. Preserve the popup decision for
-     * that one transition as long as there was no terminal physical A2DP disconnect.
+     * Preserves popup suppression for all transitions within the same active physical session.
+     * Only genuine physical reconnects (after an authoritative A2DP / LE Audio disconnect)
+     * are allowed to trigger the connect popup.
      */
     private fun shouldSuppressConnectPopup(snapshot: SonyStateSnapshot): Boolean {
         if (transportRecoveryAddress?.equals(snapshot.deviceAddress, ignoreCase = true) == true) {
+            return true
+        }
+        val address = snapshot.deviceAddress ?: lastConnectedAddress
+        val isPhysicalReconnect = address != null &&
+            physicalDisconnectAddress?.equals(address, ignoreCase = true) == true
+        if (!isPhysicalReconnect && address != null &&
+            lastConnectedAddress?.equals(address, ignoreCase = true) == true
+        ) {
             return true
         }
         return !snapshot.connected &&
