@@ -617,4 +617,26 @@ class SonyCapabilityProbeTest {
             state.uiKeys().map { it.actions.single().function },
         )
     }
+
+    @Test
+    fun gestureUiFallsBackToDefaultPresetOnOutOfRangePlaceholder() {
+        // V1 keeps an OUT_OF_RANGE placeholder in the preset list when a device
+        // reports a byte off the shared table, preserving index alignment with
+        // the capability keys. It must surface as the key's default preset —
+        // never as a selectable/writable value (the builders reject it).
+        val preset = AssignableSettingsPreset.PLAYBACK_CONTROL
+        val capability = AssignableSettingsKeyCapability(
+            key = AssignableSettingsKey.LEFT_SIDE,
+            type = AssignableSettingsType.TOUCH_SENSOR,
+            defaultPreset = preset,
+            presets = listOf(preset),
+            actionsByPreset = emptyMap(),
+        )
+        val state = dev.sonypods.data.GestureOperationsState(
+            capabilities = listOf(capability),
+            presets = listOf(AssignableSettingsPreset.OUT_OF_RANGE),
+        )
+
+        assertEquals(preset, state.uiKeys().single().currentPreset)
+    }
 }

@@ -342,7 +342,12 @@ data class GestureOperationsState(
         // preset do not accidentally display the same action table.
         val usedMappingIndices = mutableSetOf<Int>()
         return capabilities.mapIndexed { index, capability ->
-            val currentPreset = presets.getOrNull(index) ?: capability.defaultPreset
+            // An OUT_OF_RANGE entry is a positional placeholder for a byte off the
+            // shared preset table (V1 keeps it to preserve key alignment), never a
+            // selectable value: fall back to the capability's default preset.
+            val currentPreset = presets.getOrNull(index)
+                ?.takeIf { it != AssignableSettingsPreset.OUT_OF_RANGE }
+                ?: capability.defaultPreset
             val mappingIndex = mappings.indices.firstOrNull { mappingIndex ->
                 mappingIndex == index &&
                     mappingIndex !in usedMappingIndices &&
@@ -2370,7 +2375,12 @@ class SonyHeadphoneRepository private constructor(
         val gesture = _state.value.gestureOperationsState
         val keys = gesture.uiKeys()
         return keys.mapIndexed { index, key ->
-            gesture.presets.getOrNull(index) ?: key.currentPreset
+            // OUT_OF_RANGE is a positional placeholder, never writable — the
+            // protocol builders reject it, so substitute the resolved current
+            // preset (already default-backed by uiKeys()).
+            gesture.presets.getOrNull(index)
+                ?.takeIf { it != AssignableSettingsPreset.OUT_OF_RANGE }
+                ?: key.currentPreset
         }
     }
 
