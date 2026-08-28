@@ -1301,8 +1301,14 @@ class SonyHeadphoneRepository private constructor(
             EqPresetId.entries.firstOrNull { it.code.toInt() and 0xFF == code }
         }
         val cachedBandCount = entry.eqBandInfo.size.takeIf { it > 0 } ?: currentEq.bandCount
+        val cachedHasClearBass = entry.eqHasClearBass
         val restoredCapabilities = capabilities.copy(
-            features = if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
+            features = if (cachedHasClearBass == true) {
+                // Mirror applyEqEbbExtendedInfo: PRESET_EQ-layout devices without
+                // the EBB function still have Clear Bass, and canWrite() gates
+                // the slider on this feature.
+                capabilities.features + HeadphoneFeature.CLEAR_BASS
+            } else if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
                 capabilities.features + HeadphoneFeature.MULTIPOINT
             } else {
                 capabilities.features
@@ -3050,6 +3056,16 @@ class SonyHeadphoneRepository private constructor(
                         connectedProfile = profile.copy(
                             capabilities = profile.capabilities.copy(
                                 eqConfig = updatedEqConfig,
+                                // Devices without the EBB function still expose
+                                // Clear Bass as the SPECIFIC_INFORMATION band of
+                                // the PRESET_EQ array (LinkBuds S): the extended
+                                // info is the authoritative capability signal,
+                                // without which canWrite() blocked the slider.
+                                features = if (hasClearBass) {
+                                    profile.capabilities.features + HeadphoneFeature.CLEAR_BASS
+                                } else {
+                                    profile.capabilities.features
+                                },
                             )
                         ),
                         eqUiCapability = EqProtocolEngine.uiCapability(updatedEqConfig),
