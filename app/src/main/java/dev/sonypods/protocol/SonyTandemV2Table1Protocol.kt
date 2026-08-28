@@ -416,10 +416,46 @@ object SonyTandemV2Table1Protocol {
         //   [preset][bandCount][bandSteps...]
         // while the ULT variant inserts the EqUltModeStatus byte:
         //   [preset][ultModeStatus][bandCount][bandSteps...]
-        val body = if (typeCode == EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE.code) {
-            byteArrayOf(typeCode, preset.code, EQ_ULT_MODE_OFF, bandSteps.size.toByte()) + bands
-        } else {
-            byteArrayOf(typeCode, preset.code, bandSteps.size.toByte()) + bands
+        val body = when (typeCode) {
+            EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE.code -> {
+                val (basePreset, ultMode) = when (preset) {
+                    EqPresetId.ULT, EqPresetId.ULT_1 -> EqPresetId.OFF to 0x01.toByte()
+                    EqPresetId.ULT_2 -> EqPresetId.OFF to 0x02.toByte()
+                    else -> preset to 0x00.toByte()
+                }
+                byteArrayOf(typeCode, basePreset.code, ultMode, bandSteps.size.toByte()) + bands
+            }
+            EqEbbInquiredType.SOUND_EFFECT.code -> {
+                val soundEffectByte = when (preset) {
+                    EqPresetId.OFF -> 0x00.toByte()
+                    EqPresetId.ULT -> 0x01.toByte()
+                    EqPresetId.ULT_1 -> 0x02.toByte()
+                    EqPresetId.ULT_2 -> 0x03.toByte()
+                    EqPresetId.CUSTOM, EqPresetId.USER_SETTING1, EqPresetId.USER_SETTING2,
+                    EqPresetId.USER_SETTING3, EqPresetId.USER_SETTING4, EqPresetId.USER_SETTING5 -> 0x04.toByte()
+                    EqPresetId.FLAT -> 0x05.toByte()
+                    EqPresetId.LIVE_SOUND -> 0x06.toByte()
+                    else -> 0x00.toByte()
+                }
+                byteArrayOf(typeCode, soundEffectByte)
+            }
+            EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT.code -> {
+                val soundEffectByte = when (preset) {
+                    EqPresetId.OFF -> 0x00.toByte()
+                    EqPresetId.ULT -> 0x01.toByte()
+                    EqPresetId.ULT_1 -> 0x02.toByte()
+                    EqPresetId.ULT_2 -> 0x03.toByte()
+                    EqPresetId.CUSTOM, EqPresetId.USER_SETTING1, EqPresetId.USER_SETTING2,
+                    EqPresetId.USER_SETTING3, EqPresetId.USER_SETTING4, EqPresetId.USER_SETTING5 -> 0x04.toByte()
+                    EqPresetId.FLAT -> 0x05.toByte()
+                    EqPresetId.LIVE_SOUND -> 0x06.toByte()
+                    else -> 0x00.toByte()
+                }
+                byteArrayOf(typeCode, soundEffectByte, 0x00.toByte())
+            }
+            else -> {
+                byteArrayOf(typeCode, preset.code, bandSteps.size.toByte()) + bands
+            }
         }
         return SonyTandemFrame.message(EQEBB_SET_PARAM, body)
     }

@@ -45,7 +45,10 @@ object SonyDeviceService {
         UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
     )
 
-    private val sonyNamePrefixes = listOf("wf-", "wh-", "wi-", "xba-", "mdr-")
+    private val sonyNamePrefixes = listOf(
+        "wf-", "wh-", "wi-", "xba-", "mdr-",
+        "srs-", "ult ", "ht-", "sa-", "lspx-", "gtk-", "gtx-", "mhc-",
+    )
 
     /** Classifies an Android Bluetooth device using every locally available signal. */
     fun isSony(device: BluetoothDevice?): Boolean {

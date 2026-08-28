@@ -100,8 +100,19 @@ internal object SonyEqEbbPayloadParser {
             EqEbbPayloadVersion.V2 -> when (type) {
                 EqEbbInquiredType.PRESET_EQ,
                 EqEbbInquiredType.PRESET_EQ_NONCUSTOMIZABLE,
-                EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE,
-                EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE -> payload.getOrNull(1)?.toEqPreset()
+                EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE -> payload.getOrNull(1)?.toEqPreset()
+                EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE -> {
+                    val ult = payload.getOrNull(2)?.toInt() ?: 0
+                    when (ult) {
+                        0x01 -> EqPresetId.ULT_1
+                        0x02 -> EqPresetId.ULT_2
+                        else -> payload.getOrNull(1)?.toEqPreset()
+                    }
+                }
+                EqEbbInquiredType.SOUND_EFFECT,
+                EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT -> {
+                    payload.getOrNull(1)?.let { parseSoundEffectType(it) }
+                }
                 EqEbbInquiredType.EBB -> if (v2EbbHasPresetField(payload)) {
                     payload.getOrNull(1)?.toEqPreset()
                 } else {
@@ -157,6 +168,17 @@ internal object SonyEqEbbPayloadParser {
 
     private fun Byte.toEqPreset(): EqPresetId? =
         EqPresetId.entries.firstOrNull { it.code == this }
+
+    private fun parseSoundEffectType(code: Byte): EqPresetId = when (code.toInt()) {
+        0x00 -> EqPresetId.OFF
+        0x01 -> EqPresetId.ULT
+        0x02 -> EqPresetId.ULT_1
+        0x03 -> EqPresetId.ULT_2
+        0x04 -> EqPresetId.CUSTOM
+        0x05 -> EqPresetId.FLAT
+        0x06 -> EqPresetId.LIVE_SOUND
+        else -> EqPresetId.OFF
+    }
 
     private fun Byte.toEqBandInformationType(): EqBandInformationType? =
         EqBandInformationType.entries.firstOrNull { it.code == this }

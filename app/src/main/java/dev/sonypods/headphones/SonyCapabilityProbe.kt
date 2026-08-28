@@ -927,6 +927,7 @@ object SonyCapabilityProbe {
             EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE in types -> EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE
             EqEbbInquiredType.CUSTOM_EQ in types -> EqEbbInquiredType.CUSTOM_EQ
             EqEbbInquiredType.PRESET_EQ_NONCUSTOMIZABLE in types -> EqEbbInquiredType.PRESET_EQ_NONCUSTOMIZABLE
+            EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT in types -> EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT
             EqEbbInquiredType.SOUND_EFFECT in types -> EqEbbInquiredType.SOUND_EFFECT
             EqEbbInquiredType.TURN_KEY_EQ in types -> EqEbbInquiredType.TURN_KEY_EQ
             else -> types.firstOrNull() ?: EqEbbInquiredType.PRESET_EQ
