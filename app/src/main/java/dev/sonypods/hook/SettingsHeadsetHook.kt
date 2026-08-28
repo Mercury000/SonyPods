@@ -49,6 +49,7 @@ object SettingsHeadsetHook : HookContext() {
     private var reloadHeadsetFragments: WeakHashMap<Any, Boolean>? = null
     private var reloadBatteryLabelOriginals: WeakHashMap<TextView, CharSequence>? = null
     private var hasLiveSnapshot = false
+    private var isConnectedState = false
     private var hasAncState = false
     private var context: Context? = null
     private var receiverRegistered = false
@@ -185,10 +186,9 @@ object SettingsHeadsetHook : HookContext() {
             hookAfter(findMethod("com.android.settings.bluetooth.HeadsetIDConstants", "isBleMmaConnect", Context::class.java, BluetoothDevice::class.java, String::class.java)) {
                 val device = args[1] as? BluetoothDevice
                 val deviceId = args[2] as? String
-                Log.d(TAG, "isBleMmaConnect(Context) old=$result device=${device.describe()} deviceId=$deviceId service=${runCatching { callMethod(args[0], "getService") }.getOrNull()}")
                 if (isSonyPod(device)) {
-                    result = true
-                    Log.d(TAG, "isBleMmaConnect(Context) forced true")
+                    result = isDeviceConnected(device)
+                    Log.d(TAG, "isBleMmaConnect(Context) result=$result device=${device.describe()} deviceId=$deviceId")
                 }
             }
         }.onFailure { Log.d(TAG, "hook HeadsetIDConstants.isBleMmaConnect(Context) skipped", it) }
@@ -200,10 +200,9 @@ object SettingsHeadsetHook : HookContext() {
             hookAfter(findMethod("com.android.settings.bluetooth.HeadsetIDConstants", "isBleMmaConnect", serviceClass, BluetoothDevice::class.java, String::class.java)) {
                 val device = args[1] as? BluetoothDevice
                 val deviceId = args[2] as? String
-                Log.d(TAG, "isBleMmaConnect(Service) old=$result service=${args[0]} device=${device.describe()} deviceId=$deviceId")
                 if (isSonyPod(device)) {
-                    result = true
-                    Log.d(TAG, "isBleMmaConnect(Service) forced true")
+                    result = isDeviceConnected(device)
+                    Log.d(TAG, "isBleMmaConnect(Service) result=$result device=${device.describe()} deviceId=$deviceId")
                 }
             }
         }.onFailure { Log.d(TAG, "hook HeadsetIDConstants.isBleMmaConnect(Service) skipped", it) }
@@ -468,57 +467,73 @@ object SettingsHeadsetHook : HookContext() {
                     SonyBridge.ACTION_STATE -> {
                         val snapshot = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT)
                             ?.let { SonyStateSnapshot.fromBundle(it) }
-                        if (snapshot != null && snapshot.deviceAddress != null) {
-                            hasLiveSnapshot = true
-                            currentAddress = snapshot.deviceAddress
-                            SonyDeviceService.rememberAddress(snapshot.deviceAddress)
-                            currentName = snapshot.deviceName
-                            // UNKNOWN is the pre-capability-table placeholder and carries no
-                            // information; keep the last real value (which is also what gets
-                            // persisted) rather than falling back to the TWS layout.
-                            snapshot.formFactor
-                                ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
-                                ?.let { currentFormFactor = it }
-                            snapshot.firmwareVersion
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { currentFirmware = it }
-                            currentBattery = snapshotBattery(snapshot)
-                            // Reconcile the ANC/transparency-vocal state from the engine's live
-                            // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
-                            // stay at their initial defaults and injectFragmentStatus keeps pushing a
-                            // stale level (e.g. "0200,false") that fights the real "0201,true" state,
-                            // making the vocal-enhancement toggle appear unresponsive.
-                            snapshot.noiseControlMode?.let { mode ->
-                                currentAnc = when (mode) {
-                                    NoiseControlMode.OFF -> 1
-                                    NoiseControlMode.AMBIENT_SOUND -> 3
-                                    else -> 2
+                        if (snapshot != null) {
+                            isConnectedState = snapshot.connected
+                            if (snapshot.deviceAddress != null) {
+                                hasLiveSnapshot = true
+                                currentAddress = snapshot.deviceAddress
+                                SonyDeviceService.rememberAddress(snapshot.deviceAddress)
+                                currentName = snapshot.deviceName
+                                // UNKNOWN is the pre-capability-table placeholder and carries no
+                                // information; keep the last real value (which is also what gets
+                                // persisted) rather than falling back to the TWS layout.
+                                snapshot.formFactor
+                                    ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
+                                    ?.let { currentFormFactor = it }
+                                snapshot.firmwareVersion
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { currentFirmware = it }
+                                currentBattery = if (snapshot.connected) snapshotBattery(snapshot) else BatteryParams()
+                                // Reconcile the ANC/transparency-vocal state from the engine's live
+                                // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
+                                // stay at their initial defaults and injectFragmentStatus keeps pushing a
+                                // stale level (e.g. "0200,false") that fights the real "0201,true" state,
+                                // making the vocal-enhancement toggle appear unresponsive.
+                                snapshot.noiseControlMode?.let { mode ->
+                                    currentAnc = when (mode) {
+                                        NoiseControlMode.OFF -> 1
+                                        NoiseControlMode.AMBIENT_SOUND -> 3
+                                        else -> 2
+                                    }
                                 }
+                                currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
+                                hasAncState = snapshot.connected
+                                // Live sound-quality badge inputs. Assigned unconditionally: the
+                                // repository nulls them on disconnect, and a stale LDAC/DSEE mark must
+                                // not outlive the link that carried it.
+                                currentCodec = snapshot.soundQualityCodec
+                                currentDseeGeneration = snapshot.dseeGeneration
+                                currentDseeActive = snapshot.dseeActive
+                                currentLeaStreamingL = snapshot.leaStreamingStatusL
+                                currentLeaStreamingR = snapshot.leaStreamingStatusR
+                                SonyDeviceService.rememberAddress(currentAddress)
+                                Log.d(TAG, "state snapshot address=$currentAddress connected=${snapshot.connected} formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
+                                saveState(context)
+                                rebindExistingBatteryViews()
+                                applyBatteryLayouts()
+                                updateBatteryViews()
+                                updateFragments()
+                            } else if (!snapshot.connected) {
+                                hasAncState = false
+                                currentBattery = BatteryParams()
+                                updateBatteryViews()
+                                updateFragments()
                             }
-                            currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
-                            hasAncState = true
-                            // Live sound-quality badge inputs. Assigned unconditionally: the
-                            // repository nulls them on disconnect, and a stale LDAC/DSEE mark must
-                            // not outlive the link that carried it.
-                            currentCodec = snapshot.soundQualityCodec
-                            currentDseeGeneration = snapshot.dseeGeneration
-                            currentDseeActive = snapshot.dseeActive
-                            currentLeaStreamingL = snapshot.leaStreamingStatusL
-                            currentLeaStreamingR = snapshot.leaStreamingStatusR
-                            SonyDeviceService.rememberAddress(currentAddress)
-                            Log.d(TAG, "state snapshot address=$currentAddress formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
-                            saveState(context)
-                            rebindExistingBatteryViews()
-                            applyBatteryLayouts()
-                            updateBatteryViews()
-                            updateFragments()
                         }
                     }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {
                         hasLiveSnapshot = true
+                        isConnectedState = true
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
                         SonyDeviceService.rememberAddress(currentAddress)
+                    }
+                    SonyPodsAction.ACTION_PODS_DISCONNECTED -> {
+                        isConnectedState = false
+                        hasAncState = false
+                        currentBattery = BatteryParams()
+                        updateBatteryViews()
+                        updateFragments()
                     }
                     SonyPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         hasLiveSnapshot = true
@@ -836,21 +851,25 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun injectFragmentStatus(fragment: Any?) {
         runCatching {
+            val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
+            if (!isDeviceConnected(device)) {
+                Log.d(TAG, "injectFragmentStatus skipped (device disconnected) ${fragmentDebug(fragment)}")
+                return
+            }
             val payload = "${settingsAncMode()}|0100;0101;0102;0103;0200;0201|${settingsBatteryString()}|00"
             Log.d(TAG, "injectFragmentStatus payload=$payload ${fragmentDebug(fragment)}")
             callMethod(fragment, "updateAtUiInfo", payload)
             callMethod(fragment, "updateAncUi", settingsAncLevel(), false)
-            val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
             val address = device?.address
             if (address != null) {
-                val refreshPayload = settingsRefreshPayload()
+                val refreshPayload = settingsRefreshPayload(device)
                 Log.d(TAG, "injectFragmentStatus refreshPayload=$refreshPayload address=$address")
                 // Official internals post to worker handlers that may already be dead (stale
                 // fragments in the map); a throw here must not skip the badge pass below.
                 runCatching { callMethod(fragment, "refreshStatus", address, refreshPayload) }
                     .onFailure { Log.w(TAG, "refreshStatus injection failed (stale fragment?)", it) }
             }
-            Log.d(TAG, "fragment status injected anc=$currentAnc battery=${settingsBatteryString()}")
+            Log.d(TAG, "fragment status injected connected=true anc=$currentAnc battery=${settingsBatteryString()}")
         }.onFailure { Log.w(TAG, "inject fragment status failed", it) }
         updateSoundQualityBadges(fragment)
     }
@@ -1055,6 +1074,16 @@ object SettingsHeadsetHook : HookContext() {
             address.equals(currentAddress, ignoreCase = true)
     }
 
+    private fun isDeviceConnected(device: BluetoothDevice?): Boolean {
+        if (device == null) return false
+        val rawConnected = runCatching {
+            callMethod(device, "isConnected") as? Boolean
+        }.getOrNull()
+        if (rawConnected != null) return rawConnected
+        val address = runCatching { device.address }.getOrNull() ?: return false
+        return isSonyAddress(address) && isConnectedState
+    }
+
     private fun settingsBatteryString(): String {
         return settingsBatteryValues().joinToString(",")
     }
@@ -1128,8 +1157,9 @@ object SettingsHeadsetHook : HookContext() {
         }
     }
 
-    private fun settingsRefreshPayload(): String {
-        val battery = settingsBatteryString().split(",")
+    private fun settingsRefreshPayload(device: BluetoothDevice? = null): String {
+        val connected = isDeviceConnected(device)
+        val battery = if (connected) settingsBatteryString().split(",") else listOf("255", "255", "255")
         val left = battery.getOrNull(0).orEmpty()
         val right = battery.getOrNull(1).orEmpty()
         val box = battery.getOrNull(2).orEmpty()
@@ -1138,10 +1168,14 @@ object SettingsHeadsetHook : HookContext() {
         values[1] = right
         values[2] = box
         // Slot 3 carries the firmware as "<code>+<display>"; MiuiHeadsetFragment.refreshStatus
-        // routes a non-empty value to updateStatus(), which fills versionName. Code 0 keeps every
-        // Xiaomi version-gated feature (wind noise >= 30259 etc.) off for Sony hardware.
-        values[3] = currentFirmware?.takeIf { it.isNotBlank() }?.let { "0+$it" }.orEmpty()
-        values[7] = settingsAncLevel()
+        // routes a non-empty value to updateStatus(), which fills versionName.
+        // Gated on isDeviceConnected so firmware version is only populated when connected.
+        values[3] = if (connected) {
+            currentFirmware?.takeIf { it.isNotBlank() }?.let { "0+$it" }.orEmpty()
+        } else {
+            ""
+        }
+        values[7] = if (connected) settingsAncLevel() else "0000"
         values[8] = "false"
         values[11] = "00"
         values[13] = "00"
