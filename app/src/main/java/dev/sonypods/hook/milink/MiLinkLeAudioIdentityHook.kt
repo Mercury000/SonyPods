@@ -28,8 +28,12 @@ import java.lang.reflect.Method
  *    HostLost publication completes the waiting disconnect sync instead of a timeout;
  *  - the pre-flight "target has the headset bonded" probe is waived — the connect attempt
  *    itself is the real test;
- *  - a target connect refused with a bond-class code is resent once against the headset's
- *    other bonded identity at the remote-protocol wire boundary.
+ *  - a Sony LE identity address never goes on the circulate wire: it is non-discoverable,
+ *    so no host that has not already bonded it can act on it. The connect request is
+ *    rewritten to the headset's classic address at the source-side proxy boundary, before
+ *    the RPC is encoded — a classic bond connects directly, an unbonded target enters the
+ *    normal pairing flow, and a target that enables LE Audio upgrades the link to LC3 by
+ *    itself.
  *
  * Identity pairing comes from [SonyDeviceService], classified by transport type or Sony
  * service UUIDs; the duplicate fusion-center ball is fixed separately by collapsing the LE
@@ -38,8 +42,8 @@ import java.lang.reflect.Method
 @SuppressLint("MissingPermission")
 internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
 
-    /** Guards the cross-identity retry against re-entering its own hook. */
-    private val retrying = ThreadLocal.withInitial { false }
+    /** Guards the connect-identity rewrite against re-entering its own hook. */
+    private val rewriting = ThreadLocal.withInitial { false }
 
     /** Guards the second-identity release against re-entering its own hook. */
     private val releasing = ThreadLocal.withInitial { false }
@@ -49,7 +53,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
 
     fun hookIdentityUnification() {
         hookLeDeviceActiveVeto()
-        hookReleaseBothIdentities()
+        hookSystemAlignedDisconnect()
         hookActiveDeviceVerification()
         hookHostBoundProbe()
         hookBluetoothActiveDevice()
@@ -57,7 +61,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
         hookMxManagerSeed()
         hookProfileImplCache()
         hookDiscoveryLostSignal()
-        hookCrossIdentityConnectRetry()
+        hookConnectClassicAddress()
     }
 
     /**
@@ -283,38 +287,60 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
     }
 
     /**
-     * A circulate release must free the headset completely. ProfileContext.disconnect tears
-     * down every profile of the one address it is given; the headset's other identity keeps
-     * its own link, so from the headset's point of view it never left this phone and it
-     * ignores (or races) the target host's connect — the transfer stalls into a timeout
-     * while the audio snaps back here. Release the second identity right after the first.
+     * A circulate release must disconnect the headset exactly the way the system's own
+     * "断开连接" button does. The system path (Settings → CachedBluetoothDevice.disconnect)
+     * issues `BluetoothDevice.disconnect()` for **every CSIP group member** — the LE
+     * identity first, the classic one ~18ms later, both nearly in parallel — which
+     * HyperOS routes to the same `disconnectAllEnabledProfiles` binder entry. The
+     * headset perceives LE-then-classic as "fully leaving" and enters its reconnect
+     * phase cleanly.
+     *
+     * milink instead disconnects only the classic address, leaving the LE link alive
+     * while classic drops; the headset then treats the classic loss as one-sided,
+     * and its reconnect attempt collides with the target host's incoming connect —
+     * the drop observed in the failing transfer (headset killed the target's HFP
+     * 187ms after SLC and paged this phone instead).
+     *
+     * This hook runs *before* milink's classic disconnect and issues the very same
+     * `BluetoothDevice.disconnect()` call the Settings button makes, against the
+     * headset's other identity — aligning order (LE first), coverage (both
+     * identities) and API (identical entry) with the system.
      */
-    private fun hookReleaseBothIdentities() {
+    private fun hookSystemAlignedDisconnect() {
         runCatching {
-            hook.hookAfter(
+            hook.hookBefore(
                 hook.findMethod(PROFILE_CONTEXT, "disconnect", BluetoothDevice::class.java),
-                logicalRole = "profile-context-release-both-identities",
+                logicalRole = "profile-context-system-aligned-disconnect",
             ) {
-                if (result != SUCCESS || releasing.get() == true) return@hookAfter
-                val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookAfter
-                if (!hook.isSonyPod(device)) return@hookAfter
-                val address = runCatching { device.address }.getOrNull() ?: return@hookAfter
-                val alternate = alternateIdentityOf(address) ?: return@hookAfter
-                if (alternate.equals(address, ignoreCase = true)) return@hookAfter
-                val context = profileContextInstance() ?: return@hookAfter
+                if (releasing.get() == true) return@hookBefore
+                val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookBefore
+                if (!hook.isSonyPod(device)) return@hookBefore
+                val address = runCatching { device.address }.getOrNull() ?: return@hookBefore
+                val alternate = alternateIdentityFresh(address) ?: return@hookBefore
+                if (alternate.equals(address, ignoreCase = true)) return@hookBefore
+                val context: Context = hook.context ?: return@hookBefore
                 val alternateDevice = runCatching {
-                    callMethod(context, "obtainBluetoothDevice", alternate) as? BluetoothDevice
-                }.getOrNull() ?: return@hookAfter
+                    context.getSystemService(BluetoothManager::class.java)?.adapter
+                        ?.getRemoteDevice(alternate)
+                }.getOrNull() ?: return@hookBefore
                 releasing.set(true)
-                val released = try {
-                    callMethod(context, "disconnect", alternateDevice) as? Int
+                val invoked = try {
+                    runCatching {
+                        BluetoothDevice::class.java.getMethod("disconnect").invoke(alternateDevice)
+                        true
+                    }.getOrDefault(false)
                 } finally {
                     releasing.set(false)
                 }
-                Log.i(MiLinkServiceHook.TAG, "released second identity=$alternate result=$released")
+                if (invoked) {
+                    Log.i(
+                        MiLinkServiceHook.TAG,
+                        "system-aligned disconnect: LE identity $alternate released before classic",
+                    )
+                }
             }
         }.onFailure {
-            Log.d(MiLinkServiceHook.TAG, "hook ProfileContext.disconnect skipped", it)
+            Log.d(MiLinkServiceHook.TAG, "hook ProfileContext.disconnect system-aligned skipped", it)
         }
     }
 
@@ -390,56 +416,67 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
     }
 
     /**
-     * The target-side connect of a transfer, at the remote-protocol boundary where the
-     * address actually goes on the wire. A host bonded to only the headset's other identity
-     * refuses with a bond-class code; resend once against that other identity before the
-     * caller starts rolling the headset back, and let the failure stand only once both
-     * identities have been refused.
+     * Same lookup, but bypassing the alias-scan throttle: a circulate disconnect is
+     * rare and may run on a host whose alias cache is cold (the pad target never
+     * held a Tandem session to warm it), so the bond set is scanned right now.
      */
-    private fun hookCrossIdentityConnectRetry() {
+    private fun alternateIdentityFresh(address: String): String? {
+        lastAliasScan = 0L
+        refreshAliases()
+        return SonyDeviceService.identityAliasesOf(address).firstOrNull()
+    }
+
+    /**
+     * The source-side connect of a transfer, at the proxy boundary before the RPC is
+     * encoded. Under LC3 the address MiLink publishes is the headset's LE identity, but
+     * that address is useless on the wire: it is non-discoverable, so a target host that
+     * has not bonded it can only burn its bond timeout on a doomed createBond (the
+     * removed failure-retry hook failed for exactly this reason). The classic address is
+     * the one every flow understands — already-bonded targets connect directly, unbonded
+     * ones enter the normal pairing flow, and a target that enables LE Audio upgrades the
+     * link to LC3 by itself after connecting over classic.
+     *
+     * The rewrite is unconditional for Sony LE identities: whether the target knows the
+     * classic bond is the target's business, decided after the request arrives, and can
+     * only be guessed at here. The alias map is authoritative on the source side — fed by
+     * the engine snapshot while the headset is connected here, so at the moment of a
+     * transfer it is necessarily warm.
+     */
+    private fun hookConnectClassicAddress() {
         runCatching {
-            val remoteConnect = hook.findMethodByParamCount(HEADSET_REMOTE_IMPL, "connect", 3)
-            hook.hookAfter(remoteConnect, logicalRole = "headset-remote-cross-identity-connect") {
-                val code = result as? Int ?: return@hookAfter
-                if (retrying.get() == true || code !in CROSS_IDENTITY_RETRY_CODES) return@hookAfter
-                val address = args.getOrNull(1) as? String ?: return@hookAfter
-                if (!hook.isSonyAddress(address)) {
-                    Log.d(MiLinkServiceHook.TAG, "retry skipped: address not Sony $code")
-                    return@hookAfter
-                }
-                val alternate = alternateIdentityOf(address)
-                if (alternate == null) {
-                    Log.w(MiLinkServiceHook.TAG, "retry skipped: no alternate identity for $code")
-                    return@hookAfter
-                }
-                retrying.set(true)
-                val retried = try {
-                    remoteConnect.invoke(instance, args[0], alternate, args[2]) as? Int
-                } catch (error: Throwable) {
-                    Log.w(MiLinkServiceHook.TAG, "cross-identity circulate retry threw", error)
-                    null
+            val proxyConnect = hook.findMethodByParamCount(PROFILE_PROXY, "connect", 3)
+            hook.hookBefore(proxyConnect, logicalRole = "profile-proxy-connect-classic-address") {
+                if (rewriting.get() == true) return@hookBefore
+                val address = args.getOrNull(1) as? String ?: return@hookBefore
+                if (!hook.isSonyAddress(address)) return@hookBefore
+                val control = controlAddressOf(address) ?: return@hookBefore
+                if (control.equals(address, ignoreCase = true)) return@hookBefore
+                rewriting.set(true)
+                val connected = try {
+                    runCatching { proxyConnect.invoke(instance, args[0], control, args[2]) as? Int }
+                        .getOrNull()
                 } finally {
-                    retrying.set(false)
+                    rewriting.set(false)
                 }
-                Log.i(
-                    MiLinkServiceHook.TAG,
-                    "cross-identity circulate retry primary=$code alternate=$retried",
-                )
-                if (retried != null && retried !in CROSS_IDENTITY_RETRY_CODES) {
-                    result = retried
+                if (connected != null) {
+                    Log.i(
+                        MiLinkServiceHook.TAG,
+                        "circulate connect rewritten LE→classic=$control result=$connected",
+                    )
+                    result = connected
                 }
             }
         }.onFailure {
-            Log.d(MiLinkServiceHook.TAG, "hook HeadsetRemoteImpl.connect skipped", it)
+            Log.d(MiLinkServiceHook.TAG, "hook ProfileProxy.connect classic rewrite skipped", it)
         }
     }
 
     private companion object {
         const val PROFILE_CONTEXT = "com.miui.headset.runtime.ProfileContext"
         const val PROFILE_IMPL = "com.miui.headset.runtime.ProfileImpl"
+        const val PROFILE_PROXY = "com.miui.headset.runtime.ProfileProxy"
         const val MULTIPLATFORM_PROCESSOR = "com.miui.headset.runtime.MultiplatformProcessor"
         const val DISCOVERY_IMPL = "com.miui.headset.runtime.DiscoveryImpl"
-        const val HEADSET_REMOTE_IMPL = "com.miui.headset.runtime.HeadsetRemoteImpl"
         const val BLUETOOTH_SERVICE_CLIENT =
             "com.miui.circulate.api.protocol.bluetooth.BluetoothServiceClient"
         const val ALIAS_SCAN_INTERVAL_MS = 10_000L
@@ -455,15 +492,5 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
 
         /** DiscoveryHost's headset-lost update type; the LE stack's own broadcast is unreliable. */
         const val HOST_LOST_UPDATE_TYPE = 3
-
-        /**
-         * ProfileImpl.connect outcomes that mean "this host cannot act on the address it was
-         * given": the device was not obtainable, the operation was declared unsupported, or
-         * the bond needed to be created and could not be. Each is what a host bonded to only
-         * the other identity of the headset reports, so each is worth one cross-identity
-         * retry. Codes such as 308 (a bond dialog is showing) or 301 (already active here)
-         * describe progress and must not be retried.
-         */
-        val CROSS_IDENTITY_RETRY_CODES = setOf(201, 205, 302, 304, 305, 307)
     }
 }
