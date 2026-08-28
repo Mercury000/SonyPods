@@ -75,6 +75,7 @@ internal fun EarphonesTabPage(
                 bottomContentPadding = pageBottomContentPadding,
                 uiState = uiState,
                 actions = actions,
+                visibility = visibility,
             )
 
             EarphonesPage.MULTIPOINT_SETTINGS -> MultipointSettingsPage(

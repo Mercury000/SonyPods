@@ -37,6 +37,9 @@ data class VisibilityConfig(
     val leaRestrictedConnectionQuality: Boolean = true,
     val leaRestrictedLdac: Boolean = true,
     val leaRestrictedMultipoint: Boolean = true,
+    /** Quick Access lives inside the gesture page: LE Audio (LC3) makes it
+     * unusable, so grey it out — or hide it when false. */
+    val leaRestrictedQuickAccess: Boolean = true,
 )
 
 @Serializable

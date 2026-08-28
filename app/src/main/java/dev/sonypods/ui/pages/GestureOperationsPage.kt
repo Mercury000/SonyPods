@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.mercury.sonypods.R
 import dev.sonypods.bridge.QuickAccessActionSnapshot
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.data.GestureOperationAction
 import dev.sonypods.data.GestureOperationKey
 import dev.sonypods.protocol.AssignableSettingsAction
@@ -58,6 +59,7 @@ internal fun GestureOperationsPage(
     bottomContentPadding: Dp = 16.dp,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
+    visibility: VisibilityConfig,
 ) {
     val keys = uiState.gestureOperationKeys
     val hasAmbientControl = keys.any { key ->
@@ -112,12 +114,20 @@ internal fun GestureOperationsPage(
             }
         }
 
-        if (uiState.quickAccessActions.isNotEmpty()) {
+        // Quick Access talks to the headset's SAR/Spotify service directory over
+        // classic Bluetooth; under LC3 the headset refuses the writes, so the card
+        // greys out (mirroring the multipoint card) — or hides, per the visibility
+        // setting.
+        val quickAccessRestricted = uiState.connectedViaLeAudio
+        if (uiState.quickAccessActions.isNotEmpty() &&
+            !(quickAccessRestricted && !visibility.leaRestrictedQuickAccess)
+        ) {
             item("quick-access") {
                 QuickAccessCard(
                     actions = uiState.quickAccessActions,
                     currentFunctionCodes = uiState.quickAccessFunctionCodes,
                     onFunctionChange = actions.onQuickAccessFunctionChange,
+                    enabled = !quickAccessRestricted,
                 )
             }
         }
@@ -190,10 +200,12 @@ private fun QuickAccessCard(
     actions: List<QuickAccessActionSnapshot>,
     currentFunctionCodes: List<Int>,
     onFunctionChange: (Int, Int) -> Unit,
+    enabled: Boolean = true,
 ) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(
             title = stringResource(R.string.qa_card_title),
+            enabled = enabled,
         )
         actions.forEachIndexed { index, action ->
             val current = currentFunctionCodes.getOrNull(index)
@@ -214,6 +226,7 @@ private fun QuickAccessCard(
                     title = gestureActionLabel(action.actionCode),
                     items = functions.map { quickAccessFunctionLabel(it) },
                     selectedIndex = functions.indexOf(current).coerceAtLeast(0),
+                    enabled = enabled,
                     onSelectedIndexChange = { selected ->
                         functions.getOrNull(selected)?.let { onFunctionChange(index, it) }
                     },

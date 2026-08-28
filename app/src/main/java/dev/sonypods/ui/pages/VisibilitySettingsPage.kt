@@ -144,6 +144,11 @@ fun VisibilitySettingsPage(
                     checked = visibility.leaRestrictedMultipoint,
                     onCheckedChange = { onVisibilityChange(visibility.copy(leaRestrictedMultipoint = it)) },
                 )
+                SwitchPreference(
+                    title = stringResource(R.string.qa_card_title),
+                    checked = visibility.leaRestrictedQuickAccess,
+                    onCheckedChange = { onVisibilityChange(visibility.copy(leaRestrictedQuickAccess = it)) },
+                )
             }
         }
     }
