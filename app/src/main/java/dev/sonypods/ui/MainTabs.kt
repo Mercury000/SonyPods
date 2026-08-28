@@ -148,10 +148,12 @@ internal fun MainTabsScaffold(
     }
     var showGestureOperations by remember { mutableStateOf(false) }
     var showMultipointSettings by remember { mutableStateOf(false) }
+    var showMoreSettings by remember { mutableStateOf(false) }
     val isLandscapeDetail = selectedTab == MainTab.Earphones &&
             showEarphoneDetail &&
             !showGestureOperations &&
             !showMultipointSettings &&
+            !showMoreSettings &&
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     // The hero image belongs to the device, not to the connection. The snapshot
     // drops the address the moment the link drops, and resolving by an empty
@@ -175,23 +177,38 @@ internal fun MainTabsScaffold(
         }
         showGestureOperations = false
         showMultipointSettings = false
+        showMoreSettings = false
+    }
+
+    // A gesture/multipoint page opened from the more-settings page returns to
+    // that page, not past it — showMoreSettings stays set while its sub-page is
+    // on top, so the state itself records where the sub-page was opened from.
+    fun backOneLevel() {
+        if ((showGestureOperations || showMultipointSettings) && showMoreSettings) {
+            showGestureOperations = false
+            showMultipointSettings = false
+        } else {
+            closeSubPages()
+        }
     }
 
     LaunchedEffect(showEarphoneDetail) {
         if (!showEarphoneDetail) {
             showGestureOperations = false
             showMultipointSettings = false
+            showMoreSettings = false
         }
     }
 
-    // 手势返回按层级回退：三级子页 → 详细页 → 蓝牙设备列表，
+    // 手势返回按层级回退：四级子页 → 更多设置 → 详细页 → 蓝牙设备列表，
     // 与顶栏返回箭头保持一致，而不是直接退出应用。
     BackHandler(
         enabled = selectedTab == MainTab.Earphones &&
-            (showGestureOperations || showMultipointSettings || showEarphoneDetail)
+            (showGestureOperations || showMultipointSettings ||
+                showMoreSettings || showEarphoneDetail)
     ) {
-        if (showGestureOperations || showMultipointSettings) {
-            closeSubPages()
+        if (showGestureOperations || showMultipointSettings || showMoreSettings) {
+            backOneLevel()
         } else {
             onBackToDevicePicker()
         }
@@ -266,9 +283,11 @@ internal fun MainTabsScaffold(
                         showEarphoneDetail = showEarphoneDetail,
                         showGestureOperations = showGestureOperations,
                         showMultipointSettings = showMultipointSettings,
+                        showMoreSettings = showMoreSettings,
                         onOpenGestureOperations = { showGestureOperations = true },
                         onOpenMultipointSettings = { showMultipointSettings = true },
-                        onBackFromSubPage = { closeSubPages() },
+                        onOpenMoreSettings = { showMoreSettings = true },
+                        onBackFromSubPage = { backOneLevel() },
                         mainTitle = mainTitle,
                         displayTitle = displayTitle,
                         sonyState = sonyState,
@@ -444,8 +463,10 @@ private fun EarphonesTabShell(
     showEarphoneDetail: Boolean,
     showGestureOperations: Boolean,
     showMultipointSettings: Boolean,
+    showMoreSettings: Boolean,
     onOpenGestureOperations: () -> Unit,
     onOpenMultipointSettings: () -> Unit,
+    onOpenMoreSettings: () -> Unit,
     onBackFromSubPage: () -> Unit,
     mainTitle: String,
     displayTitle: String,
@@ -478,10 +499,11 @@ private fun EarphonesTabShell(
         null
     }
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-    val onSubPage = showGestureOperations || showMultipointSettings
+    val onSubPage = showGestureOperations || showMultipointSettings || showMoreSettings
     val pageTitle = when {
         showGestureOperations -> stringResource(R.string.card_gesture_title)
         showMultipointSettings -> stringResource(R.string.mp_connect_two_title)
+        showMoreSettings -> stringResource(R.string.more_settings_title)
         else -> mainTitle.ifEmpty { stringResource(R.string.pod_info) }
     }
     Scaffold(
@@ -560,11 +582,13 @@ private fun EarphonesTabShell(
                 showEarphoneDetail = showEarphoneDetail,
                 showGestureOperations = showGestureOperations,
                 showMultipointSettings = showMultipointSettings,
+                showMoreSettings = showMoreSettings,
                 displayTitle = displayTitle,
                 uiState = sonyState,
                 actions = sonyActions.copy(
                     onOpenGestureOperations = onOpenGestureOperations,
                     onOpenMultipointSettings = onOpenMultipointSettings,
+                    onOpenMoreSettings = onOpenMoreSettings,
                 ),
                 visibility = visibility,
                 boxImagePath = boxImagePath,

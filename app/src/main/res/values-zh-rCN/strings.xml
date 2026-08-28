@@ -95,6 +95,10 @@
     <string name="startup_tab_summary">选择进入模块时显示的页面</string>
     <string name="visibility_settings_title">显隐设置</string>
     <string name="visibility_settings_summary">控制各页面卡片与徽标的显示</string>
+    <string name="more_settings_title">更多设置</string>
+    <string name="location_detail_page">耳机页</string>
+    <string name="location_more_page">更多设置</string>
+    <string name="location_hidden">隐藏</string>
     <string name="visibility_section_bluetooth_page">蓝牙页</string>
     <string name="visibility_section_module_page">模块页</string>
     <string name="visibility_section_lea_restricted">因LE Audio开启而不支持时</string>

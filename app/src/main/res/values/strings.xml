@@ -94,6 +94,10 @@
     <string name="startup_tab_summary">Choose which page opens when entering the app</string>
     <string name="visibility_settings_title">Visibility</string>
     <string name="visibility_settings_summary">Choose which cards and badges are shown</string>
+    <string name="more_settings_title">More settings</string>
+    <string name="location_detail_page">Earphone page</string>
+    <string name="location_more_page">More settings</string>
+    <string name="location_hidden">Hidden</string>
     <string name="visibility_section_bluetooth_page">Bluetooth page</string>
     <string name="visibility_section_module_page">Module page</string>
     <string name="visibility_section_lea_restricted">Unsupported while LE Audio is on</string>

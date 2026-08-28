@@ -28,6 +28,7 @@ internal fun EarphonesTabPage(
     showEarphoneDetail: Boolean,
     showGestureOperations: Boolean,
     showMultipointSettings: Boolean,
+    showMoreSettings: Boolean,
     displayTitle: String,
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
@@ -53,6 +54,7 @@ internal fun EarphonesTabPage(
         !showEarphoneDetail -> EarphonesPage.DEVICE_PICKER
         showGestureOperations -> EarphonesPage.GESTURE_OPERATIONS
         showMultipointSettings -> EarphonesPage.MULTIPOINT_SETTINGS
+        showMoreSettings -> EarphonesPage.MORE_SETTINGS
         else -> EarphonesPage.DETAIL
     }
     AnimatedContent(
@@ -86,6 +88,17 @@ internal fun EarphonesTabPage(
                 bottomContentPadding = pageBottomContentPadding,
                 uiState = uiState,
                 actions = actions,
+            )
+
+            EarphonesPage.MORE_SETTINGS -> MoreSettingsPage(
+                modifier = Modifier
+                    .overScrollVertical()
+                    .nestedScroll(nestedScrollConnection),
+                contentPadding = contentPadding,
+                bottomContentPadding = pageBottomContentPadding,
+                uiState = uiState,
+                actions = actions,
+                visibility = visibility,
             )
 
             EarphonesPage.DETAIL -> PodDetailPage(
@@ -132,4 +145,5 @@ private enum class EarphonesPage {
     DETAIL,
     GESTURE_OPERATIONS,
     MULTIPOINT_SETTINGS,
+    MORE_SETTINGS,
 }

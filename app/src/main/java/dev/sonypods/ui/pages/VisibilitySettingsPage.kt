@@ -9,17 +9,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.mercury.sonypods.R
+import dev.sonypods.config.CardLocation
 import dev.sonypods.config.VisibilityConfig
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 /**
- * Second-level page behind the settings entry of the same name: three grouped
- * switch cards — Bluetooth-page badge, module detail-page cards, and how the
- * LE-Audio-restricted cards behave. Every switch is shown unconditionally and
- * defaults to on; a false value can only hide a card whose own support
- * condition already passed.
+ * Second-level page behind the settings entry of the same name. Detail-page
+ * cards pick a location — earphone page, the "更多设置" sub-page, or hidden —
+ * while badges and the LE-Audio-restricted behaviour stay boolean switches.
+ * Every control is shown unconditionally; a relocated or hidden card can only
+ * ever remove a UI element whose own support condition already passed.
  */
 @Composable
 fun VisibilitySettingsPage(
@@ -29,6 +31,27 @@ fun VisibilitySettingsPage(
     onVisibilityChange: (VisibilityConfig) -> Unit = {},
 ) {
     val sectionTitleInsideMargin = PaddingValues(start = 14.dp, top = 14.dp, end = 28.dp, bottom = 6.dp)
+    val locations = CardLocation.entries
+    val locationLabels = listOf(
+        stringResource(R.string.location_detail_page),
+        stringResource(R.string.location_more_page),
+        stringResource(R.string.location_hidden),
+    )
+
+    fun locationSelector(
+        title: Int,
+        current: CardLocation,
+        update: (CardLocation) -> VisibilityConfig,
+    ): @Composable () -> Unit = {
+        OverlayDropdownPreference(
+            title = stringResource(title),
+            items = locationLabels,
+            selectedIndex = locations.indexOf(current),
+            onSelectedIndexChange = { index ->
+                locations.getOrNull(index)?.let { onVisibilityChange(update(it)) }
+            },
+        )
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -65,61 +88,23 @@ fun VisibilitySettingsPage(
                     checked = visibility.detailBadge,
                     onCheckedChange = { onVisibilityChange(visibility.copy(detailBadge = it)) },
                 )
-                SwitchPreference(
-                    title = stringResource(R.string.speak_to_chat_title),
-                    checked = visibility.speakToChat,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(speakToChat = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.sony_eq_title),
-                    checked = visibility.eq,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(eq = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.playback_title),
-                    checked = visibility.playback,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(playback = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.connection_quality_title),
-                    checked = visibility.connectionQuality,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(connectionQuality = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.dsee),
-                    checked = visibility.dsee,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(dsee = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.card_ldac_title),
-                    checked = visibility.ldac,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(ldac = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.card_le_audio_title),
-                    checked = visibility.leAudioCard,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(leAudioCard = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.card_le_audio_toggle_title),
-                    checked = visibility.leAudioToggle,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(leAudioToggle = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.card_gesture_title),
-                    checked = visibility.gestures,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(gestures = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.mp_connect_two_title),
-                    checked = visibility.multipoint,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(multipoint = it)) },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.firmware_version),
-                    checked = visibility.firmware,
-                    onCheckedChange = { onVisibilityChange(visibility.copy(firmware = it)) },
-                )
+                locationSelector(R.string.speak_to_chat_title, visibility.speakToChat) { visibility.copy(speakToChat = it) }()
+                locationSelector(R.string.sony_eq_title, visibility.eq) { visibility.copy(eq = it) }()
+                locationSelector(R.string.playback_title, visibility.playback) { visibility.copy(playback = it) }()
+                locationSelector(
+                    R.string.connection_quality_title,
+                    visibility.connectionQuality,
+                ) { visibility.copy(connectionQuality = it) }()
+                locationSelector(R.string.dsee, visibility.dsee) { visibility.copy(dsee = it) }()
+                locationSelector(R.string.card_ldac_title, visibility.ldac) { visibility.copy(ldac = it) }()
+                locationSelector(R.string.card_le_audio_title, visibility.leAudioCard) { visibility.copy(leAudioCard = it) }()
+                locationSelector(
+                    R.string.card_le_audio_toggle_title,
+                    visibility.leAudioToggle,
+                ) { visibility.copy(leAudioToggle = it) }()
+                locationSelector(R.string.card_gesture_title, visibility.gestures) { visibility.copy(gestures = it) }()
+                locationSelector(R.string.mp_connect_two_title, visibility.multipoint) { visibility.copy(multipoint = it) }()
+                locationSelector(R.string.firmware_version, visibility.firmware) { visibility.copy(firmware = it) }()
             }
         }
         item {

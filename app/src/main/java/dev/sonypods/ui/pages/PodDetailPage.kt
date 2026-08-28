@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
+import dev.sonypods.config.CardLocation
 import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DseeGeneration
@@ -162,8 +163,7 @@ fun PodDetailPage(
                     actions = actions,
                     visibility = visibility,
                     bottomContentPadding = bottomContentPadding,
-                    includeBattery = false,
-                    includeDeviceStatus = false,
+                    fixedCardsRenderedExternally = true,
                 )
             }
         }
@@ -228,40 +228,45 @@ private fun defaultLogoRes(): Int {
     return if (dark) R.drawable.sony_logo_on_dark else R.drawable.sony_logo_on_light
 }
 
-private fun LazyListScope.podControlItems(
+/**
+ * Renders the relocatable cards of the earphone detail flow. [forMorePage]
+ * switches between the two surfaces: the detail page shows cards whose location
+ * is DETAIL plus battery/ANC and the more-settings entry; the more-settings
+ * page shows only cards whose location is MORE.
+ */
+internal fun LazyListScope.podControlItems(
     uiState: SonyStateSnapshot,
     actions: SonyDetailActions,
     visibility: VisibilityConfig,
     bottomContentPadding: Dp,
-    includeBattery: Boolean = true,
-    includeAnc: Boolean = true,
-    includeDeviceStatus: Boolean = true,
+    forMorePage: Boolean = false,
+    /** Landscape renders battery and firmware in its own sidebar column. */
+    fixedCardsRenderedExternally: Boolean = false,
 ) {
-    if (includeBattery) {
-        item {
-            BatteryStatusCard(uiState = uiState)
+    fun CardLocation.renderedHere(): Boolean =
+        if (forMorePage) this == CardLocation.MORE else this == CardLocation.DETAIL
+
+    if (!forMorePage && !fixedCardsRenderedExternally) {
+        item { BatteryStatusCard(uiState = uiState) }
+
+        if (uiState.supportsNoiseControl) {
+            item { AncControlCard(uiState = uiState, actions = actions) }
         }
     }
 
-    if (includeAnc && uiState.supportsNoiseControl) {
-        item {
-            AncControlCard(uiState = uiState, actions = actions)
-        }
-    }
-
-    if (visibility.speakToChat && uiState.supportsSpeakToChat) {
+    if (visibility.speakToChat.renderedHere() && uiState.supportsSpeakToChat) {
         item {
             SpeakToChatCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (visibility.eq && uiState.supportsEq) {
+    if (visibility.eq.renderedHere() && uiState.supportsEq) {
         item {
             EqCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (visibility.playback && uiState.supportsPlaybackControl) {
+    if (visibility.playback.renderedHere() && uiState.supportsPlaybackControl) {
         item {
             PlaybackCard(uiState = uiState, actions = actions)
         }
@@ -274,19 +279,21 @@ private fun LazyListScope.podControlItems(
     val hideLdac = uiState.usingLeAudio && !visibility.leaRestrictedLdac
     val hideMultipoint = uiState.connectedViaLeAudio && !visibility.leaRestrictedMultipoint
 
-    if (uiState.supportsConnectionQuality && !hideConnectionQuality) {
+    if (visibility.connectionQuality.renderedHere() &&
+        uiState.supportsConnectionQuality && !hideConnectionQuality
+    ) {
         item {
             ConnectionQualityCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (uiState.supportsUpscaling && visibility.dsee) {
+    if (visibility.dsee.renderedHere() && uiState.supportsUpscaling) {
         item {
             UpscalingCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (uiState.ldacSupported && !hideLdac) {
+    if (visibility.ldac.renderedHere() && uiState.ldacSupported && !hideLdac) {
         item {
             LdacCard(uiState = uiState, actions = actions)
         }
@@ -294,17 +301,31 @@ private fun LazyListScope.podControlItems(
 
     // The phone's own LE Audio capability gates the card: without it there is no
     // LC3 to switch to, ever — the headset's LE support is irrelevant then.
-    if (uiState.supportsLeAudio && uiState.phoneSupportsLeAudio && visibility.leAudioCard) {
-        item {
-            LeAudioCard(
-                uiState = uiState,
-                actions = actions,
-                showLeAudioToggle = visibility.leAudioToggle,
-            )
+    if (uiState.supportsLeAudio && uiState.phoneSupportsLeAudio) {
+        val cardHere = visibility.leAudioCard.renderedHere()
+        val toggleHere = visibility.leAudioToggle.renderedHere()
+        if (cardHere) {
+            item {
+                LeAudioCard(
+                    uiState = uiState,
+                    actions = actions,
+                    // Card and toggle on the same page merge into one card.
+                    showLeAudioToggle = toggleHere,
+                )
+            }
+        }
+        // Toggle relocated away from the card: it renders as its own card on
+        // whichever page it was moved to.
+        if (toggleHere && !cardHere) {
+            item {
+                Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    LowPowerAudioToggleRow(uiState = uiState, actions = actions)
+                }
+            }
         }
     }
 
-    if (uiState.supportsGestureOperations && visibility.gestures) {
+    if (visibility.gestures.renderedHere() && uiState.supportsGestureOperations) {
         item {
             Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                 BasicComponent(
@@ -316,7 +337,7 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (uiState.supportsMultipoint && !hideMultipoint) {
+    if (visibility.multipoint.renderedHere() && uiState.supportsMultipoint && !hideMultipoint) {
         item {
             MultipointEntryCard(
                 state = uiState.multipoint,
@@ -326,9 +347,25 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (includeDeviceStatus && visibility.firmware) {
-        item {
-            DeviceStatusCard(uiState = uiState)
+    if (forMorePage) {
+        if (visibility.firmware == CardLocation.MORE) {
+            item { DeviceStatusCard(uiState = uiState) }
+        }
+    } else {
+        // The more-settings entry sits directly above the firmware card — or in
+        // its place when the firmware card itself moved to the more page.
+        if (visibility.hasMorePageContent) {
+            item {
+                Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    BasicComponent(
+                        title = stringResource(R.string.more_settings_title),
+                        onClick = actions.onOpenMoreSettings,
+                    )
+                }
+            }
+        }
+        if (!fixedCardsRenderedExternally && visibility.firmware == CardLocation.DETAIL) {
+            item { DeviceStatusCard(uiState = uiState) }
         }
     }
 
@@ -529,36 +566,52 @@ private fun LeAudioCard(
         // non-discoverable one the system pairing screen never lists, and only then does the row
         // lead into the pairing flow. Shown while LC3 is in use as well, since turning it off is
         // the whole point of surfacing it.
-        if (showLeAudioToggle && enabled && !uiState.leAudioSwitchPending) {
-            val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
-                uiState.leAudioDevicePairStage == "PAIRING"
-            val policy = uiState.leAudioPolicyAllowed
-            // Nothing bonded for the permission to apply to, so there is nothing to toggle yet.
-            val needsPairing = uiState.leAudioIdentityAddress == null
-            SwitchPreference(
-                title = stringResource(R.string.card_le_audio_toggle_title),
-                summary = when {
-                    pairing -> uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pairing) }
-                    uiState.leAudioDevicePairStage == "FAILED" ->
-                        uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pair_failed_retry) }
-                    policy == true && usingLc3 -> stringResource(R.string.lea_on_lc3)
-                    policy == true -> stringResource(R.string.lea_on_waiting_lc3)
-                    policy == false -> stringResource(R.string.lea_off_fallback)
-                    needsPairing -> stringResource(R.string.lea_needs_reset)
-                    else -> stringResource(R.string.lea_state_unknown)
-                },
-                checked = policy == true,
-                onCheckedChange = { target ->
-                    // Without a bond there is nothing to permit yet, so the row leads into the
-                    // pairing flow instead. Only raise the guide; it is hosted at the top level,
-                    // because resetting an in-ear model means putting the buds in the case, which
-                    // disconnects them and tears this page down.
-                    if (needsPairing) actions.onLeAudioPairingGuide() else actions.onLeAudioPolicyChange(target)
-                },
-                enabled = !pairing,
-            )
+        if (showLeAudioToggle) {
+            LowPowerAudioToggleRow(uiState = uiState, actions = actions)
         }
     }
+}
+
+/**
+ * The per-device LE Audio permission switch. Lives inside [LeAudioCard] while
+ * card and toggle share a page, and renders as its own card when the user
+ * relocated the toggle away from the card.
+ */
+@Composable
+private fun LowPowerAudioToggleRow(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    val enabled = uiState.leaStatus == "ENABLE"
+    val usingLc3 = uiState.usingLeAudio
+    if (!enabled || uiState.leAudioSwitchPending) return
+    val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
+        uiState.leAudioDevicePairStage == "PAIRING"
+    val policy = uiState.leAudioPolicyAllowed
+    // Nothing bonded for the permission to apply to, so there is nothing to toggle yet.
+    val needsPairing = uiState.leAudioIdentityAddress == null
+    SwitchPreference(
+        title = stringResource(R.string.card_le_audio_toggle_title),
+        summary = when {
+            pairing -> uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pairing) }
+            uiState.leAudioDevicePairStage == "FAILED" ->
+                uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pair_failed_retry) }
+            policy == true && usingLc3 -> stringResource(R.string.lea_on_lc3)
+            policy == true -> stringResource(R.string.lea_on_waiting_lc3)
+            policy == false -> stringResource(R.string.lea_off_fallback)
+            needsPairing -> stringResource(R.string.lea_needs_reset)
+            else -> stringResource(R.string.lea_state_unknown)
+        },
+        checked = policy == true,
+        onCheckedChange = { target ->
+            // Without a bond there is nothing to permit yet, so the row leads into the
+            // pairing flow instead. Only raise the guide; it is hosted at the top level,
+            // because resetting an in-ear model means putting the buds in the case, which
+            // disconnects them and tears this page down.
+            if (needsPairing) actions.onLeAudioPairingGuide() else actions.onLeAudioPolicyChange(target)
+        },
+        enabled = !pairing,
+    )
 }
 
 @Composable

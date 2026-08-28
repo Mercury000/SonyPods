@@ -55,6 +55,7 @@ data class SonyDetailActions(
     val onFixedSourceChange: (String) -> Unit = {},
     val onMusicHandOverChange: (Boolean) -> Unit = {},
     val onOpenGestureOperations: () -> Unit = {},
+    val onOpenMoreSettings: () -> Unit = {},
     val onOpenMultipointSettings: () -> Unit = {},
     val onPlaybackPrevious: () -> Unit = {},
     val onPlaybackPlayPause: () -> Unit = {},

@@ -3,12 +3,55 @@ package dev.sonypods.config
 import android.content.SharedPreferences
 import android.util.Log
 import com.mercury.sonypods.BuildConfig
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 /**
- * Per-surface show/hide switches for the module's cards and badges. Every flag
- * defaults to true (current behaviour); a false value only ever removes a UI
+ * Where a detail-page card renders: on the earphone detail page itself, on the
+ * "更多设置" sub-page behind it, or nowhere. Serialized by name; legacy boolean
+ * values from older configs map true→DETAIL, false→HIDDEN.
+ */
+@Serializable(with = CardLocationSerializer::class)
+enum class CardLocation {
+    DETAIL,
+    MORE,
+    HIDDEN,
+}
+
+/** Reads both the legacy boolean form and the current enum-name form. */
+object CardLocationSerializer : KSerializer<CardLocation> {
+    override val descriptor = PrimitiveSerialDescriptor("CardLocation", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): CardLocation {
+        val input = decoder as? JsonDecoder ?: return CardLocation.DETAIL
+        return when (val element = input.decodeJsonElement()) {
+            is JsonPrimitive -> when {
+                element.booleanOrNull == true || element.content == "DETAIL" -> CardLocation.DETAIL
+                element.booleanOrNull == false || element.content == "HIDDEN" -> CardLocation.HIDDEN
+                element.content == "MORE" -> CardLocation.MORE
+                else -> CardLocation.DETAIL
+            }
+            else -> CardLocation.DETAIL
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: CardLocation) {
+        encoder.encodeString(value.name)
+    }
+}
+
+/**
+ * Per-surface show/hide switches for the module's cards and badges. Card flags
+ * choose among detail page / more-settings page / hidden; badge and per-event
+ * flags remain booleans. A hidden or relocated card can only ever remove a UI
  * element — it can never make one appear when its own support condition fails.
  */
 @Serializable
@@ -17,19 +60,23 @@ data class VisibilityConfig(
     val bluetoothBadge: Boolean = true,
     /** Sound-quality badge row on the module's earphone detail page. */
     val detailBadge: Boolean = true,
-    val speakToChat: Boolean = true,
-    val eq: Boolean = true,
-    val playback: Boolean = true,
-    val connectionQuality: Boolean = true,
-    val dsee: Boolean = true,
-    val ldac: Boolean = true,
+    val speakToChat: CardLocation = CardLocation.DETAIL,
+    val eq: CardLocation = CardLocation.DETAIL,
+    val playback: CardLocation = CardLocation.DETAIL,
+    val connectionQuality: CardLocation = CardLocation.DETAIL,
+    val dsee: CardLocation = CardLocation.DETAIL,
+    val ldac: CardLocation = CardLocation.DETAIL,
     /** LE Audio card as a whole. */
-    val leAudioCard: Boolean = true,
-    /** The low-power-audio switch inside the LE Audio card. */
-    val leAudioToggle: Boolean = true,
-    val gestures: Boolean = true,
-    val multipoint: Boolean = true,
-    val firmware: Boolean = true,
+    val leAudioCard: CardLocation = CardLocation.DETAIL,
+    /**
+     * The low-power-audio switch row. Independently relocatable: it renders
+     * inside the LE Audio card while both sit on the same page, and as its own
+     * row on the page it was moved to when the card is elsewhere or hidden.
+     */
+    val leAudioToggle: CardLocation = CardLocation.DETAIL,
+    val gestures: CardLocation = CardLocation.DETAIL,
+    val multipoint: CardLocation = CardLocation.DETAIL,
+    val firmware: CardLocation = CardLocation.DETAIL,
     /**
      * While LE Audio carries the audio these three cards degrade to a greyed-out
      * note; a false value hides them outright for the duration instead.
@@ -40,7 +87,14 @@ data class VisibilityConfig(
     /** Quick Access lives inside the gesture page: LE Audio (LC3) makes it
      * unusable, so grey it out — or hide it when false. */
     val leaRestrictedQuickAccess: Boolean = true,
-)
+) {
+    /** Whether any card is parked on the more-settings sub-page. */
+    val hasMorePageContent: Boolean
+        get() = CardLocation.MORE in listOf(
+            speakToChat, eq, playback, connectionQuality, dsee, ldac,
+            leAudioCard, leAudioToggle, gestures, multipoint, firmware,
+        )
+}
 
 @Serializable
 data class AppConfig(
