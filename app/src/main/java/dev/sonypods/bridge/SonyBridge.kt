@@ -56,6 +56,9 @@ object SonyBridge {
     const val CMD_SET_AMBIENT_LEVEL = "set_ambient_level"
     const val CMD_SET_AMBIENT_VOICE = "set_ambient_voice"
     const val CMD_SET_WIND_NOISE_REDUCTION = "set_wind_noise_reduction"
+    const val CMD_SET_SPEAK_TO_CHAT_ENABLED = "set_speak_to_chat_enabled"
+    const val CMD_SET_SPEAK_TO_CHAT_SENSITIVITY = "set_speak_to_chat_sensitivity"
+    const val CMD_SET_SPEAK_TO_CHAT_MODE_OUT_TIME = "set_speak_to_chat_mode_out_time"
     const val CMD_SET_NOISE_ADAPTIVE = "set_noise_adaptive"
     const val CMD_SET_NOISE_ADAPTIVE_SENSITIVITY = "set_noise_adaptive_sensitivity"
     const val CMD_SET_EQ_PRESET = "set_eq_preset"
@@ -151,6 +154,15 @@ object SonyBridge {
 
     fun setWindNoiseReduction(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_WIND_NOISE_REDUCTION) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setSpeakToChatEnabled(context: Context, enabled: Boolean) =
+        sendCommand(context, CMD_SET_SPEAK_TO_CHAT_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setSpeakToChatSensitivity(context: Context, sensitivityName: String) =
+        sendCommand(context, CMD_SET_SPEAK_TO_CHAT_SENSITIVITY) { putExtra(EXTRA_STRING, sensitivityName) }
+
+    fun setSpeakToChatModeOutTime(context: Context, modeOutTimeName: String) =
+        sendCommand(context, CMD_SET_SPEAK_TO_CHAT_MODE_OUT_TIME) { putExtra(EXTRA_STRING, modeOutTimeName) }
 
     fun setNoiseAdaptive(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_NOISE_ADAPTIVE) { putExtra(EXTRA_BOOL, enabled) }

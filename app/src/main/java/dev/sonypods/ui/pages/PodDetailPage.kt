@@ -2,6 +2,11 @@ package dev.sonypods.ui.pages
 
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -51,6 +56,8 @@ import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.EqPresetId
+import dev.sonypods.protocol.SmartTalkingDetectionSensitivity
+import dev.sonypods.protocol.SmartTalkingModeOutTime
 import dev.sonypods.protocol.SoundQualityCodec
 import dev.sonypods.protocol.PlaybackStatus
 import com.mercury.sonypods.R
@@ -69,6 +76,7 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Slider
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
@@ -238,6 +246,12 @@ private fun LazyListScope.podControlItems(
     if (includeAnc && uiState.supportsNoiseControl) {
         item {
             AncControlCard(uiState = uiState, actions = actions)
+        }
+    }
+
+    if (visibility.speakToChat && uiState.supportsSpeakToChat) {
+        item {
+            SpeakToChatCard(uiState = uiState, actions = actions)
         }
     }
 
@@ -1124,5 +1138,79 @@ private fun DeviceStatusCard(uiState: SonyStateSnapshot) {
                 )
             },
         )
+    }
+}
+
+@Composable
+private fun SpeakToChatCard(
+    uiState: SonyStateSnapshot,
+    actions: SonyDetailActions,
+) {
+    val enabled = uiState.speakToChatEnabled
+    val sensitivityList = listOf(
+        SmartTalkingDetectionSensitivity.AUTO,
+        SmartTalkingDetectionSensitivity.HIGH,
+        SmartTalkingDetectionSensitivity.LOW,
+    )
+    val sensitivityNames = listOf(
+        stringResource(R.string.speak_to_chat_sensitivity_auto),
+        stringResource(R.string.speak_to_chat_sensitivity_high),
+        stringResource(R.string.speak_to_chat_sensitivity_low),
+    )
+    val currentSensitivity = SmartTalkingDetectionSensitivity.entries.firstOrNull {
+        it.name == uiState.speakToChatSensitivity
+    } ?: SmartTalkingDetectionSensitivity.AUTO
+    val sensitivityIndex = sensitivityList.indexOf(currentSensitivity).coerceAtLeast(0)
+
+    val modeOutTimeList = listOf(
+        SmartTalkingModeOutTime.FAST,
+        SmartTalkingModeOutTime.MID,
+        SmartTalkingModeOutTime.SLOW,
+        SmartTalkingModeOutTime.NONE,
+    )
+    val modeOutTimeNames = listOf(
+        stringResource(R.string.speak_to_chat_mode_out_time_fast),
+        stringResource(R.string.speak_to_chat_mode_out_time_mid),
+        stringResource(R.string.speak_to_chat_mode_out_time_slow),
+        stringResource(R.string.speak_to_chat_mode_out_time_none),
+    )
+    val currentModeOutTime = SmartTalkingModeOutTime.entries.firstOrNull {
+        it.name == uiState.speakToChatModeOutTime
+    } ?: SmartTalkingModeOutTime.MID
+    val modeOutTimeIndex = modeOutTimeList.indexOf(currentModeOutTime).coerceAtLeast(0)
+
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        SwitchPreference(
+            title = stringResource(R.string.speak_to_chat_title),
+            summary = stringResource(R.string.speak_to_chat_description),
+            checked = enabled,
+            onCheckedChange = actions.onSpeakToChatEnabledChange,
+        )
+
+        AnimatedVisibility(
+            visible = enabled,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.speak_to_chat_sensitivity_title),
+                    items = sensitivityNames,
+                    selectedIndex = sensitivityIndex,
+                    onSelectedIndexChange = { index ->
+                        sensitivityList.getOrNull(index)?.let { actions.onSpeakToChatSensitivityChange(it) }
+                    },
+                )
+
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.speak_to_chat_mode_out_time_title),
+                    items = modeOutTimeNames,
+                    selectedIndex = modeOutTimeIndex,
+                    onSelectedIndexChange = { index ->
+                        modeOutTimeList.getOrNull(index)?.let { actions.onSpeakToChatModeOutTimeChange(it) }
+                    },
+                )
+            }
+        }
     }
 }

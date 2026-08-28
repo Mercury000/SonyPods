@@ -46,6 +46,7 @@ enum class HeadphoneFeature {
     QUICK_ACCESS,
     WEARING_STATUS,
     GESTURE_OPERATIONS,
+    SPEAK_TO_CHAT,
     MULTIPOINT,
 }
 
@@ -180,6 +181,8 @@ data class HeadphoneCapabilities(
     val alertSupported: Boolean = false,
     val supportsAutoWindNoiseReduction: Boolean = false,
     val supportsWindNoiseReduction: Boolean = false,
+    val supportsSpeakToChat: Boolean = false,
+    val speakToChatType: dev.sonypods.protocol.SystemInquiredType? = null,
 )
 
 data class ConnectedHeadphoneProfile(
@@ -221,6 +224,9 @@ data class ConnectedHeadphoneProfile(
     val capabilitiesKnown: Boolean = false,
 ) {
     fun supports(feature: HeadphoneFeature): Boolean = feature in capabilities.features
+    val isV1: Boolean
+        get() = featureBindings.values.any { it.variant == HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1 || it.variant == HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE2 } ||
+            featureProtocolMap.values.any { it == HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1 || it == HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE2 }
     fun protocolFor(feature: HeadphoneFeature): HeadphoneProtocolVariant =
         featureBindings[feature]?.variant ?: featureProtocolMap[feature] ?: HeadphoneProtocolVariant.UNKNOWN
     fun bindingFor(feature: HeadphoneFeature): FeatureProtocolBinding? = featureBindings[feature]
@@ -487,6 +493,18 @@ interface HeadphoneAdapter {
         mappings: List<AssignableSettingsMapping>,
     ): List<HeadphoneCommand> = emptyList()
 
+    fun buildSetSpeakToChatEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = emptyList()
+
+    fun buildSetSpeakToChatParamsCommands(
+        profile: ConnectedHeadphoneProfile,
+        sensitivity: dev.sonypods.protocol.SmartTalkingDetectionSensitivity,
+        modeOutTime: dev.sonypods.protocol.SmartTalkingModeOutTime,
+        voiceFocus: Boolean = false,
+    ): List<HeadphoneCommand> = emptyList()
+
     fun buildSetMultipointPairingModeCommands(
         profile: ConnectedHeadphoneProfile,
         inquiry: Boolean,
@@ -664,6 +682,18 @@ object HeadphoneAdapterRegistry {
         profile: ConnectedHeadphoneProfile,
         mappings: List<AssignableSettingsMapping>,
     ): List<HeadphoneCommand> = adapterFor(profile).buildSetGestureMappingsCommands(profile, mappings)
+
+    fun buildSetSpeakToChatEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetSpeakToChatEnabledCommands(profile, enabled)
+
+    fun buildSetSpeakToChatParamsCommands(
+        profile: ConnectedHeadphoneProfile,
+        sensitivity: dev.sonypods.protocol.SmartTalkingDetectionSensitivity,
+        modeOutTime: dev.sonypods.protocol.SmartTalkingModeOutTime,
+        voiceFocus: Boolean = false,
+    ): List<HeadphoneCommand> = adapterFor(profile).buildSetSpeakToChatParamsCommands(profile, sensitivity, modeOutTime, voiceFocus)
 
     fun buildSetMultipointPairingModeCommands(
         profile: ConnectedHeadphoneProfile,

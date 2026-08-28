@@ -66,6 +66,11 @@ fun VisibilitySettingsPage(
                     onCheckedChange = { onVisibilityChange(visibility.copy(detailBadge = it)) },
                 )
                 SwitchPreference(
+                    title = stringResource(R.string.speak_to_chat_title),
+                    checked = visibility.speakToChat,
+                    onCheckedChange = { onVisibilityChange(visibility.copy(speakToChat = it)) },
+                )
+                SwitchPreference(
                     title = stringResource(R.string.sony_eq_title),
                     checked = visibility.eq,
                     onCheckedChange = { onVisibilityChange(visibility.copy(eq = it)) },

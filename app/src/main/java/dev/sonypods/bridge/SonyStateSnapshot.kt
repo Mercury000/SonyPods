@@ -88,6 +88,10 @@ data class SonyStateSnapshot(
     val supportsAutoWindNoiseReduction: Boolean = false,
     val supportsWindNoiseReduction: Boolean = false,
     val windNoiseReduction: Boolean = false,
+    val supportsSpeakToChat: Boolean = false,
+    val speakToChatEnabled: Boolean = false,
+    val speakToChatSensitivity: String? = null,
+    val speakToChatModeOutTime: String? = null,
     val supportsNoiseAdaptive: Boolean = false,
     val noiseAdaptiveEnabled: Boolean = false,
     /** [dev.sonypods.protocol.NoiseAdaptiveSensitivity] name, null when unknown. */
@@ -263,6 +267,10 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_AUTO_WIND_NOISE, supportsAutoWindNoiseReduction)
         putBoolean(KEY_SUPPORTS_WIND_NOISE, supportsWindNoiseReduction)
         putBoolean(KEY_WIND_NOISE, windNoiseReduction)
+        putBoolean(KEY_SUPPORTS_SPEAK_TO_CHAT, supportsSpeakToChat)
+        putBoolean(KEY_SPEAK_TO_CHAT_ENABLED, speakToChatEnabled)
+        speakToChatSensitivity?.let { putString(KEY_SPEAK_TO_CHAT_SENSITIVITY, it) }
+        speakToChatModeOutTime?.let { putString(KEY_SPEAK_TO_CHAT_MODE_OUT_TIME, it) }
         putBoolean(KEY_SUPPORTS_NOISE_ADAPTIVE, supportsNoiseAdaptive)
         putBoolean(KEY_NOISE_ADAPTIVE, noiseAdaptiveEnabled)
         noiseAdaptiveSensitivity?.let { putString(KEY_NOISE_ADAPTIVE_SENSITIVITY, it) }
@@ -383,6 +391,10 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_AUTO_WIND_NOISE = "supports_auto_wind_noise"
         private const val KEY_SUPPORTS_WIND_NOISE = "supports_wind_noise"
         private const val KEY_WIND_NOISE = "wind_noise"
+        private const val KEY_SUPPORTS_SPEAK_TO_CHAT = "supports_speak_to_chat"
+        private const val KEY_SPEAK_TO_CHAT_ENABLED = "speak_to_chat_enabled"
+        private const val KEY_SPEAK_TO_CHAT_SENSITIVITY = "speak_to_chat_sensitivity"
+        private const val KEY_SPEAK_TO_CHAT_MODE_OUT_TIME = "speak_to_chat_mode_out_time"
         private const val KEY_SUPPORTS_NOISE_ADAPTIVE = "supports_noise_adaptive"
         private const val KEY_NOISE_ADAPTIVE = "noise_adaptive"
         private const val KEY_NOISE_ADAPTIVE_SENSITIVITY = "noise_adaptive_sensitivity"
@@ -486,6 +498,10 @@ data class SonyStateSnapshot(
             supportsAutoWindNoiseReduction = bundle.getBoolean(KEY_SUPPORTS_AUTO_WIND_NOISE, false),
             supportsWindNoiseReduction = bundle.getBoolean(KEY_SUPPORTS_WIND_NOISE, false),
             windNoiseReduction = bundle.getBoolean(KEY_WIND_NOISE, false),
+            supportsSpeakToChat = bundle.getBoolean(KEY_SUPPORTS_SPEAK_TO_CHAT, false),
+            speakToChatEnabled = bundle.getBoolean(KEY_SPEAK_TO_CHAT_ENABLED, false),
+            speakToChatSensitivity = bundle.getString(KEY_SPEAK_TO_CHAT_SENSITIVITY),
+            speakToChatModeOutTime = bundle.getString(KEY_SPEAK_TO_CHAT_MODE_OUT_TIME),
             supportsNoiseAdaptive = bundle.getBoolean(KEY_SUPPORTS_NOISE_ADAPTIVE, false),
             noiseAdaptiveEnabled = bundle.getBoolean(KEY_NOISE_ADAPTIVE, false),
             noiseAdaptiveSensitivity = bundle.getString(KEY_NOISE_ADAPTIVE_SENSITIVITY),
@@ -613,6 +629,11 @@ data class SonyStateSnapshot(
                 supportsWindNoiseReduction = state.connectedProfile
                     ?.capabilities?.supportsWindNoiseReduction == true,
                 windNoiseReduction = state.noiseControlState.windNoiseReduction,
+                supportsSpeakToChat = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.SPEAK_TO_CHAT) == true ||
+                    state.connectedProfile?.capabilities?.supportsSpeakToChat == true,
+                speakToChatEnabled = state.speakToChatState.enabled,
+                speakToChatSensitivity = state.speakToChatState.sensitivity.name,
+                speakToChatModeOutTime = state.speakToChatState.modeOutTime.name,
                 supportsNoiseAdaptive = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.NOISE_ADAPTIVE) == true,
                 noiseAdaptiveEnabled = state.noiseControlState.noiseAdaptiveEnabled,
                 noiseAdaptiveSensitivity = state.noiseControlState.noiseAdaptiveSensitivity.name,

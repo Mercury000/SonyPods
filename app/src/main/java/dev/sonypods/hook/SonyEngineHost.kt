@@ -1755,6 +1755,23 @@ object SonyEngineHost {
             SonyBridge.CMD_SET_WIND_NOISE_REDUCTION ->
                 repo.setWindNoiseReduction(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
 
+            SonyBridge.CMD_SET_SPEAK_TO_CHAT_ENABLED ->
+                repo.setSpeakToChatEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
+            SonyBridge.CMD_SET_SPEAK_TO_CHAT_SENSITIVITY -> {
+                val sensitivity = intent.getStringExtra(SonyBridge.EXTRA_STRING)
+                    ?.let { name -> dev.sonypods.protocol.SmartTalkingDetectionSensitivity.entries.firstOrNull { it.name == name } }
+                    ?: return
+                repo.setSpeakToChatSensitivity(sensitivity)
+            }
+
+            SonyBridge.CMD_SET_SPEAK_TO_CHAT_MODE_OUT_TIME -> {
+                val modeOutTime = intent.getStringExtra(SonyBridge.EXTRA_STRING)
+                    ?.let { name -> dev.sonypods.protocol.SmartTalkingModeOutTime.entries.firstOrNull { it.name == name } }
+                    ?: return
+                repo.setSpeakToChatModeOutTime(modeOutTime)
+            }
+
             SonyBridge.CMD_SET_NOISE_ADAPTIVE ->
                 repo.setNoiseAdaptive(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
 

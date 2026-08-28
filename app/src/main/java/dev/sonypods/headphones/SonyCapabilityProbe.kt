@@ -476,6 +476,24 @@ object SonyCapabilityProbe {
                 it == NcAsmInquiredType.V1_TABLE_SET1_NC_ASM
         }
 
+        val speakToChatType = functions.firstNotNullOfOrNull { function ->
+            if (function.isV1(profile)) {
+                if (function.v1Type() == SonyV1FunctionType.SMART_TALKING_MODE) {
+                    SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                } else null
+            } else {
+                when (function.v2Type()) {
+                    SonyV2FunctionType.SMART_TALKING_MODE_TYPE1 -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                    SonyV2FunctionType.SMART_TALKING_MODE_TYPE2 -> SystemInquiredType.SMART_TALKING_MODE_TYPE2
+                    else -> null
+                }
+            }
+        }
+        val supportsSpeakToChat = speakToChatType != null
+        if (supportsSpeakToChat) {
+            features.add(HeadphoneFeature.SPEAK_TO_CHAT)
+        }
+
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
             formFactor = formFactorFromBattery(batteryQueries),
@@ -485,6 +503,8 @@ object SonyCapabilityProbe {
                 .ifEmpty { fallback.writableNoiseControlTypes },
             supportsAutoWindNoiseReduction = supportsAutoWindNoiseReduction || fallback.supportsAutoWindNoiseReduction,
             supportsWindNoiseReduction = supportsWindNoiseReduction || fallback.supportsWindNoiseReduction,
+            supportsSpeakToChat = supportsSpeakToChat || fallback.supportsSpeakToChat,
+            speakToChatType = speakToChatType ?: fallback.speakToChatType,
             upscalingInquiredTypeCode = upscalingInquiredTypeCode
                 ?: fallback.upscalingInquiredTypeCode,
             // The DSEE generation byte only arrives via the AUDIO_RET_CAPABILITY
@@ -759,6 +779,8 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.LR_BATTERY_LEVEL_WITH_THRESHOLD,
         SonyV2FunctionType.CRADLE_BATTERY_LEVEL_WITH_THRESHOLD -> ProbeDomain.BATTERY
 
+        SonyV2FunctionType.SMART_TALKING_MODE_TYPE1,
+        SonyV2FunctionType.SMART_TALKING_MODE_TYPE2,
         SonyV2FunctionType.WEARING_STATUS_DETECTOR,
         SonyV2FunctionType.QUICK_ACCESS,
         SonyV2FunctionType.ASSIGNABLE_SETTING,
@@ -787,6 +809,7 @@ object SonyCapabilityProbe {
         SonyV1FunctionType.LEFT_RIGHT_BATTERY_LEVEL,
         SonyV1FunctionType.CRADLE_BATTERY_LEVEL -> ProbeDomain.BATTERY
 
+        SonyV1FunctionType.SMART_TALKING_MODE,
         SonyV1FunctionType.CONTROL_BY_WEARING -> ProbeDomain.SYSTEM
         else -> ProbeDomain.NONE
     }
@@ -909,22 +932,24 @@ object SonyCapabilityProbe {
 
     private fun SonySupportedFunction.systemInquired(profile: ConnectedHeadphoneProfile?): SystemInquiredType? {
         if (isV1(profile)) {
-            return if (v1Type() == SonyV1FunctionType.CONTROL_BY_WEARING) {
-                SystemInquiredType.WEARING_STATUS_DETECTOR
-            } else {
-                null
+            return when (v1Type()) {
+                SonyV1FunctionType.CONTROL_BY_WEARING -> SystemInquiredType.WEARING_STATUS_DETECTOR
+                SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                else -> null
             }
         }
         return when (v2Type()) {
+            SonyV2FunctionType.SMART_TALKING_MODE_TYPE1 -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+            SonyV2FunctionType.SMART_TALKING_MODE_TYPE2 -> SystemInquiredType.SMART_TALKING_MODE_TYPE2
             SonyV2FunctionType.ASSIGNABLE_SETTING -> SystemInquiredType.ASSIGNABLE_SETTINGS
             SonyV2FunctionType.ASSIGNABLE_SETTING_WITH_LIMITATION ->
                 SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
             SonyV2FunctionType.WEARING_STATUS_DETECTOR -> SystemInquiredType.WEARING_STATUS_DETECTOR
             SonyV2FunctionType.QUICK_ACCESS -> SystemInquiredType.QUICK_ACCESS
-            null -> if (v1Type() == SonyV1FunctionType.CONTROL_BY_WEARING) {
-                SystemInquiredType.WEARING_STATUS_DETECTOR
-            } else {
-                null
+            null -> when (v1Type()) {
+                SonyV1FunctionType.CONTROL_BY_WEARING -> SystemInquiredType.WEARING_STATUS_DETECTOR
+                SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                else -> null
             }
             else -> null
         }

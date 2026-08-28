@@ -429,6 +429,14 @@ data class WearingState(
     val raw: List<Int> = emptyList(),
 )
 
+data class SpeakToChatState(
+    val enabled: Boolean = false,
+    val effectStatus: dev.sonypods.protocol.SmartTalkingEffectStatus = dev.sonypods.protocol.SmartTalkingEffectStatus.IDLE,
+    val sensitivity: dev.sonypods.protocol.SmartTalkingDetectionSensitivity = dev.sonypods.protocol.SmartTalkingDetectionSensitivity.AUTO,
+    val modeOutTime: dev.sonypods.protocol.SmartTalkingModeOutTime = dev.sonypods.protocol.SmartTalkingModeOutTime.MID,
+    val voiceFocus: Boolean = false,
+)
+
 data class EndpointDiagnosticState(
     val reason: String,
     val serviceLabels: List<String> = emptyList(),
@@ -505,6 +513,7 @@ data class SonyHeadphoneUiState(
     val gestureOperationsState: GestureOperationsState = GestureOperationsState(),
     val multipointState: MultipointState = MultipointState(),
     val wearingState: WearingState = WearingState(),
+    val speakToChatState: SpeakToChatState = SpeakToChatState(),
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val playbackState: PlaybackState = PlaybackState(),
     val soundQualityState: SoundQualityState = SoundQualityState(),
@@ -1071,6 +1080,8 @@ class SonyHeadphoneRepository private constructor(
         is ParsedTandemResponse.AssignableSettingsStatus,
         is ParsedTandemResponse.AssignableSettingsExtendedParam -> HeadphoneFeature.GESTURE_OPERATIONS
         is ParsedTandemResponse.WearingStatus -> HeadphoneFeature.WEARING_STATUS
+        is ParsedTandemResponse.SpeakToChatStatus,
+        is ParsedTandemResponse.SpeakToChatParam -> HeadphoneFeature.SPEAK_TO_CHAT
         is ParsedTandemResponse.MultipointStatus,
         is ParsedTandemResponse.MultipointDevices,
         is ParsedTandemResponse.SourceSwitchStatus,
@@ -1831,6 +1842,45 @@ class SonyHeadphoneRepository private constructor(
         }
         appendLog("Sending Sony USER_POWER_OFF; headset is expected to disconnect")
         commands.forEach(::sendCommand)
+    }
+
+    fun setSpeakToChatEnabled(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change Speak-to-Chat.")
+            return
+        }
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetSpeakToChatEnabledCommands(profile, enabled).forEach(::sendCommand)
+    }
+
+    fun setSpeakToChatSensitivity(sensitivity: dev.sonypods.protocol.SmartTalkingDetectionSensitivity) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change Speak-to-Chat sensitivity.")
+            return
+        }
+        val profile = ensureConnectedProfile()
+        val current = _state.value.speakToChatState
+        HeadphoneAdapterRegistry.buildSetSpeakToChatParamsCommands(
+            profile = profile,
+            sensitivity = sensitivity,
+            modeOutTime = current.modeOutTime,
+            voiceFocus = current.voiceFocus,
+        ).forEach(::sendCommand)
+    }
+
+    fun setSpeakToChatModeOutTime(modeOutTime: dev.sonypods.protocol.SmartTalkingModeOutTime) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change Speak-to-Chat mode out time.")
+            return
+        }
+        val profile = ensureConnectedProfile()
+        val current = _state.value.speakToChatState
+        HeadphoneAdapterRegistry.buildSetSpeakToChatParamsCommands(
+            profile = profile,
+            sensitivity = current.sensitivity,
+            modeOutTime = modeOutTime,
+            voiceFocus = current.voiceFocus,
+        ).forEach(::sendCommand)
     }
 
     /** Run Sony's complete phone/headset hand-over instead of only toggling the
@@ -2743,6 +2793,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.AssignableSettingsStatus -> applyAssignableSettingsStatus(parsed)
             is ParsedTandemResponse.AssignableSettingsExtendedParam -> applyAssignableSettingsExtendedParam(parsed)
             is ParsedTandemResponse.WearingStatus -> applyWearingStatus(parsed)
+            is ParsedTandemResponse.SpeakToChatStatus -> applySpeakToChatStatus(parsed)
+            is ParsedTandemResponse.SpeakToChatParam -> applySpeakToChatParam(parsed)
             is ParsedTandemResponse.AudioCodecStatus -> applySoundCodec(parsed)
             is ParsedTandemResponse.UpscalingEffect -> applyUpscalingEffectState(parsed)
             is ParsedTandemResponse.MultipointCapability -> applyMultipointCapability(parsed)
@@ -3600,6 +3652,31 @@ class SonyHeadphoneRepository private constructor(
                 result = response.result?.name ?: current.wearingState.result,
                 raw = response.values,
             ))
+        }
+    }
+
+    private fun applySpeakToChatStatus(response: ParsedTandemResponse.SpeakToChatStatus) {
+        appendLog("Speak-to-Chat status effect=${response.effectStatus}")
+        _state.update { current ->
+            current.copy(
+                speakToChatState = current.speakToChatState.copy(
+                    effectStatus = response.effectStatus ?: current.speakToChatState.effectStatus,
+                )
+            )
+        }
+    }
+
+    private fun applySpeakToChatParam(response: ParsedTandemResponse.SpeakToChatParam) {
+        appendLog("Speak-to-Chat param enabled=${response.enabled} sensitivity=${response.sensitivity} modeOutTime=${response.modeOutTime} voiceFocus=${response.voiceFocus}")
+        _state.update { current ->
+            current.copy(
+                speakToChatState = current.speakToChatState.copy(
+                    enabled = response.enabled ?: current.speakToChatState.enabled,
+                    sensitivity = response.sensitivity ?: current.speakToChatState.sensitivity,
+                    modeOutTime = response.modeOutTime ?: current.speakToChatState.modeOutTime,
+                    voiceFocus = response.voiceFocus ?: current.speakToChatState.voiceFocus,
+                )
+            )
         }
     }
 

@@ -17,6 +17,7 @@ data class VisibilityConfig(
     val bluetoothBadge: Boolean = true,
     /** Sound-quality badge row on the module's earphone detail page. */
     val detailBadge: Boolean = true,
+    val speakToChat: Boolean = true,
     val eq: Boolean = true,
     val playback: Boolean = true,
     val connectionQuality: Boolean = true,

@@ -1823,4 +1823,69 @@ class SonyTandemV2Table1ProtocolTest {
         assertEquals(NoiseControlMode.NOISE_CANCELLING, ntfySingle.controlMode)
         assertTrue(ntfySingle.windNoiseReduction == true)
     }
+
+    @Test
+    fun speakToChat_buildCommands_matchReverseEngineeredSpec() {
+        val enableCmd = SonyTandemV2Table1Protocol.buildSetSpeakToChatEnabled(true, SystemInquiredType.SMART_TALKING_MODE_TYPE1)
+        assertArrayEquals(byteArrayOf(0x0E, 0xF8.toByte(), 0x02, 0x00, 0x01), enableCmd)
+
+        val disableCmd = SonyTandemV2Table1Protocol.buildSetSpeakToChatEnabled(false, SystemInquiredType.SMART_TALKING_MODE_TYPE1)
+        assertArrayEquals(byteArrayOf(0x0E, 0xF8.toByte(), 0x02, 0x01, 0x01), disableCmd)
+
+        val extType1Cmd = SonyTandemV2Table1Protocol.buildSetSpeakToChatExtParam(
+            sensitivity = SmartTalkingDetectionSensitivity.HIGH,
+            modeOutTime = SmartTalkingModeOutTime.SLOW,
+            voiceFocus = true,
+            type = SystemInquiredType.SMART_TALKING_MODE_TYPE1,
+        )
+        assertArrayEquals(byteArrayOf(0x0E, 0xFC.toByte(), 0x02, 0x01, 0x00, 0x02), extType1Cmd)
+
+        val extType2Cmd = SonyTandemV2Table1Protocol.buildSetSpeakToChatExtParam(
+            sensitivity = SmartTalkingDetectionSensitivity.LOW,
+            modeOutTime = SmartTalkingModeOutTime.FAST,
+            type = SystemInquiredType.SMART_TALKING_MODE_TYPE2,
+        )
+        assertArrayEquals(byteArrayOf(0x0E, 0xFC.toByte(), 0x0C, 0x02, 0x00), extType2Cmd)
+    }
+
+    @Test
+    fun speakToChat_parseStatus_reportsEffectOnlyNotTheToggle() {
+        // RET_STATUS = [type][EnableDisable][effectStatus]. EnableDisable is the
+        // control's availability (official app grays the switch with it), so the
+        // toggle must not be derived here — only the effect status is, with
+        // official codes NOT_ACTIVE=0x00 / ACTIVE=0x01.
+        val activeFrame = byteArrayOf(0x0E, 0xF3.toByte(), 0x02, 0x00, 0x01)
+        val parsedActive = SonyTandemV2Table1Protocol.parse(activeFrame) as ParsedTandemResponse.SpeakToChatStatus
+        assertEquals(SmartTalkingEffectStatus.ACTIVE, parsedActive.effectStatus)
+
+        val idleFrame = byteArrayOf(0x0E, 0xF3.toByte(), 0x02, 0x00, 0x00)
+        val parsedIdle = SonyTandemV2Table1Protocol.parse(idleFrame) as ParsedTandemResponse.SpeakToChatStatus
+        assertEquals(SmartTalkingEffectStatus.IDLE, parsedIdle.effectStatus)
+    }
+
+    @Test
+    fun speakToChat_parseParam_carriesTheToggleForBothTypes() {
+        // RET_PARAM = [type][OnOffSettingValue value][preview]; V2 polarity ON=0x00.
+        val onFrame = byteArrayOf(0x0E, 0xF7.toByte(), 0x02, 0x00, 0x01)
+        val parsedOn = SonyTandemV2Table1Protocol.parse(onFrame) as ParsedTandemResponse.SpeakToChatParam
+        assertEquals(true, parsedOn.enabled)
+
+        val offFrame = byteArrayOf(0x0E, 0xF7.toByte(), 0x0C, 0x01, 0x01)
+        val parsedOff = SonyTandemV2Table1Protocol.parse(offFrame) as ParsedTandemResponse.SpeakToChatParam
+        assertEquals(false, parsedOff.enabled)
+    }
+
+    @Test
+    fun speakToChat_parseExtendedParam_type1AndType2_parsesCorrectly() {
+        val extType1Frame = byteArrayOf(0x0E, 0xFB.toByte(), 0x02, 0x01, 0x00, 0x01) // Type1, High, VoiceFocus ON, Mid
+        val parsedType1 = SonyTandemV2Table1Protocol.parse(extType1Frame) as ParsedTandemResponse.SpeakToChatParam
+        assertEquals(SmartTalkingDetectionSensitivity.HIGH, parsedType1.sensitivity)
+        assertEquals(true, parsedType1.voiceFocus)
+        assertEquals(SmartTalkingModeOutTime.MID, parsedType1.modeOutTime)
+
+        val extType2Frame = byteArrayOf(0x0E, 0xFB.toByte(), 0x0C, 0x02, 0x03) // Type2, Low, None
+        val parsedType2 = SonyTandemV2Table1Protocol.parse(extType2Frame) as ParsedTandemResponse.SpeakToChatParam
+        assertEquals(SmartTalkingDetectionSensitivity.LOW, parsedType2.sensitivity)
+        assertEquals(SmartTalkingModeOutTime.NONE, parsedType2.modeOutTime)
+    }
 }

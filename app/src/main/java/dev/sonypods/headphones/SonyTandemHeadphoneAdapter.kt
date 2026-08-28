@@ -233,6 +233,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             if (profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
                 addAll(buildRefreshGestureOperationsCommands(profile))
             }
+            if (profile.supports(HeadphoneFeature.SPEAK_TO_CHAT) || profile.capabilities.supportsSpeakToChat) {
+                addAll(buildRefreshSpeakToChatCommands(profile))
+            }
             // Query PERIPHERAL when MULTIPOINT is supported. V2 Table2 exposes it on the MC endpoint.
             if (profile.supports(HeadphoneFeature.MULTIPOINT) &&
                 profile.protocolFor(HeadphoneFeature.MULTIPOINT) in setOf(
@@ -634,6 +637,43 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 listOf(command(profile, HeadphoneFeature.GESTURE_OPERATIONS, "SET gesture mappings", it))
             }
             .orEmpty()
+    }
+
+    override fun buildSetSpeakToChatEnabledCommands(
+        profile: ConnectedHeadphoneProfile,
+        enabled: Boolean,
+    ): List<HeadphoneCommand> {
+        val type = profile.capabilities.speakToChatType ?: dev.sonypods.protocol.SystemInquiredType.SMART_TALKING_MODE_TYPE1
+        val codec = codecFor(profile, HeadphoneFeature.SPEAK_TO_CHAT)
+        val bytes = codec.buildSetSpeakToChatEnabled(enabled, type) ?: return emptyList()
+        return listOf(command(profile, HeadphoneFeature.SPEAK_TO_CHAT, if (enabled) "ENABLE speak-to-chat" else "DISABLE speak-to-chat", bytes))
+    }
+
+    override fun buildSetSpeakToChatParamsCommands(
+        profile: ConnectedHeadphoneProfile,
+        sensitivity: dev.sonypods.protocol.SmartTalkingDetectionSensitivity,
+        modeOutTime: dev.sonypods.protocol.SmartTalkingModeOutTime,
+        voiceFocus: Boolean,
+    ): List<HeadphoneCommand> {
+        val type = profile.capabilities.speakToChatType ?: dev.sonypods.protocol.SystemInquiredType.SMART_TALKING_MODE_TYPE1
+        val codec = codecFor(profile, HeadphoneFeature.SPEAK_TO_CHAT)
+        val bytes = codec.buildSetSpeakToChatExtParam(sensitivity, modeOutTime, voiceFocus, type) ?: return emptyList()
+        return listOf(command(profile, HeadphoneFeature.SPEAK_TO_CHAT, "SET speak-to-chat params", bytes))
+    }
+
+    private fun buildRefreshSpeakToChatCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
+        val type = profile.capabilities.speakToChatType ?: dev.sonypods.protocol.SystemInquiredType.SMART_TALKING_MODE_TYPE1
+        val codec = codecFor(profile, HeadphoneFeature.SPEAK_TO_CHAT)
+        val getStatus = codec.buildGetSpeakToChatStatus(type) ?: return emptyList()
+        // GET_PARAM carries the on/off toggle; GET_STATUS only reports whether the
+        // control is available plus the live effect status.
+        val getParam = codec.buildGetSpeakToChatParam(type) ?: return emptyList()
+        val getExtParam = codec.buildGetSpeakToChatExtParam(type) ?: return emptyList()
+        return listOf(
+            command(profile, HeadphoneFeature.SPEAK_TO_CHAT, "GET speak-to-chat status", getStatus),
+            command(profile, HeadphoneFeature.SPEAK_TO_CHAT, "GET speak-to-chat param", getParam),
+            command(profile, HeadphoneFeature.SPEAK_TO_CHAT, "GET speak-to-chat ext params", getExtParam),
+        )
     }
 
     override fun buildSetMultipointPairingModeCommands(

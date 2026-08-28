@@ -507,4 +507,15 @@
     <string name="pairer_success_all">LE Audio 身份已配对（%1$d 只）</string>
     <string name="pairer_success_partial">仅配对了 %1$d 只，另一只未响应，可能只有一侧处于配对模式</string>
     <string name="lea_pair_collecting">已发现一只耳机，继续扫描另一只（剩余 %1$d 秒）…</string>
+    <string name="speak_to_chat_title">智能免摘</string>
+    <string name="speak_to_chat_description">当您说话时，智能免摘将自动暂停音乐并捕捉环境声音。</string>
+    <string name="speak_to_chat_sensitivity_title">语音检测灵敏度</string>
+    <string name="speak_to_chat_sensitivity_auto">自动</string>
+    <string name="speak_to_chat_sensitivity_high">高灵敏度</string>
+    <string name="speak_to_chat_sensitivity_low">低灵敏度</string>
+    <string name="speak_to_chat_mode_out_time_title">结束免摘时间</string>
+    <string name="speak_to_chat_mode_out_time_fast">短（约5秒）</string>
+    <string name="speak_to_chat_mode_out_time_mid">标准（约15秒）</string>
+    <string name="speak_to_chat_mode_out_time_slow">长（约30秒）</string>
+    <string name="speak_to_chat_mode_out_time_none">不自动关闭</string>
 </resources>

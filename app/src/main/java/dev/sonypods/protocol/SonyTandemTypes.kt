@@ -388,6 +388,28 @@ sealed interface ParsedTandemResponse {
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
+    /**
+     * SYSTEM_RET_STATUS / NTFY_STATUS for SMART_TALKING_MODE. Carries only the
+     * effect status — the EnableDisable byte in this frame is the *control
+     * availability* (whether the official app grays the switch), not the
+     * on/off toggle. The toggle lives in [SpeakToChatParam.enabled].
+     */
+    data class SpeakToChatStatus(
+        val effectStatus: SmartTalkingEffectStatus?,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /** SYSTEM_RET_PARAM / NTFY_PARAM / EXT_PARAM for SMART_TALKING_MODE. */
+    data class SpeakToChatParam(
+        val enabled: Boolean? = null,
+        val sensitivity: SmartTalkingDetectionSensitivity? = null,
+        val modeOutTime: SmartTalkingModeOutTime? = null,
+        val voiceFocus: Boolean? = null,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
     data class WearingStatus(
         val status: WearingDetectionStatus? = null,
         val result: WearingDetectionResult? = null,

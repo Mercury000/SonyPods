@@ -245,11 +245,35 @@ enum class LeaPairedHistory(val code: Byte) {
 }
 
 enum class SystemInquiredType(val code: Byte) {
+    SMART_TALKING_MODE_TYPE1(0x02),
     ASSIGNABLE_SETTINGS(0x03),
     WEARING_STATUS_DETECTOR(0x06),
+    SMART_TALKING_MODE_TYPE2(0x0C),
     QUICK_ACCESS(0x0D),
     /** ASSIGNABLE_SETTINGS variant whose capability payload carries a LE Audio limitation. */
     ASSIGNABLE_SETTINGS_WITH_LIMITATION(0x0E),
+}
+
+enum class SmartTalkingDetectionSensitivity(val code: Byte) {
+    AUTO(0x00),
+    HIGH(0x01),
+    LOW(0x02),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class SmartTalkingModeOutTime(val code: Byte) {
+    FAST(0x00),
+    MID(0x01),
+    SLOW(0x02),
+    NONE(0x03),
+    OUT_OF_RANGE(0xFF.toByte()),
+}
+
+enum class SmartTalkingEffectStatus(val code: Byte) {
+    // SC `SmartTalkingModeEffectStatus` (both table sets): NOT_ACTIVE=0x00, ACTIVE=0x01.
+    IDLE(0x00),
+    ACTIVE(0x01),
+    OUT_OF_RANGE(0xFF.toByte()),
 }
 
 /** V2 Table1 ASSIGNABLE_SETTINGS key identifiers from Sound Connect. */

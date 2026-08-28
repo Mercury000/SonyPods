@@ -744,6 +744,44 @@ object SonyTandemV2Table1Protocol {
         return SonyTandemFrame.message(SYSTEM_SET_EXT_PARAM, body)
     }
 
+    fun buildGetSpeakToChatStatus(type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(type.code))
+
+    fun buildGetSpeakToChatParam(type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(type.code))
+
+    fun buildGetSpeakToChatExtParam(type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_EXT_PARAM, byteArrayOf(type.code))
+
+    fun buildGetSpeakToChatCapability(type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(type.code))
+
+    fun buildSetSpeakToChatEnabled(
+        enabled: Boolean,
+        type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1,
+    ): ByteArray {
+        val onOff = if (enabled) 0x00.toByte() else 0x01.toByte()
+        return SonyTandemFrame.message(
+            SYSTEM_SET_PARAM,
+            byteArrayOf(type.code, onOff, 0x01.toByte()),
+        )
+    }
+
+    fun buildSetSpeakToChatExtParam(
+        sensitivity: SmartTalkingDetectionSensitivity,
+        modeOutTime: SmartTalkingModeOutTime,
+        voiceFocus: Boolean = false,
+        type: SystemInquiredType = SystemInquiredType.SMART_TALKING_MODE_TYPE1,
+    ): ByteArray {
+        val body = if (type == SystemInquiredType.SMART_TALKING_MODE_TYPE2) {
+            byteArrayOf(type.code, sensitivity.code, modeOutTime.code)
+        } else {
+            val focusByte = if (voiceFocus) 0x00.toByte() else 0x01.toByte()
+            byteArrayOf(type.code, sensitivity.code, focusByte, modeOutTime.code)
+        }
+        return SonyTandemFrame.message(SYSTEM_SET_EXT_PARAM, body)
+    }
+
     fun buildGetWearingStatus(): ByteArray =
         SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(SystemInquiredType.WEARING_STATUS_DETECTOR.code))
 
@@ -1869,11 +1907,42 @@ object SonyTandemV2Table1Protocol {
         )
     }
 
-    /** Parse the cg0.e extended mapping list. */
+    /** Parse the cg0.e extended mapping list or Speak-to-Chat extended parameters. */
     private fun parseSystemRetExtendedParam(
         payload: ByteArray,
         raw: ByteArray,
     ): ParsedTandemResponse {
+        val typeCode = payload.firstOrNull()
+        if (typeCode == SystemInquiredType.SMART_TALKING_MODE_TYPE1.code) {
+            val sensitivity = payload.getOrNull(1)?.let { s ->
+                SmartTalkingDetectionSensitivity.entries.firstOrNull { it.code == s }
+            }
+            val voiceFocus = payload.getOrNull(2)?.unsigned == 0x00
+            val modeOutTime = payload.getOrNull(3)?.let { m ->
+                SmartTalkingModeOutTime.entries.firstOrNull { it.code == m }
+            }
+            return ParsedTandemResponse.SpeakToChatParam(
+                sensitivity = sensitivity,
+                voiceFocus = voiceFocus,
+                modeOutTime = modeOutTime,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+        }
+        if (typeCode == SystemInquiredType.SMART_TALKING_MODE_TYPE2.code) {
+            val sensitivity = payload.getOrNull(1)?.let { s ->
+                SmartTalkingDetectionSensitivity.entries.firstOrNull { it.code == s }
+            }
+            val modeOutTime = payload.getOrNull(2)?.let { m ->
+                SmartTalkingModeOutTime.entries.firstOrNull { it.code == m }
+            }
+            return ParsedTandemResponse.SpeakToChatParam(
+                sensitivity = sensitivity,
+                modeOutTime = modeOutTime,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+        }
         val count = payload.getOrNull(1)?.unsigned ?: 0
         var offset = 2
         val mappings = mutableListOf<AssignableSettingsMapping>()
@@ -1907,6 +1976,15 @@ object SonyTandemV2Table1Protocol {
 
     private fun parseSystemRetParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
         when (payload.firstOrNull()) {
+            SystemInquiredType.SMART_TALKING_MODE_TYPE1.code,
+            SystemInquiredType.SMART_TALKING_MODE_TYPE2.code -> {
+                val enabled = payload.getOrNull(1)?.unsigned == 0x00
+                ParsedTandemResponse.SpeakToChatParam(
+                    enabled = enabled,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
             SystemInquiredType.ASSIGNABLE_SETTINGS.code,
             SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION.code ->
                 parseAssignableSettingsPresets(payload, raw)
@@ -1932,6 +2010,20 @@ object SonyTandemV2Table1Protocol {
 
     private fun parseSystemStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         return when (payload.firstOrNull()) {
+            SystemInquiredType.SMART_TALKING_MODE_TYPE1.code,
+            SystemInquiredType.SMART_TALKING_MODE_TYPE2.code -> {
+                // Byte 1 is EnableDisable = control availability, not the toggle
+                // (official UI binds the switch to RET_PARAM's value); the only
+                // toggle-relevant field here is the effect status.
+                val effect = payload.getOrNull(2)?.let { e ->
+                    SmartTalkingEffectStatus.entries.firstOrNull { it.code == e }
+                }
+                ParsedTandemResponse.SpeakToChatStatus(
+                    effectStatus = effect,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
             SystemInquiredType.QUICK_ACCESS.code ->
                 ParsedTandemResponse.QuickAccessStatus(
                     enabled = payload.getOrNull(1)?.unsigned == AssignableSettingsEnableDisable.ENABLE.code.unsigned,

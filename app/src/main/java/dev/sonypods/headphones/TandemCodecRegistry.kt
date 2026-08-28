@@ -15,6 +15,8 @@ import dev.sonypods.protocol.PlaybackDetailedDataType
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table1Protocol
+import dev.sonypods.protocol.SmartTalkingDetectionSensitivity
+import dev.sonypods.protocol.SmartTalkingModeOutTime
 import dev.sonypods.protocol.SystemInquiredType
 import dev.sonypods.protocol.SonyTandemV1Table2Protocol
 import dev.sonypods.protocol.SonyTandemV2Table1Protocol
@@ -148,6 +150,16 @@ interface TandemCodec {
     fun buildSetAlertAppBecomesForeground(enable: Boolean): ByteArray? = null
     fun buildSetAlertFixedMessage(enable: Boolean): ByteArray? = null
     fun buildSetAlertLeAudioNotification(enable: Boolean): ByteArray? = null
+    fun buildGetSpeakToChatStatus(type: SystemInquiredType): ByteArray? = null
+    fun buildGetSpeakToChatParam(type: SystemInquiredType): ByteArray? = null
+    fun buildGetSpeakToChatExtParam(type: SystemInquiredType): ByteArray? = null
+    fun buildSetSpeakToChatEnabled(enabled: Boolean, type: SystemInquiredType): ByteArray? = null
+    fun buildSetSpeakToChatExtParam(
+        sensitivity: SmartTalkingDetectionSensitivity,
+        modeOutTime: SmartTalkingModeOutTime,
+        voiceFocus: Boolean = false,
+        type: SystemInquiredType,
+    ): ByteArray? = null
 }
 
 object TandemCodecRegistry {
@@ -299,6 +311,28 @@ object SonyTandemV1Table1Codec : TandemCodec {
 
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV1Table1Protocol.parse(raw)
+
+    // V1 has a single SMART_TALKING_MODE type byte (0x05), so the V2-style
+    // type argument is ignored; the protocol object builds official V1 frames.
+    override fun buildGetSpeakToChatStatus(type: SystemInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetSpeakToChatStatus()
+
+    override fun buildGetSpeakToChatParam(type: SystemInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetSpeakToChatParam()
+
+    override fun buildGetSpeakToChatExtParam(type: SystemInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildGetSpeakToChatExtParam()
+
+    override fun buildSetSpeakToChatEnabled(enabled: Boolean, type: SystemInquiredType): ByteArray =
+        SonyTandemV1Table1Protocol.buildSetSpeakToChatEnabled(enabled)
+
+    override fun buildSetSpeakToChatExtParam(
+        sensitivity: SmartTalkingDetectionSensitivity,
+        modeOutTime: SmartTalkingModeOutTime,
+        voiceFocus: Boolean,
+        type: SystemInquiredType,
+    ): ByteArray =
+        SonyTandemV1Table1Protocol.buildSetSpeakToChatExtParam(sensitivity, modeOutTime, voiceFocus)
 }
 
 object SonyTandemV1Table2Codec : TandemCodec {
@@ -582,6 +616,26 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun parse(raw: ByteArray): ParsedTandemResponse =
         SonyTandemV2Table1Protocol.parse(raw)
+
+    override fun buildGetSpeakToChatStatus(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetSpeakToChatStatus(type)
+
+    override fun buildGetSpeakToChatParam(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetSpeakToChatParam(type)
+
+    override fun buildGetSpeakToChatExtParam(type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetSpeakToChatExtParam(type)
+
+    override fun buildSetSpeakToChatEnabled(enabled: Boolean, type: SystemInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetSpeakToChatEnabled(enabled, type)
+
+    override fun buildSetSpeakToChatExtParam(
+        sensitivity: SmartTalkingDetectionSensitivity,
+        modeOutTime: SmartTalkingModeOutTime,
+        voiceFocus: Boolean,
+        type: SystemInquiredType,
+    ): ByteArray =
+        SonyTandemV2Table1Protocol.buildSetSpeakToChatExtParam(sensitivity, modeOutTime, voiceFocus, type)
 }
 
 object SonyTandemV2Table2Codec : TandemCodec {

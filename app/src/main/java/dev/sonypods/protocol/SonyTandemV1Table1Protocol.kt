@@ -67,11 +67,35 @@ object SonyTandemV1Table1Protocol {
     private const val PLAY_RET_CAPABILITY: Byte = 0xA1.toByte()
     private const val SYSTEM_GET_CAPABILITY: Byte = 0xF0.toByte()
     private const val SYSTEM_RET_CAPABILITY: Byte = 0xF1.toByte()
+    private const val SYSTEM_GET_STATUS: Byte = 0xF2.toByte()
+    private const val SYSTEM_RET_STATUS: Byte = 0xF3.toByte()
+    private const val SYSTEM_NTFY_STATUS: Byte = 0xF5.toByte()
+    private const val SYSTEM_GET_PARAM: Byte = 0xF6.toByte()
+    private const val SYSTEM_RET_PARAM: Byte = 0xF7.toByte()
+    private const val SYSTEM_SET_PARAM: Byte = 0xF8.toByte()
+    private const val SYSTEM_NTFY_PARAM: Byte = 0xF9.toByte()
+    private const val SYSTEM_GET_EXT_PARAM: Byte = 0xFA.toByte()
+    private const val SYSTEM_RET_EXT_PARAM: Byte = 0xFB.toByte()
+    private const val SYSTEM_SET_EXT_PARAM: Byte = 0xFC.toByte()
+    private const val SYSTEM_NTFY_EXT_PARAM: Byte = 0xFD.toByte()
 
     // V1 inquired-type sub-codes
     private const val V1_PRESET_EQ: Byte = 0x01
     private const val V1_EBB: Byte = 0x02
     private const val V1_PRESET_EQ_NONCUSTOMIZABLE: Byte = 0x03
+
+    // ── Smart Talking Mode (V1) ──
+    // Official V1 layout (SC `ve0.d`/`qe0.r3` SET_PARAM, `ve0.a`+`ve0.b`/`qe0.q3`
+    // SET_EXT_PARAM, `ve0.c`/`ve0.e` RET payloads). V1 differs from V2 in three
+    // ways: a single SMART_TALKING_MODE type byte 0x05 (0x02 is POWER_SAVING_MODE
+    // on V1), a parameter-type / detail-type byte precedes the values, and the
+    // ON/OFF polarity (ON=0x01) is the inverse of V2's OnOffSettingValue.
+    private const val V1_SYSTEM_SMART_TALKING_MODE: Byte = 0x05
+    private const val V1_SMART_TALKING_SETTING_TYPE_ON_OFF: Byte = 0x00
+    private const val V1_SMART_TALKING_DETAIL_TYPE_1: Byte = 0x00
+    private const val V1_SMART_TALKING_PARAM_MODE_ON_OFF: Byte = 0x01
+    private const val V1_ON: Byte = 0x01
+    private const val V1_OFF: Byte = 0x00
 
     // ── Device information ──
 
@@ -245,8 +269,57 @@ object SonyTandemV1Table1Protocol {
     fun buildGetPlayCapability(type: PlayInquiredType): ByteArray =
         SonyTandemFrame.message(PLAY_GET_CAPABILITY, byteArrayOf(type.code))
 
-    fun buildGetSystemCapability(type: SystemInquiredType): ByteArray =
-        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(type.code))
+    fun buildGetSystemCapability(type: SystemInquiredType): ByteArray {
+        // The shared enum carries the V2 type codes; on the V1 wire smart
+        // talking is a single SMART_TALKING_MODE byte (0x05), where 0x02 is
+        // POWER_SAVING_MODE.
+        val typeCode = when (type) {
+            SystemInquiredType.SMART_TALKING_MODE_TYPE1,
+            SystemInquiredType.SMART_TALKING_MODE_TYPE2 -> V1_SYSTEM_SMART_TALKING_MODE
+            else -> type.code
+        }
+        return SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(typeCode))
+    }
+
+    // ── Smart Talking Mode (V1): GET bodies are just [SMART_TALKING_MODE 0x05],
+    // the V1 type byte — never V2's TYPE1/TYPE2 codes (SC `qe0.C26558i0` & co). ──
+
+    fun buildGetSpeakToChatStatus(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(V1_SYSTEM_SMART_TALKING_MODE))
+
+    fun buildGetSpeakToChatParam(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(V1_SYSTEM_SMART_TALKING_MODE))
+
+    fun buildGetSpeakToChatExtParam(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_EXT_PARAM, byteArrayOf(V1_SYSTEM_SMART_TALKING_MODE))
+
+    /** SET_PARAM = `[0x05][MODE_ON_OFF 0x01][ON 0x01 / OFF 0x00]` (SC `ve0.d`). */
+    fun buildSetSpeakToChatEnabled(enabled: Boolean): ByteArray =
+        SonyTandemFrame.message(
+            SYSTEM_SET_PARAM,
+            byteArrayOf(
+                V1_SYSTEM_SMART_TALKING_MODE,
+                V1_SMART_TALKING_PARAM_MODE_ON_OFF,
+                if (enabled) V1_ON else V1_OFF,
+            ),
+        )
+
+    /** SET_EXT_PARAM = `[0x05][DETAIL_TYPE_1 0x00][sensitivity][voiceFocus ON 0x01/OFF 0x00][modeOutTime]` (SC `ve0.a`+`ve0.b`). */
+    fun buildSetSpeakToChatExtParam(
+        sensitivity: SmartTalkingDetectionSensitivity,
+        modeOutTime: SmartTalkingModeOutTime,
+        voiceFocus: Boolean = false,
+    ): ByteArray =
+        SonyTandemFrame.message(
+            SYSTEM_SET_EXT_PARAM,
+            byteArrayOf(
+                V1_SYSTEM_SMART_TALKING_MODE,
+                V1_SMART_TALKING_DETAIL_TYPE_1,
+                sensitivity.code,
+                if (voiceFocus) V1_ON else V1_OFF,
+                modeOutTime.code,
+            ),
+        )
 
     fun buildSetEqPreset(
         preset: EqPresetId,
@@ -349,11 +422,81 @@ object SonyTandemV1Table1Protocol {
             )
             PLAY_RET_PARAM -> parsePlayRetParam(payload, raw)
             PLAY_NTFY_PARAM -> parsePlayNtfyParam(payload, raw)
+            SYSTEM_RET_STATUS, SYSTEM_NTFY_STATUS -> parseSystemStatus(payload, raw)
+            SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
+            SYSTEM_RET_EXT_PARAM, SYSTEM_NTFY_EXT_PARAM -> parseSystemRetExtendedParam(payload, raw)
             COMMON_RET_AUDIO_CODEC, COMMON_NTFY_AUDIO_CODEC -> parseAudioCodecStatus(command, payload, raw)
             COMMON_RET_UPSCALING_EFFECT, COMMON_NTFY_UPSCALING_EFFECT ->
                 parseUpscalingEffectStatus(command, payload, raw)
             else -> unknown(command, payload, raw)
         }
+    }
+
+    /**
+     * RET/NTFY_STATUS = `[0x05][CommonStatus][effectStatus NOT_ACTIVE 0x00 / ACTIVE 0x01]`
+     * (SC `ve0.e`). The CommonStatus byte is the control's *availability*, not the
+     * on/off toggle: official `l50.a`/`k50.a` feed it to `setEnabled()` (graying)
+     * while the switch itself follows RET_PARAM's value.
+     */
+    private fun parseSystemStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        return when (payload.firstOrNull()) {
+            V1_SYSTEM_SMART_TALKING_MODE -> {
+                val effect = payload.getOrNull(2)?.let { e ->
+                    SmartTalkingEffectStatus.entries.firstOrNull { it.code == e }
+                }
+                ParsedTandemResponse.SpeakToChatStatus(
+                    effectStatus = effect,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
+            else -> unknown(SYSTEM_RET_STATUS, payload, raw)
+        }
+    }
+
+    /**
+     * RET_PARAM = `[0x05][settingType ON_OFF 0x00][value]` (SC `ve0.c`);
+     * NTFY_PARAM = `[0x05][paramType][value]` (SC `ve0.d`). Both put the mode
+     * value at index 2 with V1 polarity (ON=0x01); preview-only notifies are
+     * not tracked.
+     */
+    private fun parseSystemRetParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        return when {
+            payload.firstOrNull() == V1_SYSTEM_SMART_TALKING_MODE &&
+                (payload.getOrNull(1) == V1_SMART_TALKING_SETTING_TYPE_ON_OFF ||
+                    payload.getOrNull(1) == V1_SMART_TALKING_PARAM_MODE_ON_OFF) -> {
+                val enabled = payload.getOrNull(2)?.unsigned == 0x01
+                ParsedTandemResponse.SpeakToChatParam(
+                    enabled = enabled,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
+            else -> unknown(SYSTEM_RET_PARAM, payload, raw)
+        }
+    }
+
+    /** RET/NTFY_EXT_PARAM = `[0x05][detailType TYPE_1 0x00][sensitivity][voiceFocus ON 0x01][modeOutTime]` (SC `ve0.a`+`ve0.b`). */
+    private fun parseSystemRetExtendedParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        if (payload.firstOrNull() == V1_SYSTEM_SMART_TALKING_MODE &&
+            payload.getOrNull(1) == V1_SMART_TALKING_DETAIL_TYPE_1
+        ) {
+            val sensitivity = payload.getOrNull(2)?.let { s ->
+                SmartTalkingDetectionSensitivity.entries.firstOrNull { it.code == s }
+            }
+            val voiceFocus = payload.getOrNull(3)?.unsigned == 0x01
+            val modeOutTime = payload.getOrNull(4)?.let { m ->
+                SmartTalkingModeOutTime.entries.firstOrNull { it.code == m }
+            }
+            return ParsedTandemResponse.SpeakToChatParam(
+                sensitivity = sensitivity,
+                voiceFocus = voiceFocus,
+                modeOutTime = modeOutTime,
+                values = payload.unsignedList(),
+                raw = raw,
+            )
+        }
+        return unknown(SYSTEM_RET_EXT_PARAM, payload, raw)
     }
 
     /** V1 codec body `[FIXED_VALUE 0x00][codecByte]`, exactly 2 bytes — SC
