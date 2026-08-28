@@ -93,4 +93,88 @@ class SonyTandemV1Table1ProtocolTest {
         )
         assertFalse(powerSaving is ParsedTandemResponse.SpeakToChatStatus)
     }
+
+    // ── Assignable settings (V1 wire type 0x06) ──────────────────────────────
+
+    @Test
+    fun assignableSettings_buildCommands_useV1TypeByte() {
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF0.toByte(), 0x06),
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsCapability(),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF2.toByte(), 0x06),
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsStatus(),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF6.toByte(), 0x06),
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsPresets(),
+        )
+        // SET_PARAM = [0x06][count][preset...] in capability key order (SC se0.d).
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF8.toByte(), 0x06, 0x02, 0x20, 0x00),
+            SonyTandemV1Table1Protocol.buildSetAssignableSettingsPresets(
+                listOf(AssignableSettingsPreset.PLAYBACK_CONTROL, AssignableSettingsPreset.AMBIENT_SOUND_CONTROL),
+            ),
+        )
+    }
+
+    @Test
+    fun assignableSettings_getSystemCapability_translatesSharedEnumToV1Type() {
+        // Both shared-enum spellings must land on the V1 wire type 0x06; the
+        // V2 code 0x03 is CONTROL_BY_WEARING on V1.
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF0.toByte(), 0x06),
+            SonyTandemV1Table1Protocol.buildGetSystemCapability(SystemInquiredType.ASSIGNABLE_SETTINGS),
+        )
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0xF0.toByte(), 0x06),
+            SonyTandemV1Table1Protocol.buildGetSystemCapability(SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION),
+        )
+    }
+
+    @Test
+    fun assignableSettings_parseCapability_matchesNestedV1Layout() {
+        // [0x06][1 key][LEFT][TOUCH_SENSOR][default ASC][1 preset][PLAYBACK_CONTROL][2 actions]
+        //   actions: [SINGLE_TAP][PLAY_PAUSE], [DOUBLE_TAP][NEXT_TRACK]
+        val parsed = SonyTandemV1Table1Protocol.parse(
+            byteArrayOf(
+                0x0E, 0xF1.toByte(), 0x06, 0x01,
+                0x00, 0x00, 0x00, 0x01,
+                0x20, 0x02,
+                0x00, 0x20,
+                0x01, 0x21,
+            ),
+        ) as ParsedTandemResponse.AssignableSettingsCapability
+        assertEquals(1, parsed.keys.size)
+        val key = parsed.keys.first()
+        assertEquals(AssignableSettingsKey.LEFT_SIDE, key.key)
+        assertEquals(AssignableSettingsType.TOUCH_SENSOR, key.type)
+        assertEquals(AssignableSettingsPreset.AMBIENT_SOUND_CONTROL, key.defaultPreset)
+        assertEquals(listOf(AssignableSettingsPreset.PLAYBACK_CONTROL), key.presets)
+        val actions = key.actionsByPreset.getValue(AssignableSettingsPreset.PLAYBACK_CONTROL)
+        assertEquals(2, actions.size)
+        assertEquals(AssignableSettingsAction.SINGLE_TAP, actions[0].action)
+        assertEquals(AssignableSettingsFunction.PLAY_PAUSE, actions[0].defaultFunction)
+        assertEquals(AssignableSettingsAction.DOUBLE_TAP, actions[1].action)
+        assertEquals(AssignableSettingsFunction.NEXT_TRACK, actions[1].defaultFunction)
+    }
+
+    @Test
+    fun assignableSettings_parsePresetsAndStatus_matchV1Layout() {
+        // RET_PARAM = [0x06][count][preset...]
+        val presets = SonyTandemV1Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF7.toByte(), 0x06, 0x02, 0x00, 0x20),
+        ) as ParsedTandemResponse.AssignableSettingsPresets
+        assertEquals(
+            listOf(AssignableSettingsPreset.AMBIENT_SOUND_CONTROL, AssignableSettingsPreset.PLAYBACK_CONTROL),
+            presets.presets,
+        )
+
+        // RET_STATUS = [0x06][count][CommonStatus...] with ENABLE=0x00/DISABLE=0x01.
+        val status = SonyTandemV1Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF3.toByte(), 0x06, 0x02, 0x00, 0x01),
+        ) as ParsedTandemResponse.AssignableSettingsStatus
+        assertEquals(listOf(true, false), status.enabled)
+    }
 }

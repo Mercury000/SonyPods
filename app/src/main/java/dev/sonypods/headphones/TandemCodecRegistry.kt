@@ -337,6 +337,55 @@ object SonyTandemV1Table1Codec : TandemCodec {
         type: SystemInquiredType,
     ): ByteArray =
         SonyTandemV1Table1Protocol.buildSetSpeakToChatExtParam(sensitivity, modeOutTime, voiceFocus)
+
+    // V1 assignable settings uses its own wire type (0x06) and has no
+    // EXT_PARAM path; the V2-style type argument is translated inside the
+    // protocol object.
+    override fun buildGetAssignableSettingsCapability(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS ||
+            type == SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
+        ) {
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsCapability()
+        } else {
+            null
+        }
+
+    override fun buildGetAssignableSettingsStatus(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS ||
+            type == SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
+        ) {
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsStatus()
+        } else {
+            null
+        }
+
+    override fun buildGetAssignableSettingsPresets(type: SystemInquiredType): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS ||
+            type == SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
+        ) {
+            SonyTandemV1Table1Protocol.buildGetAssignableSettingsPresets()
+        } else {
+            null
+        }
+
+    override fun buildGetAssignableSettingsExtendedParam(type: SystemInquiredType): ByteArray? = null
+
+    override fun buildSetAssignableSettingsPresets(
+        type: SystemInquiredType,
+        presets: List<AssignableSettingsPreset>,
+    ): ByteArray? =
+        if (type == SystemInquiredType.ASSIGNABLE_SETTINGS ||
+            type == SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION
+        ) {
+            SonyTandemV1Table1Protocol.buildSetAssignableSettingsPresets(presets)
+        } else {
+            null
+        }
+
+    override fun buildSetAssignableSettingsExtendedParam(
+        type: SystemInquiredType,
+        mappings: List<AssignableSettingsMapping>,
+    ): ByteArray? = null
 }
 
 object SonyTandemV1Table2Codec : TandemCodec {

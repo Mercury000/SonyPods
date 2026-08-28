@@ -271,14 +271,48 @@ object SonyTandemV1Table1Protocol {
 
     fun buildGetSystemCapability(type: SystemInquiredType): ByteArray {
         // The shared enum carries the V2 type codes; on the V1 wire smart
-        // talking is a single SMART_TALKING_MODE byte (0x05), where 0x02 is
-        // POWER_SAVING_MODE.
+        // talking is a single SMART_TALKING_MODE byte (0x05) and assignable
+        // settings is 0x06 — where V2's 0x02/0x03 are POWER_SAVING_MODE and
+        // CONTROL_BY_WEARING respectively.
         val typeCode = when (type) {
             SystemInquiredType.SMART_TALKING_MODE_TYPE1,
             SystemInquiredType.SMART_TALKING_MODE_TYPE2 -> V1_SYSTEM_SMART_TALKING_MODE
+            SystemInquiredType.ASSIGNABLE_SETTINGS,
+            SystemInquiredType.ASSIGNABLE_SETTINGS_WITH_LIMITATION -> V1_SYSTEM_ASSIGNABLE_SETTINGS
             else -> type.code
         }
         return SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(typeCode))
+    }
+
+    // ── Assignable Settings (V1) ──
+    // Official V1 (`n00.b` sender, `te0.c`/`se0.d` payloads): a preset-only API.
+    // The wire type is 0x06 (0x03 on V1 is CONTROL_BY_WEARING). Capability and
+    // preset get/set share the shape `[0x06][count][value...]`; there is no
+    // EXT_PARAM path — per-action assignment does not exist on V1 (official
+    // `te0.b`/`te0.d` serialization throws UnsupportedOperationException and the
+    // setter's action read/write are empty stubs).
+
+    private const val V1_SYSTEM_ASSIGNABLE_SETTINGS: Byte = 0x06
+
+    fun buildGetAssignableSettingsCapability(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_CAPABILITY, byteArrayOf(V1_SYSTEM_ASSIGNABLE_SETTINGS))
+
+    fun buildGetAssignableSettingsStatus(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_STATUS, byteArrayOf(V1_SYSTEM_ASSIGNABLE_SETTINGS))
+
+    fun buildGetAssignableSettingsPresets(): ByteArray =
+        SonyTandemFrame.message(SYSTEM_GET_PARAM, byteArrayOf(V1_SYSTEM_ASSIGNABLE_SETTINGS))
+
+    /** SET_PARAM = `[0x06][count][preset...]` in capability key order (SC `se0.d`). */
+    fun buildSetAssignableSettingsPresets(presets: List<AssignableSettingsPreset>): ByteArray {
+        require(presets.isNotEmpty()) { "Assignable preset list is empty" }
+        require(presets.none { it == AssignableSettingsPreset.OUT_OF_RANGE }) {
+            "Assignable preset is invalid"
+        }
+        return SonyTandemFrame.message(
+            SYSTEM_SET_PARAM,
+            byteArrayOf(V1_SYSTEM_ASSIGNABLE_SETTINGS, presets.size.toByte()) + presets.map { it.code },
+        )
     }
 
     // ── Smart Talking Mode (V1): GET bodies are just [SMART_TALKING_MODE 0x05],
@@ -389,12 +423,16 @@ object SonyTandemV1Table1Protocol {
                 raw = raw,
             )
             PLAY_RET_CAPABILITY -> parsePlayCapability(payload, raw)
-            SYSTEM_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
-                domain = "SYSTEM",
-                inquiredTypeCode = payload.firstOrNull()?.unsigned,
-                values = payload.unsignedList(),
-                raw = raw,
-            )
+            SYSTEM_RET_CAPABILITY -> if (payload.firstOrNull() == V1_SYSTEM_ASSIGNABLE_SETTINGS) {
+                parseAssignableSettingsCapability(payload, raw)
+            } else {
+                ParsedTandemResponse.CapabilityInfo(
+                    domain = "SYSTEM",
+                    inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
             CONNECT_RET_DEVICE_INFO -> parseDeviceInfo(payload, raw)
             COMMON_RET_BATTERY_LEVEL -> parseBattery(payload, raw)
             COMMON_NTFY_BATTERY_LEVEL -> if (looksLikeV1BatteryPayload(payload)) {
@@ -453,6 +491,8 @@ object SonyTandemV1Table1Protocol {
                     raw = raw,
                 )
             }
+            // `[0x06][count][CommonStatus...]` — per-key availability (SC `se0.e`).
+            V1_SYSTEM_ASSIGNABLE_SETTINGS -> parseAssignableSettingsStatus(payload, raw)
             else -> unknown(SYSTEM_RET_STATUS, payload, raw)
         }
     }
@@ -475,8 +515,115 @@ object SonyTandemV1Table1Protocol {
                     raw = raw,
                 )
             }
+            payload.firstOrNull() == V1_SYSTEM_ASSIGNABLE_SETTINGS -> {
+                parseAssignableSettingsPresets(payload, raw)
+            }
             else -> unknown(SYSTEM_RET_PARAM, payload, raw)
         }
+    }
+
+    /** RET/NTFY_PARAM for assignable = `[0x06][count][preset...]` in capability
+     * key order (SC `se0.d`). Off-table preset bytes keep the position (as
+     * OUT_OF_RANGE) so index alignment with the capability keys survives. */
+    private fun parseAssignableSettingsPresets(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        val presets = payload.drop(2).take(count).map { byte ->
+            AssignableSettingsPreset.entries.firstOrNull { it.code == byte }
+                ?: AssignableSettingsPreset.OUT_OF_RANGE
+        }
+        return ParsedTandemResponse.AssignableSettingsPresets(
+            presets = presets,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /** RET/NTFY_STATUS for assignable = `[0x06][count][CommonStatus...]`, one
+     * availability bit per key in capability order (SC `se0.e`; CommonStatus
+     * ENABLE=0x00 / DISABLE=0x01). */
+    private fun parseAssignableSettingsStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val count = payload.getOrNull(1)?.unsigned ?: 0
+        val enabled = payload.drop(2).take(count).map { it == V1_OFF }
+        return ParsedTandemResponse.AssignableSettingsStatus(
+            enabled = enabled,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
+    }
+
+    /**
+     * RET_CAPABILITY for assignable (SC `qe0.t2$b` → `te0.c` nested grammar),
+     * after dataType+command are stripped:
+     * `[0x06][keyCount]{ [key][keyType][defaultPreset][presetCount]{ [preset][actionCount]{ [action][function] } } }`.
+     *
+     * Unlike V2 there is no single/multiple action split: every action entry is
+     * exactly one `[action][function]` pair, and the default preset travels in
+     * the key header. Entries with a non-positive count are skipped entirely
+     * (`te0.b`/`te0.d` drop them too).
+     */
+    private fun parseAssignableSettingsCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val keyCount = payload.getOrNull(1)?.unsigned ?: 0
+        var offset = 2
+        val keys = mutableListOf<ParsedTandemResponse.AssignableSettingsKeyCapability>()
+        repeat(keyCount) {
+            if (offset + 4 > payload.size) return@repeat
+            val key = AssignableSettingsKey.entries.firstOrNull { it.code == payload[offset] }
+            val type = AssignableSettingsType.entries.firstOrNull { it.code == payload[offset + 1] }
+            val defaultPreset = AssignableSettingsPreset.entries.firstOrNull { it.code == payload[offset + 2] }
+            val presetCount = payload[offset + 3].unsigned
+            offset += 4
+            if (key == null || type == null || defaultPreset == null ||
+                key == AssignableSettingsKey.OUT_OF_RANGE ||
+                type == AssignableSettingsType.OUT_OF_RANGE ||
+                defaultPreset == AssignableSettingsPreset.OUT_OF_RANGE
+            ) return@repeat
+
+            val presets = mutableListOf<AssignableSettingsPreset>()
+            val actionsByPreset = linkedMapOf<AssignableSettingsPreset, List<ParsedTandemResponse.AssignableSettingsActionCapability>>()
+            repeat(presetCount) {
+                if (offset + 2 > payload.size) return@repeat
+                val preset = AssignableSettingsPreset.entries.firstOrNull { it.code == payload[offset] }
+                val actionCount = payload[offset + 1].unsigned
+                offset += 2
+                if (preset == null || preset == AssignableSettingsPreset.OUT_OF_RANGE || actionCount < 1) return@repeat
+                val actions = mutableListOf<ParsedTandemResponse.AssignableSettingsActionCapability>()
+                repeat(actionCount) {
+                    if (offset + 2 > payload.size) return@repeat
+                    val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
+                    val function = AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                    offset += 2
+                    if (action != null && function != null &&
+                        action != AssignableSettingsAction.OUT_OF_RANGE &&
+                        function != AssignableSettingsFunction.OUT_OF_RANGE
+                    ) {
+                        actions += ParsedTandemResponse.AssignableSettingsActionCapability(
+                            action = action,
+                            defaultFunction = function,
+                            availableFunctions = listOf(function),
+                        )
+                    }
+                }
+                if (actions.isNotEmpty()) {
+                    presets += preset
+                    actionsByPreset[preset] = actions.sortedBy { it.action.code.unsigned }
+                }
+            }
+            // Official `te0.b` drops a key whose preset list ended up empty
+            // (`m106487h` requires at least one valid preset block).
+            if (presets.isEmpty()) return@repeat
+            keys += ParsedTandemResponse.AssignableSettingsKeyCapability(
+                key = key,
+                type = type,
+                defaultPreset = defaultPreset,
+                presets = presets,
+                actionsByPreset = actionsByPreset,
+            )
+        }
+        return ParsedTandemResponse.AssignableSettingsCapability(
+            keys = keys,
+            values = payload.unsignedList(),
+            raw = raw,
+        )
     }
 
     /** RET/NTFY_EXT_PARAM = `[0x05][detailType TYPE_1 0x00][sensitivity][voiceFocus ON 0x01][modeOutTime]` (SC `ve0.a`+`ve0.b`). */

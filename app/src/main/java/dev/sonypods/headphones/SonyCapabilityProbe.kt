@@ -949,6 +949,10 @@ object SonyCapabilityProbe {
         if (isV1(profile)) {
             return when (v1Type()) {
                 SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                // V1 assignable settings (0xF6) is preset-only on its own wire
+                // type 0x06; the shared enum's ASSIGNABLE_SETTINGS spelling is
+                // what the V1 codec translates back to 0x06.
+                SonyV1FunctionType.ASSIGNABLE_SETTINGS -> SystemInquiredType.ASSIGNABLE_SETTINGS
                 else -> null
             }
         }
@@ -962,6 +966,7 @@ object SonyCapabilityProbe {
             SonyV2FunctionType.QUICK_ACCESS -> SystemInquiredType.QUICK_ACCESS
             null -> when (v1Type()) {
                 SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
+                SonyV1FunctionType.ASSIGNABLE_SETTINGS -> SystemInquiredType.ASSIGNABLE_SETTINGS
                 else -> null
             }
             else -> null
