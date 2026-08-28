@@ -46,7 +46,6 @@ object HeadsetStateDispatcher : HookContext() {
                 context = it,
                 address = SonyEngineHost.reloadDeviceAddress() ?: snapshot.deviceAddress,
                 name = snapshot.deviceName,
-                physicalDisconnectAddress = SonyEngineHost.reloadPhysicalDisconnectAddress(),
             )
         }
     }
@@ -56,13 +55,12 @@ object HeadsetStateDispatcher : HookContext() {
         context: Context,
         address: String?,
         name: String?,
-        physicalDisconnectAddress: String? = null,
     ) {
         SonyDeviceService.rememberAddress(address)
         // Must happen before start() launches the repository collector and its
-        // startup announce. Otherwise the initial Tandem=false snapshot can clear
-        // surfaces or look like a new connection during a hot reload.
-        SonyEngineHost.restoreHotReloadState(address, physicalDisconnectAddress)
+        // startup announce. The reload's own reconnect is always a recovery,
+        // never a fresh connection, so the tracker is restored accordingly.
+        SonyEngineHost.restoreHotReloadState(address, physicallyDisconnected = false)
         // No AdapterService instance to hand over: onCreate will not fire again in a live
         // bluetooth process, so the host recovers the running singleton from the class on demand.
         SonyEngineHost.start(
@@ -74,14 +72,12 @@ object HeadsetStateDispatcher : HookContext() {
         )
         registerAppRequestReceiver(context)
         registerAclReceiver(context)
-        if (!address.isNullOrBlank() && physicalDisconnectAddress.isNullOrBlank()) {
+        if (!address.isNullOrBlank()) {
             runCatching {
                 context.getSystemService(android.bluetooth.BluetoothManager::class.java)
                     ?.adapter?.getRemoteDevice(address)
                     ?.let { SonyEngineHost.connectDevice(it, force = true) }
             }.onFailure { Log.w("SonyPods", "saved-address reconnect failed address=$address", it) }
-        } else if (!address.isNullOrBlank()) {
-            Log.d("SonyPods", "saved-address reconnect skipped after physical disconnect address=$address")
         }
     }
 
@@ -131,6 +127,7 @@ object HeadsetStateDispatcher : HookContext() {
                 val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
+                    SonyEngineHost.onLinkConnected(device.address)
                     SonyEngineHost.connectDevice(device)
                     // Already-live session: a second bud joining shows up here as a state
                     // change, so re-read levels instead of waiting for the next poll.
@@ -289,10 +286,16 @@ object HeadsetStateDispatcher : HookContext() {
                         "Control identity $controlAddress is outside the LE Audio group " +
                             "$group; connecting it from ${device.address}",
                     )
-                    postToProfileHandler(serviceInstance) { SonyEngineHost.connectDevice(control) }
+                    postToProfileHandler(serviceInstance) {
+                        SonyEngineHost.onLinkConnected(control.address)
+                    SonyEngineHost.connectDevice(control)
+                    }
                     return
                 }
-                postToProfileHandler(serviceInstance) { SonyEngineHost.connectDevice(device) }
+                postToProfileHandler(serviceInstance) {
+                    SonyEngineHost.onLinkConnected(device.address)
+                    SonyEngineHost.connectDevice(device)
+                }
             }
 
             BluetoothProfile.STATE_DISCONNECTED -> {

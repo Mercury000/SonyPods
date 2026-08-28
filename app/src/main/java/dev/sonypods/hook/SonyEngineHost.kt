@@ -154,11 +154,17 @@ object SonyEngineHost {
     private var lastConnectAttemptMs = 0L
     /** Prevent startAfterReload and the A2DP proxy callback from opening two sessions. */
     private var connectInFlightAddress: String? = null
-    /** A2DP has explicitly gone down; do not classify its trailing Tandem callback as recovery. */
-    private var physicalDisconnectAddress: String? = null
     /** Snapshot retained for the rare path where a reload request is rejected after shutdown. */
     private var preparedReloadAddress: String? = null
-    private var preparedReloadPhysicalDisconnectAddress: String? = null
+    /**
+     * The unified connection state machine: DISCONNECTED / CONNECTING / ACTIVE /
+     * RECOVERING per headset, driven by the profile state-machine hooks and the
+     * repository transport snapshots. Replaces the former
+     * physicalDisconnectAddress / transportRecoveryAddress / animation-key-window
+     * markers, whose independent timing was the source of every stale-marker bug
+     * (islands failing to pop, notifications failing to clear).
+     */
+    private val linkTracker = HeadsetLinkTracker()
 
     /**
      * Sound Connect holds this lease while it owns the headphone control session.
@@ -188,12 +194,6 @@ object SonyEngineHost {
      */
     @Volatile
     private var pendingLeAudioEnable: (() -> Unit)? = null
-    /**
-     * A Tandem transport recovery is not a user-visible new connection.  Keep this
-     * separate from the screen lifecycle: GATT/SPP can fail for any reason while the
-     * A2DP link remains alive.
-     */
-    private var transportRecoveryAddress: String? = null
 
     private var commandReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
@@ -519,23 +519,6 @@ object SonyEngineHost {
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
         val current = repo.state.value
-        val explicitPhysicalDisconnect = physicalDisconnectAddress
-            ?.equals(address, ignoreCase = true) == true
-        // Keep the terminal physical marker until the connected snapshot reaches
-        // renderXiaomiSurfaces(). That renderer must see it to reset the old
-        // animation identity for a genuine same-address A2DP reconnect.
-        val sameKnownConnection = current.connectedDevice?.address.equals(address, ignoreCase = true) ||
-            lastConnectedAddress?.equals(address, ignoreCase = true) == true ||
-            lastRenderedAddress?.equals(address, ignoreCase = true) == true
-        if (!explicitPhysicalDisconnect && sameKnownConnection &&
-            !repo.hasLiveTransport()
-        ) {
-            // The A2DP device is still the same, but the Tandem session is gone.
-            // Reconnecting this session must not replay the user-facing connection UI.
-            // The repository clears connectedDevice as soon as GATT/SPP reports a
-            // transport loss, so the host's last-known address is part of this test.
-            markTransportRecovery(address)
-        }
         val alreadyLive = current.connectedDevice?.address.equals(address, ignoreCase = true) &&
             current.deviceInfo.protocolReady &&
             repo.hasLiveTransport()
@@ -648,31 +631,23 @@ object SonyEngineHost {
         preparedReloadAddress = it
     }
 
-    /** Terminal A2DP disconnect marker to carry across a reload racing teardown. */
-    fun reloadPhysicalDisconnectAddress(): String? =
-        (physicalDisconnectAddress ?: preparedReloadPhysicalDisconnectAddress).also {
-            preparedReloadPhysicalDisconnectAddress = it
-        }
+    /** Whether the tracked headset is gone at reload time (drives the restore decision). */
+    fun reloadPhysicallyDisconnected(): Boolean = linkTracker.isDisconnected()
 
     /**
      * Seeds the replacement generation before its first default repository snapshot
-     * is published. A2DP surviving reload is transport recovery; a terminal A2DP
-     * disconnect must instead be allowed to clear all user-visible surfaces.
+     * is published. The reload's own reconnect is always a recovery — whether A2DP
+     * survived the reload or a terminal disconnect raced it — so no connect UI may
+     * replay. A later genuine link disconnect/reconnect cycle still walks the full
+     * state machine.
      */
-    fun restoreHotReloadState(address: String?, physicalDisconnect: String?) {
+    fun restoreHotReloadState(address: String?, physicallyDisconnected: Boolean) {
         preparedReloadAddress = null
-        preparedReloadPhysicalDisconnectAddress = null
-        val physical = physicalDisconnect?.takeIf { it.isNotBlank() }
-        if (physical != null) {
-            physicalDisconnectAddress = physical
-            transportRecoveryAddress = null
-            lastConnectedAddress = physical
-            lastRenderedAddress = physical
-            lastRenderedBattery = null
-            lastConnectAnimationKey = physical
-            return
-        }
-        address?.takeIf { it.isNotBlank() }?.let(::markTransportRecovery)
+        linkTracker.restore(address, physicallyDisconnected)
+        lastRenderedAddress = null
+        lastRenderedBattery = null
+        lastConnectAnimationKey = address?.takeIf { it.isNotBlank() }
+        lastConnectedAddress = address?.takeIf { it.isNotBlank() }
     }
 
     private fun acquireOfficialAppLease(intent: Intent) {
@@ -709,7 +684,7 @@ object SonyEngineHost {
 
         lastConnectAttemptMs = 0L
         connectInFlightAddress = null
-        leaseAddress?.let(::markTransportRecovery)
+        leaseAddress?.let { linkTracker.forceRecovery(it) }
         repository?.disconnect()
         Log.d(
             TAG,
@@ -757,9 +732,9 @@ object SonyEngineHost {
         }
 
         // The returned session is the same A2DP device's Tandem recovery. Reuse the
-        // generic recovery marker so handoff and unexpected transport loss follow one
+        // recovery phase so handoff and unexpected transport loss follow one
         // surface policy: no popup, no first island animation, no expired-island restore.
-        markTransportRecovery(handoffAddress)
+        linkTracker.forceRecovery(handoffAddress)
         lastConnectAttemptMs = 0L
         connectInFlightAddress = null
         restoreSoundConnectConnection(handoffAddress)
@@ -859,11 +834,20 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "A2DP proxy bind failed", it) }
     }
 
+    /**
+     * Link-level (re)connection, reported by the A2DP / LE Audio state machine.
+     * This is the authoritative "the headset is physically back" signal — a
+     * Tandem transport blip never moves a profile state machine.
+     */
+    fun onLinkConnected(address: String) {
+        linkTracker.onLinkConnected(address)
+    }
+
     @SuppressLint("MissingPermission")
     fun disconnectDevice(device: BluetoothDevice, forceTeardown: Boolean = false) {
         val address = runCatching { device.address }.getOrNull() ?: return
         // A2DP dropping is expected, not terminal, once the headset moves audio to LE Audio:
-        // the classic link goes away while Tandem keeps working over it on demand. Treating it
+        // the classic link goes away while Tandem keeps working on demand. Treating it
         // as a physical disconnect tore down a session that was still exchanging frames, which
         // is why the headset became uncontrollable exactly when LC3 started working.
         // The LE Audio path passes forceTeardown: its own DISCONNECTED callback is the
@@ -874,8 +858,7 @@ object SonyEngineHost {
             return
         }
         // This is an explicit A2DP disconnect, not a recoverable Tandem transport loss.
-        transportRecoveryAddress = null
-        physicalDisconnectAddress = address
+        linkTracker.onLinkDisconnected(address)
         // The connect episode ends here: a cooldown recorded by an earlier attempt must not
         // swallow the next genuine connect signal after a fresh power-on. The LE Audio path
         // only fires on profile transitions, so a swallowed dial means nobody retries until
@@ -1948,12 +1931,11 @@ object SonyEngineHost {
             SonyBridge.CMD_DISCONNECT -> {
                 val address = knownSonyAddress()
                 connectInFlightAddress = null
-                transportRecoveryAddress = null
                 // A user-requested disconnect is physical from the surface's point
-                // of view. Keep its address long enough for the terminal false state
-                // to cancel the old notification/island instead of preserving it as
-                // an apparent Tandem recovery.
-                physicalDisconnectAddress = address
+                // of view: the terminal false state cancels the old
+                // notification/island instead of preserving it as an apparent
+                // Tandem recovery.
+                address?.let { linkTracker.onLinkDisconnected(it) }
                 repo.disconnect()
             }
 
@@ -2052,8 +2034,8 @@ object SonyEngineHost {
         Log.d(
             TAG,
             "publish state connected=${snapshot.connected} address=${snapshot.deviceAddress} " +
-                "suppressPopup=$suppressConnectPopup recovery=$transportRecoveryAddress " +
-                "physicalDisconnect=$physicalDisconnectAddress lastConnected=$lastConnectedAddress",
+                "suppressPopup=$suppressConnectPopup phase=${linkTracker.currentPhase} " +
+                "linkAddress=${linkTracker.currentAddress} lastConnected=$lastConnectedAddress",
         )
         val bundle = snapshot.toBundle()
         SonyBridge.STATE_CONSUMERS.forEach { target ->
@@ -2062,8 +2044,10 @@ object SonyEngineHost {
                     Intent(SonyBridge.ACTION_STATE).apply {
                         putExtra(SonyStateSnapshot.EXTRA_SNAPSHOT, bundle)
                         putExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, suppressConnectPopup)
-                        physicalDisconnectAddress?.let {
-                            putExtra(SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS, it)
+                        if (linkTracker.isDisconnected()) {
+                            linkTracker.currentAddress?.let {
+                                putExtra(SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS, it)
+                            }
                         }
                         setPackage(target)
                         addFlags(Intent.FLAG_RECEIVER_FOREGROUND or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
@@ -2086,53 +2070,38 @@ object SonyEngineHost {
     ) {
         val address = snapshot.deviceAddress
         if (address == null || !snapshot.connected) {
-            val previous = transportRecoveryAddress ?: lastRenderedAddress ?: lastConnectedAddress
+            val previous = linkTracker.currentAddress ?: lastRenderedAddress ?: lastConnectedAddress
             Log.d(
                 TAG,
                 "surface state unavailable connected=${snapshot.connected} address=$address " +
-                    "previous=$previous recovery=$transportRecoveryAddress " +
-                    "physicalDisconnect=$physicalDisconnectAddress",
+                    "previous=$previous phase=${linkTracker.currentPhase} " +
+                    "linkAddress=${linkTracker.currentAddress}",
             )
-            // The A2DP proxy can briefly return an empty list while the Tandem
-            // session is recovering. The explicit A2DP disconnect callback is the
-            // authoritative physical-disconnect signal; requiring a fresh proxy
-            // query here made the surface get cancelled during that gap.
-            val a2dpStillHasPreviousDevice = previous != null &&
-                physicalDisconnectAddress?.equals(previous, ignoreCase = true) != true
-            if (a2dpStillHasPreviousDevice) {
-                // Keep the surface records alive while only the Tandem transport is
-                // recovering.  The next usable battery state will update them without
-                // treating the device as a new connection.
-                markTransportRecovery(previous)
-                Log.d(TAG, "Tandem transport lost; preserving surfaces for recovery address=$previous")
-                return
+            when (linkTracker.onTransportDown(address ?: previous) { isAnyIdentityLinkAlive(previous!!) }) {
+                HeadsetLinkTracker.DownOutcome.PRESERVE -> {
+                    Log.d(TAG, "Tandem transport lost; preserving surfaces for recovery address=$previous")
+                    return
+                }
+                HeadsetLinkTracker.DownOutcome.IGNORE -> return
+                HeadsetLinkTracker.DownOutcome.TERMINAL -> {
+                    lastConnectedAddress = null
+                    if (previous == null) return
+                    Log.d(TAG, "all headset links down; terminal disconnect address=$previous")
+                    clearXiaomiSurfaces(context, previous)
+                    return
+                }
             }
-            transportRecoveryAddress = null
-            physicalDisconnectAddress = null
-            lastConnectedAddress = null
-            if (previous == null) return
-            clearXiaomiSurfaces(context, previous)
-            return
         }
 
-        val physicalReconnect = physicalDisconnectAddress
-            ?.equals(address, ignoreCase = true) == true
+        val isNewPhysicalConnection = linkTracker.isNewPhysicalConnection(address)
         lastConnectedAddress = address
-        if (physicalReconnect) {
-            // A real A2DP disconnect followed by a same-address reconnect is a new
-            // user connection. Clear the old render identity so it can legitimately
-            // show its first island/popup; this path is never used for a Tandem-only
-            // loss because physicalDisconnectAddress is set only by the terminal
-            // A2DP DISCONNECTED event or an explicit disconnect command.
-            physicalDisconnectAddress = null
-            transportRecoveryAddress = null
+        if (isNewPhysicalConnection) {
+            // A link-level reconnect: clear the old render identity so this connection
+            // legitimately shows its first island/popup. The tracker decided this from
+            // the profile state machine, not from a timed marker.
             lastRenderedAddress = null
             lastRenderedBattery = null
             lastConnectAnimationKey = null
-        }
-        if (transportRecoveryAddress?.equals(address, ignoreCase = true) != true) {
-            // A different device cannot consume the previous device's recovery marker.
-            transportRecoveryAddress = null
         }
 
         // Form factor (headband vs TWS) comes from the device's capability table, and
@@ -2171,8 +2140,7 @@ object SonyEngineHost {
             right = pod(snapshot.batteryRight),
             case = pod(snapshot.batteryCradle),
         )
-        val isTransportRecovery = transportRecoveryAddress
-            ?.equals(address, ignoreCase = true) == true
+        val isTransportRecovery = linkTracker.isRecovery(address)
         val hasBatteryData = battery.left != null || battery.right != null || battery.case != null
         if (!hasBatteryData) {
             // A Tandem/Sound Connect handoff can produce one probe-complete
@@ -2190,9 +2158,8 @@ object SonyEngineHost {
         // Pop the island once per connection. Subsequent battery replies still go
         // through the same bridge so the visible island can update in place, but
         // they must not retrigger the connection animation.
-        val isTransportRecoveryReplay = isTransportRecovery && hasBatteryData
-        val isNewDevice = !isTransportRecovery &&
-            address != lastConnectAnimationKey && hasBatteryData
+        val isTransportRecoveryReplay = isTransportRecovery
+        val isNewDevice = isNewPhysicalConnection
         // A surface replay explicitly requested by PopupActivity is a new
         // notification submission, not a battery update.  It must recreate the
         // island even though the connection animation has already been shown.
@@ -2203,6 +2170,7 @@ object SonyEngineHost {
         if (isNewDevice) lastConnectAnimationKey = address
         lastRenderedBattery = battery
         lastRenderedAddress = address
+        linkTracker.onSurfaceRendered(address)
 
         val device = remoteDevice(context, address) ?: return
         runCatching {
@@ -2233,7 +2201,7 @@ object SonyEngineHost {
                 },
                 transportRecovery = isTransportRecoveryReplay,
             )
-            if (isTransportRecoveryReplay) transportRecoveryAddress = null
+            if (isTransportRecoveryReplay) linkTracker.onSurfaceRendered(address)
             Log.d(
                 TAG,
                 "xiaomi surfaces updated address=$address " +
@@ -2243,15 +2211,36 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "xiaomi surface render failed", it) }
     }
 
-    /** Mark an existing A2DP device's Tandem session as recoverable, not new. */
-    private fun markTransportRecovery(address: String) {
-        transportRecoveryAddress = address
-        lastConnectedAddress = address
-        // Force the next usable state through the renderer, while keeping the
-        // connection animation key so it cannot become isNewDevice=true.
-        lastConnectAnimationKey = address
-        lastRenderedAddress = null
-        lastRenderedBattery = null
+    /**
+     * Preserves popup suppression for all transitions within the same active physical session.
+     * Only a link-level (re)connection — CONNECTING — is allowed to trigger the
+     * connect popup; the tracker decides that from the profile state machine.
+     */
+    private fun shouldSuppressConnectPopup(snapshot: SonyStateSnapshot): Boolean =
+        !linkTracker.isNewPhysicalConnection(snapshot.deviceAddress)
+
+    /**
+     * Whether any link of the headset behind [address] is still up at the ACL
+     * level, asked live of the stack. The headset's two identities are both
+     * probed: a Tandem transport blip leaves the underlying ACL connected, so a
+     * live answer means "still physically here" (preserve surfaces), while every
+     * identity being down means the headset actually left — no reliance on any
+     * remembered marker, which is exactly what silently failed before.
+     */
+    @SuppressLint("MissingPermission")
+    private fun isAnyIdentityLinkAlive(address: String): Boolean {
+        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+            ?: return true // No stack handle: fall back to the previous behaviour.
+        val identities = buildSet {
+            add(address.uppercase())
+            SonyDeviceService.identityAliasesOf(address).forEach { add(it.uppercase()) }
+        }
+        return identities.any { candidate ->
+            runCatching {
+                val remote = adapter.getRemoteDevice(candidate) ?: return@runCatching true
+                BluetoothDevice::class.java.getMethod("isConnected").invoke(remote) as? Boolean == true
+            }.getOrDefault(true) // Unreadable state is not evidence of departure.
+        }
     }
 
     /**
@@ -2259,23 +2248,6 @@ object SonyEngineHost {
      * Only genuine physical reconnects (after an authoritative A2DP / LE Audio disconnect)
      * are allowed to trigger the connect popup.
      */
-    private fun shouldSuppressConnectPopup(snapshot: SonyStateSnapshot): Boolean {
-        if (transportRecoveryAddress?.equals(snapshot.deviceAddress, ignoreCase = true) == true) {
-            return true
-        }
-        val address = snapshot.deviceAddress ?: lastConnectedAddress
-        val isPhysicalReconnect = address != null &&
-            physicalDisconnectAddress?.equals(address, ignoreCase = true) == true
-        if (!isPhysicalReconnect && address != null &&
-            lastConnectedAddress?.equals(address, ignoreCase = true) == true
-        ) {
-            return true
-        }
-        return !snapshot.connected &&
-            physicalDisconnectAddress == null &&
-            lastConnectedAddress != null
-    }
-
     @SuppressLint("MissingPermission")
     private fun remoteDevice(context: Context, address: String) = runCatching {
         context.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)

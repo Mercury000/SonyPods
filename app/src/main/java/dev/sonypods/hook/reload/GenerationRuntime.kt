@@ -89,8 +89,8 @@ class GenerationRuntime(
         val reloadAddress = runCatching {
             dev.sonypods.hook.SonyEngineHost.reloadDeviceAddress()
         }.getOrNull()
-        val physicalDisconnectAddress = runCatching {
-            dev.sonypods.hook.SonyEngineHost.reloadPhysicalDisconnectAddress()
+        val physicalDisconnect = runCatching {
+            dev.sonypods.hook.SonyEngineHost.reloadPhysicallyDisconnected()
         }.getOrNull()
         reloadSnapshot = snapshot
         val dynamicClasses = dynamicBinderClasses()
@@ -125,7 +125,7 @@ class GenerationRuntime(
             putLong(KEY_RELOAD_EPOCH, generationId)
             putBoolean(
                 KEY_CONNECTION_PRESENT,
-                snapshot.connected || (!reloadAddress.isNullOrBlank() && physicalDisconnectAddress.isNullOrBlank()),
+                snapshot.connected || !reloadAddress.isNullOrBlank(),
             )
             // Keep the old key for consumers which already use it, but prefer the
             // A2DP-derived address in the new dispatcher. Tandem may be false while
@@ -133,7 +133,7 @@ class GenerationRuntime(
             putString(KEY_DEVICE_ADDRESS, reloadAddress ?: snapshot.deviceAddress)
             putString(KEY_DEVICE_NAME, snapshot.deviceName)
             putString(KEY_A2DP_DEVICE_ADDRESS, reloadAddress)
-            putString(KEY_PHYSICAL_DISCONNECT_ADDRESS, physicalDisconnectAddress)
+            putString(KEY_PHYSICAL_DISCONNECT_ADDRESS, physicalDisconnect.toString())
             putAll(reloadState)
             putString(KEY_TRANSPORT, "unknown")
             putStringArrayList(KEY_DYNAMIC_BINDER_CLASSES, ArrayList(dynamicClasses))
