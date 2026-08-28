@@ -74,6 +74,9 @@ data class SonyStateSnapshot(
     val supportsPowerOff: Boolean = false,
     val supportsGestureOperations: Boolean = false,
     val supportsMultipoint: Boolean = false,
+    val supportsNoiseControl: Boolean = false,
+    val supportsEq: Boolean = false,
+    val supportsPlaybackControl: Boolean = false,
     val batterySingle: Int? = null,
     val batteryLeft: Int? = null,
     val batteryRight: Int? = null,
@@ -240,6 +243,9 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
         putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
         putBoolean(KEY_SUPPORTS_MULTIPOINT, supportsMultipoint)
+        putBoolean(KEY_SUPPORTS_NOISE_CONTROL, supportsNoiseControl)
+        putBoolean(KEY_SUPPORTS_EQ, supportsEq)
+        putBoolean(KEY_SUPPORTS_PLAYBACK, supportsPlaybackControl)
         putParcelableArrayList(KEY_GESTURES, ArrayList(gestureOperationKeys.map { it.toBundle() }))
         putBundle(KEY_MULTIPOINT, multipoint.toBundle())
 
@@ -346,6 +352,9 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
         private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
         private const val KEY_SUPPORTS_MULTIPOINT = "supports_multipoint"
+        private const val KEY_SUPPORTS_NOISE_CONTROL = "supports_noise_control"
+        private const val KEY_SUPPORTS_EQ = "supports_eq"
+        private const val KEY_SUPPORTS_PLAYBACK = "supports_playback"
         private const val KEY_GESTURES = "gesture_operations"
         private const val KEY_MULTIPOINT = "multipoint"
         private const val KEY_ACTIONS = "actions"
@@ -453,6 +462,9 @@ data class SonyStateSnapshot(
             supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
             supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
             supportsMultipoint = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT, false),
+            supportsNoiseControl = bundle.getBoolean(KEY_SUPPORTS_NOISE_CONTROL, false),
+            supportsEq = bundle.getBoolean(KEY_SUPPORTS_EQ, false),
+            supportsPlaybackControl = bundle.getBoolean(KEY_SUPPORTS_PLAYBACK, false),
             batterySingle = bundle.optInt(KEY_BATTERY_SINGLE),
             batteryLeft = bundle.optInt(KEY_BATTERY_LEFT),
             batteryRight = bundle.optInt(KEY_BATTERY_RIGHT),
@@ -574,6 +586,9 @@ data class SonyStateSnapshot(
                 supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
                 supportsGestureOperations = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.GESTURE_OPERATIONS) == true,
                 supportsMultipoint = state.multipointState.supported,
+                supportsNoiseControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.NOISE_CONTROL) == true,
+                supportsEq = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.EQ) == true,
+                supportsPlaybackControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.PLAYBACK_CONTROL) == true,
                 batterySingle = state.batteryState.single,
                 batteryLeft = state.batteryState.left,
                 batteryRight = state.batteryState.right,

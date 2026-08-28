@@ -235,19 +235,19 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (includeAnc) {
+    if (includeAnc && uiState.supportsNoiseControl) {
         item {
             AncControlCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (visibility.eq) {
+    if (visibility.eq && uiState.supportsEq) {
         item {
             EqCard(uiState = uiState, actions = actions)
         }
     }
 
-    if (visibility.playback) {
+    if (visibility.playback && uiState.supportsPlaybackControl) {
         item {
             PlaybackCard(uiState = uiState, actions = actions)
         }
