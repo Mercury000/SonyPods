@@ -2,6 +2,7 @@ package dev.sonypods.ui.pages
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,8 +20,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -203,10 +206,30 @@ private fun QuickAccessCard(
     enabled: Boolean = true,
 ) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        val contentAlpha = if (enabled) 1f else 0.38f
         BasicComponent(
             title = stringResource(R.string.qa_card_title),
             enabled = enabled,
         )
+        if (!enabled) {
+            // 与「同时连接2台设备」相同：LE Audio 承载连接时隐藏选择器，
+            // 在原位置居中说明这是连接方式决定的不可用，而非用户关闭。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(76.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.feature_unavailable_over_le_audio),
+                    modifier = Modifier.padding(horizontal = 16.dp).alpha(contentAlpha),
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            return@Card
+        }
         actions.forEachIndexed { index, action ->
             val current = currentFunctionCodes.getOrNull(index)
                 ?: action.currentFunctionCode
@@ -226,7 +249,6 @@ private fun QuickAccessCard(
                     title = gestureActionLabel(action.actionCode),
                     items = functions.map { quickAccessFunctionLabel(it) },
                     selectedIndex = functions.indexOf(current).coerceAtLeast(0),
-                    enabled = enabled,
                     onSelectedIndexChange = { selected ->
                         functions.getOrNull(selected)?.let { onFunctionChange(index, it) }
                     },
