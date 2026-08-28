@@ -60,6 +60,8 @@ object SonyEngineHost {
     /** Audio Stream Control Service: only an LE Audio identity carries it. */
     private val ASCS_SERVICE_UUID: java.util.UUID =
         java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+    /** Vendor LE Audio profile id (mirrors [dev.sonypods.ble.SonyBleClient]). */
+    private const val QUALCOMM_LE_AUDIO_PROFILE = 32
     /**
      * `BluetoothProfile.HID_HOST`, which is `@SystemApi` and so absent from the compile SDK.
      *
@@ -898,13 +900,24 @@ object SonyEngineHost {
      *
      * Both of a TWS headset's identities are checked: LE Audio runs on the LE identity while
      * A2DP runs on the classic one, and either address may be the one whose A2DP just dropped.
-     * Reads the live profile rather than cached state so a stale record cannot keep a session
-     * alive after the headset is really gone.
+     *
+     * The verdict must come from the LE Audio *profile*, never from a bare ACL probe: the LE
+     * identity keeps a GATT/ACL link that outlives the classic link by seconds, so on a
+     * classic-only session (LDAC, LE Audio profile never connected) an ACL-level
+     * `isConnected` still reports true right after A2DP drops — and since the LE Audio
+     * profile never transitions, no later DISCONNECTED callback ever corrects the wrong
+     * "keep the session" decision. Observed as the notification/island surviving a full
+     * power-off (16:23 capture: "A2DP disconnect ignored: LE Audio is still connected"
+     * while `getProfileConnectionState(LE_AUDIO)` was 0).
+     *
+     * Same two tiers the connect path uses ([SonyBleClient]): the profile's connected-device
+     * list where the proxy answers, otherwise the adapter-wide profile state gates the
+     * ACL+ASCS probe.
      */
     @SuppressLint("MissingPermission")
     private fun isLeAudioStillConnected(device: BluetoothDevice): Boolean {
-        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter
-            ?: return false
+        val manager = appContext?.getSystemService(BluetoothManager::class.java) ?: return false
+        val adapter = manager.adapter ?: return false
         val address = runCatching { device.address }.getOrNull() ?: return false
         val related = buildSet {
             add(address.uppercase())
@@ -913,10 +926,25 @@ object SonyEngineHost {
                 if (control.equals(address, ignoreCase = true)) add(le.uppercase())
             }
         }
-        // Checked per identity rather than on the device that just dropped: that one reports
-        // disconnected the moment A2DP goes, which says nothing about the LE side. Requiring an
-        // ASCS service is what makes an ACL here mean "LE Audio", since under LC3 the classic
-        // link is the one that went away.
+        // On HyperOS the LE_AUDIO proxy can refuse with "Profile not supported", in which
+        // case the connected-device list is not evidence of absence and we fall through.
+        var profileListUsable = true
+        val leAudioAddresses = mutableSetOf<String>()
+        for (profileId in intArrayOf(BluetoothProfile.LE_AUDIO, QUALCOMM_LE_AUDIO_PROFILE)) {
+            runCatching { manager.getConnectedDevices(profileId) }
+                .onFailure { if (profileId == BluetoothProfile.LE_AUDIO) profileListUsable = false }
+                .getOrDefault(emptyList())
+                .forEach { remote -> remote.address?.uppercase()?.let(leAudioAddresses::add) }
+        }
+        if (profileListUsable) {
+            return related.any { it in leAudioAddresses }
+        }
+        val adapterState = runCatching {
+            adapter.getProfileConnectionState(BluetoothProfile.LE_AUDIO)
+        }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
+        if (adapterState != BluetoothProfile.STATE_CONNECTED) return false
+        // Only now does an ASCS-bearing live link mean LE Audio — the profile is
+        // connected for someone and the identity holds the service.
         return related.any { candidate ->
             runCatching {
                 val remote = adapter.getRemoteDevice(candidate)
