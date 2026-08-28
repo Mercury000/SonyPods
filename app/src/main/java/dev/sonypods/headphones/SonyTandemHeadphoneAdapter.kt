@@ -233,9 +233,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             if (profile.supports(HeadphoneFeature.GESTURE_OPERATIONS)) {
                 addAll(buildRefreshGestureOperationsCommands(profile))
             }
-            // Query PERIPHERAL before capability probing adds MULTIPOINT to
-            // the neutral profile. V2 Table2 exposes it on the MC endpoint.
-            if (profile.protocolFor(HeadphoneFeature.MULTIPOINT) in setOf(
+            // Query PERIPHERAL when MULTIPOINT is supported. V2 Table2 exposes it on the MC endpoint.
+            if (profile.supports(HeadphoneFeature.MULTIPOINT) &&
+                profile.protocolFor(HeadphoneFeature.MULTIPOINT) in setOf(
                     HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1,
                     HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE2,
                 )
@@ -266,7 +266,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             // 0x94 [APP_BECOMES_FOREGROUND=0x02][ENABLE] on UI shown, 0x94
             // [FIXED_MESSAGE=0x00][ENABLE] on connect. Both are idempotent, so the
             // refresh (connection + UI entry) is the right place.
-            if (profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1) {
+            if (profile.capabilities.alertSupported &&
+                profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+            ) {
                 addAll(buildRefreshAlertCommands(profile))
             }
         }

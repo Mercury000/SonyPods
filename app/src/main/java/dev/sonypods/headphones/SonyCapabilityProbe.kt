@@ -454,6 +454,19 @@ object SonyCapabilityProbe {
                 function.v2Type() == SonyV2FunctionType.UPSCALING_INDICATOR
             }
         }
+        val alertSupported = functions.any { function ->
+            if (function.isV1(profile)) {
+                function.v1Type() == SonyV1FunctionType.VIBRATOR_ALERT_NOTIFICATION
+            } else {
+                function.v2Type() in setOf(
+                    SonyV2FunctionType.FIXED_MESSAGE,
+                    SonyV2FunctionType.FIXED_MESSAGE_WITH_LR_SELECTION,
+                    SonyV2FunctionType.VIBRATOR_ALERT_NOTIFICATION,
+                    SonyV2FunctionType.VOICE_ASSISTANT_ALERT_NOTIFICATION,
+                    SonyV2FunctionType.LE_AUDIO_ALERT_NOTIFICATION,
+                )
+            }
+        }
 
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
@@ -473,6 +486,7 @@ object SonyCapabilityProbe {
             connectionQualityRestrictedByLea = qualityLeaRestricted,
             codecIndicatorSupported = codecIndicatorSupported,
             upscalingIndicatorSupported = upscalingIndicatorSupported,
+            alertSupported = alertSupported,
             eqConfig = eqConfig,
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
             playbackVolumeHasMute = playbackHasMute,

@@ -176,6 +176,8 @@ data class HeadphoneCapabilities(
     /** FunctionType UPSCALING_INDICATOR advertised — enables the live DSEE badge
      * (COMMON_GET_STATUS UPSCALING_EFFECT + NTFY), mirroring SC `mo58463A1()`. */
     val upscalingIndicatorSupported: Boolean = false,
+    /** Whether the device declared any ALERT / FIXED_MESSAGE notification support. */
+    val alertSupported: Boolean = false,
 )
 
 data class ConnectedHeadphoneProfile(
