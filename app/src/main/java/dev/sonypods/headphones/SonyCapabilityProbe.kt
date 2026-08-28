@@ -809,8 +809,7 @@ object SonyCapabilityProbe {
         SonyV1FunctionType.LEFT_RIGHT_BATTERY_LEVEL,
         SonyV1FunctionType.CRADLE_BATTERY_LEVEL -> ProbeDomain.BATTERY
 
-        SonyV1FunctionType.SMART_TALKING_MODE,
-        SonyV1FunctionType.CONTROL_BY_WEARING -> ProbeDomain.SYSTEM
+        SonyV1FunctionType.SMART_TALKING_MODE -> ProbeDomain.SYSTEM
         else -> ProbeDomain.NONE
     }
 
@@ -930,10 +929,18 @@ object SonyCapabilityProbe {
         }
     }
 
+    /**
+     * V1 has no wearing-status detector: its `CONTROL_BY_WEARING` (SystemInquiredType
+     * 0x03) is a playback-control on/off setting — official V1 RET_STATUS returns a
+     * bare CommonStatus for it (`qe0.w2` falls through to `se0.m0`), and SET_PARAM
+     * takes `[ControlByWearingSettingType][SettingValue]` (`se0.m`). It is V2's
+     * PLAYBACK_CONTROL_BY_WEARING, not V2's WEARING_STATUS_DETECTOR, so it maps to no
+     * inquired type here — the shared enum only carries V2 codes, where 0x06 means
+     * ASSIGNABLE_SETTINGS on the V1 wire.
+     */
     private fun SonySupportedFunction.systemInquired(profile: ConnectedHeadphoneProfile?): SystemInquiredType? {
         if (isV1(profile)) {
             return when (v1Type()) {
-                SonyV1FunctionType.CONTROL_BY_WEARING -> SystemInquiredType.WEARING_STATUS_DETECTOR
                 SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
                 else -> null
             }
@@ -947,7 +954,6 @@ object SonyCapabilityProbe {
             SonyV2FunctionType.WEARING_STATUS_DETECTOR -> SystemInquiredType.WEARING_STATUS_DETECTOR
             SonyV2FunctionType.QUICK_ACCESS -> SystemInquiredType.QUICK_ACCESS
             null -> when (v1Type()) {
-                SonyV1FunctionType.CONTROL_BY_WEARING -> SystemInquiredType.WEARING_STATUS_DETECTOR
                 SonyV1FunctionType.SMART_TALKING_MODE -> SystemInquiredType.SMART_TALKING_MODE_TYPE1
                 else -> null
             }

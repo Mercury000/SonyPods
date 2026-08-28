@@ -483,18 +483,42 @@ class SonyCapabilityProbeTest {
             profile = v1Profile,
             functions = listOf(
                 fn1(SonyV1FunctionType.NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE, 0),
-                fn1(SonyV1FunctionType.CONTROL_BY_WEARING, 1),
+                fn1(SonyV1FunctionType.SMART_TALKING_MODE, 1),
             ),
         )
         val labels = commands.map { it.label }
         assertTrue(labels.any { it.contains("GET NCASM capability V1") })
         assertTrue(labels.any { it.contains("GET SYSTEM capability") })
         val system = commands.first { it.label.contains("GET SYSTEM capability") }
-        // V1 SYSTEM GET_CAPABILITY: [SYSTEM 0xF0][type code 0x06]
+        // V1 SYSTEM GET_CAPABILITY: [SYSTEM 0xF0][SMART_TALKING_MODE 0x05]; the V2
+        // TYPE1 code 0x02 means POWER_SAVING_MODE on the V1 wire.
         assertEquals(
-            listOf(0x0E, 0xF0, 0x06),
+            listOf(0x0E, 0xF0, 0x05),
             system.bytes.toList().map { it.toInt().and(0xFF) },
         )
+    }
+
+    /**
+     * V1 `CONTROL_BY_WEARING` is a playback-control on/off setting (V2's
+     * PLAYBACK_CONTROL_BY_WEARING), not a wearing-status detector, and V1 has no
+     * such detector at all. It must neither be probed — 0x06 is ASSIGNABLE_SETTINGS
+     * on the V1 wire — nor claim wearing support.
+     */
+    @Test
+    fun v1ControlByWearing_isNotProbedAsWearingStatus() {
+        val functions = listOf(fn1(SonyV1FunctionType.CONTROL_BY_WEARING, 0))
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v1Profile,
+            functions = functions,
+        )
+        assertTrue(commands.none { it.label.contains("GET SYSTEM capability") })
+
+        val capabilities = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = functions,
+            fallback = baseCapabilities(),
+            profile = v1Profile,
+        )
+        assertFalse(HeadphoneFeature.WEARING_STATUS in capabilities.features)
     }
 
     @Test
