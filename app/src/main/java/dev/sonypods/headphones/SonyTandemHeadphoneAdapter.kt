@@ -454,7 +454,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 profile,
                 HeadphoneFeature.EQ,
                 "SET EQ preset ${preset.name} type=${profile.capabilities.eqConfig.writeInquiredType}",
-                engine.buildSetPreset(preset),
+                engine.buildSetPreset(preset, context.basePreset),
             )
         )
     }
@@ -473,7 +473,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 profile,
                 HeadphoneFeature.EQ,
                 "SET EQ bands type=$writeType preset=${targetPreset.name}",
-                engine.buildSetBands(rawSteps, targetPreset),
+                engine.buildSetBands(rawSteps, targetPreset, context.basePreset),
             )
         )
     }

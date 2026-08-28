@@ -64,13 +64,13 @@ class EqProtocolEngine(
 
     // ── Writes ──
 
-    fun buildSetPreset(preset: EqPresetId): ByteArray =
-        requireNotNull(codec.buildSetEqPreset(preset, config.writeInquiredType)) {
+    fun buildSetPreset(preset: EqPresetId, basePreset: EqPresetId? = null): ByteArray =
+        requireNotNull(codec.buildSetEqPreset(preset, config.writeInquiredType, basePreset = basePreset)) {
             "Codec ${codec.variant} does not support EQ preset writes"
         }
 
-    fun buildSetBands(bands: List<Int>, preset: EqPresetId): ByteArray =
-        requireNotNull(codec.buildSetEqBands(preset, config.writeInquiredType, bands)) {
+    fun buildSetBands(bands: List<Int>, preset: EqPresetId, basePreset: EqPresetId? = null): ByteArray =
+        requireNotNull(codec.buildSetEqBands(preset, config.writeInquiredType, bands, basePreset)) {
             "Codec ${codec.variant} does not support EQ band writes"
         }
 

@@ -354,9 +354,18 @@ object SonyCapabilityProbe {
 
         val eqConfig = if (eqTypes.isNotEmpty()) {
             val writeType = preferredEqWriteType(eqTypes)
+            val basePresets = fallback.eqConfig.availablePresets.ifEmpty { DEFAULT_PRESETS }
             EqDeviceConfig(
-                availablePresets = fallback.eqConfig.availablePresets
-                    .ifEmpty { DEFAULT_PRESETS },
+                // The dropdown vocabulary follows the write type: sound-effect
+                // devices speak SC `SoundEffectType` (not EqPresetId), and
+                // PRESET_EQ_AND_ULT_MODE devices add the ULT mode entries.
+                availablePresets = when (writeType) {
+                    EqEbbInquiredType.SOUND_EFFECT,
+                    EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT -> SOUND_EFFECT_PRESETS
+                    EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE ->
+                        basePresets + listOf(EqPresetId.ULT_1, EqPresetId.ULT_2)
+                    else -> basePresets
+                },
                 writeInquiredType = writeType,
                 statusQueryTypes = eqTypes.toList(),
                 paramQueryTypes = eqTypes.toList(),
@@ -471,9 +480,12 @@ object SonyCapabilityProbe {
         val supportsAutoWindNoiseReduction = noiseQueries.any {
             it == NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS
         }
+        // V1 single-mic wind noise is NOT derivable from the function list: it
+        // depends on the NCASM_RET_CAPABILITY NcAsmSettingType being
+        // DUAL_SINGLE_OFF, which the repository learns when that capability
+        // response arrives (SC `qe0.d2$c` / NoiseCancellingType.DUAL_SINGLE).
         val supportsWindNoiseReduction = noiseQueries.any {
-            it == NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS ||
-                it == NcAsmInquiredType.V1_TABLE_SET1_NC_ASM
+            it == NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS
         }
 
         val speakToChatType = functions.firstNotNullOfOrNull { function ->
@@ -650,9 +662,8 @@ object SonyCapabilityProbe {
 
     /**
      * Prefer the DUAL (MODE_NC_ASM_DUAL_...) seamless write type over the AUTO
-     * one when a device advertises both. Devices like LinkBuds S / WF-1000XM5
-     * report AUTO_NCASM in the support-function list (so AUTO maps to 0x15 and
-     * gets inserted first), but the device only accepts the level/focus-on-voice
+     * one when a device advertises both. A device advertising both 0x68
+     * (DUAL_AUTO → 0x15) and a DUAL layout only honors the level/focus-on-voice
      * bytes through the DUAL layout — its RET_NCASM echoes 0x17 regardless of
      * the queried type, and mode toggles survive an AUTO write only because the
      * mode byte sits at the same offset. Writing AUTO silently drops level and
@@ -760,11 +771,7 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT_NOISE_ADAPTATION,
         SonyV2FunctionType.AMBIENT_SOUND_MODE_ONOFF,
         SonyV2FunctionType.AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT,
-        SonyV2FunctionType.AMBIENT_SOUND_CONTROL_MODE_SELECT,
-        SonyV2FunctionType.AUTO_NCASM,
-        // SC registers AUTO_NCASM and adaptive control under the same NCASM
-        // domain (`pq/i.java`); both read the auto NC/ASM param.
-        SonyV2FunctionType.ADAPTIVE_CONTROL_WITH_PARAMETER_NOTIFICATION -> ProbeDomain.NCASM
+        SonyV2FunctionType.AMBIENT_SOUND_CONTROL_MODE_SELECT -> ProbeDomain.NCASM
 
         SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT,
         SonyV2FunctionType.PLAYBACK_CONTROLLER_WITH_CALL_VOLUME_ADJUSTMENT_AND_MUTE,
@@ -837,11 +844,11 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.AMBIENT_SOUND_MODE_ONOFF -> NcAsmInquiredType.ASM_ON_OFF
         SonyV2FunctionType.AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT -> NcAsmInquiredType.ASM_SEAMLESS
         SonyV2FunctionType.AMBIENT_SOUND_CONTROL_MODE_SELECT -> NcAsmInquiredType.NC_AMB_TOGGLE
-        // AUTO_NCASM and ADAPTIVE_CONTROL both read the auto NC/ASM param
-        // (SC `pq/i.java` groups them under one NCASM domain registration).
-        SonyV2FunctionType.AUTO_NCASM,
-        SonyV2FunctionType.ADAPTIVE_CONTROL_WITH_PARAMETER_NOTIFICATION ->
-            NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS
+        // AUTO_NCASM (0x70) / ADAPTIVE_CONTROL_WITH_PARAMETER_NOTIFICATION
+        // (0x71) are NOT 0x15 writers: SC registers them under the SENSE /
+        // adaptive-sound-control domain (SenseInquiredType.ADAPTIVE_CONTROL),
+        // not NCASM. Mapping them to 0x15 turned every ASC-capable device into
+        // a phantom "auto wind noise reduction" device.
         else -> null
     }
 
@@ -987,5 +994,17 @@ object SonyCapabilityProbe {
         EqPresetId.CUSTOM,
         EqPresetId.USER_SETTING1,
         EqPresetId.USER_SETTING2,
+    )
+
+    /** Dropdown vocabulary for SOUND_EFFECT / CUSTOMIZABLE_SOUND_EFFECT_SELECT
+     * writers — mirrors SC `SoundEffectType` 0x00-0x06, not EqPresetId. */
+    private val SOUND_EFFECT_PRESETS = listOf(
+        EqPresetId.OFF,
+        EqPresetId.ULT,
+        EqPresetId.ULT_1,
+        EqPresetId.ULT_2,
+        EqPresetId.CUSTOM,
+        EqPresetId.FLAT,
+        EqPresetId.LIVE_SOUND,
     )
 }

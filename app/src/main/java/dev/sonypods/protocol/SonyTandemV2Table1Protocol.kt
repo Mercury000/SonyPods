@@ -236,6 +236,8 @@ object SonyTandemV2Table1Protocol {
     private const val NC_VALUE_ON_SINGLE: Byte = 0x01
     private const val NC_VALUE_ON_DUAL: Byte = 0x02
     private const val NC_VALUE_AUTO: Byte = 0x03
+    private const val NC_VALUE_AUTO_SINGLE: Byte = 0x04
+    private const val NC_VALUE_AUTO_DUAL: Byte = 0x05
 
     // ── NC_AMB_TOGGLE Function byte codes (rf0/j, `system/param/Function`) ──
     // Mapping is semantic: NC_ASM_OFF turns everything off, NC_OFF turns noise
@@ -403,13 +405,15 @@ object SonyTandemV2Table1Protocol {
         preset: EqPresetId,
         type: EqEbbInquiredType = EqEbbInquiredType.PRESET_EQ,
         bandSteps: List<Int> = emptyList(),
+        basePreset: EqPresetId? = null,
     ): ByteArray =
-        buildSetEqPreset(preset, type.code, bandSteps)
+        buildSetEqPreset(preset, type.code, bandSteps, basePreset)
 
     fun buildSetEqPreset(
         preset: EqPresetId,
         typeCode: Byte,
         bandSteps: List<Int> = emptyList(),
+        basePreset: EqPresetId? = null,
     ): ByteArray {
         val bands = bandSteps.map { it.coerceIn(0, 255).toByte() }.toByteArray()
         // EQEBB SET_PARAM body (SC `hf0/c` PRESET_EQ, `hf0/d`
@@ -419,46 +423,47 @@ object SonyTandemV2Table1Protocol {
         //   [preset][ultModeStatus][bandCount][bandSteps...]
         val body = when (typeCode) {
             EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE.code -> {
-                val (basePreset, ultMode) = when (preset) {
-                    EqPresetId.ULT, EqPresetId.ULT_1 -> EqPresetId.OFF to 0x01.toByte()
-                    EqPresetId.ULT_2 -> EqPresetId.OFF to 0x02.toByte()
+                // Official C17560d pairs the *current* EqPresetId with the
+                // EqUltModeStatus; selecting an ULT mode must keep the base
+                // preset instead of forcing OFF.
+                val (base, ultMode) = when (preset) {
+                    EqPresetId.ULT, EqPresetId.ULT_1 -> (basePreset ?: EqPresetId.OFF) to 0x01.toByte()
+                    EqPresetId.ULT_2 -> (basePreset ?: EqPresetId.OFF) to 0x02.toByte()
                     else -> preset to 0x00.toByte()
                 }
-                byteArrayOf(typeCode, basePreset.code, ultMode, bandSteps.size.toByte()) + bands
+                byteArrayOf(typeCode, base.code, ultMode, bandSteps.size.toByte()) + bands
             }
-            EqEbbInquiredType.SOUND_EFFECT.code -> {
-                val soundEffectByte = when (preset) {
-                    EqPresetId.OFF -> 0x00.toByte()
-                    EqPresetId.ULT -> 0x01.toByte()
-                    EqPresetId.ULT_1 -> 0x02.toByte()
-                    EqPresetId.ULT_2 -> 0x03.toByte()
-                    EqPresetId.CUSTOM, EqPresetId.USER_SETTING1, EqPresetId.USER_SETTING2,
-                    EqPresetId.USER_SETTING3, EqPresetId.USER_SETTING4, EqPresetId.USER_SETTING5 -> 0x04.toByte()
-                    EqPresetId.FLAT -> 0x05.toByte()
-                    EqPresetId.LIVE_SOUND -> 0x06.toByte()
-                    else -> 0x00.toByte()
-                }
-                byteArrayOf(typeCode, soundEffectByte)
-            }
+            EqEbbInquiredType.SOUND_EFFECT.code,
             EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT.code -> {
-                val soundEffectByte = when (preset) {
-                    EqPresetId.OFF -> 0x00.toByte()
-                    EqPresetId.ULT -> 0x01.toByte()
-                    EqPresetId.ULT_1 -> 0x02.toByte()
-                    EqPresetId.ULT_2 -> 0x03.toByte()
-                    EqPresetId.CUSTOM, EqPresetId.USER_SETTING1, EqPresetId.USER_SETTING2,
-                    EqPresetId.USER_SETTING3, EqPresetId.USER_SETTING4, EqPresetId.USER_SETTING5 -> 0x04.toByte()
-                    EqPresetId.FLAT -> 0x05.toByte()
-                    EqPresetId.LIVE_SOUND -> 0x06.toByte()
-                    else -> 0x00.toByte()
-                }
-                byteArrayOf(typeCode, soundEffectByte, 0x00.toByte())
+                // SC `gf0.z0`/`gf0.v0` build exactly [type][SoundEffectType] and
+                // validate the whole frame at length 3 — no trailing byte.
+                byteArrayOf(typeCode, soundEffectByteFor(preset))
             }
             else -> {
+                require(!preset.isSoundEffectSpace) {
+                    "$preset is a sound-effect/ULT marker with no EqPresetId wire code"
+                }
                 byteArrayOf(typeCode, preset.code, bandSteps.size.toByte()) + bands
             }
         }
         return SonyTandemFrame.message(EQEBB_SET_PARAM, body)
+    }
+
+    /** Maps the app-level sound-effect vocabulary onto SC `SoundEffectType`
+     * bytes (0x00-0x06) — a different namespace from EqPresetId codes. */
+    private fun soundEffectByteFor(preset: EqPresetId): Byte = when (preset) {
+        EqPresetId.ULT -> 0x01.toByte()
+        EqPresetId.ULT_1 -> 0x02.toByte()
+        EqPresetId.ULT_2 -> 0x03.toByte()
+        EqPresetId.CUSTOM,
+        EqPresetId.USER_SETTING1,
+        EqPresetId.USER_SETTING2,
+        EqPresetId.USER_SETTING3,
+        EqPresetId.USER_SETTING4,
+        EqPresetId.USER_SETTING5 -> 0x04.toByte()
+        EqPresetId.FLAT -> 0x05.toByte()
+        EqPresetId.LIVE_SOUND -> 0x06.toByte()
+        else -> 0x00.toByte()
     }
 
     fun buildSetClearBass(level: Int): ByteArray =
@@ -1320,8 +1325,11 @@ object SonyTandemV2Table1Protocol {
             controlMode = combinedControlMode,
             windNoiseReduction = when (type) {
                 NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                    // The device resolves the AUTO write into the actual mic
+                    // configuration (SC `NcValue`): AUTO/AUTO_SINGLE/AUTO_DUAL all
+                    // mean auto wind-noise reduction is active.
                     when (payload.getOrNull(4)) {
-                        NC_VALUE_AUTO -> true
+                        NC_VALUE_AUTO, NC_VALUE_AUTO_SINGLE, NC_VALUE_AUTO_DUAL -> true
                         NC_VALUE_ON_DUAL, NC_VALUE_ON_SINGLE -> false
                         else -> null
                     }

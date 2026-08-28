@@ -59,6 +59,10 @@ data class CapabilityCacheEntry(
     val upscalingTypeCode: Int? = null,
     /** GS capability metadata; the matched slot remains in [multipointGsSlot]. */
     val generalSettingCapability: GeneralSettingCapabilityCache? = null,
+    /** V1 NCASM_RET_CAPABILITY's NcAsmSettingType was DUAL_SINGLE_OFF, i.e. the
+     * device has the single-mic (wind-noise) NC option. Not derivable from the
+     * function list, so it persists for cache-hit reconnects. */
+    val supportsV1WindNoise: Boolean? = null,
     val savedAtMs: Long = 0L,
 )
 

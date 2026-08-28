@@ -215,13 +215,13 @@ class SonyCapabilityProbeTest {
 
     @Test
     fun autoAndDualNcAsm_prefersDualForWrites() {
-        // LinkBuds S / WF-1000XM5 advertise AUTO_NCASM (0x15) AND the DUAL
-        // type (0x17); the device only honors level/voice through the DUAL
-        // layout, so the writable set must prefer DUAL even when AUTO is listed
-        // first (AUTO_NCASM appears before MODE_NC_ASM_DUAL in the list).
+        // A device advertising both the AUTO layout (function 0x68 → 0x15) and
+        // the DUAL layout (0x6B → 0x17) only honors level/voice through the
+        // DUAL layout, so the writable set must prefer DUAL even when AUTO is
+        // listed first.
         val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
             functions = listOf(
-                fn(SonyV2FunctionType.AUTO_NCASM, 1),
+                fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AUTO_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 1),
                 fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 6),
             ),
             fallback = baseCapabilities(),
@@ -236,14 +236,39 @@ class SonyCapabilityProbeTest {
 
     @Test
     fun autoNcAsmOnly_keepsAutoForWrites() {
+        // The genuine DUAL_AUTO function (0x68) alone selects the 0x15 layout.
         val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
-            functions = listOf(fn(SonyV2FunctionType.AUTO_NCASM, 1)),
+            functions = listOf(
+                fn(SonyV2FunctionType.MODE_NC_ASM_NOISE_CANCELLING_DUAL_AUTO_AMBIENT_SOUND_MODE_LEVEL_ADJUSTMENT, 1),
+            ),
             fallback = baseCapabilities(),
         )
         assertEquals(
             setOf(NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS),
             caps.writableNoiseControlTypes,
         )
+    }
+
+    /**
+     * AUTO_NCASM (0x70) is Adaptive Sound Control, registered under the SENSE
+     * domain in SC (`SenseInquiredType.ADAPTIVE_CONTROL`), NOT the NCASM 0x15
+     * layout. A device advertising only ASC must not get noise-control types,
+     * let alone the wind-noise capability.
+     */
+    @Test
+    fun adaptiveControlOnly_doesNotEnableNcAsmOrWindNoise() {
+        val caps = SonyCapabilityProbe.capabilitiesFromFunctions(
+            functions = listOf(
+                fn(SonyV2FunctionType.AUTO_NCASM, 1),
+                fn(SonyV2FunctionType.ADAPTIVE_CONTROL_WITH_PARAMETER_NOTIFICATION, 2),
+            ),
+            fallback = baseCapabilities(),
+        )
+        assertFalse(HeadphoneFeature.NOISE_CONTROL in caps.features)
+        assertFalse(caps.supportsAutoWindNoiseReduction)
+        assertFalse(caps.supportsWindNoiseReduction)
+        assertTrue(caps.writableNoiseControlTypes.isEmpty())
+        assertTrue(caps.noiseControlQueryTypes.isEmpty())
     }
 
     @Test

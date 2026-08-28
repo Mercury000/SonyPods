@@ -238,6 +238,10 @@ data class NoiseControlState(
 data class EqState(
     val enabled: Boolean? = null,
     val preset: EqPresetId? = null,
+    /** Base EqPresetId the device pairs with the ULT mode byte on
+     * PRESET_EQ_AND_ULT_MODE devices; while [preset] shows the ULT_1/ULT_2
+     * display marker, writes must resend this preset (SC `hf0.d`). */
+    val ultBasePreset: EqPresetId? = null,
     val presetType: EqEbbInquiredType = EqEbbInquiredType.PRESET_EQ,
     val clearBass: Int? = null,
     val bandSteps: List<Int> = emptyList(),
@@ -1308,6 +1312,8 @@ class SonyHeadphoneRepository private constructor(
                 bandCount = cachedBandCount,
                 hasClearBass = entry.eqHasClearBass ?: currentEq.hasClearBass,
             ),
+            supportsWindNoiseReduction = capabilities.supportsWindNoiseReduction ||
+                (entry.supportsV1WindNoise == true),
             upscalingInquiredTypeCode = capabilities.upscalingInquiredTypeCode
                 ?: entry.upscalingInquiredTypeCode,
             upscalingTypeCode = capabilities.upscalingTypeCode ?: entry.upscalingTypeCode,
@@ -1439,6 +1445,9 @@ class SonyHeadphoneRepository private constructor(
             upscalingTypeCode = profile.capabilities.upscalingTypeCode
                 ?: previous?.upscalingTypeCode,
             generalSettingCapability = previous?.generalSettingCapability,
+            supportsV1WindNoise = previous?.supportsV1WindNoise
+                ?: profile.capabilities.supportsWindNoiseReduction
+                    .takeIf { NcAsmInquiredType.V1_TABLE_SET1_NC_ASM in profile.capabilities.noiseControlQueryTypes },
             savedAtMs = System.currentTimeMillis(),
         )
         capabilityCache[address] = entry
@@ -2507,7 +2516,11 @@ class SonyHeadphoneRepository private constructor(
 
     private fun currentEqWriteContext(): EqWriteContext {
         val eqState = _state.value.eqState
-        return EqWriteContext(rawBandSteps = eqState.rawBandSteps, preset = eqState.preset)
+        return EqWriteContext(
+            rawBandSteps = eqState.rawBandSteps,
+            preset = eqState.preset,
+            basePreset = eqState.ultBasePreset,
+        )
     }
 
     override fun onBluetoothUnavailable(reason: String) {
@@ -2818,6 +2831,7 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.SupportFunction -> applySupportFunction(parsed)
             is ParsedTandemResponse.ProtocolInfo -> applyProtocolInfo(parsed)
             is ParsedTandemResponse.ConnectCapabilityInfo -> applyConnectCapabilityInfo(parsed)
+            is ParsedTandemResponse.NcAsmCapabilityInfo -> applyNcAsmCapabilityInfo(parsed)
             is ParsedTandemResponse.CapabilityInfo -> applyCapabilityInfo(parsed)
         }
         // After the handler, so the value is already in the state when the gate opens.
@@ -2964,7 +2978,21 @@ class SonyHeadphoneRepository private constructor(
             current.copy(
                 eqState = current.eqState.copy(
                     enabled = response.enabled ?: current.eqState.enabled,
-                    preset = response.preset ?: current.eqState.preset,
+                    // PRESET_EQ_AND_ULT_MODE folds the base preset + EqUltModeStatus
+                    // into the display vocabulary: an active ULT mode shows the
+                    // ULT_1/ULT_2 marker while ultBasePreset keeps the base preset.
+                    preset = when {
+                        response.type == EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE &&
+                            response.ultMode == 0x01 -> EqPresetId.ULT_1
+                        response.type == EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE &&
+                            response.ultMode == 0x02 -> EqPresetId.ULT_2
+                        else -> response.preset ?: current.eqState.preset
+                    },
+                    ultBasePreset = when (response.type) {
+                        EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE ->
+                            response.preset ?: current.eqState.ultBasePreset
+                        else -> current.eqState.ultBasePreset
+                    },
                     presetType = when (response.type) {
                         EqEbbInquiredType.PRESET_EQ,
                         EqEbbInquiredType.PRESET_EQ_NONCUSTOMIZABLE,
@@ -4172,6 +4200,45 @@ class SonyHeadphoneRepository private constructor(
         supportFunctionProbeRunning = false
         pendingSupportFunctionTables.clear()
         supportFunctionsByTable.clear()
+    }
+
+    /**
+     * V1 NCASM capability: the NcAsmSettingType byte decides whether the device
+     * has the three-state (dual/single-mic) NC setting — the single-mic state is
+     * what the UI exposes as wind-noise reduction (SC `qe0.d2$c` →
+     * NoiseCancellingType.DUAL_SINGLE).
+     */
+    private fun applyNcAsmCapabilityInfo(response: ParsedTandemResponse.NcAsmCapabilityInfo) {
+        val settingTypeHex = response.ncAsmSettingType?.let { "0x%02X".format(it) } ?: "?"
+        appendLog(
+            "NCASM capability type=0x02 settingType=$settingTypeHex " +
+                "windNoise=${response.supportsSingleMicWindNoise}",
+            writeLogcat = false,
+        )
+        _state.update { current ->
+            val profile = current.connectedProfile ?: return@update current
+            if (profile.capabilities.supportsWindNoiseReduction == response.supportsSingleMicWindNoise) {
+                current
+            } else {
+                current.copy(
+                    connectedProfile = profile.copy(
+                        capabilities = profile.capabilities.copy(
+                            supportsWindNoiseReduction = response.supportsSingleMicWindNoise,
+                        ),
+                    ),
+                )
+            }
+        }
+        val address = _state.value.connectedDevice?.address
+        if (!address.isNullOrBlank()) {
+            updateCapabilityCache(address) { entry ->
+                if (entry.supportsV1WindNoise == response.supportsSingleMicWindNoise) {
+                    entry
+                } else {
+                    entry.copy(supportsV1WindNoise = response.supportsSingleMicWindNoise)
+                }
+            }
+        }
     }
 
     private fun applyCapabilityInfo(response: ParsedTandemResponse.CapabilityInfo) {

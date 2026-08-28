@@ -118,6 +118,9 @@ sealed interface ParsedTandemResponse {
         val type: EqEbbInquiredType?,
         val enabled: Boolean? = null,
         val preset: EqPresetId? = null,
+        /** PRESET_EQ_AND_ULT_MODE (0x03) EqUltModeStatus byte: 0=OFF, 1=ULT_1,
+         * 2=ULT_2; null for every other inquired type. */
+        val ultMode: Int? = null,
         val clearBass: Int? = null,
         val bandSteps: List<Int> = emptyList(),
         val values: List<Int>,
@@ -527,6 +530,42 @@ sealed interface ParsedTandemResponse {
      * device returns to a GET_CAPABILITY probe; the engine records it as probe
      * evidence and derives its feature/query/writable sets from the FunctionType
      * list that triggered the probe (SC builds its capability tableset the same way). */
+    /** V1 NCASM_RET_CAPABILITY with the NcAsmSettingType lifted out (SC
+     * `qe0.d2`): DUAL_SINGLE_OFF (0x02) is the only setting type that carries
+     * the three-state NcDualSingleValue, i.e. single-mic wind-noise NC. */
+    data class NcAsmCapabilityInfo(
+        val inquiredTypeCode: Int?,
+        val ncAsmSettingType: Int?,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        val supportsSingleMicWindNoise: Boolean
+            get() = ncAsmSettingType == NC_ASM_SETTING_TYPE_DUAL_SINGLE_OFF
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is NcAsmCapabilityInfo) return false
+            return inquiredTypeCode == other.inquiredTypeCode &&
+                ncAsmSettingType == other.ncAsmSettingType &&
+                values == other.values &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = inquiredTypeCode ?: 0
+            result = 31 * result + (ncAsmSettingType ?: 0)
+            result = 31 * result + values.hashCode()
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+
+        companion object {
+            const val NC_ASM_SETTING_TYPE_ON_OFF = 0x00
+            const val NC_ASM_SETTING_TYPE_LEVEL_ADJUSTMENT = 0x01
+            const val NC_ASM_SETTING_TYPE_DUAL_SINGLE_OFF = 0x02
+        }
+    }
+
     data class CapabilityInfo(
         val domain: String,
         val inquiredTypeCode: Int?,

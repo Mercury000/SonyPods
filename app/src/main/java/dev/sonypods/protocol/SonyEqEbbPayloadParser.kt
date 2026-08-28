@@ -44,6 +44,14 @@ internal object SonyEqEbbPayloadParser {
             type = type,
             enabled = enabled,
             preset = if (isParamResponse) parsePreset(version, type, payload) else null,
+            // PRESET_EQ_AND_ULT_MODE carries the base EqPresetId and the
+            // EqUltModeStatus in separate bytes (SC `hf0.d`); the caller folds
+            // ultMode into the display state instead of overwriting the preset.
+            ultMode = if (isParamResponse && type == EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE) {
+                payload.getOrNull(2)?.unsigned
+            } else {
+                null
+            },
             clearBass = if (isParamResponse) parseClearBass(version, type, payload, bandSteps) else null,
             bandSteps = bandSteps,
             values = values,
@@ -100,15 +108,10 @@ internal object SonyEqEbbPayloadParser {
             EqEbbPayloadVersion.V2 -> when (type) {
                 EqEbbInquiredType.PRESET_EQ,
                 EqEbbInquiredType.PRESET_EQ_NONCUSTOMIZABLE,
-                EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE -> payload.getOrNull(1)?.toEqPreset()
-                EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE -> {
-                    val ult = payload.getOrNull(2)?.toInt() ?: 0
-                    when (ult) {
-                        0x01 -> EqPresetId.ULT_1
-                        0x02 -> EqPresetId.ULT_2
-                        else -> payload.getOrNull(1)?.toEqPreset()
-                    }
-                }
+                EqEbbInquiredType.PRESET_EQ_AND_ERRORCODE,
+                // Base preset only; the ULT mode byte is exposed separately via
+                // [ParsedTandemResponse.EqEbb.ultMode].
+                EqEbbInquiredType.PRESET_EQ_AND_ULT_MODE -> payload.getOrNull(1)?.toEqPreset()
                 EqEbbInquiredType.SOUND_EFFECT,
                 EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT -> {
                     payload.getOrNull(1)?.let { parseSoundEffectType(it) }
@@ -167,7 +170,7 @@ internal object SonyEqEbbPayloadParser {
             payload.getOrNull(2)?.unsigned?.let { count -> payload.size == count + 3 } == true
 
     private fun Byte.toEqPreset(): EqPresetId? =
-        EqPresetId.entries.firstOrNull { it.code == this }
+        EqPresetId.fromByteCode(this)
 
     private fun parseSoundEffectType(code: Byte): EqPresetId = when (code.toInt()) {
         0x00 -> EqPresetId.OFF

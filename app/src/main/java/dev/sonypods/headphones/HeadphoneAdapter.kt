@@ -129,6 +129,10 @@ data class HeadphoneCommand(
 data class EqWriteContext(
     val rawBandSteps: List<Int> = emptyList(),
     val preset: EqPresetId? = null,
+    /** Base EqPresetId behind a PRESET_EQ_AND_ULT_MODE display value: when the
+     * current selection is ULT_1/ULT_2, `preset` is the ULT marker and this is
+     * the preset the device pairs with the ULT mode byte (SC `hf0.d`). */
+    val basePreset: EqPresetId? = null,
 )
 
 data class HeadphoneCapabilities(

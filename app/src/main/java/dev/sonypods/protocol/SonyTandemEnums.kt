@@ -131,7 +131,25 @@ enum class EqPresetId(val code: Byte, val displayName: String) {
     USER_SETTING3(0xA3.toByte(), "User Setting 3"),
     USER_SETTING4(0xA4.toByte(), "User Setting 4"),
     USER_SETTING5(0xA5.toByte(), "User Setting 5"),
-    UNSPECIFIED(0xFF.toByte(), "Unspecified"),
+    UNSPECIFIED(0xFF.toByte(), "Unspecified");
+
+    /**
+     * True for the app-level sound-effect / ULT vocabulary entries. Their `code`
+     * bytes (0x34/0x35/0x40-0x42) do NOT exist in SC's official EqPresetId table —
+     * on the wire they are SoundEffectType or EqUltModeStatus codes instead — so
+     * they must never be written as a raw presetId byte.
+     */
+    val isSoundEffectSpace: Boolean
+        get() = this in SOUND_EFFECT_SPACE_PRESETS
+
+    companion object {
+        private val SOUND_EFFECT_SPACE_PRESETS = setOf(
+            FLAT, LIVE_SOUND, ULT, ULT_1, ULT_2,
+        )
+
+        fun fromByteCode(code: Byte): EqPresetId? =
+            entries.firstOrNull { !it.isSoundEffectSpace && it.code == code }
+    }
 }
 
 enum class NcAsmInquiredType(val code: Byte) {

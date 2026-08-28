@@ -125,30 +125,24 @@ fun AncSwitch(
         }
 
         if (ancStatus == NoiseControlMode.NOISE_CANCELLING) {
+            // 普通/抗风噪 mirrors the ambient 普通/人声 row: the protocol layer
+            // still distinguishes V1 AUTO (0x15) vs V2 single-mic (0x16), but the
+            // UI shows one unified wind-noise vocabulary.
             if ((autoWindNoiseSupported || windNoiseSupported) && onWindNoiseReductionChange != null) {
-                val title = if (autoWindNoiseSupported) {
-                    stringResource(R.string.auto_wind_noise_reduction)
-                } else {
-                    stringResource(R.string.wind_noise_reduction)
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = if (compact) 8.dp else 16.dp)
-                        .padding(horizontal = tabOuterPadding),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = title,
-                        fontSize = if (compact) 12.sp else 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = windNoiseReductionEnabled,
-                        onCheckedChange = onWindNoiseReductionChange,
-                    )
-                }
+                ResponsiveAncTabRow(
+                    tabs = listOf(
+                        stringResource(R.string.ambient_normal),
+                        stringResource(R.string.wind_noise_reduction),
+                    ),
+                    selectedTabIndex = if (windNoiseReductionEnabled) 1 else 0,
+                    onTabSelected = { onWindNoiseReductionChange(it == 1) },
+                    compact = compact,
+                    minWidth = tabMinWidth,
+                    tabMaxWidth = tabMaxWidth,
+                    height = tabHeight,
+                    itemSpacing = tabSpacing,
+                    outerPadding = tabOuterPadding,
+                )
             }
         }
 

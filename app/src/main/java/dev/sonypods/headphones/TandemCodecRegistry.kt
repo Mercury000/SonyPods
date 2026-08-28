@@ -58,12 +58,14 @@ interface TandemCodec {
         preset: EqPresetId,
         type: EqEbbInquiredType,
         bandSteps: List<Int> = emptyList(),
+        basePreset: EqPresetId? = null,
     ): ByteArray? = null
     fun buildSetEqBands(
         preset: EqPresetId,
         type: EqEbbInquiredType,
         bandSteps: List<Int>,
-    ): ByteArray? = buildSetEqPreset(preset, type, bandSteps)
+        basePreset: EqPresetId? = null,
+    ): ByteArray? = buildSetEqPreset(preset, type, bandSteps, basePreset)
     fun buildSetClearBass(level: Int): ByteArray? = null
     fun buildGetNcAsmStatus(type: NcAsmInquiredType): ByteArray? = null
     fun buildGetNcAsmParam(type: NcAsmInquiredType): ByteArray? = null
@@ -273,6 +275,7 @@ object SonyTandemV1Table1Codec : TandemCodec {
         preset: EqPresetId,
         type: EqEbbInquiredType,
         bandSteps: List<Int>,
+        basePreset: EqPresetId?,
     ): ByteArray =
         SonyTandemV1Table1Protocol.buildSetEqPreset(preset, type, bandSteps)
 
@@ -280,6 +283,7 @@ object SonyTandemV1Table1Codec : TandemCodec {
         preset: EqPresetId,
         type: EqEbbInquiredType,
         bandSteps: List<Int>,
+        basePreset: EqPresetId?,
     ): ByteArray =
         SonyTandemV1Table1Protocol.buildSetEqPreset(
             EqPresetId.UNSPECIFIED,
@@ -412,15 +416,17 @@ object SonyTandemV2Table1Codec : TandemCodec {
         preset: EqPresetId,
         type: EqEbbInquiredType,
         bandSteps: List<Int>,
+        basePreset: EqPresetId?,
     ): ByteArray =
-        SonyTandemV2Table1Protocol.buildSetEqPreset(preset, type, bandSteps)
+        SonyTandemV2Table1Protocol.buildSetEqPreset(preset, type, bandSteps, basePreset)
 
     fun buildSetEqPreset(
         preset: EqPresetId,
         typeCode: Byte,
         bandSteps: List<Int> = emptyList(),
+        basePreset: EqPresetId? = null,
     ): ByteArray =
-        SonyTandemV2Table1Protocol.buildSetEqPreset(preset, typeCode, bandSteps)
+        SonyTandemV2Table1Protocol.buildSetEqPreset(preset, typeCode, bandSteps, basePreset)
 
     override fun buildSetClearBass(level: Int): ByteArray =
         SonyTandemV2Table1Protocol.buildSetClearBass(level)

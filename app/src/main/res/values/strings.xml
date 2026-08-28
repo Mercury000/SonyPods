@@ -128,7 +128,6 @@
     <string name="ambient_normal">Normal</string>
     <string name="ambient_voice_focus">Voice</string>
     <string name="ambient_level">Ambient sound level</string>
-    <string name="auto_wind_noise_reduction">Automatic Wind Noise Reduction</string>
     <string name="wind_noise_reduction">Wind Noise Reduction</string>
     <string name="noise_adaptive_title">Auto Ambient Sound</string>
     <string name="noise_adaptive_sensitivity_title">Noise Detection Sensitivity</string>

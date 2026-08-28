@@ -373,9 +373,12 @@ object SonyTandemV1Table1Protocol {
             )
             CONNECT_RET_CAPABILITY_INFO -> parseConnectRetCapabilityInfo(payload)
                 ?: unknown(command, payload, raw)
-            NCASM_RET_CAPABILITY -> ParsedTandemResponse.CapabilityInfo(
-                domain = "NCASM",
+            NCASM_RET_CAPABILITY -> ParsedTandemResponse.NcAsmCapabilityInfo(
                 inquiredTypeCode = payload.firstOrNull()?.unsigned,
+                // SC `qe0.d2$c` body for the V1 NC/ASM type 0x02:
+                // [type][NcAsmSettingType][ncValue][AsmSettingType][count][ids...];
+                // the setting type decides whether single-mic wind-noise NC exists.
+                ncAsmSettingType = payload.getOrNull(1)?.unsigned,
                 values = payload.unsignedList(),
                 raw = raw,
             )
@@ -600,10 +603,18 @@ object SonyTandemV1Table1Protocol {
         val ambientMode = payload.getOrNull(5)?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }
         }
-        val windNoiseReduction = when (payload.getOrNull(3)) {
-            NC_VALUE_ON_SINGLE -> true
-            NC_VALUE_ON_DUAL -> false
-            else -> null
+        // SC `se0.b0` layout: [type][NcAsmEffect][NcAsmSettingType][ncValue]…
+        // payload[3] is a three-state NcDualSingleValue only when the setting
+        // type is DUAL_SINGLE_OFF; on ON_OFF devices 0x01 there merely means
+        // "NC on" and must not read as wind-noise.
+        val windNoiseReduction = if (payload.getOrNull(2) == NCASM_SETTING_DUAL_SINGLE_OFF) {
+            when (payload.getOrNull(3)) {
+                NC_VALUE_ON_SINGLE -> true
+                NC_VALUE_ON_DUAL -> false
+                else -> null
+            }
+        } else {
+            null
         }
         return ParsedTandemResponse.NoiseControl(
             type = type,
