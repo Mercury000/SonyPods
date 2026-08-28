@@ -759,6 +759,29 @@ class SonyTandemHeadphoneAdapterTest {
         assertEquals(NoiseControlMode.NOISE_CANCELLING, parsed.controlMode)
     }
 
+    /**
+     * SYSTEM inquired codes collide across generations: 0x05 is SMART_TALKING_MODE on
+     * V1 but VOICE_ASSISTANT_WAKE_WORD on V2, so the response must be classified with
+     * the V1 table and routed to the V1 speak-to-chat binding.
+     */
+    @Test
+    fun parse_v1SmartTalkingStatus_0xf3_routedViaV1SpeakToChat() {
+        val profile = probedV1(
+            xm4Device(),
+            v1FullSet() + v1(SonyV1FunctionType.SMART_TALKING_MODE, 5),
+        )
+        assertTrue(profile.supports(HeadphoneFeature.SPEAK_TO_CHAT))
+        // [SYSTEM_RET_STATUS 0xF3][SMART_TALKING_MODE 0x05][CommonStatus][ACTIVE 0x01]
+        val parsed = SonyTandemHeadphoneAdapter.parse(profile, byteArrayOf(0x0E, 0xF3.toByte(), 0x05, 0x00, 0x01))
+
+        assertTrue(
+            "Expected SpeakToChatStatus but got ${parsed::class.simpleName}",
+            parsed is ParsedTandemResponse.SpeakToChatStatus,
+        )
+        parsed as ParsedTandemResponse.SpeakToChatStatus
+        assertEquals(dev.sonypods.protocol.SmartTalkingEffectStatus.ACTIVE, parsed.effectStatus)
+    }
+
     @Test
     fun parse_v1PlaybackResponse_0xa3_parsedViaV1() {
         val profile = probedV1(xm4Device(), v1FullSet())

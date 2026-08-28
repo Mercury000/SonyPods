@@ -1200,13 +1200,26 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 channel = channel,
             )
         }
-        val feature = classifyCommand(command, payload)
+        val feature = classifyCommand(command, payload, isV1Wire(profile, channel))
         return profile.bindingFor(feature) ?: FeatureProtocolBinding(
             feature = feature,
             variant = variantForChannel(channel, command),
             channel = channel,
         )
     }
+
+    /**
+     * Which generation's code tables apply to an incoming frame. The channel
+     * decides it wherever it distinguishes them — the V1 MC service only ever
+     * carries V1 and the V2 services only V2 — while SPP carries both, so there
+     * only the profile knows.
+     */
+    private fun isV1Wire(profile: ConnectedHeadphoneProfile, channel: TandemChannel): Boolean =
+        when (channel) {
+            TandemChannel.GATT_V1_MC -> true
+            TandemChannel.GATT_V2_HPC, TandemChannel.GATT_V2_MC -> false
+            TandemChannel.SPP_MDR -> profile.isV1
+        }
 
     private fun isV1Table2Command(command: Byte): Boolean {
         val code = command.toInt() and 0xFF
@@ -1225,7 +1238,11 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             TandemChannel.SPP_MDR -> HeadphoneProtocolVariant.UNKNOWN
         }
 
-    private fun classifyCommand(command: Byte, payload: ByteArray = byteArrayOf()): HeadphoneFeature = when (command) {
+    private fun classifyCommand(
+        command: Byte,
+        payload: ByteArray = byteArrayOf(),
+        isV1: Boolean = false,
+    ): HeadphoneFeature = when (command) {
         COMMON_RET_BATTERY_LEVEL -> HeadphoneFeature.BATTERY
         COMMON_NTFY_BATTERY_LEVEL -> classify0x13(payload)
         POWER_RET_STATUS, POWER_NTFY_STATUS -> HeadphoneFeature.BATTERY
@@ -1243,17 +1260,37 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         SYSTEM_RET_PARAM,
         SYSTEM_NTFY_PARAM,
         SYSTEM_RET_EXT_PARAM,
-        SYSTEM_NTFY_EXT_PARAM -> classifySystemResponse(payload)
+        SYSTEM_NTFY_EXT_PARAM -> classifySystemResponse(payload, isV1)
         else -> HeadphoneFeature.DEVICE_INFO
     }
 
-    private fun classifySystemResponse(payload: ByteArray): HeadphoneFeature =
-        when (payload.firstOrNull()?.toInt()?.and(0xFF)) {
-            0x03, 0x0E -> HeadphoneFeature.GESTURE_OPERATIONS
-            0x0D -> HeadphoneFeature.QUICK_ACCESS
-            0x06 -> HeadphoneFeature.WEARING_STATUS
-            else -> HeadphoneFeature.DEVICE_INFO
+    /**
+     * SYSTEM responses carry their inquired type in the first payload byte, and the
+     * two generations' code tables collide: on V1 (`p068v1.table1.param`) 0x03 is
+     * CONTROL_BY_WEARING, 0x05 SMART_TALKING_MODE and 0x06 ASSIGNABLE_SETTINGS,
+     * whereas on V2 those same bytes mean ASSIGNABLE_SETTINGS,
+     * VOICE_ASSISTANT_WAKE_WORD and WEARING_STATUS_DETECTOR. The feature picked here
+     * selects the binding — hence the codec — used to parse the frame, so it has to
+     * follow the wire generation rather than assume V2.
+     */
+    private fun classifySystemResponse(payload: ByteArray, isV1: Boolean): HeadphoneFeature {
+        val inquiredType = payload.firstOrNull()?.toInt()?.and(0xFF) ?: return HeadphoneFeature.DEVICE_INFO
+        return if (isV1) {
+            when (inquiredType) {
+                0x05 -> HeadphoneFeature.SPEAK_TO_CHAT
+                0x06 -> HeadphoneFeature.GESTURE_OPERATIONS
+                else -> HeadphoneFeature.DEVICE_INFO
+            }
+        } else {
+            when (inquiredType) {
+                0x02, 0x0C -> HeadphoneFeature.SPEAK_TO_CHAT
+                0x03, 0x0E -> HeadphoneFeature.GESTURE_OPERATIONS
+                0x06 -> HeadphoneFeature.WEARING_STATUS
+                0x0D -> HeadphoneFeature.QUICK_ACCESS
+                else -> HeadphoneFeature.DEVICE_INFO
+            }
         }
+    }
 
     /**
      * 0x13 is overloaded: V2 COMMON_RET_STATUS and V1 COMMON_NTFY_BATTERY_LEVEL.
