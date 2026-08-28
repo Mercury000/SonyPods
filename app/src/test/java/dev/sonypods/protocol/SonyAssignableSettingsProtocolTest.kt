@@ -2,6 +2,7 @@ package dev.sonypods.protocol
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SonyAssignableSettingsProtocolTest {
@@ -83,5 +84,41 @@ class SonyAssignableSettingsProtocolTest {
         ) as ParsedTandemResponse.AssignableSettingsCapability
         assertEquals(AssignableSettingsKey.LEFT_SIDE, capability.keys.single().key)
         assertEquals(AssignableSettingsPreset.PLAYBACK_CONTROL, capability.keys.single().defaultPreset)
+    }
+
+    /**
+     * Official `cg0.g` semantics: a preset byte off the table (or a count that
+     * disagrees with the remaining length) rejects the whole frame — the
+     * previous state is kept. Silently dropping only the unknown entry would
+     * shift every subsequent key's preset and corrupt the next write.
+     */
+    @Test
+    fun presetListWithUnknownByteIsRejectedAsAWhole() {
+        // 0x73 is off both the shared and official V2 tables.
+        val unknownByte = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF7.toByte(), 0x03, 0x02, 0x73, 0x20),
+        )
+        assertTrue(unknownByte is ParsedTandemResponse.Unknown)
+
+        // OUT_OF_RANGE placeholder byte is equally rejected.
+        val outOfRange = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF7.toByte(), 0x03, 0x02, 0xFE.toByte(), 0x20),
+        )
+        assertTrue(outOfRange is ParsedTandemResponse.Unknown)
+
+        // count disagrees with remaining length (truncated list).
+        val badLength = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF7.toByte(), 0x03, 0x02, 0x20),
+        )
+        assertTrue(badLength is ParsedTandemResponse.Unknown)
+
+        // Well-formed frame still parses with all entries in place.
+        val ok = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0xF7.toByte(), 0x03, 0x02, 0x20, 0x00),
+        ) as ParsedTandemResponse.AssignableSettingsPresets
+        assertEquals(
+            listOf(AssignableSettingsPreset.PLAYBACK_CONTROL, AssignableSettingsPreset.AMBIENT_SOUND_CONTROL),
+            ok.presets,
+        )
     }
 }

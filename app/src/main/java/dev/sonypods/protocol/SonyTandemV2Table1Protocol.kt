@@ -1884,15 +1884,26 @@ object SonyTandemV2Table1Protocol {
         )
     }
 
-    /** Parse the cg0.g current-preset list: [type][count][preset...] */
+    /**
+     * Parse the cg0.g current-preset list: [type][count][preset...]. Official
+     * semantics: an unknown preset byte or a count that disagrees with the
+     * remaining length rejects the whole frame (TandemException) — the previous
+     * state is kept. Dropping only the unknown entry would shift every
+     * subsequent key's preset, misaligning both the display and the next write.
+     */
     private fun parseAssignableSettingsPresets(
         payload: ByteArray,
         raw: ByteArray,
     ): ParsedTandemResponse {
+        fun reject() = ParsedTandemResponse.Unknown(null, SYSTEM_RET_PARAM.unsigned, payload, raw)
         val count = payload.getOrNull(1)?.unsigned ?: 0
-        val presets = payload.drop(2).take(count).mapNotNull { code ->
-            AssignableSettingsPreset.entries.firstOrNull { it.code == code }
+        if (count < 1 || payload.size != 2 + count) {
+            return reject()
+        }
+        val presets = payload.drop(2).take(count).map { byte ->
+            AssignableSettingsPreset.entries.firstOrNull { it.code == byte }
                 ?.takeIf { it != AssignableSettingsPreset.OUT_OF_RANGE }
+                ?: return reject()
         }
         return ParsedTandemResponse.AssignableSettingsPresets(
             presets = presets,
