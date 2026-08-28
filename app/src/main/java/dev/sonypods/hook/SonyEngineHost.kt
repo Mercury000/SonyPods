@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.content.SharedPreferences
 import android.bluetooth.BluetoothCodecConfig
@@ -1269,12 +1270,45 @@ object SonyEngineHost {
 
 
     /**
+     * Whether the phone itself supports LE Audio — Xiaomi's own gate for the LE
+     * Audio / Auracast settings UI (`BluetoothAdvancedSettings.isDeviceSupported`,
+     * `BluetoothLeAudioModePreferenceController`): `isLeAudioSupported() == 10`
+     * (AOSP FEATURE_SUPPORTED); 1 is "bluetooth off", every other code unsupported.
+     * Called only while bluetooth is on, where the read is authoritative. A
+     * missing method (non-Xiaomi framework) keeps the previous value rather than
+     * hiding the card — absence of the API is not evidence of absence of support.
+     */
+    private fun phoneSupportsLeAudio(): Boolean {
+        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+            ?: return phoneLeAudioSupported
+        return runCatching {
+            val method = BluetoothAdapter::class.java.getMethod("isLeAudioSupported")
+            method.isAccessible = true
+            val result = method.invoke(adapter) as? Int
+            when (result) {
+                null -> phoneLeAudioSupported
+                else -> {
+                    phoneLeAudioSupported = result == 10
+                    phoneLeAudioSupported
+                }
+            }
+        }.getOrElse {
+            Log.w(TAG, "isLeAudioSupported read failed", it)
+            phoneLeAudioSupported
+        }
+    }
+
+    private var phoneLeAudioSupported: Boolean = true
+
+    /**
      * Adds every fact only this process can see to a repository-built snapshot: the system's LE
      * Audio permission and its LDAC switch, both of which live in the profile services rather than
      * in the headset.
      */
     private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot =
-        withControlIdentity(withLdac(withLeAudioPolicy(base)))
+        withControlIdentity(withLdac(withLeAudioPolicy(base)).let { snapshot ->
+            snapshot.copy(phoneSupportsLeAudio = phoneSupportsLeAudio())
+        })
 
     /**
      * Publishes the control (classic) identity as the device address.

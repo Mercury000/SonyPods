@@ -292,7 +292,9 @@ private fun LazyListScope.podControlItems(
         }
     }
 
-    if (uiState.supportsLeAudio && visibility.leAudioCard) {
+    // The phone's own LE Audio capability gates the card: without it there is no
+    // LC3 to switch to, ever — the headset's LE support is irrelevant then.
+    if (uiState.supportsLeAudio && uiState.phoneSupportsLeAudio && visibility.leAudioCard) {
         item {
             LeAudioCard(
                 uiState = uiState,

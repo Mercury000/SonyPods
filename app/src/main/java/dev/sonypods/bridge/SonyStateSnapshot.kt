@@ -109,6 +109,13 @@ data class SonyStateSnapshot(
     val eqClearBassMax: Int = 10,
 
     val supportsLeAudio: Boolean = false,
+    /**
+     * Whether the *phone* itself supports LE Audio (Xiaomi's own gate for the LE
+     * Audio / Auracast UI: `BluetoothAdapter.isLeAudioSupported() == 10`). False
+     * hides the LE Audio card and the LC3-only behaviors — the headset's
+     * capability says nothing about the phone being able to carry LC3.
+     */
+    val phoneSupportsLeAudio: Boolean = true,
     val leaStatus: String? = null,
     /** DSEE / DSEE Extreme (AUDIO-domain upscaling): supported + current state.
      * [upscalingTypeCode] is the AUDIO_RET_CAPABILITY generation byte
@@ -287,6 +294,7 @@ data class SonyStateSnapshot(
         putInt(KEY_EQ_CB_MAX, eqClearBassMax)
 
         putBoolean(KEY_SUPPORTS_LEA, supportsLeAudio)
+        putBoolean(KEY_PHONE_SUPPORTS_LEA, phoneSupportsLeAudio)
         putBoolean(KEY_SUPPORTS_UPSCALING, supportsUpscaling)
         upscalingEnabled?.let { putBoolean(KEY_UPSCALING_ENABLED, it) }
         putInt(KEY_UPSCALING_TYPE, upscalingTypeCode)
@@ -409,6 +417,7 @@ data class SonyStateSnapshot(
         private const val KEY_EQ_CB_MIN = "eq_cb_min"
         private const val KEY_EQ_CB_MAX = "eq_cb_max"
         private const val KEY_SUPPORTS_LEA = "supports_lea"
+        private const val KEY_PHONE_SUPPORTS_LEA = "phone_supports_lea"
         private const val KEY_SUPPORTS_UPSCALING = "supports_upscaling"
         private const val KEY_UPSCALING_ENABLED = "upscaling_enabled"
         private const val KEY_UPSCALING_TYPE = "upscaling_type"
@@ -520,6 +529,7 @@ data class SonyStateSnapshot(
             eqClearBassMin = bundle.getInt(KEY_EQ_CB_MIN, -10),
             eqClearBassMax = bundle.getInt(KEY_EQ_CB_MAX, 10),
             supportsLeAudio = bundle.getBoolean(KEY_SUPPORTS_LEA, false),
+            phoneSupportsLeAudio = bundle.getBoolean(KEY_PHONE_SUPPORTS_LEA, true),
             supportsUpscaling = bundle.getBoolean(KEY_SUPPORTS_UPSCALING, false),
             upscalingEnabled = if (bundle.containsKey(KEY_UPSCALING_ENABLED)) {
                 bundle.getBoolean(KEY_UPSCALING_ENABLED)
