@@ -13,6 +13,7 @@ data class EqDeviceConfig(
     val bandCount: Int,
     val hasClearBass: Boolean,
     val clearBassWriteMode: ClearBassWriteMode = ClearBassWriteMode.EBB_PARAM,
+    val bandLabels: List<String> = emptyList(),
 )
 
 enum class ClearBassWriteMode {
@@ -91,14 +92,24 @@ class EqProtocolEngine(
 
         private val DEFAULT_BAND_LABELS = listOf("400 Hz", "1 kHz", "2.5 kHz", "6.3 kHz", "16 kHz")
 
-        fun uiCapability(config: EqDeviceConfig): EqUiCapability = EqUiCapability(
-            availablePresets = config.availablePresets,
-            visibleBandCount = config.bandCount - 1,
-            bandLabels = DEFAULT_BAND_LABELS,
-            bandDisplayRange = -10..10,
-            hasClearBass = config.hasClearBass,
-            clearBassDisplayRange = -10..10,
-            bandStepCenter = BAND_STEP_CENTER,
-        )
+        fun uiCapability(config: EqDeviceConfig): EqUiCapability {
+            val labels = config.bandLabels.ifEmpty { DEFAULT_BAND_LABELS }
+            val visibleCount = if (config.bandLabels.isNotEmpty()) {
+                config.bandLabels.size
+            } else if (config.hasClearBass) {
+                (config.bandCount - 1).coerceAtLeast(0)
+            } else {
+                config.bandCount.coerceAtLeast(0)
+            }
+            return EqUiCapability(
+                availablePresets = config.availablePresets,
+                visibleBandCount = visibleCount,
+                bandLabels = labels,
+                bandDisplayRange = -10..10,
+                hasClearBass = config.hasClearBass,
+                clearBassDisplayRange = -10..10,
+                bandStepCenter = BAND_STEP_CENTER,
+            )
+        }
     }
 }

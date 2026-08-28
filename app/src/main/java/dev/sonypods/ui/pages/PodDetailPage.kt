@@ -717,7 +717,7 @@ private fun MultipointEntryContent(
 @Composable
 private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
     val presets = uiState.eqAvailablePresets.takeIf { it.isNotEmpty() }
-        ?: EqPresetId.entries.toList()
+        ?: listOfNotNull(uiState.eqPreset).ifEmpty { listOf(EqPresetId.OFF) }
     val currentPreset = uiState.eqPreset
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {

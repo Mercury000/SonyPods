@@ -27,6 +27,7 @@ import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.headphones.HeadphoneProtocolVariant
 import dev.sonypods.headphones.HeadphoneTransport
 import dev.sonypods.headphones.TandemCodecRegistry
+import dev.sonypods.headphones.EqProtocolEngine
 import dev.sonypods.headphones.PlaybackDispatchStrategy
 import dev.sonypods.headphones.MultipointDeviceAction
 import dev.sonypods.headphones.buildFeatureBindings
@@ -54,6 +55,7 @@ import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.DseeEffectState
 import dev.sonypods.protocol.DseeGeneration
 import dev.sonypods.protocol.SoundQualityCodec
+import dev.sonypods.protocol.EqBandInformationType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
@@ -2896,21 +2898,42 @@ class SonyHeadphoneRepository private constructor(
         )
         // Band geometry is only discoverable at runtime; the extended-info bands
         // list is the authoritative band count (raw bands, Clear Bass included).
-        if (response.bands.size > 0) {
+        if (response.bands.isNotEmpty()) {
+            val normalBands = response.bands.filter { it.type != EqBandInformationType.SPECIFIC_INFORMATION }
+            val hasClearBass = response.bands.any { it.type == EqBandInformationType.SPECIFIC_INFORMATION }
+            val dynamicLabels = normalBands.map { band ->
+                when (band.type) {
+                    EqBandInformationType.HZ -> {
+                        if (band.value < 1000) {
+                            "${band.value} Hz"
+                        } else if (band.value % 1000 == 0) {
+                            "${band.value / 1000} kHz"
+                        } else {
+                            val dec = band.value / 1000.0
+                            if (dec == dec.toLong().toDouble()) "${dec.toLong()} kHz" else "$dec kHz"
+                        }
+                    }
+                    EqBandInformationType.KHZ -> "${band.value} kHz"
+                    else -> if (band.value in 1..20000) "${band.value} Hz" else "${band.value}"
+                }
+            }
             _state.update { current ->
                 val profile = current.connectedProfile
-                if (profile == null || profile.capabilities.eqConfig.bandCount == response.bands.size) {
+                if (profile == null) {
                     current
                 } else {
+                    val updatedEqConfig = profile.capabilities.eqConfig.copy(
+                        bandCount = response.bands.size,
+                        hasClearBass = hasClearBass,
+                        bandLabels = dynamicLabels,
+                    )
                     current.copy(
                         connectedProfile = profile.copy(
                             capabilities = profile.capabilities.copy(
-                                eqConfig = profile.capabilities.eqConfig.copy(bandCount = response.bands.size),
+                                eqConfig = updatedEqConfig,
                             )
                         ),
-                        eqUiCapability = profile.eqUiCapability.copy(
-                            visibleBandCount = (response.bands.size - 1).coerceAtLeast(0),
-                        ),
+                        eqUiCapability = EqProtocolEngine.uiCapability(updatedEqConfig),
                     )
                 }
             }
