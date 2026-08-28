@@ -76,6 +76,7 @@ interface TandemCodec {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean = false,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+        windNoiseReduction: Boolean = false,
     ): ByteArray? = null
     fun buildSetNcOnOff(enabled: Boolean): ByteArray? = null
     fun buildSetAmbientSound(enabled: Boolean, mode: AmbientSoundMode): ByteArray? = null
@@ -236,10 +237,11 @@ object SonyTandemV1Table1Codec : TandemCodec {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
+        windNoiseReduction: Boolean,
     ): ByteArray? =
         if (type == NcAsmInquiredType.V1_TABLE_SET1_NC_ASM) {
             // V1 has no noise-adaptive concept; the extra params are ignored.
-            SonyTandemV1Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode)
+            SonyTandemV1Table1Protocol.buildSetNoiseControlMode(mode, ambientLevel, ambientMode, windNoiseReduction)
         } else {
             null
         }
@@ -428,6 +430,7 @@ object SonyTandemV2Table1Codec : TandemCodec {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
+        windNoiseReduction: Boolean,
     ): ByteArray? =
         when (type) {
             // All V2 NCASM types share the same official-layout dispatcher; V1
@@ -435,7 +438,7 @@ object SonyTandemV2Table1Codec : TandemCodec {
             NcAsmInquiredType.V1_TABLE_SET1_NC_ASM,
             NcAsmInquiredType.NC_TEST_MODE -> null
             else -> SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
-                mode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity,
+                mode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity, windNoiseReduction,
             )
         }
 

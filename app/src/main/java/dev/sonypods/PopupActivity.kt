@@ -259,6 +259,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
             PopupBody(
                 sonyState = sonyState,
                 onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+                onWindNoiseReductionChange = { SonyBridge.setWindNoiseReduction(context, it) },
                 onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
                 onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
                 onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },
@@ -274,6 +275,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 private fun PopupBody(
     sonyState: SonyStateSnapshot,
     onAncModeChange: (NoiseControlMode) -> Unit,
+    onWindNoiseReductionChange: (Boolean) -> Unit,
     onAmbientLevelChange: (Int) -> Unit,
     onAmbientVoiceModeChange: (Boolean) -> Unit,
     onNoiseAdaptiveChange: (Boolean) -> Unit,
@@ -303,6 +305,10 @@ private fun PopupBody(
                 onAmbientLevelChange = onAmbientLevelChange,
                 ambientVoiceMode = sonyState.ambientVoiceMode,
                 onAmbientVoiceModeChange = onAmbientVoiceModeChange,
+                autoWindNoiseSupported = sonyState.supportsAutoWindNoiseReduction,
+                windNoiseSupported = sonyState.supportsWindNoiseReduction,
+                windNoiseReductionEnabled = sonyState.windNoiseReduction,
+                onWindNoiseReductionChange = onWindNoiseReductionChange,
                 noiseAdaptiveSupported = sonyState.supportsNoiseAdaptive,
                 noiseAdaptiveEnabled = sonyState.noiseAdaptiveEnabled,
                 onNoiseAdaptiveChange = onNoiseAdaptiveChange,

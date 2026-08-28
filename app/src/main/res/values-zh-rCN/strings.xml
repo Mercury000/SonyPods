@@ -129,6 +129,8 @@
     <string name="ambient_normal">普通</string>
     <string name="ambient_voice_focus">人声</string>
     <string name="ambient_level">环境声等级</string>
+    <string name="auto_wind_noise_reduction">自动减少风噪</string>
+    <string name="wind_noise_reduction">风噪降低</string>
     <string name="noise_adaptive_title">自动环境声音</string>
     <string name="noise_adaptive_sensitivity_title">噪声检测灵敏度</string>
     <string name="noise_adaptive_sensitivity_standard">标准</string>

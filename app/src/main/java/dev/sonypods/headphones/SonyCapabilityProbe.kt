@@ -468,6 +468,14 @@ object SonyCapabilityProbe {
             }
         }
 
+        val supportsAutoWindNoiseReduction = noiseQueries.any {
+            it == NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS
+        }
+        val supportsWindNoiseReduction = noiseQueries.any {
+            it == NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS ||
+                it == NcAsmInquiredType.V1_TABLE_SET1_NC_ASM
+        }
+
         return fallback.copy(
             features = features + (fallback.features - fallbackOnlyFeatures) ,
             formFactor = formFactorFromBattery(batteryQueries),
@@ -475,6 +483,8 @@ object SonyCapabilityProbe {
             noiseControlQueryTypes = noiseQueries.distinct().ifEmpty { fallback.noiseControlQueryTypes },
             writableNoiseControlTypes = preferDualWriteTypes(writableNoise)
                 .ifEmpty { fallback.writableNoiseControlTypes },
+            supportsAutoWindNoiseReduction = supportsAutoWindNoiseReduction || fallback.supportsAutoWindNoiseReduction,
+            supportsWindNoiseReduction = supportsWindNoiseReduction || fallback.supportsWindNoiseReduction,
             upscalingInquiredTypeCode = upscalingInquiredTypeCode
                 ?: fallback.upscalingInquiredTypeCode,
             // The DSEE generation byte only arrives via the AUDIO_RET_CAPABILITY

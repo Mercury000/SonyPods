@@ -235,6 +235,7 @@ object SonyTandemV2Table1Protocol {
     private const val NC_VALUE_OFF: Byte = 0x00
     private const val NC_VALUE_ON_SINGLE: Byte = 0x01
     private const val NC_VALUE_ON_DUAL: Byte = 0x02
+    private const val NC_VALUE_AUTO: Byte = 0x03
 
     // ── NC_AMB_TOGGLE Function byte codes (rf0/j, `system/param/Function`) ──
     // Mapping is semantic: NC_ASM_OFF turns everything off, NC_OFF turns noise
@@ -493,12 +494,22 @@ object SonyTandemV2Table1Protocol {
         type: NcAsmInquiredType = NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
         noiseAdaptive: Boolean = false,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+        windNoiseReduction: Boolean = false,
     ): ByteArray {
         val effect = if (controlMode == NoiseControlMode.OFF) NCASM_OFF else NCASM_ON
         val mode = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_MODE_ASM else NCASM_MODE_NC
         val level = ambientLevel.coerceIn(1, 20).toByte()
         val ncOn = if (controlMode == NoiseControlMode.NOISE_CANCELLING) NCASM_ON else NCASM_OFF
-        val ncValue = if (controlMode == NoiseControlMode.NOISE_CANCELLING) NC_VALUE_ON_DUAL else NC_VALUE_OFF
+        val ncValue = if (controlMode == NoiseControlMode.NOISE_CANCELLING) {
+            if (windNoiseReduction) NC_VALUE_ON_SINGLE else NC_VALUE_ON_DUAL
+        } else {
+            NC_VALUE_OFF
+        }
+        val autoNcValue = if (controlMode == NoiseControlMode.NOISE_CANCELLING) {
+            if (windNoiseReduction) NC_VALUE_AUTO else NC_VALUE_ON_DUAL
+        } else {
+            NC_VALUE_ON_DUAL
+        }
         val asmOn = if (controlMode == NoiseControlMode.AMBIENT_SOUND) NCASM_ON else NCASM_OFF
 
         if (type == NcAsmInquiredType.NC_AMB_TOGGLE) {
@@ -525,10 +536,10 @@ object SonyTandemV2Table1Protocol {
             // rf0/i: [NcAsmMode][NcValue][AmbientSoundMode][level].
             // NcValue is ON_DUAL for every mode on the AUTO device (btsnoop
             // `68 15 01 01 01 02 01 10` ambient / `68 15 01 01 00 02 01 10` NC /
-            // `68 15 01 00 00 02 01 0a` off — WF-1000XM4); the mode byte picks
-            // NC/ASM and totalEffect carries on/off.
+            // `68 15 01 00 00 02 01 0a` off — WF-1000XM4); when wind noise reduction
+            // is enabled, NcValue is AUTO (0x03) in NC mode.
             NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
-                byteArrayOf(mode, NC_VALUE_ON_DUAL, ambientMode.code, level)
+                byteArrayOf(mode, autoNcValue, ambientMode.code, level)
             // rf0/h: [NcAsmMode][NcValue][AmbientSoundMode][level]
             NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
                 byteArrayOf(mode, ncValue, ambientMode.code, level)
@@ -572,9 +583,10 @@ object SonyTandemV2Table1Protocol {
         type: NcAsmInquiredType = NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS,
         noiseAdaptive: Boolean = false,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+        windNoiseReduction: Boolean = false,
     ): ByteArray =
         buildSetNoiseControlMode(
-            controlMode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity,
+            controlMode, ambientLevel, ambientMode, type, noiseAdaptive, noiseAdaptiveSensitivity, windNoiseReduction,
         )
 
     fun buildGetPlaybackStatus(
@@ -1268,6 +1280,34 @@ object SonyTandemV2Table1Protocol {
             },
             ambientMode = ambientMode,
             controlMode = combinedControlMode,
+            windNoiseReduction = when (type) {
+                NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                    when (payload.getOrNull(4)) {
+                        NC_VALUE_AUTO -> true
+                        NC_VALUE_ON_DUAL, NC_VALUE_ON_SINGLE -> false
+                        else -> null
+                    }
+                NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS ->
+                    when (payload.getOrNull(4)) {
+                        NC_VALUE_ON_SINGLE -> true
+                        NC_VALUE_ON_DUAL -> false
+                        else -> null
+                    }
+                NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+                NcAsmInquiredType.NC_MODE_SWITCH_AND_ASM_ON_OFF ->
+                    when (payload.getOrNull(3)) {
+                        NC_VALUE_ON_SINGLE -> true
+                        NC_VALUE_ON_DUAL -> false
+                        else -> null
+                    }
+                NcAsmInquiredType.V1_TABLE_SET1_NC_ASM ->
+                    when (payload.getOrNull(3)) {
+                        NC_VALUE_ON_SINGLE -> true
+                        NC_VALUE_ON_DUAL -> false
+                        else -> null
+                    }
+                else -> null
+            },
             // rf0/g trailing pair: [6]=NcAsmOnOffValue NA toggle, [7]=sensitivity.
             noiseAdaptiveEnabled = if (type == NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA) {
                 payload.getOrNull(6)?.let { it == NCASM_ON }

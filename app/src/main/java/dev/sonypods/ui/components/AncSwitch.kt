@@ -69,6 +69,10 @@ fun AncSwitch(
     onAmbientLevelChange: ((Int) -> Unit)? = null,
     ambientVoiceMode: Boolean = false,
     onAmbientVoiceModeChange: ((Boolean) -> Unit)? = null,
+    autoWindNoiseSupported: Boolean = false,
+    windNoiseSupported: Boolean = false,
+    windNoiseReductionEnabled: Boolean = false,
+    onWindNoiseReductionChange: ((Boolean) -> Unit)? = null,
     noiseAdaptiveSupported: Boolean = false,
     noiseAdaptiveEnabled: Boolean = false,
     onNoiseAdaptiveChange: ((Boolean) -> Unit)? = null,
@@ -118,6 +122,34 @@ fun AncSwitch(
                 modifier = Modifier.weight(1f),
                 compact = compact
             )
+        }
+
+        if (ancStatus == NoiseControlMode.NOISE_CANCELLING) {
+            if ((autoWindNoiseSupported || windNoiseSupported) && onWindNoiseReductionChange != null) {
+                val title = if (autoWindNoiseSupported) {
+                    stringResource(R.string.auto_wind_noise_reduction)
+                } else {
+                    stringResource(R.string.wind_noise_reduction)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (compact) 8.dp else 16.dp)
+                        .padding(horizontal = tabOuterPadding),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = title,
+                        fontSize = if (compact) 12.sp else 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = windNoiseReductionEnabled,
+                        onCheckedChange = onWindNoiseReductionChange,
+                    )
+                }
+            }
         }
 
         if (ancStatus == NoiseControlMode.AMBIENT_SOUND) {

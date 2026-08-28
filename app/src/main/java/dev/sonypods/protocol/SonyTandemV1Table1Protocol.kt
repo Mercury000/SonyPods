@@ -183,6 +183,7 @@ object SonyTandemV1Table1Protocol {
         controlMode: NoiseControlMode,
         ambientLevel: Int = 10,
         ambientMode: AmbientSoundMode = AmbientSoundMode.NORMAL,
+        windNoiseReduction: Boolean = false,
     ): ByteArray {
         val effect = if (controlMode == NoiseControlMode.OFF) {
             NCASM_EFFECT_OFF
@@ -190,7 +191,7 @@ object SonyTandemV1Table1Protocol {
             NCASM_EFFECT_ADJUSTMENT_COMPLETION
         }
         val ncValue = when (controlMode) {
-            NoiseControlMode.NOISE_CANCELLING -> NC_VALUE_ON_DUAL
+            NoiseControlMode.NOISE_CANCELLING -> if (windNoiseReduction) NC_VALUE_ON_SINGLE else NC_VALUE_ON_DUAL
             NoiseControlMode.AMBIENT_SOUND,
             NoiseControlMode.OFF -> NC_VALUE_OFF
         }
@@ -456,6 +457,11 @@ object SonyTandemV1Table1Protocol {
         val ambientMode = payload.getOrNull(5)?.let { byte ->
             AmbientSoundMode.entries.firstOrNull { it.code == byte }
         }
+        val windNoiseReduction = when (payload.getOrNull(3)) {
+            NC_VALUE_ON_SINGLE -> true
+            NC_VALUE_ON_DUAL -> false
+            else -> null
+        }
         return ParsedTandemResponse.NoiseControl(
             type = type,
             values = payload.drop(1).map { it.unsigned },
@@ -464,6 +470,7 @@ object SonyTandemV1Table1Protocol {
             ambientLevel = payload.getOrNull(6)?.unsigned,
             ambientMode = ambientMode,
             controlMode = controlMode,
+            windNoiseReduction = windNoiseReduction,
             raw = raw,
         )
     }

@@ -372,13 +372,14 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity,
+        windNoiseReduction: Boolean,
     ): List<HeadphoneCommand> {
         val level = ambientLevel.coerceIn(1, 20)
         val codec = codecFor(profile, HeadphoneFeature.NOISE_CONTROL)
 
         profile.capabilities.writableNoiseControlTypes.forEach { type ->
             val bytes = codec.buildSetNoiseControlMode(
-                type, mode, level, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity,
+                type, mode, level, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity, windNoiseReduction,
             ) ?: return@forEach
             return listOf(
                 command(

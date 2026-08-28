@@ -144,6 +144,7 @@ sealed interface ParsedTandemResponse {
         val ambientLevel: Int? = null,
         val ambientMode: AmbientSoundMode? = null,
         val controlMode: NoiseControlMode? = null,
+        val windNoiseReduction: Boolean? = null,
         val noiseAdaptiveEnabled: Boolean? = null,
         val noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity? = null,
         override val raw: ByteArray,

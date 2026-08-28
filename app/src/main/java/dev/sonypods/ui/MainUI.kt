@@ -209,6 +209,7 @@ fun MainUI(
     val sonyActions = remember(context) {
         SonyDetailActions(
             onAncModeChange = { SonyBridge.setNoiseControl(context, it) },
+            onWindNoiseReductionChange = { SonyBridge.setWindNoiseReduction(context, it) },
             onAmbientLevelChange = { SonyBridge.setAmbientLevel(context, it) },
             onAmbientVoiceModeChange = { SonyBridge.setAmbientVoice(context, it) },
             onNoiseAdaptiveChange = { SonyBridge.setNoiseAdaptive(context, it) },

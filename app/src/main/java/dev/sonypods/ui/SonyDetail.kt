@@ -17,6 +17,7 @@ import dev.sonypods.utils.miuiStrongToast.data.PodParams
 /** Callbacks from the earphone detail UI; each one sends a command to the engine. */
 data class SonyDetailActions(
     val onAncModeChange: (NoiseControlMode) -> Unit = {},
+    val onWindNoiseReductionChange: (Boolean) -> Unit = {},
     val onAmbientLevelChange: (Int) -> Unit = {},
     val onAmbientVoiceModeChange: (Boolean) -> Unit = {},
     val onNoiseAdaptiveChange: (Boolean) -> Unit = {},

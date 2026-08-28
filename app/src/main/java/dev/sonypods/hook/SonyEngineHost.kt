@@ -1752,6 +1752,9 @@ object SonyEngineHost {
             SonyBridge.CMD_SET_AMBIENT_VOICE ->
                 repo.setAmbientVoiceMode(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
 
+            SonyBridge.CMD_SET_WIND_NOISE_REDUCTION ->
+                repo.setWindNoiseReduction(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+
             SonyBridge.CMD_SET_NOISE_ADAPTIVE ->
                 repo.setNoiseAdaptive(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
 

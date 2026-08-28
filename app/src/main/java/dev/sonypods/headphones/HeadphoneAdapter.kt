@@ -178,6 +178,8 @@ data class HeadphoneCapabilities(
     val upscalingIndicatorSupported: Boolean = false,
     /** Whether the device declared any ALERT / FIXED_MESSAGE notification support. */
     val alertSupported: Boolean = false,
+    val supportsAutoWindNoiseReduction: Boolean = false,
+    val supportsWindNoiseReduction: Boolean = false,
 )
 
 data class ConnectedHeadphoneProfile(
@@ -425,6 +427,7 @@ interface HeadphoneAdapter {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean = false,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+        windNoiseReduction: Boolean = false,
     ): List<HeadphoneCommand> = emptyList()
 
     fun buildSetEqPresetCommands(
@@ -583,9 +586,10 @@ object HeadphoneAdapterRegistry {
         ambientMode: AmbientSoundMode,
         noiseAdaptive: Boolean = false,
         noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
+        windNoiseReduction: Boolean = false,
     ): List<HeadphoneCommand> =
         adapterFor(profile).buildSetNoiseControlModeCommands(
-            profile, mode, ambientLevel, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity,
+            profile, mode, ambientLevel, ambientMode, noiseAdaptive, noiseAdaptiveSensitivity, windNoiseReduction,
         )
 
     fun buildSetEqPresetCommands(

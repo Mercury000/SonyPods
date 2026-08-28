@@ -1763,4 +1763,64 @@ class SonyTandemV2Table1ProtocolTest {
         assertTrue(ntfy.enabled)
         assertTrue(ntfy.isUnsolicited)
     }
+
+    @Test
+    fun windNoiseReduction_autoMode_buildsAndParsesAccurately() {
+        // Build auto wind noise reduction enabled (0x03)
+        val cmdAutoOn = SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+            controlMode = NoiseControlMode.NOISE_CANCELLING,
+            type = NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+            windNoiseReduction = true,
+        )
+        // [0x0E][0x68][type 0x15][changed 0x01][effect 0x01][mode 0x00][ncValue 0x03][ambientMode 0x00][level 0x0A]
+        assertEquals(0x03.toByte(), cmdAutoOn[6])
+
+        // Build standard NC (0x02 ON_DUAL)
+        val cmdAutoOff = SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+            controlMode = NoiseControlMode.NOISE_CANCELLING,
+            type = NcAsmInquiredType.MODE_NC_ASM_AUTO_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+            windNoiseReduction = false,
+        )
+        assertEquals(0x02.toByte(), cmdAutoOff[6])
+
+        // Parse notification with AUTO (0x03)
+        val ntfyAuto = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x15, 0x01, 0x01, 0x00, 0x03, 0x00, 0x0A)
+        ) as ParsedTandemResponse.NoiseControl
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, ntfyAuto.controlMode)
+        assertTrue(ntfyAuto.windNoiseReduction == true)
+
+        // Parse notification with ON_DUAL (0x02)
+        val ntfyDual = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x15, 0x01, 0x01, 0x00, 0x02, 0x00, 0x0A)
+        ) as ParsedTandemResponse.NoiseControl
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, ntfyDual.controlMode)
+        assertFalse(ntfyDual.windNoiseReduction == true)
+    }
+
+    @Test
+    fun windNoiseReduction_dualSingleMode_buildsAndParsesAccurately() {
+        // Build single-mic wind noise reduction enabled (0x01 ON_SINGLE)
+        val cmdSingleOn = SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+            controlMode = NoiseControlMode.NOISE_CANCELLING,
+            type = NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+            windNoiseReduction = true,
+        )
+        assertEquals(0x01.toByte(), cmdSingleOn[6])
+
+        // Build standard dual-mic NC (0x02 ON_DUAL)
+        val cmdSingleOff = SonyTandemV2Table1Protocol.buildSetNoiseControlMode(
+            controlMode = NoiseControlMode.NOISE_CANCELLING,
+            type = NcAsmInquiredType.MODE_NC_ASM_DUAL_SINGLE_NC_MODE_SWITCH_AND_ASM_SEAMLESS,
+            windNoiseReduction = false,
+        )
+        assertEquals(0x02.toByte(), cmdSingleOff[6])
+
+        // Parse notification with ON_SINGLE (0x01)
+        val ntfySingle = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x69, 0x16, 0x01, 0x01, 0x00, 0x01, 0x00, 0x0A)
+        ) as ParsedTandemResponse.NoiseControl
+        assertEquals(NoiseControlMode.NOISE_CANCELLING, ntfySingle.controlMode)
+        assertTrue(ntfySingle.windNoiseReduction == true)
+    }
 }

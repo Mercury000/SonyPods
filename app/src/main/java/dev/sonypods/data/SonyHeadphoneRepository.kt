@@ -229,6 +229,7 @@ data class NoiseControlState(
     val ambientSoundEnabled: Boolean? = null,
     val ambientLevel: Int? = null,
     val ambientVoiceMode: Boolean = false,
+    val windNoiseReduction: Boolean = false,
     val noiseAdaptiveEnabled: Boolean = false,
     val noiseAdaptiveSensitivity: NoiseAdaptiveSensitivity = NoiseAdaptiveSensitivity.STANDARD,
     val raw: List<Int> = emptyList(),
@@ -1486,6 +1487,40 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
             current.noiseAdaptiveEnabled,
             current.noiseAdaptiveSensitivity,
+            current.windNoiseReduction,
+        ).forEach(::sendCommand)
+        refreshNoiseControlStateAfterWrite(profile)
+    }
+
+    fun setWindNoiseReduction(enabled: Boolean) {
+        if (!_state.value.deviceInfo.protocolReady) {
+            onBluetoothUnavailable("Sony Tandem channel is not ready; cannot change wind noise reduction.")
+            return
+        }
+        if (!canWrite(HeadphoneFeature.NOISE_CONTROL)) {
+            appendLog("Noise control write is disabled for current profile")
+            return
+        }
+        val current = _state.value.noiseControlState
+        val level = current.ambientLevel?.takeIf { it > 0 }?.coerceIn(1, 20) ?: 10
+        val ambientMode = if (current.ambientVoiceMode) AmbientSoundMode.VOICE else AmbientSoundMode.NORMAL
+        _state.update {
+            it.copy(
+                noiseControlState = it.noiseControlState.forMode(NoiseControlMode.NOISE_CANCELLING).copy(
+                    windNoiseReduction = enabled,
+                    ambientLevel = level,
+                )
+            )
+        }
+        val profile = ensureConnectedProfile()
+        HeadphoneAdapterRegistry.buildSetNoiseControlModeCommands(
+            profile,
+            NoiseControlMode.NOISE_CANCELLING,
+            level,
+            ambientMode,
+            current.noiseAdaptiveEnabled,
+            current.noiseAdaptiveSensitivity,
+            enabled,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -1519,6 +1554,7 @@ class SonyHeadphoneRepository private constructor(
             mode,
             current.noiseAdaptiveEnabled,
             current.noiseAdaptiveSensitivity,
+            current.windNoiseReduction,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -1551,6 +1587,7 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
             current.noiseAdaptiveEnabled,
             current.noiseAdaptiveSensitivity,
+            current.windNoiseReduction,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -1583,6 +1620,7 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
             enabled,
             current.noiseAdaptiveSensitivity,
+            current.windNoiseReduction,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -1618,6 +1656,7 @@ class SonyHeadphoneRepository private constructor(
             ambientMode,
             true,
             sensitivity,
+            current.windNoiseReduction,
         ).forEach(::sendCommand)
         refreshNoiseControlStateAfterWrite(profile)
     }
@@ -3058,6 +3097,8 @@ class SonyHeadphoneRepository private constructor(
                     },
                     controlMode = response.controlMode
                         ?: current.noiseControlState.controlMode,
+                    windNoiseReduction = response.windNoiseReduction
+                        ?: current.noiseControlState.windNoiseReduction,
                     noiseAdaptiveEnabled = response.noiseAdaptiveEnabled
                         ?: current.noiseControlState.noiseAdaptiveEnabled,
                     noiseAdaptiveSensitivity = response.noiseAdaptiveSensitivity
