@@ -560,7 +560,32 @@ object SonyTandemV1Table1Protocol {
      * exactly one `[action][function]` pair, and the default preset travels in
      * the key header. Entries with a non-positive count are skipped entirely
      * (`te0.b`/`te0.d` drop them too).
+     *
+     * Function bytes follow the V1 table (`p068v1.…AssignableSettingsFunction`),
+     * which collides with V2's on three codes — V1 NC_OPTIMIZER=0x02,
+     * VOLUME_UP=0x11, VOLUME_DOWN=0x12 — so a V1-aware lookup is required; the
+     * shared V2 enum would mislabel those.
      */
+    private fun v1AssignableSettingsFunction(code: Byte): AssignableSettingsFunction? = when (code) {
+        0x00.toByte() -> AssignableSettingsFunction.NO_FUNCTION
+        0x01.toByte() -> AssignableSettingsFunction.NC_ASM_OFF
+        0x02.toByte() -> AssignableSettingsFunction.NC_OPTIMIZER
+        0x10.toByte() -> AssignableSettingsFunction.QUICK_ATTENTION
+        0x11.toByte() -> AssignableSettingsFunction.VOLUME_UP
+        0x12.toByte() -> AssignableSettingsFunction.VOLUME_DOWN
+        0x20.toByte() -> AssignableSettingsFunction.PLAY_PAUSE
+        0x21.toByte() -> AssignableSettingsFunction.NEXT_TRACK
+        0x22.toByte() -> AssignableSettingsFunction.PREV_TRACK
+        0x30.toByte() -> AssignableSettingsFunction.VOICE_RECOGNITION
+        0x31.toByte() -> AssignableSettingsFunction.GET_YOUR_NOTIFICATION
+        0x32.toByte() -> AssignableSettingsFunction.TALK_TO_GOOGLE_ASSISTANT
+        0x33.toByte() -> AssignableSettingsFunction.STOP_GOOGLE_ASSISTANT
+        0x34.toByte() -> AssignableSettingsFunction.VOICE_INPUT_CANCEL
+        0x35.toByte() -> AssignableSettingsFunction.TALK_TO_TENCENT_XIAOWEI
+        0x36.toByte() -> AssignableSettingsFunction.CANCEL_VOICE_RECOGNITION
+        else -> null
+    }
+
     private fun parseAssignableSettingsCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val keyCount = payload.getOrNull(1)?.unsigned ?: 0
         var offset = 2
@@ -590,11 +615,10 @@ object SonyTandemV1Table1Protocol {
                 repeat(actionCount) {
                     if (offset + 2 > payload.size) return@repeat
                     val action = AssignableSettingsAction.entries.firstOrNull { it.code == payload[offset] }
-                    val function = AssignableSettingsFunction.entries.firstOrNull { it.code == payload[offset + 1] }
+                    val function = v1AssignableSettingsFunction(payload[offset + 1])
                     offset += 2
                     if (action != null && function != null &&
-                        action != AssignableSettingsAction.OUT_OF_RANGE &&
-                        function != AssignableSettingsFunction.OUT_OF_RANGE
+                        action != AssignableSettingsAction.OUT_OF_RANGE
                     ) {
                         actions += ParsedTandemResponse.AssignableSettingsActionCapability(
                             action = action,

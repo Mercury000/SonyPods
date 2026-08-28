@@ -161,6 +161,35 @@ class SonyTandemV1Table1ProtocolTest {
     }
 
     @Test
+    fun assignableSettings_functionCodes_followV1TableNotV2() {
+        // V1 `p068v1.…AssignableSettingsFunction` collides with the V2 table on
+        // 0x02/0x11/0x12: V1 reads NC_OPTIMIZER / VOLUME_UP / VOLUME_DOWN there,
+        // where the shared (V2) enum would say NC_ASM / NC_OPTIMIZER / unknown.
+        val parsed = SonyTandemV1Table1Protocol.parse(
+            byteArrayOf(
+                0x0E, 0xF1.toByte(), 0x06, 0x01,
+                0x00, 0x00, 0x00, 0x01,
+                0x10, 0x03,
+                0x00, 0x02,          // SINGLE_TAP   → NC_OPTIMIZER (V1 0x02)
+                0x10, 0x11,          // TAP_AND_HOLD → VOLUME_UP    (V1 0x11)
+                0x01, 0x12,          // DOUBLE_TAP   → VOLUME_DOWN  (V1 0x12)
+            ),
+        ) as ParsedTandemResponse.AssignableSettingsCapability
+        val actions = parsed.keys.single()
+            .actionsByPreset.getValue(AssignableSettingsPreset.VOLUME_CONTROL)
+        // Rows are ordered by action code (SINGLE_TAP 0x00, DOUBLE_TAP 0x01,
+        // TAP_AND_HOLD 0x10) as on the V2 path.
+        assertEquals(
+            listOf(
+                AssignableSettingsFunction.NC_OPTIMIZER,
+                AssignableSettingsFunction.VOLUME_DOWN,
+                AssignableSettingsFunction.VOLUME_UP,
+            ),
+            actions.map { it.defaultFunction },
+        )
+    }
+
+    @Test
     fun assignableSettings_parsePresetsAndStatus_matchV1Layout() {
         // RET_PARAM = [0x06][count][preset...]
         val presets = SonyTandemV1Table1Protocol.parse(
