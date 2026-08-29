@@ -641,9 +641,9 @@ object SonyEngineHost {
      * replay. A later genuine link disconnect/reconnect cycle still walks the full
      * state machine.
      */
-    fun restoreHotReloadState(address: String?, physicallyDisconnected: Boolean) {
+    fun restoreHotReloadState(address: String?) {
         preparedReloadAddress = null
-        linkTracker.restore(address, physicallyDisconnected)
+        linkTracker.restore(address)
         lastRenderedAddress = null
         lastRenderedBattery = null
         lastConnectAnimationKey = address?.takeIf { it.isNotBlank() }

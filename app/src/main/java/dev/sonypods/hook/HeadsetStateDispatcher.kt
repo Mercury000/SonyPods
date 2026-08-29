@@ -60,7 +60,7 @@ object HeadsetStateDispatcher : HookContext() {
         // Must happen before start() launches the repository collector and its
         // startup announce. The reload's own reconnect is always a recovery,
         // never a fresh connection, so the tracker is restored accordingly.
-        SonyEngineHost.restoreHotReloadState(address, physicallyDisconnected = false)
+        SonyEngineHost.restoreHotReloadState(address)
         // No AdapterService instance to hand over: onCreate will not fire again in a live
         // bluetooth process, so the host recovers the running singleton from the class on demand.
         SonyEngineHost.start(

@@ -147,16 +147,15 @@ internal class HeadsetLinkTracker {
     }
 
     /** Hot reload restore: the reload's own reconnect is a recovery, never a new episode. */
-    fun restore(candidate: String?, physicallyDisconnected: Boolean) {
+    fun restore(candidate: String?) {
         synchronized(this) {
             address = candidate?.takeIf { it.isNotBlank() }
             phase = if (address == null) {
                 Phase.DISCONNECTED
             } else {
-                // Both branches recover rather than connect: the reload's own
-                // saved-address reconnect must not replay connect UI. A later
-                // genuine link disconnect/reconnect cycle still goes through
-                // the full state machine.
+                // The reload's own saved-address reconnect must not replay
+                // connect UI. A later genuine link disconnect/reconnect cycle
+                // still goes through the full state machine.
                 Phase.RECOVERING
             }
             log("restored address=$address phase=$phase")
