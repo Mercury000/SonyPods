@@ -2,7 +2,7 @@
     <string name="app_name">SonyPods</string>
     <string name="app_description">为 HyperOS 设备提供系统级 Sony 耳机控制</string>
     <string name="pod_info">Pod Info</string>
-    <string name="about">About SonyPods</string>
+    <string name="about_tab">About</string>
     <string name="settings">Settings</string>
     <string name="module">Module</string>
     <string name="home">Home</string>
@@ -368,12 +368,13 @@
     <string name="mp_reconnect_required_title">Reconnection required</string>
     <string name="mp_ldac_off_body">The audio device will reconnect. LDAC becomes unavailable while this setting is on, even in Sound Quality Priority. Reconnect?</string>
     <string name="mp_auto_reconnect_body">The audio device disconnects briefly and reconnects automatically.</string>
-    <string name="about_sonypods">SonyPods</string>
     <string name="about_openbuds">OpenBuds</string>
-    <string name="about_oppopods_enhanced">OppoPods-Enhanced</string>
     <string name="about_oppopods">OppoPods</string>
-    <string name="about_hyperpods">HyperPods by Art_Chen</string>
-    <string name="about_github">Github</string>
+    <string name="about_developer">Developer</string>
+    <string name="about_source_code">Source Code</string>
+    <string name="about_references">References</string>
+    <string name="about_references_description">The implementation of SonyPods references the following open-source projects.</string>
+    <string name="about_reference_projects">Reference projects</string>
     <string name="qa_card_title">Quick Access</string>
     <string name="home_wait_lsposed">Waiting for the LSPosed service</string>
     <string name="home_activate_scope">Activate the scope in LSPosed</string>

@@ -71,8 +71,7 @@ fun SettingsPage(
     onFusionMoreClickActionChange: (Int) -> Unit = {},
     fakeDeviceId: MutableState<String> = mutableStateOf(ConfigManager.DEFAULT_FAKE_DEVICE_ID),
     onFakeDeviceIdChange: (String) -> Unit = {},
-    onOpenTheme: () -> Unit = {},
-    onOpenAbout: () -> Unit = {}
+    onOpenTheme: () -> Unit = {}
 ) {
     val languageOptions = listOf(
         stringResource(R.string.language_system),
@@ -361,15 +360,6 @@ fun SettingsPage(
             }
         }
 
-        item {
-            Card(modifier = Modifier.padding(top = 12.dp)) {
-                BasicComponent(
-                    title = stringResource(R.string.about),
-                    summary = stringResource(R.string.about_sonypods),
-                    onClick = onOpenAbout
-                )
-            }
-        }
     }
 
     AncCycleModesDialog(

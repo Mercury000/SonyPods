@@ -54,7 +54,7 @@ import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.ui.components.BarBackdropContent
 import dev.sonypods.ui.components.BarBlurHost
 import dev.sonypods.ui.components.BlurredBar
-import dev.sonypods.ui.pages.AboutPage
+import dev.sonypods.ui.pages.ReferencesPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
 import dev.sonypods.ui.pages.VisibilitySettingsPage
@@ -91,7 +91,7 @@ private const val CONNECT_TIMEOUT_MS = 25_000L
 @Serializable
 sealed interface Screen : NavKey {
     @Serializable data object Main : Screen
-    @Serializable data object About : Screen
+    @Serializable data object References : Screen
     @Serializable data object Theme : Screen
     @Serializable data object TandemDebug : Screen
     @Serializable data object Visibility : Screen
@@ -801,7 +801,7 @@ fun MainUI(
                     ConfigManager.updateFakeDeviceId(it)
                 },
                 onOpenTheme = { openScreen(Screen.Theme) },
-                onOpenAbout = { openScreen(Screen.About) },
+                onOpenReferences = { openScreen(Screen.References) },
                 showRestartScopeDialog = showRestartScopeDialog,
                 restartingScopes = restartingScopes,
                 onShowRestartScopeDialog = { showRestartScopeDialog = true },
@@ -812,8 +812,8 @@ fun MainUI(
                 )
             }
         }
-        entry<Screen.About>(swipeDismiss = swipeBackDirection) {
-            val aboutScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+        entry<Screen.References>(swipeDismiss = swipeBackDirection) {
+            val referencesScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             BarBlurHost(
                 bottomBarBlurEnabled = false,
                 topBarBlurEnabled = blurTopBar.value,
@@ -822,10 +822,10 @@ fun MainUI(
                     topBar = {
                         BlurredBar(topGradient = true) {
                             TopAppBar(
-                                title = stringResource(R.string.about),
-                                largeTitle = stringResource(R.string.about),
+                                title = stringResource(R.string.about_references),
+                                largeTitle = stringResource(R.string.about_references),
                                 color = Color.Transparent,
-                                scrollBehavior = aboutScrollBehavior,
+                                scrollBehavior = referencesScrollBehavior,
                                 navigationIcon = {
                                     IconButton(onClick = { backStack.removeLast() }) {
                                         Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
@@ -835,19 +835,17 @@ fun MainUI(
                         }
                     }
                 ) { padding ->
-                    // No box padding: the page scrolls under the top bar (padding goes
-                    // into its scroll contentPadding), so the blurred bar samples real
-                    // content instead of the flat backdrop base.
+                    // See Screen.Theme: the page scrolls under the top bar.
                     BarBackdropContent(modifier = Modifier.fillMaxSize()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(backgroundColor),
                         ) {
-                            AboutPage(
+                            ReferencesPage(
                                 modifier = Modifier
                                     .overScrollVertical()
-                                    .nestedScroll(aboutScrollBehavior.nestedScrollConnection),
+                                    .nestedScroll(referencesScrollBehavior.nestedScrollConnection),
                                 contentPadding = PaddingValues(
                                     top = padding.calculateTopPadding(),
                                     bottom = pageBottomContentPadding,
@@ -881,7 +879,7 @@ fun MainUI(
                         }
                     }
                 ) { padding ->
-                    // See Screen.About: the page scrolls under the top bar.
+                    // See Screen.Theme: the page scrolls under the top bar.
                     BarBackdropContent(modifier = Modifier.fillMaxSize()) {
                         Box(
                             modifier = Modifier
@@ -937,7 +935,7 @@ fun MainUI(
                         }
                     }
                 ) { padding ->
-                    // See Screen.About: the page scrolls under the top bar.
+                    // See Screen.Theme: the page scrolls under the top bar.
                     BarBackdropContent(modifier = Modifier.fillMaxSize()) {
                         Box(
                             modifier = Modifier
@@ -992,7 +990,7 @@ fun MainUI(
                         }
                     }
                 ) { padding ->
-                    // See Screen.About: the page scrolls under the top bar.
+                    // See Screen.Theme: the page scrolls under the top bar.
                     BarBackdropContent(modifier = Modifier.fillMaxSize()) {
                         Box(
                             modifier = Modifier

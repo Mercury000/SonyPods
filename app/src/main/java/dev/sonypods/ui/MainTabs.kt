@@ -39,6 +39,7 @@ import dev.sonypods.ui.components.LocalBarBlurBackdrop
 import dev.sonypods.ui.dialogs.RestartScope
 import dev.sonypods.ui.dialogs.RestartScopeDialog
 import dev.sonypods.ui.dialogs.PowerOffDialog
+import dev.sonypods.ui.pages.AboutTabPage
 import dev.sonypods.ui.pages.EarphonesTabPage
 import dev.sonypods.ui.pages.HomePage
 import dev.sonypods.ui.pages.SettingsPage
@@ -127,7 +128,7 @@ internal fun MainTabsScaffold(
     fakeDeviceId: MutableState<String>,
     onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
-    onOpenAbout: () -> Unit,
+    onOpenReferences: () -> Unit,
     showRestartScopeDialog: Boolean,
     restartingScopes: Boolean,
     onShowRestartScopeDialog: () -> Unit,
@@ -356,7 +357,12 @@ internal fun MainTabsScaffold(
                             fakeDeviceId = fakeDeviceId,
                             onFakeDeviceIdChange = onFakeDeviceIdChange,
                             onOpenTheme = onOpenTheme,
-                            onOpenAbout = onOpenAbout,
+                        )
+
+                        MainTab.About -> AboutTabPage(
+                            isActive = pagerState.currentPage == page,
+                            pageBottomContentPadding = pageBottomContentPadding,
+                            onOpenReferences = onOpenReferences,
                         )
                     }
                 }
@@ -632,7 +638,6 @@ private fun SettingsTabPage(
     fakeDeviceId: MutableState<String>,
     onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
-    onOpenAbout: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
     BarBlurHost(
@@ -701,7 +706,6 @@ private fun SettingsTabPage(
                         fakeDeviceId = fakeDeviceId,
                         onFakeDeviceIdChange = onFakeDeviceIdChange,
                         onOpenTheme = onOpenTheme,
-                        onOpenAbout = onOpenAbout,
                     )
                 }
             }

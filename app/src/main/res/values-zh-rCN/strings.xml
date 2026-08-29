@@ -3,7 +3,7 @@
     <string name="app_name">SonyPods</string>
     <string name="app_description">为 HyperOS 设备提供系统级 Sony 耳机控制</string>
     <string name="pod_info">耳机信息</string>
-    <string name="about">关于 SonyPods</string>
+    <string name="about_tab">关于</string>
     <string name="settings">设置</string>
     <string name="module">模块</string>
     <string name="home">首页</string>
@@ -369,12 +369,13 @@
     <string name="mp_reconnect_required_title">需要重新连接</string>
     <string name="mp_ldac_off_body">音频设备将重新连接。开启该设置后将无法使用 LDAC，即使选择音质优先也是如此。要重新连接吗？</string>
     <string name="mp_auto_reconnect_body">音频设备暂时断开连接，将自动重新连接。</string>
-    <string name="about_sonypods">SonyPods</string>
     <string name="about_openbuds">OpenBuds</string>
-    <string name="about_oppopods_enhanced">OppoPods-Enhanced</string>
     <string name="about_oppopods">OppoPods</string>
-    <string name="about_hyperpods">HyperPods by Art_Chen</string>
-    <string name="about_github">Github</string>
+    <string name="about_developer">开发者</string>
+    <string name="about_source_code">源码</string>
+    <string name="about_references">引用</string>
+    <string name="about_references_description">SonyPods 的实现参考了以下开源项目。</string>
+    <string name="about_reference_projects">引用项目</string>
     <string name="qa_card_title">Quick Access</string>
     <string name="home_wait_lsposed">等待 LSPosed 服务连接</string>
     <string name="home_activate_scope">请在LSPosed中激活作用域</string>
