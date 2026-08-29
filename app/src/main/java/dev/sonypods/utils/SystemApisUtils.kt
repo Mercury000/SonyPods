@@ -78,6 +78,30 @@ object SystemApisUtils {
         }
     }
 
+    /** First non-blank value among [propNames], or an empty string. */
+    private fun firstPropByShell(vararg propNames: String): String {
+        propNames.forEach { name ->
+            val value = getPropByShell(name).trim()
+            if (value.isNotBlank()) return value
+        }
+        return ""
+    }
+
+    /**
+     * The user-facing device name. The market name is what the user recognises
+     * ("Redmi K70") and it already carries the brand, so the manufacturer is never
+     * prepended; [android.os.Build.MODEL] is usually a codename ("23113RKC6C") and
+     * only serves as the fallback.
+     */
+    val deviceModel: String
+        get() = firstPropByShell(
+            "ro.product.marketname",
+            "ro.product.vendor.marketname",
+            "ro.product.odm.marketname",
+        )
+            .ifBlank { android.os.Build.MODEL.orEmpty().trim() }
+            .ifBlank { android.os.Build.DEVICE.orEmpty().trim() }
+
     val isHyperOS: Boolean
         get() {
             return getPropByShell("ro.mi.os.version.code").isNotEmpty()

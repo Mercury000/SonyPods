@@ -34,6 +34,7 @@ import java.util.Locale
 import com.mercury.sonypods.BuildConfig
 import com.mercury.sonypods.R
 import dev.sonypods.ui.components.AppIcons
+import dev.sonypods.utils.SystemApisUtils
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -281,7 +282,7 @@ private fun homeSystemInfo(context: Context): HomeSystemInfo {
         appVersion = "$versionName ($versionCode)",
         androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
         buildDate = buildDate(BuildConfig.BUILD_TIMESTAMP),
-        deviceModel = listOf(Build.MANUFACTURER, Build.MODEL).filter { it.isNotBlank() }.joinToString(" "),
+        deviceModel = SystemApisUtils.deviceModel,
     )
 }
 
