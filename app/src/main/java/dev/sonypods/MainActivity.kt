@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -12,9 +13,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.core.content.ContextCompat
 import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.ui.App
@@ -23,6 +26,18 @@ import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 
 class MainActivity : ComponentActivity() {
     private val openEarphoneDetailAddress = mutableStateOf<String?>(null)
+
+    // uiMode is self-handled in android:configChanges, so a system dark-mode toggle no
+    // longer recreates the activity — and the fresh Configuration is not guaranteed to
+    // reach Compose's LocalConfiguration on every ROM. onConfigurationChanged() IS
+    // guaranteed, so feed the new config into the composition from here to restyle
+    // in place instead of freezing on the state captured at entry.
+    private val latestConfig = mutableStateOf<Configuration?>(null)
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        latestConfig.value = Configuration(newConfig)
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -53,83 +68,88 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val prefs = remember { getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE) }
-            val themeMode = remember { mutableStateOf(prefs.getInt("theme_mode", 0)) }
-            val accentMode = remember { mutableStateOf(prefs.getInt("accent_mode", 0)) }
-            val floatingBottomBar = remember { mutableStateOf(prefs.getBoolean("floating_bottom_bar", false)) }
-            val floatingBottomBarStyle = remember { mutableStateOf(prefs.getInt("floating_bottom_bar_style", 0)) }
-            val blurBottomBar = remember { mutableStateOf(prefs.getBoolean("blur_bottom_bar", false)) }
-            val blurTopBar = remember { mutableStateOf(prefs.getBoolean("blur_top_bar", false)) }
-            val predictiveBack = remember { mutableStateOf(prefs.getBoolean("predictive_back", true)) }
-            val predictiveBackDistance = remember { mutableStateOf(prefs.getInt("predictive_back_distance", 50)) }
-            val appLanguage = remember { mutableStateOf(prefs.getInt("app_language", AppLocale.SYSTEM)) }
-            val systemDark = isSystemInDarkTheme()
-            val darkMode = when (themeMode.value) {
-                1 -> false
-                2 -> true
-                else -> systemDark
-            }
+            // Always wrap (never branch) so the subtree keeps its composition slot and
+            // remembered state across config changes.
+            val effectiveConfig = latestConfig.value ?: LocalConfiguration.current
+            CompositionLocalProvider(LocalConfiguration provides effectiveConfig) {
+                val prefs = remember { getSharedPreferences(LegacyConfigMigrator.UI_PREFS_NAME, Context.MODE_PRIVATE) }
+                val themeMode = remember { mutableStateOf(prefs.getInt("theme_mode", 0)) }
+                val accentMode = remember { mutableStateOf(prefs.getInt("accent_mode", 0)) }
+                val floatingBottomBar = remember { mutableStateOf(prefs.getBoolean("floating_bottom_bar", false)) }
+                val floatingBottomBarStyle = remember { mutableStateOf(prefs.getInt("floating_bottom_bar_style", 0)) }
+                val blurBottomBar = remember { mutableStateOf(prefs.getBoolean("blur_bottom_bar", false)) }
+                val blurTopBar = remember { mutableStateOf(prefs.getBoolean("blur_top_bar", false)) }
+                val predictiveBack = remember { mutableStateOf(prefs.getBoolean("predictive_back", true)) }
+                val predictiveBackDistance = remember { mutableStateOf(prefs.getInt("predictive_back_distance", 50)) }
+                val appLanguage = remember { mutableStateOf(prefs.getInt("app_language", AppLocale.SYSTEM)) }
+                val systemDark = isSystemInDarkTheme()
+                val darkMode = when (themeMode.value) {
+                    1 -> false
+                    2 -> true
+                    else -> systemDark
+                }
 
-            DisposableEffect(darkMode) {
-                enableEdgeToEdge(
-                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkMode },
-                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkMode },
+                DisposableEffect(darkMode) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkMode },
+                        navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkMode },
+                    )
+
+                    window.isNavigationBarContrastEnforced = false
+
+                    onDispose {}
+                }
+
+                App(
+                    themeMode = themeMode,
+                    onThemeModeChange = {
+                        themeMode.value = it
+                        prefs.edit().putInt("theme_mode", it).apply()
+                    },
+                    accentMode = accentMode,
+                    onAccentModeChange = {
+                        accentMode.value = it
+                        prefs.edit().putInt("accent_mode", it).apply()
+                    },
+                    floatingBottomBar = floatingBottomBar,
+                    onFloatingBottomBarChange = {
+                        floatingBottomBar.value = it
+                        prefs.edit().putBoolean("floating_bottom_bar", it).apply()
+                    },
+                    floatingBottomBarStyle = floatingBottomBarStyle,
+                    onFloatingBottomBarStyleChange = {
+                        floatingBottomBarStyle.value = it
+                        prefs.edit().putInt("floating_bottom_bar_style", it).apply()
+                    },
+                    blurBottomBar = blurBottomBar,
+                    onBlurBottomBarChange = {
+                        blurBottomBar.value = it
+                        prefs.edit().putBoolean("blur_bottom_bar", it).apply()
+                    },
+                    blurTopBar = blurTopBar,
+                    onBlurTopBarChange = {
+                        blurTopBar.value = it
+                        prefs.edit().putBoolean("blur_top_bar", it).apply()
+                    },
+                    predictiveBack = predictiveBack,
+                    onPredictiveBackChange = {
+                        predictiveBack.value = it
+                        prefs.edit().putBoolean("predictive_back", it).apply()
+                    },
+                    predictiveBackDistance = predictiveBackDistance,
+                    onPredictiveBackDistanceChange = {
+                        predictiveBackDistance.value = it
+                        prefs.edit().putInt("predictive_back_distance", it).apply()
+                    },
+                    appLanguage = appLanguage,
+                    onAppLanguageChange = {
+                        appLanguage.value = it
+                        prefs.edit().putInt("app_language", it).apply()
+                    },
+                    openEarphoneDetailAddress = openEarphoneDetailAddress,
+                    onExternalDetailRequestConsumed = { openEarphoneDetailAddress.value = null },
                 )
-
-                window.isNavigationBarContrastEnforced = false
-
-                onDispose {}
             }
-
-            App(
-                themeMode = themeMode,
-                onThemeModeChange = {
-                    themeMode.value = it
-                    prefs.edit().putInt("theme_mode", it).apply()
-                },
-                accentMode = accentMode,
-                onAccentModeChange = {
-                    accentMode.value = it
-                    prefs.edit().putInt("accent_mode", it).apply()
-                },
-                floatingBottomBar = floatingBottomBar,
-                onFloatingBottomBarChange = {
-                    floatingBottomBar.value = it
-                    prefs.edit().putBoolean("floating_bottom_bar", it).apply()
-                },
-                floatingBottomBarStyle = floatingBottomBarStyle,
-                onFloatingBottomBarStyleChange = {
-                    floatingBottomBarStyle.value = it
-                    prefs.edit().putInt("floating_bottom_bar_style", it).apply()
-                },
-                blurBottomBar = blurBottomBar,
-                onBlurBottomBarChange = {
-                    blurBottomBar.value = it
-                    prefs.edit().putBoolean("blur_bottom_bar", it).apply()
-                },
-                blurTopBar = blurTopBar,
-                onBlurTopBarChange = {
-                    blurTopBar.value = it
-                    prefs.edit().putBoolean("blur_top_bar", it).apply()
-                },
-                predictiveBack = predictiveBack,
-                onPredictiveBackChange = {
-                    predictiveBack.value = it
-                    prefs.edit().putBoolean("predictive_back", it).apply()
-                },
-                predictiveBackDistance = predictiveBackDistance,
-                onPredictiveBackDistanceChange = {
-                    predictiveBackDistance.value = it
-                    prefs.edit().putInt("predictive_back_distance", it).apply()
-                },
-                appLanguage = appLanguage,
-                onAppLanguageChange = {
-                    appLanguage.value = it
-                    prefs.edit().putInt("app_language", it).apply()
-                },
-                openEarphoneDetailAddress = openEarphoneDetailAddress,
-                onExternalDetailRequestConsumed = { openEarphoneDetailAddress.value = null },
-            )
         }
     }
 

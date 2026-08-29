@@ -25,22 +25,26 @@ fun AppTheme(
     }
     val controller = remember(actualMode) { ThemeController(actualMode) }
 
-    when (actualMode) {
-        ColorSchemeMode.Light, ColorSchemeMode.Dark -> {
-            val nightMode = if (actualMode == ColorSchemeMode.Dark)
-                Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
-            val currentConfig = LocalConfiguration.current
-            val overrideConfig = remember(currentConfig, nightMode) {
-                Configuration(currentConfig).apply {
-                    uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
-                }
-            }
-            CompositionLocalProvider(LocalConfiguration provides overrideConfig) {
-                MiuixTheme(controller = controller, content = content)
+    // One call site for [content], deliberately: branching between a provider-wrapped and a
+    // bare MiuixTheme would move the whole subtree to a different composition slot every time
+    // the mode crosses between "follow system" and an explicit light/dark, discarding all of
+    // its remembered state — the UI would rebuild from scratch instead of just restyling.
+    val currentConfig = LocalConfiguration.current
+    val nightMode = when (actualMode) {
+        ColorSchemeMode.Light -> Configuration.UI_MODE_NIGHT_NO
+        ColorSchemeMode.Dark -> Configuration.UI_MODE_NIGHT_YES
+        else -> null
+    }
+    val providedConfig = remember(currentConfig, nightMode) {
+        if (nightMode == null) {
+            currentConfig
+        } else {
+            Configuration(currentConfig).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
             }
         }
-        else -> {
-            MiuixTheme(controller = controller, content = content)
-        }
+    }
+    CompositionLocalProvider(LocalConfiguration provides providedConfig) {
+        MiuixTheme(controller = controller, content = content)
     }
 }
