@@ -26,6 +26,8 @@ fun ThemeSettingsPage(
     onFloatingBottomBarChange: (Boolean) -> Unit = {},
     blurBottomBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurBottomBarChange: (Boolean) -> Unit = {},
+    floatingBottomBarStyle: MutableState<Int> = mutableStateOf(0),
+    onFloatingBottomBarStyleChange: (Int) -> Unit = {},
     blurTopBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurTopBarChange: (Boolean) -> Unit = {},
 ) {
@@ -37,6 +39,11 @@ fun ThemeSettingsPage(
     val accentOptions = listOf(
         stringResource(R.string.color_default),
         stringResource(R.string.color_monet),
+    )
+
+    val floatingStyleOptions = listOf(
+        stringResource(R.string.floating_bottom_bar_style_default),
+        stringResource(R.string.floating_bottom_bar_style_ios),
     )
 
     LazyColumn(
@@ -69,6 +76,14 @@ fun ThemeSettingsPage(
                     checked = floatingBottomBar.value,
                     onCheckedChange = { onFloatingBottomBarChange(it) },
                 )
+                if (floatingBottomBar.value) {
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.floating_bottom_bar_style),
+                        items = floatingStyleOptions,
+                        selectedIndex = floatingBottomBarStyle.value.coerceIn(floatingStyleOptions.indices),
+                        onSelectedIndexChange = { onFloatingBottomBarStyleChange(it) },
+                    )
+                }
                 SwitchPreference(
                     title = stringResource(R.string.blur_bottom_bar),
                     summary = stringResource(R.string.blur_bottom_bar_summary),

@@ -66,6 +66,7 @@ internal fun MainTabsScaffold(
     onTabSelected: (MainTab) -> Unit,
     floatingBottomBar: Boolean,
     blurBottomBar: Boolean,
+    iosBottomBar: Boolean,
     blurTopBar: MutableState<Boolean>,
     backdrop: LayerBackdrop?,
     backgroundColor: Color,
@@ -239,6 +240,7 @@ internal fun MainTabsScaffold(
                 selectedTab = tabs.getOrElse(mainPagerState.selectedPage) { selectedTab },
                 floating = floatingBottomBar,
                 blur = blurBottomBar,
+                iosStyle = iosBottomBar,
                 backdrop = backdrop,
                 onTabClick = {
                     mainPagerState.animateToPage(it.ordinal)

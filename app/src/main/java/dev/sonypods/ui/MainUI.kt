@@ -104,6 +104,8 @@ fun MainUI(
     onFloatingBottomBarChange: (Boolean) -> Unit = {},
     blurBottomBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurBottomBarChange: (Boolean) -> Unit = {},
+    floatingBottomBarStyle: MutableState<Int> = mutableStateOf(0),
+    onFloatingBottomBarStyleChange: (Int) -> Unit = {},
     blurTopBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurTopBarChange: (Boolean) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
@@ -147,8 +149,13 @@ fun MainUI(
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
     var hasRequestedStartupConnection by remember { mutableStateOf(false) }
     val backgroundColor = appBackground()
+    // The floating bar's style: 0 = miuix default pill, 1 = iOS liquid glass. Only
+    // meaningful while the floating bar itself is on.
+    val useIosBottomBar = floatingBottomBar.value && floatingBottomBarStyle.value == 1
     val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
     val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
+    // Bottom-bar blur owns the glass sampling layer, mirroring the miuix example app:
+    // both the classic texture blur and the iOS liquid-glass bar read from this backdrop.
     val backdrop = if (blurBottomBar.value) {
         rememberLayerBackdrop {
             drawRect(backgroundColor)
@@ -662,6 +669,7 @@ fun MainUI(
                 onTabSelected = { selectedTab = it },
                 floatingBottomBar = floatingBottomBar.value,
                 blurBottomBar = blurBottomBar.value,
+                iosBottomBar = useIosBottomBar,
                 blurTopBar = blurTopBar,
                 backdrop = backdrop,
                 backgroundColor = backgroundColor,
@@ -890,6 +898,8 @@ fun MainUI(
                         onFloatingBottomBarChange = onFloatingBottomBarChange,
                         blurBottomBar = blurBottomBar,
                         onBlurBottomBarChange = onBlurBottomBarChange,
+                        floatingBottomBarStyle = floatingBottomBarStyle,
+                        onFloatingBottomBarStyleChange = onFloatingBottomBarStyleChange,
                         blurTopBar = blurTopBar,
                         onBlurTopBarChange = onBlurTopBarChange,
                     )

@@ -73,6 +73,9 @@
     <string name="floating_bottom_bar_summary">Float the bottom navigation above the screen edge</string>
     <string name="blur_bottom_bar">Blur Bottom Bar</string>
     <string name="blur_bottom_bar_summary">Use a translucent bottom navigation background</string>
+    <string name="floating_bottom_bar_style">Floating Bar Style</string>
+    <string name="floating_bottom_bar_style_default">Default</string>
+    <string name="floating_bottom_bar_style_ios">iOS</string>
     <string name="blur_top_bar">Blur Top Bar</string>
     <string name="blur_top_bar_summary">Use a translucent top app bar background</string>
     <string name="settings_section_module">Module settings</string>

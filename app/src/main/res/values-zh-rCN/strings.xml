@@ -74,6 +74,9 @@
     <string name="floating_bottom_bar_summary">让底部导航栏悬浮在屏幕边缘上方</string>
     <string name="blur_bottom_bar">底栏模糊</string>
     <string name="blur_bottom_bar_summary">使用半透明底部导航背景</string>
+    <string name="floating_bottom_bar_style">悬浮底栏样式</string>
+    <string name="floating_bottom_bar_style_default">默认</string>
+    <string name="floating_bottom_bar_style_ios">iOS</string>
     <string name="blur_top_bar">顶栏模糊</string>
     <string name="blur_top_bar_summary">使用半透明顶部栏背景</string>
     <string name="settings_section_module">模块设置</string>
