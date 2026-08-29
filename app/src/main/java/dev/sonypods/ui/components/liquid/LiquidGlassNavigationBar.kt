@@ -410,7 +410,7 @@ internal fun IosLiquidGlassNavigationBar(
                             ),
                         )
                         .then(
-                            if (isBlurActive && backdrop != null) {
+                            if (backdrop != null) {
                                 Modifier.drawBackdrop(
                                     backdrop = backdrop,
                                     shape = { pillShape },
@@ -456,7 +456,7 @@ internal fun IosLiquidGlassNavigationBar(
                 )
             }
 
-            if (isBlurActive && backdrop != null) {
+            if (backdrop != null) {
                 CompositionLocalProvider(
                     LocalIosTabScale provides { lerp(1f, 1.2f, dampedDrag.pressProgress) },
                     LocalContentColor provides accentColor,
