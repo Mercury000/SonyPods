@@ -3255,7 +3255,7 @@ class SonyHeadphoneRepository private constructor(
             }
         }
         if (response.status != PlaybackStatus.UNKNOWN) {
-            applyPlaybackStatus(response.status, source = "Tandem", isUnsolicited = response.isUnsolicited)
+            applyPlaybackStatus(response.status, source = "Tandem")
         } else {
             updatePlaybackStatusFromAudioManager()
         }
@@ -4354,7 +4354,7 @@ class SonyHeadphoneRepository private constructor(
             profile.playbackDispatchStrategy != PlaybackDispatchStrategy.ANDROID_MEDIA_FALLBACK
     }
 
-    private fun applyPlaybackStatus(status: PlaybackStatus, source: String, isUnsolicited: Boolean = false) {
+    private fun applyPlaybackStatus(status: PlaybackStatus, source: String) {
         val pending = pendingPlaybackStatus
         if (pending != null) {
             val now = SystemClock.elapsedRealtime()
@@ -4371,21 +4371,11 @@ class SonyHeadphoneRepository private constructor(
             pendingPlaybackStatus = null
         }
 
-        // Cross-validation: when headphones send an unsolicited NTFY_STATUS that contradicts
-        // our current PLAYING state, verify against AudioManager before accepting.
-        if (isUnsolicited && source == "Tandem" &&
-            status == PlaybackStatus.PAUSED &&
-            _state.value.playbackStatus == PlaybackStatus.PLAYING
-        ) {
-            val audioActive = mediaController.currentFallbackStatus() == PlaybackStatus.PLAYING
-            if (audioActive) {
-                appendLog("NTFY PAUSED from headphones but AudioManager says PLAYING — " +
-                    "re-querying Tandem before accepting")
-                refreshPlaybackState()
-                return
-            }
-        }
-
+        // An unsolicited NTFY is accepted as-is: the headset is the party
+        // executing playback, and its notification arrives over GATT before
+        // AudioManager.isMusicActive can reflect a headset-initiated pause —
+        // "verifying" against the slower source could only reject the truth
+        // and burn a re-query round trip.
         _state.update { it.copy(playbackStatus = status) }
     }
 
