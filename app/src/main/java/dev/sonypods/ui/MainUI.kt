@@ -1285,7 +1285,6 @@ fun MainUI(
                 bondedDeviceCount = bluetoothState.bondedCount,
                 onBluetoothStatusClick = { openBluetoothSettings() },
                 onPairedBluetoothClick = { openDevicePicker() },
-                mainTitle = displayTitle,
                 displayTitle = displayTitle,
                 sonyState = sonyState,
                 connectedDeviceAddress = connectedDeviceAddress,

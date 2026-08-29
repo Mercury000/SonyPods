@@ -13,7 +13,6 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -56,10 +54,7 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -101,8 +96,6 @@ fun DevicePickerPage(
         ActivityResultContracts.RequestPermission()
     ) { granted -> hasPermission = granted }
 
-    val showMacDialog = remember { mutableStateOf(false) }
-    var macInput by remember { mutableStateOf("") }
     var bluetoothRefreshToken by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -192,24 +185,6 @@ fun DevicePickerPage(
                 bottom = bottomContentPadding + 12.dp,
             ),
         ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.select_device),
-                        color = MiuixTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = { showMacDialog.value = true }) {
-                        Icon(
-                            imageVector = MiuixIcons.Add,
-                            contentDescription = stringResource(R.string.input_mac_manually),
-                        )
-                    }
-                }
-            }
             if (pairedDevices.isEmpty()) {
                 item {
                     Box(
@@ -252,44 +227,6 @@ fun DevicePickerPage(
             }
         }
 
-    }
-
-    OverlayDialog(
-        title = stringResource(R.string.input_mac_title),
-        show = showMacDialog.value,
-        onDismissRequest = { showMacDialog.value = false },
-    ) {
-        TextField(
-            value = macInput,
-            onValueChange = { macInput = it.uppercase() },
-            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TextButton(
-                text = stringResource(R.string.cancel),
-                onClick = { showMacDialog.value = false },
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(4.dp))
-            TextButton(
-                text = stringResource(R.string.connect),
-                onClick = {
-                    val mac = macInput.trim()
-                    if (BluetoothAdapter.checkBluetoothAddress(mac)) {
-                        val device = adapter?.getRemoteDevice(mac)
-                        if (device != null) {
-                            showMacDialog.value = false
-                            onDeviceSelected(device)
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-        }
     }
 
     WindowDialog(

@@ -42,12 +42,10 @@
     <string name="pod_case">充电盒</string>
     <string name="batt_left_pod">左</string>
     <string name="batt_right_pod">右</string>
-    <string name="select_device">选择蓝牙设备</string>
+    <string name="device">设备</string>
     <string name="no_paired_devices">未找到已配对的设备</string>
     <string name="bluetooth_disabled">请开启蓝牙</string>
     <string name="unknown_device">未知设备</string>
-    <string name="input_mac_manually">手动输入 MAC 地址</string>
-    <string name="input_mac_title">输入设备 MAC 地址</string>
     <string name="connect">连接</string>
     <string name="cancel">取消</string>
     <string name="connect_failed">连接失败，请确认设备已开机且在附近。</string>

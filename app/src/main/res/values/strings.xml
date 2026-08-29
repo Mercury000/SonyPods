@@ -41,12 +41,10 @@
     <string name="pod_case">Case</string>
     <string name="batt_left_pod">Left</string>
     <string name="batt_right_pod">Right</string>
-    <string name="select_device">Select Bluetooth Device</string>
+    <string name="device">Device</string>
     <string name="no_paired_devices">No paired devices found</string>
     <string name="bluetooth_disabled">Please enable Bluetooth</string>
     <string name="unknown_device">Unknown Device</string>
-    <string name="input_mac_manually">Input MAC Address Manually</string>
-    <string name="input_mac_title">Enter Device MAC Address</string>
     <string name="connect">Connect</string>
     <string name="cancel">Cancel</string>
     <string name="connect_failed">Connection failed. Please make sure the device is nearby and powered on.</string>

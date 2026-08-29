@@ -77,7 +77,6 @@ internal fun MainTabsScaffold(
     bondedDeviceCount: Int,
     onBluetoothStatusClick: () -> Unit,
     onPairedBluetoothClick: () -> Unit,
-    mainTitle: String,
     displayTitle: String,
     sonyState: SonyStateSnapshot,
     connectedDeviceAddress: String,
@@ -220,7 +219,6 @@ internal fun MainTabsScaffold(
                         )
 
                         MainTab.Earphones -> EarphonesTabShell(
-                            mainTitle = mainTitle,
                             displayTitle = displayTitle,
                             sonyState = sonyState,
                             connectedDeviceAddress = connectedDeviceAddress,
@@ -369,7 +367,6 @@ private fun ModuleTabPage(
 
 @Composable
 private fun EarphonesTabShell(
-    mainTitle: String,
     displayTitle: String,
     sonyState: SonyStateSnapshot,
     connectedDeviceAddress: String,
@@ -384,7 +381,7 @@ private fun EarphonesTabShell(
     onDismissConnectError: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-    val pageTitle = mainTitle.ifEmpty { stringResource(R.string.pod_info) }
+    val pageTitle = stringResource(R.string.device)
     BarBlurHost(
         bottomBarBlurEnabled = false,
         topBarBlurEnabled = blurTopBar,
