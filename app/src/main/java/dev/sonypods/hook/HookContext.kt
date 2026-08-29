@@ -233,9 +233,10 @@ abstract class HookContext {
  * channel is not visible to `adb logcat`, which makes hook problems in system
  * processes impossible to diagnose from a host machine.
  *
- * Levels: v/d require LOG_LEVEL_DEBUG, i/w require LOG_LEVEL_BASIC, e is always
- * emitted. In processes where the module is not loaded (the app itself) `module`
- * is null and this degrades to plain logcat, still level-gated.
+ * Levels: BASIC logcat carries only warnings and errors — routine info and
+ * debug output requires LOG_LEVEL_DEBUG. e is always emitted, even at OFF. In
+ * processes where the module is not loaded (the app itself) `module` is null
+ * and this degrades to plain logcat, still level-gated.
  *
  * Tag taxonomy — every file logs under exactly one of these five, so one filter
  * shows a whole subsystem:
@@ -267,7 +268,7 @@ object Log {
     }
 
     fun i(tag: String, message: String) {
-        if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
+        if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
         emit(android.util.Log.INFO, tag, message)
     }
 

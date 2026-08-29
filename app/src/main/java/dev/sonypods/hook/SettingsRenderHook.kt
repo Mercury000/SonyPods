@@ -67,7 +67,7 @@ class SettingsRenderHook : HookContext() {
                     .filter { it.autoImageUrl != null }
                     .maxByOrNull { it.lastConnectedAt }
                 if (earphone == null) {
-                    Log.i(TAG, "no earphone with box image, falling through to stock")
+                    Log.d(TAG, "no earphone with box image, falling through to stock")
                     return@hookBefore
                 }
 
@@ -78,7 +78,7 @@ class SettingsRenderHook : HookContext() {
                 val reader = PodImageLoader.remoteImageReader
                 val bitmap = reader?.let { runCatching { it(fileName) }.getOrNull() }
                 if (bitmap == null) {
-                    Log.i(TAG, "remote reader returned null for $fileName, falling through")
+                    Log.d(TAG, "remote reader returned null for $fileName, falling through")
                     return@hookBefore
                 }
 
@@ -90,7 +90,7 @@ class SettingsRenderHook : HookContext() {
                     ctx.resources.getIdentifier("tic", "id", "com.android.settings")
                 )
                 if (ticId == null) {
-                    Log.i(TAG, "tic ImageView not found")
+                    Log.d(TAG, "tic ImageView not found")
                     return@hookBefore
                 }
 
@@ -98,12 +98,12 @@ class SettingsRenderHook : HookContext() {
                 val epoch = reloadEpoch
                 val action = Runnable {
                     if (epoch != reloadEpoch) return@Runnable
-                    Log.i(TAG, "setting catalog box image")
+                    Log.d(TAG, "setting catalog box image")
                     ticId.setImageDrawable(drawable)
                 }
                 handler?.postDelayed(action, 50L) ?: action.run()
             }
-            Log.i(TAG, "loadDefaultInternal hook installed")
+            Log.d(TAG, "loadDefaultInternal hook installed")
         }.onFailure { Log.e(TAG, "Failed to hook loadDefaultInternal", it) }
     }
 }

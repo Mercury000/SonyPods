@@ -102,7 +102,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                 .invoke(null, context)
         }.getOrNull() ?: return
         setObjectField(client, MX_MANAGER_FIELD, manager)
-        Log.i(MiLinkServiceHook.TAG, "seeded live mx manager before first classification")
+        Log.d(MiLinkServiceHook.TAG, "seeded live mx manager before first classification")
     }
 
     /**
@@ -121,7 +121,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                 if (result == HEADSET_TYPE) return@hookAfter
                 val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookAfter
                 if (!hook.isSonyPod(device)) return@hookAfter
-                Log.i(MiLinkServiceHook.TAG, "device type forced to headset (mx bind window)")
+                Log.d(MiLinkServiceHook.TAG, "device type forced to headset (mx bind window)")
                 result = HEADSET_TYPE
             }
         }.onFailure {
@@ -172,7 +172,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     true
                 }.getOrDefault(false)
                 if (signalled) {
-                    Log.i(MiLinkServiceHook.TAG, "disconnect sync signalled from discovery loss")
+                    Log.d(MiLinkServiceHook.TAG, "disconnect sync signalled from discovery loss")
                 }
             }
         }.onFailure {
@@ -200,7 +200,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     callMethod(profileContextInstance(), "getActiveDevice") as? BluetoothDevice
                 }.getOrNull() ?: return@hookAfter
                 if (!sameHeadset(reported.address, active.address)) return@hookAfter
-                Log.i(MiLinkServiceHook.TAG, "accepting cross-identity active device match")
+                Log.d(MiLinkServiceHook.TAG, "accepting cross-identity active device match")
                 result = true
             }
         }.onFailure {
@@ -278,7 +278,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     Log.d(MiLinkServiceHook.TAG, "LE veto kept: active device not Sony")
                     return@hookAfter
                 }
-                Log.i(MiLinkServiceHook.TAG, "lifting LE circulate veto")
+                Log.d(MiLinkServiceHook.TAG, "lifting LE circulate veto")
                 result = false
             }
         }.onFailure {
@@ -333,7 +333,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     releasing.set(false)
                 }
                 if (invoked) {
-                    Log.i(
+                    Log.d(
                         MiLinkServiceHook.TAG,
                         "system-aligned disconnect: LE identity $alternate released before classic",
                     )
@@ -365,7 +365,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
             ) {
                 val code = result as? Int ?: return@hookAfter
                 if (code == HOST_NOT_BOUND) {
-                    Log.i(MiLinkServiceHook.TAG, "hostBoundCheck HostNotBound waived for circulate")
+                    Log.d(MiLinkServiceHook.TAG, "hostBoundCheck HostNotBound waived for circulate")
                     result = SUCCESS
                 }
             }
@@ -398,7 +398,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     setObjectField(instance, "mLeadAudioActiveDevice", null)
                     setObjectField(instance, "mCurrentBtAddress", control)
                 }.onSuccess {
-                    Log.i(MiLinkServiceHook.TAG, "collapsed LE audio device onto control identity")
+                    Log.d(MiLinkServiceHook.TAG, "collapsed LE audio device onto control identity")
                 }.onFailure {
                     Log.w(MiLinkServiceHook.TAG, "failed to collapse LE audio device", it)
                 }
@@ -459,7 +459,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
                     rewriting.set(false)
                 }
                 if (connected != null) {
-                    Log.i(
+                    Log.d(
                         MiLinkServiceHook.TAG,
                         "circulate connect rewritten LE→classic=$control result=$connected",
                     )

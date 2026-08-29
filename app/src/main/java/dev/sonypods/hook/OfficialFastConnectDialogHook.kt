@@ -259,7 +259,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 SonyBridge.sendCommand(application, SonyBridge.CMD_REPUBLISH)
             }
             uiApplicationHookInstalled = true
-            Log.i(TAG, "official dialog UI application receiver hook installed")
+            Log.d(TAG, "official dialog UI application receiver hook installed")
         }.onFailure { Log.w(TAG, "official dialog UI application hook unavailable", it) }
     }
 
@@ -290,7 +290,7 @@ object OfficialFastConnectDialogHook : HookContext() {
             ) {
                 val intent = args.filterIsInstance<Intent>().firstOrNull() ?: return@hookBefore
                 if (!shouldSuppressExternalOfficialIntent(intent)) return@hookBefore
-                Log.i(
+                Log.d(
                     TAG,
                     "blocked delayed unmarked official Activity before launch " +
                         "class=${intent.component?.className} " +
@@ -301,7 +301,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 result = null
             }
             activityLaunchGuardInstalled = true
-            Log.i(TAG, "official dialog pre-launch guard installed method=${method.name}")
+            Log.d(TAG, "official dialog pre-launch guard installed method=${method.name}")
         }.onFailure {
             Log.e(
                 TAG,
@@ -334,7 +334,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 if (isManagedOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
             }
             frameworkActivityHookInstalled = true
-            Log.i(TAG, "official framework Activity fallback hook installed")
+            Log.d(TAG, "official framework Activity fallback hook installed")
         }.onFailure { Log.w(TAG, "official framework Activity fallback unavailable", it) }
     }
 
@@ -482,7 +482,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 val activity = instance as? Activity ?: return@hookAfter
                 if (isManagedOfficialActivity(activity)) onOfficialActivityDestroyed(activity)
             }
-            Log.i(TAG, "official Activity hooks installed class=$className")
+            Log.d(TAG, "official Activity hooks installed class=$className")
             true
         }.getOrElse {
             // Expected on builds that ship this Activity in a Qigsaw feature: its
@@ -540,7 +540,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 Log.d(TAG, "official Activity controller rebound class=${controller.javaClass.name}")
             }
         }
-        Log.i(
+        Log.d(
             TAG,
             "official Activity created class=${activity.javaClass.name} " +
                 "address=$activeAddress controller=${activeController?.javaClass?.name}",
@@ -590,7 +590,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 ) {
                     return@hookBefore
                 }
-                Log.i(
+                Log.d(
                     TAG,
                     "official dialog ignored automatic close/check " +
                         "what=${message.what} address=${snapshot.deviceAddress}",
@@ -598,7 +598,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 result = null
             }
             handlerDispatchGuardInstalled = true
-            Log.i(TAG, "official dialog failure-check Handler guard installed")
+            Log.d(TAG, "official dialog failure-check Handler guard installed")
         }.onFailure { Log.w(TAG, "official dialog failure-check guard unavailable", it) }
     }
 
@@ -635,7 +635,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 onOfficialViewRefreshed(args.firstOrNull() as? View, instance)
             }
             fastControllerHookedClasses += className
-            Log.i(TAG, "official fast controller hook installed class=$className")
+            Log.d(TAG, "official fast controller hook installed class=$className")
         }.onFailure { Log.w(TAG, "official fast controller hook unavailable class=$className", it) }
     }
 
@@ -655,7 +655,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 onOfficialViewRefreshed(view, instance)
             }
             fastSuccessHookedClasses += className
-            Log.i(
+            Log.d(
                 TAG,
                 "official fast success hook installed class=$className " +
                     "method=${method.name} params=${method.parameterTypes.size}",
@@ -1014,7 +1014,7 @@ object OfficialFastConnectDialogHook : HookContext() {
         }
         return runCatching {
             context.startActivity(intent)
-            Log.i(TAG, "official PairingDialog Activity launched address=$address")
+            Log.d(TAG, "official PairingDialog Activity launched address=$address")
             true
         }.onFailure {
             // This is intentionally a hard official-mode failure. The caller
@@ -1657,7 +1657,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 }
             }
             batteryTextHookInstalled = true
-            Log.i(TAG, "official dialog semantic battery TextView guard installed")
+            Log.d(TAG, "official dialog semantic battery TextView guard installed")
         }.onFailure { Log.w(TAG, "official dialog battery TextView guard unavailable", it) }
     }
 

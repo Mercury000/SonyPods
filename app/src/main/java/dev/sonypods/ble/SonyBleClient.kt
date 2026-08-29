@@ -1745,7 +1745,11 @@ class SonyBleClient(
         if (hasConnectPermission()) device.name else null
 
     private fun log(message: String) {
-        Log.i(LOG_TAG, message)
+        // Transport frames (RX/TX/ACK/write status) fire for every NTFY the
+        // headset pushes unprompted — battery alone arrives every ~15s — so
+        // logcat only sees them at DEBUG level. The listener copy feeds the
+        // debug ring buffer unconditionally.
+        Log.d(LOG_TAG, message)
         listener.onLog(message)
     }
 

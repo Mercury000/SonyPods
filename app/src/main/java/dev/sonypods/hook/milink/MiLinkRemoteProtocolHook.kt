@@ -40,7 +40,7 @@ internal class MiLinkRemoteProtocolHook(private val hook: MiLinkServiceHook) {
                 val deviceId = args[2] as? String ?: return@hookBefore
                 if (!isSonyRequest(address, deviceId)) return@hookBefore
                 hook.pushStateToPanel()
-                Log.i(MiLinkServiceHook.TAG, "remote getHeadsetProperty answered 100 address=$address")
+                Log.d(MiLinkServiceHook.TAG, "remote getHeadsetProperty answered 100 address=$address")
                 this.result = statusSuccess
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetRemoteImpl.getHeadsetProperty skipped", it) }
@@ -65,7 +65,7 @@ internal class MiLinkRemoteProtocolHook(private val hook: MiLinkServiceHook) {
                 val mode = args[3] as? Int ?: return@hookBefore
                 hook.applyRemoteAncMode(mode)
                 hook.pushStateToPanel()
-                Log.i(MiLinkServiceHook.TAG, "remote updateHeadsetMode applied anc=$mode address=$address")
+                Log.d(MiLinkServiceHook.TAG, "remote updateHeadsetMode applied anc=$mode address=$address")
                 this.result = statusSuccess
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetRemoteImpl.updateHeadsetMode skipped", it) }

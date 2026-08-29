@@ -179,7 +179,7 @@ object MiLinkServiceHook : HookContext() {
                 runCatching {
                     launchContext.startActivity(intent)
                 }.onSuccess {
-                    Log.i(TAG, "fusion more settings redirected to module address=${device.address}")
+                    Log.d(TAG, "fusion more settings redirected to module address=${device.address}")
                     // The official method is void. Marking a null result prevents it from
                     // launching the system settings after the module activity was opened.
                     this.result = null

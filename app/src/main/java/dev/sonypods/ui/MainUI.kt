@@ -280,7 +280,7 @@ fun MainUI(
             }
             hasAppliedDefaultTab = true
             mainTabsGeneration++
-            Log.i(
+            Log.d(
                 "SonyPods-App",
                 "startup page applied config=$configuredStartupTab selected=$selectedTab connected=$sonyConnected",
             )
@@ -377,7 +377,7 @@ fun MainUI(
                 pendingAutoOpenAddress = null
                 autoOpenAfterScopeRestart = false
             }
-            Log.i("SonyPods-App", "Sony device connected: $displayTitle ($connectedDeviceAddress)")
+            Log.d("SonyPods-App", "Sony device connected: $displayTitle ($connectedDeviceAddress)")
         }
     }
 
@@ -417,7 +417,7 @@ fun MainUI(
                         if (!hasRequestedStartupConnection) {
                             hasRequestedStartupConnection = true
                             SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
-                            Log.i("SonyPods-App", "startup control connection reconciliation requested")
+                            Log.d("SonyPods-App", "startup control connection reconciliation requested")
                         }
                         // No config re-push here: the engine reads the framework-backed
                         // remote-pref store itself at startup and observes changes through

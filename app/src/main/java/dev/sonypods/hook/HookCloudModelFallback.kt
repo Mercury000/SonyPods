@@ -116,7 +116,7 @@ class HookCloudModelFallback(
                 }
                 if (!job.isActive) return@launch
                 if (matchesCurrentDevice) failedCatalogKeys.remove(key) else failedCatalogKeys.add(key)
-                Log.i(TAG, "hook fallback catalog ready host=${appContext.packageName} records=${records.size}")
+                Log.d(TAG, "hook fallback catalog ready host=${appContext.packageName} records=${records.size}")
                 onCatalogReady()
             } finally {
                 catalogInFlight.remove(key)
@@ -164,7 +164,7 @@ class HookCloudModelFallback(
                 }
                 if (!job.isActive) return@launch
                 failedImageKeys.remove(key)
-                Log.i(TAG, "hook fallback image ready host=${appContext.packageName} address=$address bytes=${bytes.size}")
+                Log.d(TAG, "hook fallback image ready host=${appContext.packageName} address=$address bytes=${bytes.size}")
                 onImageReady(address)
             } finally {
                 imageInFlight.remove(url)

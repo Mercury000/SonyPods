@@ -332,7 +332,7 @@ object MiBluetoothToastHook : HookContext() {
                 announceSurfacesReady(context)
                 registerUnlockReceiver(context)
             }
-            Log.i("SonyPods-Hook", "MiuiBluetoothNotification constructor hook installed on ${constructors.size} overloads")
+            Log.d("SonyPods-Hook", "MiuiBluetoothNotification constructor hook installed on ${constructors.size} overloads")
         }.onFailure {
             Log.w("SonyPods-Hook", "MiuiBluetoothNotification constructor hook skipped", it)
         }

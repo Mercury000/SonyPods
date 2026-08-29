@@ -37,7 +37,7 @@ object LeAudioAllowListHook : HookContext() {
                 if (!SonyDeviceService.isKnownSonyAddress(address)) return@hookBefore
                 result = true
             }
-            Log.i(TAG, "isLeAudioAllowed hook installed")
+            Log.d(TAG, "isLeAudioAllowed hook installed")
         }.onFailure {
             Log.w(TAG, "isLeAudioAllowed hook unavailable", it)
         }

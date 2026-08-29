@@ -132,7 +132,7 @@ object CloudModelInfoSync {
             if (CloudModelInfoStore.publishJson(raw, service)) {
                 SonyBridge.sendCommand(context, SonyBridge.CMD_CLOUD_MODEL_INFO_READY)
             }
-            Log.i(TAG, "on-demand cloud model catalog updated records=${fetched.size} key=$attemptKey")
+            Log.d(TAG, "on-demand cloud model catalog updated records=${fetched.size} key=$attemptKey")
         }
     }
 

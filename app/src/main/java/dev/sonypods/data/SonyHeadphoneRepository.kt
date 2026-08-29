@@ -2510,7 +2510,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun sendCommand(command: HeadphoneCommand) {
-        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}", verbose = true)
+        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}")
         client.sendToChannel(command.channel, command.bytes)
     }
 
@@ -2791,7 +2791,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onMessage(channel: TandemChannel, raw: ByteArray) {
-        appendLog("RX [$channel] ${raw.hexString()}", verbose = true)
+        appendLog("RX [$channel] ${raw.hexString()}")
         val profile = _state.value.connectedProfile
             ?: runCatching { ensureConnectedProfile() }.getOrNull()
             ?: run {
@@ -2904,7 +2904,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyCommonStatus(response: ParsedTandemResponse.CommonStatus) {
-        appendLog("Common status ${response.type} text=${response.text} values=${response.values} raw=${response.raw.hexString()}", verbose = true)
+        appendLog("Common status ${response.type} text=${response.text} values=${response.values} raw=${response.raw.hexString()}")
         if (response.type != dev.sonypods.protocol.CommonInquiredType.DISPLAY_FW_VERSION) return
         _state.update { current ->
             current.copy(
@@ -4429,9 +4429,12 @@ class SonyHeadphoneRepository private constructor(
         }.getOrNull()
     }
 
-    private fun appendLog(message: String, writeLogcat: Boolean = true, verbose: Boolean = false) {
+    private fun appendLog(message: String, writeLogcat: Boolean = true) {
         if (writeLogcat) {
-            if (verbose) Log.d(LOG_TAG, message) else Log.i(LOG_TAG, message)
+            // BASIC logcat carries only warnings and errors; every repository
+            // event line is routine and goes to logcat at DEBUG. The debug page
+            // ring buffer receives it regardless of level.
+            Log.d(LOG_TAG, message)
         }
         // Deliberately not part of _state: a log line must not re-emit the whole UI
         // state (and re-run every collector) — with the old field, one appendLog

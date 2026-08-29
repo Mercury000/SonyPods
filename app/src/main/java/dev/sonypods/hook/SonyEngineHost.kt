@@ -464,7 +464,7 @@ object SonyEngineHost {
             }
         } else {
             adapterService = resolved
-            Log.i(TAG, "AdapterService singleton recovered from class")
+            Log.d(TAG, "AdapterService singleton recovered from class")
         }
         return resolved
     }
@@ -1157,7 +1157,7 @@ object SonyEngineHost {
                 Log.w(TAG, "profile $profile write failed enabled=$enabled", it)
                 false
             }
-            Log.i(
+            Log.d(
                 TAG,
                 "profile $profile ${runCatching { device.address }.getOrNull()} " +
                     "$current -> $policy written=$written",
@@ -1313,7 +1313,7 @@ object SonyEngineHost {
             ?.bondedDevices.orEmpty()
             .any { it.address.equals(control, ignoreCase = true) }
         if (!bondedNow) return base
-        Log.i(TAG, "publishing control identity $control for live session on $address")
+        Log.d(TAG, "publishing control identity $control for live session on $address")
         return base.copy(
             deviceAddress = control,
             // An identity field equal to the rewritten address would be an inverted pairing;
@@ -1367,7 +1367,7 @@ object SonyEngineHost {
         val summary = "$control -> $line connected=${system.connected} active=${system.active}"
         if (summary == lastLeAudioPolicyLog) return
         lastLeAudioPolicyLog = summary
-        Log.i(TAG, "LE Audio policy $summary")
+        Log.d(TAG, "LE Audio policy $summary")
     }
 
     // ── System per-device LDAC switch ──
@@ -1499,7 +1499,7 @@ object SonyEngineHost {
             false
         }
         if (!wrote) return
-        Log.i(TAG, "LDAC enabled=$enabled written for $address")
+        Log.d(TAG, "LDAC enabled=$enabled written for $address")
         ldacWriteTarget = enabled
         ldacWriteSettlesAtMs = SystemClock.elapsedRealtime() + LDAC_SETTLE_MS
         publishLdac(context)
@@ -1567,7 +1567,7 @@ object SonyEngineHost {
         }
         val dualMode = dualModeAudioEnabled()
         val group = leAudioSwitchGroup(devices)
-        Log.i(
+        Log.d(
             TAG,
             "LE Audio switch allowed=$allowed dualMode=$dualMode group=" +
                 group.joinToString { runCatching { it.address }.getOrNull().orEmpty() },
@@ -1597,10 +1597,10 @@ object SonyEngineHost {
             // Check whether all targeted identities are already disconnected — if so, proceed
             // immediately without waiting for a callback that may never arrive.
             if (group.all { isClassicProfileDisconnected(it) }) {
-                Log.i(TAG, "classic profiles already disconnected; enabling LE Audio now")
+                Log.d(TAG, "classic profiles already disconnected; enabling LE Audio now")
                 enableLeAudio()
             } else {
-                Log.i(TAG, "waiting for classic profiles to disconnect before enabling LE Audio")
+                Log.d(TAG, "waiting for classic profiles to disconnect before enabling LE Audio")
                 pendingLeAudioEnable = enableLeAudio
             }
         } else {
@@ -1658,7 +1658,7 @@ object SonyEngineHost {
         val pending = pendingLeAudioEnable ?: return
         if (!HeadsetStateDispatcher.isSonyPod(device)) return
         pendingLeAudioEnable = null
-        Log.i(TAG, "classic profiles disconnected for ${device.address}; enabling LE Audio")
+        Log.d(TAG, "classic profiles disconnected for ${device.address}; enabling LE Audio")
         pending()
     }
 

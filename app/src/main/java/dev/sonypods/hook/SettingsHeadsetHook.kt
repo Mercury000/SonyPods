@@ -949,7 +949,7 @@ object SettingsHeadsetHook : HookContext() {
                 positionBadges(host, card, state)
                 state.drawables.forEach { host.overlay.add(it) }
             }
-            Log.i(
+            Log.d(
                 TAG,
                 "badges updated lea=${leaRes != null} codec=$currentCodec " +
                     "dsee=$currentDseeGeneration active=$currentDseeActive visible=$visible",
