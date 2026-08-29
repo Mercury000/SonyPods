@@ -78,6 +78,10 @@
     <string name="floating_bottom_bar_style_ios">iOS</string>
     <string name="blur_top_bar">Blur Top Bar</string>
     <string name="blur_top_bar_summary">Use a translucent top app bar background</string>
+    <string name="predictive_back">Predictive Back Animation</string>
+    <string name="predictive_back_summary">Follow the finger during the back gesture, previewing the page underneath</string>
+    <string name="predictive_back_distance">Back Travel Distance</string>
+    <string name="predictive_back_distance_summary">Adjust the maximum horizontal travel of the page during the back gesture</string>
     <string name="settings_section_module">Module settings</string>
     <string name="settings_section_island">Super Island</string>
     <string name="settings_section_notification">Notifications</string>

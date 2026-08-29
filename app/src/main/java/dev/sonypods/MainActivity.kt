@@ -60,6 +60,8 @@ class MainActivity : ComponentActivity() {
             val floatingBottomBarStyle = remember { mutableStateOf(prefs.getInt("floating_bottom_bar_style", 0)) }
             val blurBottomBar = remember { mutableStateOf(prefs.getBoolean("blur_bottom_bar", false)) }
             val blurTopBar = remember { mutableStateOf(prefs.getBoolean("blur_top_bar", false)) }
+            val predictiveBack = remember { mutableStateOf(prefs.getBoolean("predictive_back", true)) }
+            val predictiveBackDistance = remember { mutableStateOf(prefs.getInt("predictive_back_distance", 50)) }
             val appLanguage = remember { mutableStateOf(prefs.getInt("app_language", AppLocale.SYSTEM)) }
             val systemDark = isSystemInDarkTheme()
             val darkMode = when (themeMode.value) {
@@ -109,6 +111,16 @@ class MainActivity : ComponentActivity() {
                 onBlurTopBarChange = {
                     blurTopBar.value = it
                     prefs.edit().putBoolean("blur_top_bar", it).apply()
+                },
+                predictiveBack = predictiveBack,
+                onPredictiveBackChange = {
+                    predictiveBack.value = it
+                    prefs.edit().putBoolean("predictive_back", it).apply()
+                },
+                predictiveBackDistance = predictiveBackDistance,
+                onPredictiveBackDistanceChange = {
+                    predictiveBackDistance.value = it
+                    prefs.edit().putInt("predictive_back_distance", it).apply()
                 },
                 appLanguage = appLanguage,
                 onAppLanguageChange = {

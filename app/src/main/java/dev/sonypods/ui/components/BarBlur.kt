@@ -38,10 +38,11 @@ internal val LocalBarBlurBackdrop = staticCompositionLocalOf<LayerBackdrop?> { n
 internal fun BarBlurHost(
     bottomBarBlurEnabled: Boolean,
     topBarBlurEnabled: Boolean,
+    captureForEffects: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val surfaceColor = MiuixTheme.colorScheme.surface
-    val backdrop = if ((bottomBarBlurEnabled || topBarBlurEnabled) && isRuntimeShaderSupported()) {
+    val backdrop = if ((bottomBarBlurEnabled || topBarBlurEnabled || captureForEffects) && isRuntimeShaderSupported()) {
         rememberLayerBackdrop {
             drawRect(surfaceColor)
             drawContent()

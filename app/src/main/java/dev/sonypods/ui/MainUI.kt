@@ -1,6 +1,7 @@
 package dev.sonypods.ui
 
 import android.annotation.SuppressLint
+import androidx.activity.compose.BackHandler
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -11,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.provider.Settings
 import android.os.SystemClock
 import dev.sonypods.hook.Log
@@ -21,27 +23,34 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.key
-import kotlinx.serialization.Serializable
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
@@ -51,9 +60,25 @@ import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.components.BarBackdropContent
 import dev.sonypods.ui.components.BarBlurHost
 import dev.sonypods.ui.components.BlurredBar
+import dev.sonypods.ui.nav.BACKGROUND_PARALLAX
+import dev.sonypods.ui.nav.BACKGROUND_SCALE_REDUCTION
+import dev.sonypods.ui.nav.EFFECT_VISIBILITY_THRESHOLD
+import dev.sonypods.ui.nav.IslandLayerBackHandlers
+import dev.sonypods.ui.nav.IslandLayerMotion
+import dev.sonypods.ui.nav.IslandLevelHost
+import dev.sonypods.ui.nav.isBoundaryEngaged
+import dev.sonypods.ui.nav.LAYER_ENTER_DURATION
+import dev.sonypods.ui.nav.LAYER_EXIT_DURATION
+import dev.sonypods.ui.nav.MAX_LAYERS
+import dev.sonypods.ui.nav.PredictiveBackBackdrop
+import dev.sonypods.ui.pages.GestureOperationsPage
+import dev.sonypods.ui.pages.MoreSettingsPage
+import dev.sonypods.ui.pages.MultipointSettingsPage
+import dev.sonypods.ui.pages.PodDetailPage
 import dev.sonypods.ui.pages.ReferencesPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
@@ -61,9 +86,11 @@ import dev.sonypods.ui.pages.VisibilitySettingsPage
 import dev.sonypods.ui.dialogs.MultipointAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioPairingHelpDialog
+import dev.sonypods.ui.dialogs.PowerOffDialog
 import dev.sonypods.utils.RootManager
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,36 +98,35 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
-import top.yukonga.miuix.kmp.nav.core.NavBackStack
-import top.yukonga.miuix.kmp.nav.core.NavDisplay
-import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
-import top.yukonga.miuix.kmp.nav.core.NavEntryBuilder
-import top.yukonga.miuix.kmp.nav.core.NavKey
-import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
-import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
+import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 private const val CONNECT_TIMEOUT_MS = 25_000L
 
-@Serializable
-sealed interface Screen : NavKey {
-    @Serializable data object Main : Screen
-    @Serializable data object References : Screen
-    @Serializable data object Theme : Screen
-    @Serializable data object TandemDebug : Screen
-    @Serializable data object Visibility : Screen
+sealed interface Screen {
+    data object Main : Screen
+    data object References : Screen
+    data object Theme : Screen
+    data object TandemDebug : Screen
+    data object Visibility : Screen
+
+    /** The earphone detail flow, layered above [Main]. */
+    data object EarphoneDetail : Screen
+    data object EarphoneMoreSettings : Screen
+    data object EarphoneGestureOperations : Screen
+    data object EarphoneMultipointSettings : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
 @Composable
 fun MainUI(
-    backStack: NavBackStack,
     themeMode: MutableState<Int> = mutableStateOf(0),
     onThemeModeChange: (Int) -> Unit = {},
     accentMode: MutableState<Int> = mutableStateOf(0),
@@ -113,6 +139,10 @@ fun MainUI(
     onFloatingBottomBarStyleChange: (Int) -> Unit = {},
     blurTopBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurTopBarChange: (Boolean) -> Unit = {},
+    predictiveBack: MutableState<Boolean> = mutableStateOf(true),
+    onPredictiveBackChange: (Boolean) -> Unit = {},
+    predictiveBackDistance: MutableState<Int> = mutableStateOf(50),
+    onPredictiveBackDistanceChange: (Int) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     openEarphoneDetailAddress: MutableState<String?> = mutableStateOf(null),
@@ -134,7 +164,6 @@ fun MainUI(
     var remoteDataReady by remember {
         mutableStateOf(ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached())
     }
-    var showDevicePicker by remember { mutableStateOf(false) }
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
     var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
@@ -157,8 +186,9 @@ fun MainUI(
     // The floating bar's style: 0 = miuix default pill, 1 = iOS liquid glass. Only
     // meaningful while the floating bar itself is on.
     val useIosBottomBar = floatingBottomBar.value && floatingBottomBarStyle.value == 1
-    val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
-    val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
+    // Constant page bottom padding like the reference (28dp); the vertical give comes
+    // from the bottom-bar slot itself collapsing when the bar hides, not extra padding.
+    val pageBottomContentPadding = 28.dp
 
     val appConfig = remember { ConfigManager.current() }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
@@ -193,20 +223,61 @@ fun MainUI(
     // value burst as well is what keeps the page from opening on defaults that
     // cannot be tapped.
     val canShowDetailPage = sonyConnected && sonyState.capabilitiesKnown && sonyState.initialValuesReady
-    // A device selection is itself a navigation request. Do not make the
-    // request depend solely on the effect below winning a particular
-    // recomposition: the connection broadcast and the picker state can be
-    // delivered in either order. While the selected session is probing, keep
-    // the picker visible; as soon as the probe completes, the pending request
-    // makes the detail page the target even before the effect clears the
-    // picker flag.
-    val externalDetailMatchesConnection = pendingExternalDetailAddress?.let { pending ->
-        sonyConnected && connectedDeviceAddress.equals(pending, ignoreCase = true)
-    } == true
-    val showEarphoneDetail = canShowDetailPage && if (pendingExternalDetailAddress != null) {
-        externalDetailMatchesConnection
-    } else {
-        !showDevicePicker || pendingAutoOpenAddress != null
+    // The layered stack above the root — the reference's architecture: pushing adds a
+    // layer; the device picker is the Earphones tab with no earphone layer pushed.
+    var layers by remember { mutableStateOf<List<Screen>>(emptyList()) }
+    val motion = remember { List(MAX_LAYERS) { IslandLayerMotion() } }
+    // A popped level keeps rendering its last screen so its exit animation can play —
+    // the reference keeps its `visibleDetail` set after closing for the same reason.
+    // Only ever overwritten while a screen occupies the level, never cleared.
+    val lastScreens = remember { mutableStateListOf<Screen?>(null, null, null) }
+    SideEffect {
+        repeat(MAX_LAYERS) { k ->
+            // Guarded: SnapshotStateList.set records a write even for an equal value, and
+            // this list is read during composition — an unconditional write would keep
+            // scheduling recompositions forever.
+            val screen = layers.getOrNull(k)
+            if (screen != null && lastScreens[k] != screen) lastScreens[k] = screen
+        }
+    }
+    val renderScreens: List<Screen?> = List(MAX_LAYERS) { k ->
+        layers.getOrNull(k) ?: lastScreens[k]
+    }
+
+    val earphoneScreens = remember {
+        setOf(
+            Screen.EarphoneDetail,
+            Screen.EarphoneMoreSettings,
+            Screen.EarphoneGestureOperations,
+            Screen.EarphoneMultipointSettings,
+        )
+    }
+    val earphoneDetailOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
+
+    // Set while the user is deliberately on the device picker, so the auto-open effect
+    // below does not drag them back into the detail page.
+    var pickerRequested by remember { mutableStateOf(false) }
+
+    fun popToEarphonePicker() {
+        pickerRequested = true
+        layers = emptyList()
+    }
+
+    fun openEarphoneDetail() {
+        pickerRequested = false
+        if (layers.firstOrNull() != Screen.EarphoneDetail) {
+            layers = listOf(Screen.EarphoneDetail)
+        }
+    }
+
+    fun openScreen(screen: Screen) {
+        if (layers.lastOrNull() != screen && layers.size < MAX_LAYERS) {
+            layers = layers + screen
+        }
+    }
+
+    fun closeLayer() {
+        if (layers.isNotEmpty()) layers = layers.dropLast(1)
     }
 
     val sonyActions = remember(context) {
@@ -299,7 +370,7 @@ fun MainUI(
             pendingAutoOpenAddress = null
             autoOpenAfterScopeRestart = false
             selectedTab = MainTab.Earphones
-            showDevicePicker = true
+            popToEarphonePicker()
         }
     }
 
@@ -313,9 +384,27 @@ fun MainUI(
         val pending = pendingExternalDetailAddress ?: return@LaunchedEffect
         if (!canShowDetailPage || !connectedDeviceAddress.equals(pending, ignoreCase = true)) return@LaunchedEffect
         selectedTab = MainTab.Earphones
-        showDevicePicker = false
+        openEarphoneDetail()
         pendingExternalDetailAddress = null
         onExternalDetailRequestConsumed()
+    }
+
+    // Connection lost while the earphone flow is open: the detail page is gated on a
+    // live, fully-probed session, so drop the flow back to the device picker.
+    LaunchedEffect(canShowDetailPage) {
+        if (!canShowDetailPage && earphoneDetailOpen) {
+            popToEarphonePicker()
+        }
+    }
+
+    // A live, fully-probed session opens its detail page on its own — the picker is only
+    // shown while the user asked for it (or nothing is connected).
+    LaunchedEffect(canShowDetailPage, pickerRequested, pendingExternalDetailAddress) {
+        if (canShowDetailPage && !pickerRequested && pendingExternalDetailAddress == null &&
+            layers.isEmpty()
+        ) {
+            openEarphoneDetail()
+        }
     }
 
     // The only documented gap in the NTFY-maintained state is playback metadata
@@ -324,8 +413,8 @@ fun MainUI(
     // reliably produce an invalidation NTFY, so nothing would re-ask. That gap
     // has a visible symptom — ask again only when that symptom is present.
     // Otherwise opening the page is a read of the mirrored state: no commands.
-    LaunchedEffect(showEarphoneDetail, connectedDeviceAddress) {
-        if (!showEarphoneDetail || connectedDeviceAddress.isBlank()) return@LaunchedEffect
+    LaunchedEffect(earphoneDetailOpen, connectedDeviceAddress) {
+        if (!earphoneDetailOpen || connectedDeviceAddress.isBlank()) return@LaunchedEffect
         if (!sonyState.supportsPlaybackControl) return@LaunchedEffect
         val metadataEmpty = sonyState.playbackTrack.isNullOrBlank() &&
             sonyState.playbackArtist.isNullOrBlank() &&
@@ -375,7 +464,7 @@ fun MainUI(
             if (canShowDetailPage && shouldAutoOpen) {
                 selectedTab = MainTab.Earphones
                 hasAppliedDefaultTab = true
-                showDevicePicker = false
+                openEarphoneDetail()
                 pendingAutoOpenAddress = null
                 autoOpenAfterScopeRestart = false
             }
@@ -392,7 +481,7 @@ fun MainUI(
             pendingAutoOpenAddress = null
             autoOpenAfterScopeRestart = false
             showConnectErrorDialog = true
-            showDevicePicker = true
+            popToEarphonePicker()
             SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
         }
     }
@@ -527,7 +616,7 @@ fun MainUI(
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = true
         showConnectErrorDialog = false
-        showDevicePicker = true
+        popToEarphonePicker()
         selectedTab = MainTab.Earphones
     }
 
@@ -542,7 +631,7 @@ fun MainUI(
         pendingAutoOpenAddress = device.address
         autoOpenAfterScopeRestart = false
         showConnectErrorDialog = false
-        showDevicePicker = true
+        popToEarphonePicker()
         selectedTab = MainTab.Earphones
         val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
         SonyBridge.connect(context, device.address, name)
@@ -568,7 +657,7 @@ fun MainUI(
         connectingDeviceAddress = null
         if (canShowDetailPage) {
             pendingAutoOpenAddress = null
-            showDevicePicker = false
+            openEarphoneDetail()
         } else {
             pendingAutoOpenAddress = connectedDeviceAddress
         }
@@ -579,7 +668,7 @@ fun MainUI(
         clearExternalDetailRequest()
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
-        showDevicePicker = true
+        popToEarphonePicker()
     }
 
     fun openBluetoothSettings() {
@@ -595,7 +684,7 @@ fun MainUI(
         clearExternalDetailRequest()
         pendingAutoOpenAddress = null
         autoOpenAfterScopeRestart = false
-        showDevicePicker = true
+        popToEarphonePicker()
         selectedTab = MainTab.Earphones
     }
 
@@ -647,51 +736,548 @@ fun MainUI(
         }
     }
 
-    // miuix-nav rejects duplicate contentKeys on the stack (a double-tap on an
-    // entry point would push the same data object twice and throw), so push only
-    // when the target is not already on top.
-    fun openScreen(screen: Screen) {
-        if (backStack.lastOrNull() != screen) {
-            backStack.add(screen)
+    // The reference's layered navigation runtime: per-boundary enter/exit effects and
+    // predictive handlers, verbatim structure generalized to the bounded stack.
+    val predictiveDistance: () -> Long = { predictiveBackDistance.value.coerceIn(25, 100).toLong() }
+
+    repeat(MAX_LAYERS) { k ->
+        val shown = layers.size > k
+        LaunchedEffect(shown, motion[k].predictiveActive) {
+            if (!motion[k].predictiveActive) {
+                val target = if (shown) 1f else 0f
+                val duration = if (shown) LAYER_ENTER_DURATION else LAYER_EXIT_DURATION
+                coroutineScope {
+                    launch {
+                        motion[k].backdropIntensity.animateTo(
+                            target,
+                            tween(duration, easing = FastOutSlowInEasing),
+                        )
+                    }
+                    launch {
+                        motion[k].coveredDepth.animateTo(
+                            target,
+                            tween(duration, easing = FastOutSlowInEasing),
+                        )
+                    }
+                }
+            }
+        }
+        IslandLayerBackHandlers(
+            enabled = predictiveBack.value && layers.size == k + 1,
+            motion = motion[k],
+            maxTranslationPercent = predictiveDistance,
+            onDismissed = { layers = layers.take(k) },
+        )
+    }
+    if (!predictiveBack.value) {
+        BackHandler(enabled = layers.isNotEmpty()) { closeLayer() }
+    }
+
+    @Composable
+    fun LayerScreenContent(screen: Screen) {
+        when (screen) {
+            Screen.References -> {
+            val referencesScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.about_references),
+                                largeTitle = stringResource(R.string.about_references),
+                                color = Color.Transparent,
+                                scrollBehavior = referencesScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            ReferencesPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(referencesScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.Theme -> {
+            val themeScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.theme_title),
+                                largeTitle = stringResource(R.string.theme_title),
+                                color = Color.Transparent,
+                                scrollBehavior = themeScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            ThemeSettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(themeScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                                themeMode = themeMode,
+                                onThemeModeChange = onThemeModeChange,
+                                accentMode = accentMode,
+                                onAccentModeChange = onAccentModeChange,
+                                floatingBottomBar = floatingBottomBar,
+                                onFloatingBottomBarChange = onFloatingBottomBarChange,
+                                blurBottomBar = blurBottomBar,
+                                onBlurBottomBarChange = onBlurBottomBarChange,
+                                floatingBottomBarStyle = floatingBottomBarStyle,
+                                onFloatingBottomBarStyleChange = onFloatingBottomBarStyleChange,
+                                blurTopBar = blurTopBar,
+                                onBlurTopBarChange = onBlurTopBarChange,
+                                predictiveBack = predictiveBack,
+                                onPredictiveBackChange = onPredictiveBackChange,
+                                predictiveBackDistance = predictiveBackDistance,
+                                onPredictiveBackDistanceChange = onPredictiveBackDistanceChange,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.Visibility -> {
+            val visibilityScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.visibility_settings_title),
+                                largeTitle = stringResource(R.string.visibility_settings_title),
+                                color = Color.Transparent,
+                                scrollBehavior = visibilityScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            VisibilitySettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(visibilityScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                                visibility = visibility.value,
+                                onVisibilityChange = { newVisibility ->
+                                    visibility.value = newVisibility
+                                    ConfigManager.updateVisibility(newVisibility)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.TandemDebug -> {
+            val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.tandem_debug_title),
+                                largeTitle = stringResource(R.string.tandem_debug_title),
+                                color = Color.Transparent,
+                                scrollBehavior = debugScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = { clearLogsRequest++ }) {
+                                        Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            TandemDebugPage(
+                                modifier = Modifier.nestedScroll(debugScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                ),
+                                clearRequest = clearLogsRequest,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.EarphoneDetail -> {
+            val detailScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val detailTitle = displayTitle.ifEmpty { stringResource(R.string.pod_info) }
+            // Own the list state here so returning from a sub-page restores the scroll
+            // position; a new detail session/device still starts from the top.
+            val detailListState = remember(connectedDeviceAddress) { LazyListState() }
+            // The hero image belongs to the device, not the connection. The snapshot
+            // drops the address the moment the link drops, and resolving by an empty
+            // address would swap the user's own headset picture for the generic
+            // placeholder mid-view — so resolve against the last known address instead.
+            var lastKnownImageAddress by remember { mutableStateOf(connectedDeviceAddress) }
+            if (connectedDeviceAddress.isNotBlank()) {
+                lastKnownImageAddress = connectedDeviceAddress
+            }
+            val imageLookupAddress = connectedDeviceAddress.ifBlank { lastKnownImageAddress }
+            val currentEarphonePref = earphonePrefs.value.firstOrNull {
+                it.address.equals(imageLookupAddress, ignoreCase = true)
+            }
+            var showPowerOffDialog by remember { mutableStateOf(false) }
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            val navigationIcon: @Composable () -> Unit = {
+                                IconButton(onClick = { backToDevicePicker() }) {
+                                    Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                }
+                            }
+                            val actions: @Composable RowScope.() -> Unit = {
+                                if (sonyState.supportsPowerOff) {
+                                    IconButton(onClick = { showPowerOffDialog = true }) {
+                                        Icon(
+                                            imageVector = AppIcons.Power,
+                                            modifier = Modifier.size(23.dp),
+                                            contentDescription = stringResource(R.string.power_off),
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = { openSystemHeadsetSettings() }) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Settings,
+                                        contentDescription = stringResource(R.string.click_action_system_settings),
+                                    )
+                                }
+                            }
+                            if (isLandscape) {
+                                SmallTopAppBar(
+                                    title = detailTitle,
+                                    color = Color.Transparent,
+                                    scrollBehavior = detailScrollBehavior,
+                                    navigationIcon = navigationIcon,
+                                    actions = actions,
+                                )
+                            } else {
+                                TopAppBar(
+                                    title = detailTitle,
+                                    largeTitle = detailTitle,
+                                    color = Color.Transparent,
+                                    scrollBehavior = detailScrollBehavior,
+                                    navigationIcon = navigationIcon,
+                                    actions = actions,
+                                )
+                            }
+                        }
+                    },
+                ) { padding ->
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            PodDetailPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(detailScrollBehavior.nestedScrollConnection),
+                                contentPadding = padding,
+                                bottomContentPadding = pageBottomContentPadding,
+                                podName = detailTitle,
+                                uiState = sonyState,
+                                actions = sonyActions.copy(
+                                    onOpenMoreSettings = { openScreen(Screen.EarphoneMoreSettings) },
+                                    onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
+                                    onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
+                                ),
+                                visibility = visibility.value,
+                                listState = detailListState,
+                                boxImagePath = currentEarphonePref?.boxImagePath,
+                                boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
+                            )
+                            PowerOffDialog(
+                                show = showPowerOffDialog,
+                                deviceName = displayTitle,
+                                onDismissRequest = { showPowerOffDialog = false },
+                                onConfirm = {
+                                    showPowerOffDialog = false
+                                    sonyActions.onPowerOff()
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.EarphoneMoreSettings -> {
+            val moreScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.more_settings_title),
+                                largeTitle = stringResource(R.string.more_settings_title),
+                                color = Color.Transparent,
+                                scrollBehavior = moreScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                            )
+                        }
+                    },
+                ) { padding ->
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            MoreSettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(moreScrollBehavior.nestedScrollConnection),
+                                contentPadding = padding,
+                                bottomContentPadding = pageBottomContentPadding,
+                                uiState = sonyState,
+                                actions = sonyActions.copy(
+                                    onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
+                                    onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
+                                ),
+                                visibility = visibility.value,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.EarphoneGestureOperations -> {
+            val gestureScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.card_gesture_title),
+                                largeTitle = stringResource(R.string.card_gesture_title),
+                                color = Color.Transparent,
+                                scrollBehavior = gestureScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                            )
+                        }
+                    },
+                ) { padding ->
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            GestureOperationsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(gestureScrollBehavior.nestedScrollConnection),
+                                contentPadding = padding,
+                                bottomContentPadding = pageBottomContentPadding,
+                                uiState = sonyState,
+                                actions = sonyActions,
+                                visibility = visibility.value,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.EarphoneMultipointSettings -> {
+            val multipointScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            // Official behaviour: leaving the add-device flow drops the headset back
+            // to NORMAL_MODE (SC sends the cancel when the waiting screen closes).
+            val pairingMode by rememberUpdatedState(sonyState.multipoint.pairingMode)
+            val cancelPairingMode by rememberUpdatedState(sonyActions.onMultipointPairingModeChange)
+            DisposableEffect(Unit) {
+                onDispose {
+                    if (pairingMode) cancelPairingMode(false)
+                }
+            }
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.mp_connect_two_title),
+                                largeTitle = stringResource(R.string.mp_connect_two_title),
+                                color = Color.Transparent,
+                                scrollBehavior = multipointScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                            )
+                        }
+                    },
+                ) { padding ->
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            MultipointSettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(multipointScrollBehavior.nestedScrollConnection),
+                                contentPadding = padding,
+                                bottomContentPadding = pageBottomContentPadding,
+                                uiState = sonyState,
+                                actions = sonyActions,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.Main -> Unit
         }
     }
 
-    // miuix-nav reference setup: the entering page's leading corners clip to the
-    // device screen corner, the dim scrim stays at the default 0.5, and the area
-    // revealed around layers fills with the page background.
-    val navEffects = NavDisplayEffects(
-        cornerClipRadius = rememberNavSystemCornerRadius(),
-        backdropColor = backgroundColor,
-    )
-    // Interactive swipe-to-dismiss is opt-in in miuix-nav; directions are physical
-    // (rightward back-swipe under LTR, leftward under RTL).
-    val swipeBackDirection = if (LocalLayoutDirection.current == LayoutDirection.Rtl) {
-        NavSwipeDirection.RightToLeft
-    } else {
-        NavSwipeDirection.LeftToRight
-    }
-
-    val navEntries: NavEntryBuilder.() -> Unit = {
-        entry<Screen.Main>(swipeDismiss = swipeBackDirection) {
-            if (!remoteDataReady || !hasAppliedDefaultTab) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor),
-                )
-                return@entry
-            }
-            key(mainTabsGeneration) {
-                MainTabsScaffold(
+    // Outer transparent Scaffold: provides a root-level MiuixPopupHost so that
+    // OverlayDialog-based composables (e.g. MultipointAlertDialog) render even
+    // when invoked outside the per-screen Scaffolds. Inner Scaffolds propagate
+    // LocalRootDialogStates up to this host. Zero contentWindowInsets so the
+    // outer host does not steal insets the inner Scaffolds rely on.
+    Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    ) {
+        // The reference's root host: captures the root for the bottom bar's glass and
+        // the predictive backdrop, exactly like AppShell's root BarBlurHost.
+        val rootEngaged = layers.isNotEmpty() || motion[0].predictiveActive ||
+            motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD
+        BarBlurHost(
+            bottomBarBlurEnabled = blurBottomBar.value,
+            topBarBlurEnabled = false,
+            captureForEffects = rootEngaged,
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (!remoteDataReady || !hasAppliedDefaultTab) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(backgroundColor),
+                    )
+                } else {
+                    key(mainTabsGeneration) {
+                        MainTabsScaffold(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val depth = motion[0].coveredDepth.value.coerceIn(0f, 1f)
+                                    scaleX = 1f - depth * BACKGROUND_SCALE_REDUCTION
+                                    scaleY = scaleX
+                                    translationX = -size.width * depth * BACKGROUND_PARALLAX
+                                },
                     tabs = tabs,
                     selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
                 floatingBottomBar = floatingBottomBar.value,
                 blurBottomBar = blurBottomBar.value,
                 iosBottomBar = useIosBottomBar,
+                bottomBarVisible = layers.isEmpty() && !motion[0].predictiveActive &&
+                    motion[0].coveredDepth.value < EFFECT_VISIBILITY_THRESHOLD,
                 blurTopBar = blurTopBar,
                 backgroundColor = backgroundColor,
-                overlayBottomBar = overlayBottomBar,
                 pageBottomContentPadding = pageBottomContentPadding,
                 xposedService = xposedService,
                 bluetoothServiceResponsive = bluetoothServiceResponsive,
@@ -699,13 +1285,9 @@ fun MainUI(
                 bondedDeviceCount = bluetoothState.bondedCount,
                 onBluetoothStatusClick = { openBluetoothSettings() },
                 onPairedBluetoothClick = { openDevicePicker() },
-                showEarphoneDetail = showEarphoneDetail,
                 mainTitle = displayTitle,
                 displayTitle = displayTitle,
                 sonyState = sonyState,
-                sonyActions = sonyActions,
-                visibility = visibility.value,
-                earphonePrefs = earphonePrefs.value,
                 connectedDeviceAddress = connectedDeviceAddress,
                 connectingDeviceAddress = connectingDeviceAddress,
                 showConnectErrorDialog = showConnectErrorDialog,
@@ -807,231 +1389,31 @@ fun MainUI(
                 onShowRestartScopeDialog = { showRestartScopeDialog = true },
                 onDismissRestartScopeDialog = { showRestartScopeDialog = false },
                 onRestartScopes = { restartScopes(it) },
-                onBackToDevicePicker = { backToDevicePicker() },
-                    onOpenSystemHeadsetSettings = { openSystemHeadsetSettings() },
                 )
             }
-        }
-        entry<Screen.References>(swipeDismiss = swipeBackDirection) {
-            val referencesScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            BarBlurHost(
-                bottomBarBlurEnabled = false,
-                topBarBlurEnabled = blurTopBar.value,
-            ) {
-                Scaffold(
-                    topBar = {
-                        BlurredBar(topGradient = true) {
-                            TopAppBar(
-                                title = stringResource(R.string.about_references),
-                                largeTitle = stringResource(R.string.about_references),
-                                color = Color.Transparent,
-                                scrollBehavior = referencesScrollBehavior,
-                                navigationIcon = {
-                                    IconButton(onClick = { backStack.removeLast() }) {
-                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                                    }
-                                }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    // See Screen.Theme: the page scrolls under the top bar.
-                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(backgroundColor),
-                        ) {
-                            ReferencesPage(
-                                modifier = Modifier
-                                    .overScrollVertical()
-                                    .nestedScroll(referencesScrollBehavior.nestedScrollConnection),
-                                contentPadding = PaddingValues(
-                                    top = padding.calculateTopPadding(),
-                                    bottom = pageBottomContentPadding,
-                                ),
-                            )
-                        }
-                    }
                 }
-            }
-        }
-        entry<Screen.Theme>(swipeDismiss = swipeBackDirection) {
-            val themeScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            BarBlurHost(
-                bottomBarBlurEnabled = false,
-                topBarBlurEnabled = blurTopBar.value,
-            ) {
-                Scaffold(
-                    topBar = {
-                        BlurredBar(topGradient = true) {
-                            TopAppBar(
-                                title = stringResource(R.string.theme_title),
-                                largeTitle = stringResource(R.string.theme_title),
-                                color = Color.Transparent,
-                                scrollBehavior = themeScrollBehavior,
-                                navigationIcon = {
-                                    IconButton(onClick = { backStack.removeLast() }) {
-                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                                    }
-                                }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    // See Screen.Theme: the page scrolls under the top bar.
-                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(backgroundColor),
-                        ) {
-                            ThemeSettingsPage(
-                                modifier = Modifier
-                                    .overScrollVertical()
-                                    .nestedScroll(themeScrollBehavior.nestedScrollConnection),
-                                contentPadding = PaddingValues(
-                                    top = padding.calculateTopPadding(),
-                                    bottom = pageBottomContentPadding,
-                                ),
-                                themeMode = themeMode,
-                                onThemeModeChange = onThemeModeChange,
-                                accentMode = accentMode,
-                                onAccentModeChange = onAccentModeChange,
-                                floatingBottomBar = floatingBottomBar,
-                                onFloatingBottomBarChange = onFloatingBottomBarChange,
-                                blurBottomBar = blurBottomBar,
-                                onBlurBottomBarChange = onBlurBottomBarChange,
-                                floatingBottomBarStyle = floatingBottomBarStyle,
-                                onFloatingBottomBarStyleChange = onFloatingBottomBarStyleChange,
-                                blurTopBar = blurTopBar,
-                                onBlurTopBarChange = onBlurTopBarChange,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        entry<Screen.Visibility>(swipeDismiss = swipeBackDirection) {
-            val visibilityScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            BarBlurHost(
-                bottomBarBlurEnabled = false,
-                topBarBlurEnabled = blurTopBar.value,
-            ) {
-                Scaffold(
-                    topBar = {
-                        BlurredBar(topGradient = true) {
-                            TopAppBar(
-                                title = stringResource(R.string.visibility_settings_title),
-                                largeTitle = stringResource(R.string.visibility_settings_title),
-                                color = Color.Transparent,
-                                scrollBehavior = visibilityScrollBehavior,
-                                navigationIcon = {
-                                    IconButton(onClick = { backStack.removeLast() }) {
-                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                                    }
-                                }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    // See Screen.Theme: the page scrolls under the top bar.
-                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(backgroundColor),
-                        ) {
-                            VisibilitySettingsPage(
-                                modifier = Modifier
-                                    .overScrollVertical()
-                                    .nestedScroll(visibilityScrollBehavior.nestedScrollConnection),
-                                contentPadding = PaddingValues(
-                                    top = padding.calculateTopPadding(),
-                                    bottom = pageBottomContentPadding,
-                                ),
-                                visibility = visibility.value,
-                                onVisibilityChange = { newVisibility ->
-                                    visibility.value = newVisibility
-                                    ConfigManager.updateVisibility(newVisibility)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        entry<Screen.TandemDebug>(swipeDismiss = swipeBackDirection) {
-            val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
-            BarBlurHost(
-                bottomBarBlurEnabled = false,
-                topBarBlurEnabled = blurTopBar.value,
-            ) {
-                Scaffold(
-                    topBar = {
-                        BlurredBar(topGradient = true) {
-                            TopAppBar(
-                                title = stringResource(R.string.tandem_debug_title),
-                                largeTitle = stringResource(R.string.tandem_debug_title),
-                                color = Color.Transparent,
-                                scrollBehavior = debugScrollBehavior,
-                                navigationIcon = {
-                                    IconButton(onClick = { backStack.removeLast() }) {
-                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                                    }
-                                },
-                                actions = {
-                                    IconButton(onClick = { clearLogsRequest++ }) {
-                                        Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
-                                    }
-                                }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    // See Screen.Theme: the page scrolls under the top bar.
-                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(backgroundColor),
-                        ) {
-                            TandemDebugPage(
-                                modifier = Modifier.nestedScroll(debugScrollBehavior.nestedScrollConnection),
-                                contentPadding = PaddingValues(
-                                    top = padding.calculateTopPadding(),
-                                ),
-                                clearRequest = clearLogsRequest,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
 
-    // Outer transparent Scaffold: provides a root-level MiuixPopupHost so that
-    // OverlayDialog-based composables (e.g. MultipointAlertDialog) render even
-    // when invoked outside the per-screen Scaffolds. Inner Scaffolds propagate
-    // LocalRootDialogStates up to this host. Zero contentWindowInsets so the
-    // outer host does not steal insets the inner Scaffolds rely on.
-    Scaffold(
-        containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    ) {
-        NavDisplay(
-            backStack = backStack,
-            onBack = {
-                if (backStack.size > 1) {
-                    backStack.removeLast()
-                } else {
-                    (context as? Activity)?.finish()
+                PredictiveBackBackdrop(
+                    intensity = motion[0].backdropIntensity.value,
+                    visible = motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                BarBlurHost(
+                    bottomBarBlurEnabled = false,
+                    topBarBlurEnabled = false,
+                    captureForEffects = motion.isBoundaryEngaged(1, layers.size),
+                ) {
+                    IslandLevelHost(
+                        level = 0,
+                        layerCount = layers.size,
+                        renderScreens = renderScreens,
+                        motion = motion,
+                        maxTranslationPercent = predictiveDistance,
+                        screenContent = { LayerScreenContent(it) },
+                    )
                 }
-            },
-            effects = navEffects,
-            content = navEntries,
-        )
+            }
+        }
 
         // Device-driven multipoint reconnection alert: shown globally once the engine
         // reports a pending FIXED_MESSAGE alert (V2 Table1 ALERT_NTFY_PARAM 0x99).

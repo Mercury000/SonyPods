@@ -3,7 +3,6 @@ package dev.sonypods.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import top.yukonga.miuix.kmp.nav.core.rememberNavBackStack
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 
 @Composable
@@ -20,6 +19,10 @@ fun App(
     onBlurBottomBarChange: (Boolean) -> Unit = {},
     blurTopBar: MutableState<Boolean> = mutableStateOf(false),
     onBlurTopBarChange: (Boolean) -> Unit = {},
+    predictiveBack: MutableState<Boolean> = mutableStateOf(true),
+    onPredictiveBackChange: (Boolean) -> Unit = {},
+    predictiveBackDistance: MutableState<Int> = mutableStateOf(50),
+    onPredictiveBackDistanceChange: (Int) -> Unit = {},
     appLanguage: MutableState<Int> = mutableStateOf(AppLocale.SYSTEM),
     onAppLanguageChange: (Int) -> Unit = {},
     openEarphoneDetailAddress: MutableState<String?> = mutableStateOf(null),
@@ -30,12 +33,10 @@ fun App(
         2 -> ColorSchemeMode.Dark
         else -> ColorSchemeMode.System
     }
-    val backStack = rememberNavBackStack<Screen>(Screen.Main)
 
     AppLocale.Provider(language = appLanguage.value) {
         AppTheme(colorSchemeMode = colorSchemeMode, accentMode = accentMode.value) {
             MainUI(
-                backStack = backStack,
                 themeMode = themeMode,
                 onThemeModeChange = onThemeModeChange,
                 accentMode = accentMode,
@@ -48,6 +49,10 @@ fun App(
                 onBlurBottomBarChange = onBlurBottomBarChange,
                 blurTopBar = blurTopBar,
                 onBlurTopBarChange = onBlurTopBarChange,
+                predictiveBack = predictiveBack,
+                onPredictiveBackChange = onPredictiveBackChange,
+                predictiveBackDistance = predictiveBackDistance,
+                onPredictiveBackDistanceChange = onPredictiveBackDistanceChange,
                 appLanguage = appLanguage,
                 onAppLanguageChange = onAppLanguageChange,
                 openEarphoneDetailAddress = openEarphoneDetailAddress,
