@@ -30,7 +30,7 @@ import java.lang.reflect.Modifier
  * killed or crashes before lifecycle callbacks can release the lease.
  */
 object SoundConnectHandoverHook : HookContext() {
-    private const val TAG = "SonyPods-SoundConnect"
+    private const val TAG = "SonyPods-Hook"
     private const val KEEP_CONNECTION_SERVICE =
         "com.sony.songpal.mdr.service.KeepConnectionForegroundService"
     private const val MDR_CONNECTION_CONTROLLER =

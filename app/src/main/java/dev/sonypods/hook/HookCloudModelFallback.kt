@@ -3,7 +3,7 @@ package dev.sonypods.hook
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Log
+import dev.sonypods.hook.Log
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.CloudModelInfoNetwork
 import dev.sonypods.config.CloudModelInfoStore
@@ -263,7 +263,7 @@ class HookCloudModelFallback(
             ?.lowercase()
 
     private companion object {
-        const val TAG = "SonyPods-HookFallback"
+        const val TAG = "SonyPods-Cloud"
         const val CACHE_DIR = "sonypods_hook_cloud"
         const val IMAGE_DIR = "images"
         const val CATALOG_FILE = "cloud_model_info.json"

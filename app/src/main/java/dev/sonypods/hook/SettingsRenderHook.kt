@@ -22,7 +22,7 @@ import java.lang.ref.WeakReference
  * our own image at the same 50ms delay, avoiding any flicker.
  */
 class SettingsRenderHook : HookContext() {
-    private val TAG = "SonyPods-SettingsRender"
+    private val TAG = "SonyPods-Hook"
     private var reloadEpoch = 0L
 
     private val animClass = "com.android.settings.bluetooth.tws.MiuiHeadsetAnimation"

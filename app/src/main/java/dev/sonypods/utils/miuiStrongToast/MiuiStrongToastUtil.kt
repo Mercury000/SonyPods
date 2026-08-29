@@ -59,7 +59,7 @@ object MiuiStrongToastUtil {
                 "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
             ).invoke(service, 1, "strong_toast_action", bundle)
         } catch (e: Exception) {
-            Log.e("SonyPods", "Failed to show HyperOS String Toast")
+            Log.e("SonyPods-Hook", "Failed to show HyperOS String Toast")
         }
     }
 
@@ -103,7 +103,7 @@ object MiuiStrongToastUtil {
             ).invoke(service, 1, "strong_toast_action", bundle)
             lastPodsTimestamp = System.currentTimeMillis()
         } catch (_: Exception) {
-            Log.e("SonyPods", "Failed to show Pods Battery Toast")
+            Log.e("SonyPods-Hook", "Failed to show Pods Battery Toast")
         }
     }
 
@@ -246,7 +246,7 @@ object MiuiStrongToastUtil {
                     }.getOrDefault(0).takeIf { it != 0 }
                 }
             if (id == null) {
-                Log.d("SonyPods", "strong toast clip missing and no raw resource: $name")
+                Log.d("SonyPods-Hook", "strong toast clip missing and no raw resource: $name")
                 return null
             }
             val copied = runCatching {
@@ -255,9 +255,9 @@ object MiuiStrongToastUtil {
                 }
                 file.setReadable(true, false)
                 true
-            }.onFailure { Log.w("SonyPods", "failed to materialise clip $name", it) }.getOrDefault(false)
+            }.onFailure { Log.w("SonyPods-Hook", "failed to materialise clip $name", it) }.getOrDefault(false)
             if (!copied) return null
-            Log.d("SonyPods", "materialised strong toast clip $name (${file.length()} bytes)")
+            Log.d("SonyPods-Hook", "materialised strong toast clip $name (${file.length()} bytes)")
         }
         val uri = "content://com.xiaomi.bluetooth.fileprovider/internal_files/$name.mp4"
         runCatching {
@@ -266,7 +266,7 @@ object MiuiStrongToastUtil {
                 Uri.parse(uri),
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
-        }.onFailure { Log.w("SonyPods", "grantUriPermission failed for $name", it) }
+        }.onFailure { Log.w("SonyPods-Hook", "grantUriPermission failed for $name", it) }
         return uri
     }
 
@@ -294,8 +294,8 @@ object MiuiStrongToastUtil {
             ).invoke(service, 1, "strong_toast_action", bundle)
             lastPodsTimestamp = System.currentTimeMillis()
             officialToastPostedAt = lastPodsTimestamp
-            Log.d("SonyPods", "official strong toast shown category=$category")
-        }.onFailure { Log.e("SonyPods", "Failed to show strong toast", it) }
+            Log.d("SonyPods-Hook", "official strong toast shown category=$category")
+        }.onFailure { Log.e("SonyPods-Hook", "Failed to show strong toast", it) }
     }
 
     /**
@@ -322,8 +322,8 @@ object MiuiStrongToastUtil {
             service.javaClass.getMethod(
                 "setStatus", Int::class.javaPrimitiveType, String::class.java, Bundle::class.java
             ).invoke(service, 1, "strong_toast_action", bundle)
-            Log.d("SonyPods", "official strong toast hidden")
-        }.onFailure { Log.w("SonyPods", "Failed to hide strong toast", it) }
+            Log.d("SonyPods-Hook", "official strong toast hidden")
+        }.onFailure { Log.w("SonyPods-Hook", "Failed to hide strong toast", it) }
     }
 
     /** How long HyperOS keeps our connect toast on screen before retiring it itself. */

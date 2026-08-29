@@ -16,7 +16,7 @@ import dev.sonypods.utils.PodImageLoader
 
 /** The single libxposed 102 entry and lifecycle coordinator. */
 class HookEntry : XposedModule() {
-    private val tag = "SonyPods-HookEntry"
+    private val tag = "SonyPods-Hook"
     private val supportedScopes = setOf(
         "com.android.bluetooth",
         "com.android.settings",

@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
  * bluetooth process cannot write to. The engine only reports the URL.
  */
 object ModelImageSync {
-    private const val TAG = "SonyPods-ImageSync"
+    private const val TAG = "SonyPods-Cloud"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlightKeys = ConcurrentHashMap.newKeySet<String>()

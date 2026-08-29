@@ -3,7 +3,7 @@ package dev.sonypods.utils
 import android.util.Log
 
 object RootManager {
-    private const val TAG = "SonyPods-Root"
+    private const val TAG = "SonyPods-App"
     private val packageNameRegex = Regex("^[A-Za-z0-9_.]+$")
     private val allowedScopes = setOf(
         "com.android.bluetooth",

@@ -141,7 +141,7 @@ data class AppConfig(
  * constants below.
  */
 object ConfigManager {
-    private const val TAG = "SonyPods-Config"
+    private const val TAG = "SonyPods-App"
     const val PREFS_NAME = "sonypods_settings"
     const val PREF_KEY_CONFIG_JSON = "config_json"
 

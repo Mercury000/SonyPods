@@ -7,7 +7,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import dev.sonypods.hook.Log
 import dev.sonypods.config.CloudModelInfoSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * but the authority now lives elsewhere, so the UI can come and go freely.
  */
 object SonyRemoteState {
-    private const val TAG = "SonyPods-RemoteState"
+    private const val TAG = "SonyPods-App"
 
     private val _state = MutableStateFlow(SonyStateSnapshot())
     val state: StateFlow<SonyStateSnapshot> = _state.asStateFlow()
@@ -37,7 +37,6 @@ object SonyRemoteState {
             val bundle = intent.bundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
             val snapshot = SonyStateSnapshot.fromBundle(bundle)
             received = true
-            android.util.Log.i("OpenBuds", "remote state pendingAlert=${snapshot.multipoint.pendingAlertMessageType}")
             _state.value = snapshot
             val appContext = context ?: return
             CloudModelInfoSync.onState(appContext, snapshot)

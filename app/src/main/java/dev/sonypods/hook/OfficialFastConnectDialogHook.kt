@@ -41,7 +41,7 @@ import dev.sonypods.utils.PodImageLoader
  */
 @SuppressLint("MissingPermission")
 object OfficialFastConnectDialogHook : HookContext() {
-    private const val TAG = "SonyPods-OfficialDialog"
+    private const val TAG = "SonyPods-Hook"
     private const val XIAOMI_PACKAGE = "com.xiaomi.bluetooth"
     private const val UI_PROCESS_SUFFIX = ":ui"
     private const val FAST_CONNECT_ACTIVITY =

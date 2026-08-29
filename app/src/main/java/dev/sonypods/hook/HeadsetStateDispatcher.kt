@@ -77,7 +77,7 @@ object HeadsetStateDispatcher : HookContext() {
                 context.getSystemService(android.bluetooth.BluetoothManager::class.java)
                     ?.adapter?.getRemoteDevice(address)
                     ?.let { SonyEngineHost.connectDevice(it, force = true) }
-            }.onFailure { Log.w("SonyPods", "saved-address reconnect failed address=$address", it) }
+            }.onFailure { Log.w("SonyPods-Engine", "saved-address reconnect failed address=$address", it) }
         }
     }
 
@@ -97,7 +97,7 @@ object HeadsetStateDispatcher : HookContext() {
                 registerAclReceiver(context)
             }
         }.onFailure {
-            Log.d("SonyPods", "AdapterService.onCreate hook skipped", it)
+            Log.d("SonyPods-Engine", "AdapterService.onCreate hook skipped", it)
         }
 
         hookLeAudioConnectionState()
@@ -123,7 +123,7 @@ object HeadsetStateDispatcher : HookContext() {
                 registerAppRequestReceiver(context)
                 if (!isSonyPod(device)) return@post
 
-                Log.d("SonyPods", "A2DP state=$currState for Sony device ${device.address}")
+                Log.d("SonyPods-Engine", "A2DP state=$currState for Sony device ${device.address}")
                 val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
@@ -145,7 +145,7 @@ object HeadsetStateDispatcher : HookContext() {
                         SonyEngineHost.onClassicProfileDisconnected(device)
                         SonyEngineHost.disconnectDevice(device)
                     } else {
-                        Log.d("SonyPods", "A2DP disconnecting; deferring Tandem teardown for ${device.address}")
+                        Log.d("SonyPods-Engine", "A2DP disconnecting; deferring Tandem teardown for ${device.address}")
                     }
                 }
             }
@@ -193,7 +193,7 @@ object HeadsetStateDispatcher : HookContext() {
                 val now = System.currentTimeMillis()
                 if (now - lastAclRefreshMs < 2000L) return
                 lastAclRefreshMs = now
-                Log.d("SonyPods", "ACL ${if (connected) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
+                Log.d("SonyPods-Engine", "ACL ${if (connected) "connected" else "disconnected"} for Sony device ${device.address}; refreshing state")
                 SonyEngineHost.refreshNow("bud-acl")
             }
         }
@@ -234,7 +234,7 @@ object HeadsetStateDispatcher : HookContext() {
                 onLeAudioStateChanged(instance, device, currState, prevState)
             }
         }.onFailure {
-            Log.d("SonyPods", "LeAudioService.notifyConnectionStateChanged hook skipped", it)
+            Log.d("SonyPods-Engine", "LeAudioService.notifyConnectionStateChanged hook skipped", it)
         }
     }
 
@@ -245,7 +245,7 @@ object HeadsetStateDispatcher : HookContext() {
         prevState: Int,
     ) {
         if (!isSonyPod(device)) return
-        Log.d("SonyPods", "LE Audio state=$currState for ${device.address}")
+        Log.d("SonyPods-Engine", "LE Audio state=$currState for ${device.address}")
         if (currState == prevState) return
         // Before the identity folding below, because what the stack holds is group-wide: either
         // identity connecting or dropping changes the answer, and the surfaces have no other way
@@ -274,7 +274,7 @@ object HeadsetStateDispatcher : HookContext() {
                     val group = leAudioGroupAddresses(serviceInstance, device)
                     if (group == null || controlAddress.uppercase() in group) {
                         Log.d(
-                            "SonyPods",
+                            "SonyPods-Engine",
                             "Deferring ${device.address}; control identity $controlAddress " +
                                 "will announce separately",
                         )
@@ -282,7 +282,7 @@ object HeadsetStateDispatcher : HookContext() {
                     }
                     val control = remoteControlDevice(serviceInstance, controlAddress) ?: return
                     Log.d(
-                        "SonyPods",
+                        "SonyPods-Engine",
                         "Control identity $controlAddress is outside the LE Audio group " +
                             "$group; connecting it from ${device.address}",
                     )
@@ -310,7 +310,7 @@ object HeadsetStateDispatcher : HookContext() {
                 // headset really powers off, that transition follows.
                 if (!fromControlIdentity) {
                     Log.d(
-                        "SonyPods",
+                        "SonyPods-Engine",
                         "LE Audio drop of ${device.address} is a set member; " +
                             "control identity $controlAddress still owns the session",
                     )
@@ -348,7 +348,7 @@ object HeadsetStateDispatcher : HookContext() {
                 onLeAudioSystemStateMoved(instance, "le-audio-active-${device?.address ?: "none"}")
             }
         }.onFailure {
-            Log.d("SonyPods", "LeAudioService.notifyActiveDeviceChanged hook skipped", it)
+            Log.d("SonyPods-Engine", "LeAudioService.notifyActiveDeviceChanged hook skipped", it)
         }
     }
 

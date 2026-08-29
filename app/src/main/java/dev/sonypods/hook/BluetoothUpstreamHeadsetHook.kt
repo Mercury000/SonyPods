@@ -26,7 +26,7 @@ import org.json.JSONObject
 
 @SuppressLint("MissingPermission")
 class BluetoothUpstreamHeadsetHook : HookContext() {
-    private val TAG = "SonyPods-Upstream"
+    private val TAG = "SonyPods-Hook"
     private val reloadCallbackBinders = mutableListOf<IBinder>()
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
     private val callbacks = linkedMapOf<IBinder, Any>()

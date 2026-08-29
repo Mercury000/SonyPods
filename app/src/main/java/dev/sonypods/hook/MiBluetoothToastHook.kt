@@ -94,7 +94,7 @@ object MiBluetoothToastHook : HookContext() {
             val miheadset_notification_Disconnect = context.resources.getIdentifier("miheadset_notification_Disconnect", "string", "com.xiaomi.bluetooth")
             val system_notification_accent_color = context.resources.getIdentifier("system_notification_accent_color", "color", "android")
             if (bluetoothDevice == null) {
-                Log.e("SonyPods", "createPodsNotification: btDevice null")
+                Log.e("SonyPods-Hook", "createPodsNotification: btDevice null")
                 return
             }
             try {
@@ -163,7 +163,7 @@ object MiBluetoothToastHook : HookContext() {
                 val headsetBitmap = runCatching { PodImageLoader.loadBoxBitmap(context, imagePrefs, address) }.getOrNull()
                     ?: runCatching { PodImageLoader.defaultLogoBitmap(moduleContext) }.getOrNull()
                 if (headsetBitmap == null) {
-                    Log.d("SonyPods", "createPodsNotification: no headset bitmap yet, using system icon")
+                    Log.d("SonyPods-Hook", "createPodsNotification: no headset bitmap yet, using system icon")
                 }
                 val headsetIcon = headsetBitmap?.let { Icon.createWithBitmap(it) }
                     ?: Icon.createWithResource(context, android.R.drawable.stat_sys_data_bluetooth)
@@ -287,7 +287,7 @@ object MiBluetoothToastHook : HookContext() {
                     SystemApisUtils.getUserAllUserHandle()
                 )
             } catch (e: Exception) {
-                Log.e("SonyPods", "Failed to create Pod Notification", e)
+                Log.e("SonyPods-Hook", "Failed to create Pod Notification", e)
             }
         }
 
@@ -299,7 +299,7 @@ object MiBluetoothToastHook : HookContext() {
                     notificationManager.cancelAsUser("BTHeadset$address", 10003, SystemApisUtils.getUserAllUserHandle())
                 }
             } catch (e: Exception) {
-                Log.e("SonyPods", "Failed to cancel Pod Notification!", e)
+                Log.e("SonyPods-Hook", "Failed to cancel Pod Notification!", e)
             }
         }
 
@@ -332,9 +332,9 @@ object MiBluetoothToastHook : HookContext() {
                 announceSurfacesReady(context)
                 registerUnlockReceiver(context)
             }
-            Log.i("SonyPods", "MiuiBluetoothNotification constructor hook installed on ${constructors.size} overloads")
+            Log.i("SonyPods-Hook", "MiuiBluetoothNotification constructor hook installed on ${constructors.size} overloads")
         }.onFailure {
-            Log.w("SonyPods", "MiuiBluetoothNotification constructor hook skipped", it)
+            Log.w("SonyPods-Hook", "MiuiBluetoothNotification constructor hook skipped", it)
         }
     }
 
@@ -369,8 +369,8 @@ object MiBluetoothToastHook : HookContext() {
                 activityOptions.toBundle(),
             )
             pendingIntent.send()
-            Log.d("SonyPods", "popup on connect launched $address")
-        }.onFailure { Log.e("SonyPods", "popup on connect failed", it) }
+            Log.d("SonyPods-Hook", "popup on connect launched $address")
+        }.onFailure { Log.e("SonyPods-Hook", "popup on connect failed", it) }
     }
 
     private fun registerNotificationReceiver(context: Context) {
@@ -420,7 +420,7 @@ object MiBluetoothToastHook : HookContext() {
                                 // An expired island is intentionally not recreated during
                                 // a transport recovery. The notification and state still
                                 // update, but the UI remains in its current no-island state.
-                                Log.d("SonyPods", "recovery island update skipped: island is no longer visible")
+                                Log.d("SonyPods-Hook", "recovery island update skipped: island is no longer visible")
                             }
                         }
                         if (showIsland) {
@@ -440,7 +440,7 @@ object MiBluetoothToastHook : HookContext() {
                                 // firing over the app the user is already reading.
                                 val dndReason = PopupDndPolicy.suppressReason(context)
                                 if (dndReason != null) {
-                                    Log.d("SonyPods", "popup on connect skipped: $dndReason")
+                                    Log.d("SonyPods-Hook", "popup on connect skipped: $dndReason")
                                 } else {
                                     launchConnectPopup(context, device, address, deviceName)
                                 }
@@ -467,10 +467,10 @@ object MiBluetoothToastHook : HookContext() {
                                         MiuiStrongToastUtil.showOfficialConnectToast(context, batteryParams, single)
                                         lastOfficialIslandShape = batteryShape(batteryParams)
                                     } else {
-                                        Log.d("SonyPods", "official island suppressed during Tandem recovery")
+                                        Log.d("SonyPods-Hook", "official island suppressed during Tandem recovery")
                                     }
                                 else ->
-                                    Log.d("SonyPods", "island disabled mode=${ConfigManager.islandMode()}")
+                                    Log.d("SonyPods-Hook", "island disabled mode=${ConfigManager.islandMode()}")
                             }
                         } else if (ConfigManager.islandMode() == ConfigManager.ISLAND_MODE_MODULE) {
                             if (transportRecovery) {
@@ -544,7 +544,7 @@ object MiBluetoothToastHook : HookContext() {
         notificationReceiver = broadcastReceiver
         receiverContext = context
         registerCloudFallback(context)
-        Log.d("SonyPods", "notification/island receiver registered")
+        Log.d("SonyPods-Hook", "notification/island receiver registered")
     }
 
     private fun registerCloudFallback(context: Context) {
@@ -573,7 +573,7 @@ object MiBluetoothToastHook : HookContext() {
         runCatching {
             val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
-                        Log.d("SonyPods", "user unlocked (${intent?.action}); re-rendering surfaces")
+                        Log.d("SonyPods-Hook", "user unlocked (${intent?.action}); re-rendering surfaces")
                         announceSurfacesReady(context)
                     }
                 }
@@ -588,7 +588,7 @@ object MiBluetoothToastHook : HookContext() {
             )
             unlockReceiver = receiver
             receiverContext = context
-        }.onFailure { Log.w("SonyPods", "unlock receiver registration failed", it) }
+        }.onFailure { Log.w("SonyPods-Hook", "unlock receiver registration failed", it) }
     }
 
     private fun announceSurfacesReady(context: Context) {

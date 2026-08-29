@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @SuppressLint("MissingPermission")
 object UnifiedDeviceIdentityService {
-    private const val TAG = "SonyPods-Identity"
+    private const val TAG = "SonyPods-Engine"
 
     /** Remote Preferences key for device identities JSON. */
     const val PREF_KEY_DEVICE_IDENTITIES = "device_identities"

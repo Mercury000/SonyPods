@@ -20,7 +20,7 @@ import io.github.libxposed.service.XposedService
  * write them.
  */
 object LegacyConfigMigrator {
-    private const val TAG = "SonyPods-LegacyMigrate"
+    private const val TAG = "SonyPods-App"
 
     /** App-local appearance prefs. Never consumed by hook processes; stay in a local file. */
     const val UI_PREFS_NAME = "sonypods_ui"

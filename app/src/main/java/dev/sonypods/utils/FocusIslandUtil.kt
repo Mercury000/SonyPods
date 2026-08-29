@@ -25,7 +25,7 @@ import com.mercury.sonypods.R
 
 @SuppressLint("WrongConstant")
 object FocusIslandUtil {
-    private const val TAG = "SonyPods-FocusIsland"
+    private const val TAG = "SonyPods-Hook"
     private const val CHANNEL_ID = "sonypods_focus_island"
     private const val CHANNEL_NAME = "SonyPods Battery"
     private const val NOTIFICATION_ID = 10086

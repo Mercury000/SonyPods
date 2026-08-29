@@ -9,7 +9,7 @@ import org.json.JSONObject
 
 /** Shared cloud transport used by the module process and Hook-host fallbacks. */
 object CloudModelInfoNetwork {
-    private const val TAG = "SonyPods-CloudModelInfo"
+    private const val TAG = "SonyPods-Cloud"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000
     private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024

@@ -109,7 +109,7 @@ abstract class HookContext {
             // fetch reflects the latest data the framework holds.
             val fresh = runCatching { prefsProvider() }.getOrElse { source }
             runCatching { ConfigManager.refreshFromPrefs(fresh) }
-                .onFailure { android.util.Log.w("SonyPods-HookContext", "remote config refresh failed", it) }
+                .onFailure { android.util.Log.w("SonyPods-Hook", "remote config refresh failed", it) }
             onRemoteConfigChanged()
         }
         runCatching { source.registerOnSharedPreferenceChangeListener(listener) }
@@ -118,7 +118,7 @@ abstract class HookContext {
                 remoteConfigListenerSource = source
             }
             .onFailure {
-                android.util.Log.w("SonyPods-HookContext", "remote config listener registration failed", it)
+                android.util.Log.w("SonyPods-Hook", "remote config listener registration failed", it)
             }
     }
 
@@ -232,6 +232,20 @@ abstract class HookContext {
  * Hook-side logging. Writes to both the LSPosed module log and logcat: the LSPosed
  * channel is not visible to `adb logcat`, which makes hook problems in system
  * processes impossible to diagnose from a host machine.
+ *
+ * Levels: v/d require LOG_LEVEL_DEBUG, i/w require LOG_LEVEL_BASIC, e is always
+ * emitted. In processes where the module is not loaded (the app itself) `module`
+ * is null and this degrades to plain logcat, still level-gated.
+ *
+ * Tag taxonomy — every file logs under exactly one of these five, so one filter
+ * shows a whole subsystem:
+ *  - SonyPods-Engine — the bluetooth-process engine: Tandem transport, repository,
+ *    connection state machine, LE audio policy
+ *  - SonyPods-Hook — Xposed hooks and the surfaces they render (MIUI settings,
+ *    notifications, island, toasts)
+ *  - SonyPods-MiLink — the milink headset-circulate subsystem
+ *  - SonyPods-Cloud — cloud model catalog and earphone image download/store
+ *  - SonyPods-App — the module app process (UI, config, migration)
  */
 object Log {
     @Volatile
@@ -249,7 +263,7 @@ object Log {
 
     fun v(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        emit(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.VERBOSE, tag, message)
     }
 
     fun i(tag: String, message: String) {
@@ -259,12 +273,12 @@ object Log {
 
     fun d(tag: String, message: String) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        emit(android.util.Log.INFO, tag, message)
+        emit(android.util.Log.DEBUG, tag, message)
     }
 
     fun d(tag: String, message: String, throwable: Throwable) {
         if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_DEBUG) return
-        emit(android.util.Log.ERROR, tag, message, throwable)
+        emit(android.util.Log.DEBUG, tag, message, throwable)
     }
 
     fun w(tag: String, message: String) {
@@ -277,13 +291,13 @@ object Log {
         emit(android.util.Log.WARN, tag, message, throwable)
     }
 
+    // Errors are emitted regardless of the configured level: a broken install must
+    // not be able to silence its own diagnostics.
     fun e(tag: String, message: String) {
-        if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
         emit(android.util.Log.ERROR, tag, message)
     }
 
     fun e(tag: String, message: String, throwable: Throwable) {
-        if (ConfigManager.logLevel() < ConfigManager.LOG_LEVEL_BASIC) return
         emit(android.util.Log.ERROR, tag, message, throwable)
     }
 }

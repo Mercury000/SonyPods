@@ -23,7 +23,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import dev.sonypods.hook.Log
 import androidx.core.content.ContextCompat
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.device.UnifiedDeviceIdentityService
@@ -1929,7 +1929,7 @@ class SonyBleClient(
     )
 
     companion object {
-        private const val LOG_TAG = "OpenBuds"
+        private const val LOG_TAG = "SonyPods-Engine"
         private const val AD_TYPE_MANUFACTURER_SPECIFIC = 0xFF
         private const val SONY_AUDIO_MANUFACTURER_ID = 0x012D
         private val SONY_AUDIO_HEAD = byteArrayOf(0x04, 0x00)

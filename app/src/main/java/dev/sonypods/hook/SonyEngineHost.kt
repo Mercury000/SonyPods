@@ -292,15 +292,10 @@ object SonyEngineHost {
         scope.launch {
             repo.state.collect { uiState ->
                 val snapshot = withSystemFacts(SonyStateSnapshot.fromUiState(uiState))
-                val pendingAlert = snapshot.multipoint.pendingAlertMessageType
-                val lastPending = lastSnapshot?.multipoint?.pendingAlertMessageType
-                val same = snapshot == lastSnapshot
-                android.util.Log.i("OpenBuds", "engine collect pendingAlert=$pendingAlert lastPending=$lastPending same=$same")
                 if (snapshot != lastSnapshot) {
                     lastSnapshot = snapshot
                     fallback?.onState(snapshot)
                     repo.ensureModelImageCatalogIfNeeded()
-                    android.util.Log.i("OpenBuds", "engine publish pendingAlert=$pendingAlert")
                     publish(ctx, snapshot)
                 }
             }

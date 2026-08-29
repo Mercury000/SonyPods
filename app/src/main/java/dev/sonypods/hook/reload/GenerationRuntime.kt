@@ -109,7 +109,7 @@ class GenerationRuntime(
         if (failures.isNotEmpty()) {
             val recoveryFailures = restoreAfterReloadRejection(failures)
             Log.e(
-                "SonyPods-Reload",
+                "SonyPods-Hook",
                 "generation=$generationId refused reload: ${failures.joinToString()}" +
                     if (recoveryFailures.isEmpty()) "; old generation restored" else
                         "; old generation recovery failed: ${recoveryFailures.joinToString()}",
@@ -146,7 +146,7 @@ class GenerationRuntime(
     fun finishReplacement(): Boolean {
         val unresolved = hooks.unresolvedOldHookIds()
         if (unresolved.isNotEmpty()) {
-            Log.e("SonyPods-Reload", "generation=$generationId unresolved old hooks=${unresolved.joinToString()}")
+            Log.e("SonyPods-Hook", "generation=$generationId unresolved old hooks=${unresolved.joinToString()}")
             return false
         }
         return true

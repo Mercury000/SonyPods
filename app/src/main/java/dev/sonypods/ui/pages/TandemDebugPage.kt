@@ -62,7 +62,7 @@ fun TandemDebugPage(
 ) {
     val context = LocalContext.current
     val repository = remember { SonyHeadphoneRepository.getInstance(context.applicationContext) }
-    val state by repository.state.collectAsState()
+    val debugLogs by repository.debugLogs.collectAsState()
     val listState = rememberLazyListState()
     var hexInput by remember { mutableStateOf("") }
     // Local "clear": hide log entries produced before the last clear request.
@@ -87,11 +87,11 @@ fun TandemDebugPage(
 
     LaunchedEffect(clearRequest) {
         if (clearRequest > 0) {
-            hiddenCount = state.debugLogs.size
+            hiddenCount = debugLogs.size
         }
     }
 
-    val logs = state.debugLogs.drop(hiddenCount.coerceAtMost(state.debugLogs.size))
+    val logs = debugLogs.drop(hiddenCount.coerceAtMost(debugLogs.size))
 
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) {

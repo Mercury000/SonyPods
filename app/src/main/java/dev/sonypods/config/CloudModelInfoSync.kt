@@ -22,7 +22,7 @@ import kotlinx.coroutines.sync.withLock
  * performs its own authoritative fetch and publishes the result to Remote Files.
  */
 object CloudModelInfoSync {
-    private const val TAG = "SonyPods-CloudModelInfo"
+    private const val TAG = "SonyPods-Cloud"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshMutex = Mutex()

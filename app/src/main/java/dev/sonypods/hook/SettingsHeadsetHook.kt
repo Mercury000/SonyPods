@@ -36,7 +36,7 @@ import java.util.WeakHashMap
 
 @SuppressLint("MissingPermission")
 object SettingsHeadsetHook : HookContext() {
-    private const val TAG = "SonyPods-Settings"
+    private const val TAG = "SonyPods-Hook"
     private const val PREFS_NAME = "sonypods_milink_state"
     private const val REPUBLISH_DEBOUNCE_MS = 600L
     private const val PKG_SETTINGS = "com.android.settings"

@@ -1,6 +1,6 @@
 package dev.sonypods.hook
 
-import android.util.Log
+import dev.sonypods.hook.Log
 
 /**
  * The single source of truth for whether a headset is absent, coming back, in
@@ -178,6 +178,6 @@ internal class HeadsetLinkTracker {
     }
 
     private companion object {
-        const val TAG = "SonyPods-Link"
+        const val TAG = "SonyPods-Engine"
     }
 }

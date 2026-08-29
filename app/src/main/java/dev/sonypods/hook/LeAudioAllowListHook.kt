@@ -1,7 +1,7 @@
 package dev.sonypods.hook
 
 import android.bluetooth.BluetoothDevice
-import android.util.Log
+import dev.sonypods.hook.Log
 import dev.sonypods.device.SonyDeviceService
 
 /**
@@ -23,7 +23,7 @@ import dev.sonypods.device.SonyDeviceService
  * verdict still stands for every other device.
  */
 object LeAudioAllowListHook : HookContext() {
-    private const val TAG = "SonyPods-LeaAllow"
+    private const val TAG = "SonyPods-Engine"
     private const val ADAPTER_SERVICE = "com.android.bluetooth.btservice.AdapterService"
 
     override fun onHook() {

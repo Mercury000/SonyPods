@@ -9,7 +9,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
+import dev.sonypods.hook.Log
 import androidx.core.content.ContextCompat
 import dev.sonypods.ble.DiscoveredSonyDevice
 import dev.sonypods.ble.SonyBleClient
@@ -541,8 +541,6 @@ data class SonyHeadphoneUiState(
     val endpointDiagnostic: EndpointDiagnosticState? = null,
     val table2Diagnostic: Table2DiagnosticState? = null,
     val supportedFeatures: List<FeatureStatus> = featureStatusesFor(null),
-    val debugLogs: List<String> = emptyList(),
-    val debugLogging: Boolean = true,
     val autoReconnect: Boolean = false,
     val strictSonyScanFilter: Boolean = false,
     val preferredProtocol: String = "Sony Tandem",
@@ -600,6 +598,7 @@ class SonyHeadphoneRepository private constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val leAudioProfileGateway = LeAudioProfileGateway(appContext)
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
+    private val _debugLogs = MutableStateFlow<List<String>>(emptyList())
     private val leAudioCoordinator = LeAudioSwitchCoordinator(
         object : LeAudioSwitchCoordinator.Callbacks {
             override fun requestPairedHistory(): Boolean {
@@ -828,6 +827,14 @@ class SonyHeadphoneRepository private constructor(
     }
 
     val state: StateFlow<SonyHeadphoneUiState> = _state.asStateFlow()
+
+    /**
+     * Tandem debug ring buffer for the in-app debug page. Separate from [state] on
+     * purpose: appendLog fires on every TX/RX frame, which must not re-emit the UI
+     * state and re-run its collectors. In the engine process, lines additionally
+     * reach the app's copy of this buffer via the ACTION_DEBUG_LOG broadcast.
+     */
+    val debugLogs: StateFlow<List<String>> = _debugLogs.asStateFlow()
 
     fun startScan() {
         _state.update {
@@ -2483,10 +2490,6 @@ class SonyHeadphoneRepository private constructor(
         _state.update { it.copy(playbackState = it.playbackState.copy(musicVolume = clamped)) }
     }
 
-    fun setDebugLogging(enabled: Boolean) {
-        _state.update { it.copy(debugLogging = enabled) }
-    }
-
     fun setAutoReconnect(enabled: Boolean) {
         _state.update { it.copy(autoReconnect = enabled) }
     }
@@ -2496,7 +2499,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun sendCommand(command: HeadphoneCommand) {
-        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}")
+        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}", verbose = true)
         client.sendToChannel(command.channel, command.bytes)
     }
 
@@ -2777,7 +2780,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onMessage(channel: TandemChannel, raw: ByteArray) {
-        appendLog("RX [$channel] ${raw.hexString()}")
+        appendLog("RX [$channel] ${raw.hexString()}", verbose = true)
         val profile = _state.value.connectedProfile
             ?: runCatching { ensureConnectedProfile() }.getOrNull()
             ?: run {
@@ -2890,7 +2893,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyCommonStatus(response: ParsedTandemResponse.CommonStatus) {
-        appendLog("Common status ${response.type} text=${response.text} values=${response.values} raw=${response.raw.hexString()}")
+        appendLog("Common status ${response.type} text=${response.text} values=${response.values} raw=${response.raw.hexString()}", verbose = true)
         if (response.type != dev.sonypods.protocol.CommonInquiredType.DISPLAY_FW_VERSION) return
         _state.update { current ->
             current.copy(
@@ -2928,6 +2931,11 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applyBattery(response: ParsedTandemResponse.Battery) {
+        // The headset answers every battery query and also pushes unsolicited
+        // battery NTFYs, so identical values arrive constantly. One summary line
+        // per actual change instead of one per reply is what keeps the battery
+        // refresh loop from flooding logcat and the debug ring.
+        val previous = _state.value.batteryState
         _state.update { current ->
             val battery = current.batteryState
             // Which battery kinds this device actually queries. A plain BATTERY
@@ -2962,6 +2970,15 @@ class SonyHeadphoneRepository private constructor(
                     )
                     else -> battery.copy(raw = response.values.filterNotNull())
                 }
+            )
+        }
+        val now = _state.value.batteryState
+        if (now != previous) {
+            appendLog(
+                "Battery ${response.kind} L=${now.left ?: "-"} R=${now.right ?: "-"} " +
+                    "C=${now.cradle ?: "-"} single=${now.single ?: "-"} " +
+                    "(was L=${previous.left ?: "-"} R=${previous.right ?: "-"} " +
+                    "C=${previous.cradle ?: "-"} single=${previous.single ?: "-"})"
             )
         }
     }
@@ -4401,18 +4418,15 @@ class SonyHeadphoneRepository private constructor(
         }.getOrNull()
     }
 
-    private fun appendLog(message: String, writeLogcat: Boolean = true) {
+    private fun appendLog(message: String, writeLogcat: Boolean = true, verbose: Boolean = false) {
         if (writeLogcat) {
-            Log.i(LOG_TAG, message)
+            if (verbose) Log.d(LOG_TAG, message) else Log.i(LOG_TAG, message)
         }
-        _state.update { current ->
-            if (!current.debugLogging) current else {
-                debugLogForwarder?.invoke(message)
-                current.copy(
-                    debugLogs = (listOf(message) + current.debugLogs).take(80)
-                )
-            }
-        }
+        // Deliberately not part of _state: a log line must not re-emit the whole UI
+        // state (and re-run every collector) — with the old field, one appendLog
+        // produced two logcat lines and a full state cascade.
+        _debugLogs.value = (listOf(message) + _debugLogs.value).take(DEBUG_LOG_CAPACITY)
+        debugLogForwarder?.invoke(message)
     }
 
     fun ingestRemoteDebugLog(message: String) {
@@ -4439,7 +4453,12 @@ class SonyHeadphoneRepository private constructor(
             }
         }
 
-        const val LOG_TAG = "OpenBuds"
+        const val LOG_TAG = "SonyPods-Engine"
+
+        /** Ring-buffer depth for [debugLogs]. Sized so a whole battery-refresh burst
+         * (TX + RX + parse lines) cannot evict the connection-time history: at ~30
+         * lines per burst, 500 keeps roughly the last 15 bursts. */
+        private const val DEBUG_LOG_CAPACITY = 500
         const val PLAY_NTFY_PARAM = 0xA9
         const val LEA_NTFY_STATUS = 0x45
         private const val LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING = 0x0C

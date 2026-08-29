@@ -18,7 +18,7 @@ import kotlinx.serialization.json.Json
  * through XposedInterface.openRemoteFile().
  */
 object CloudModelInfoStore {
-    private const val TAG = "SonyPods-CloudModelInfo"
+    private const val TAG = "SonyPods-Cloud"
 
     const val PREFERENCES_NAME = "cloud_model_info_preference"
     const val PREF_KEY_MODEL_INFO_LIST_JSON = "MODEL_INFO_LIST_JSON"

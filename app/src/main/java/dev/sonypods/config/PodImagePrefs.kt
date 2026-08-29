@@ -51,7 +51,7 @@ data class EarphonePref(
  * Compose rendering.
  */
 object PodImagePrefs {
-    private const val TAG = "SonyPods-PodImage"
+    private const val TAG = "SonyPods-Cloud"
     const val PREF_KEY_EARPHONES = "earphone_prefs_json"
     private const val IMAGE_DIR = "pod_images"
 
