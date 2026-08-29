@@ -9,6 +9,7 @@
 
 - [架构说明](ARCHITECTURE.md)：进程、transport、协议、adapter、repository 与 UI 的边界。
 - [协议实现现状](PROTOCOL_IMPLEMENTATION.md)：当前真实支持的 V1/V2、Table1/Table2、SPP/GATT、typed codec 与产品 API。
+- [协议技术说明](PROTOCOL_SPEC.md)：逐项协议面、帧构造与响应布局、与 Sound Connect 13.2.1 的一致性核对结论（2026-08-29 全量复验）。
 - [新机型适配](DEVICE_ADAPTATION.md)：基于动态能力探测和真实协议证据接入新设备。
 
 ### 协议扩展
