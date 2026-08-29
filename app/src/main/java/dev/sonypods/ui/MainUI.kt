@@ -36,7 +36,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.key
 import kotlinx.serialization.Serializable
@@ -76,8 +78,11 @@ import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.nav.core.NavBackStack
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
+import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
 import top.yukonga.miuix.kmp.nav.core.NavEntryBuilder
 import top.yukonga.miuix.kmp.nav.core.NavKey
+import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
+import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -651,8 +656,23 @@ fun MainUI(
         }
     }
 
+    // miuix-nav reference setup: the entering page's leading corners clip to the
+    // device screen corner, the dim scrim stays at the default 0.5, and the area
+    // revealed around layers fills with the page background.
+    val navEffects = NavDisplayEffects(
+        cornerClipRadius = rememberNavSystemCornerRadius(),
+        backdropColor = backgroundColor,
+    )
+    // Interactive swipe-to-dismiss is opt-in in miuix-nav; directions are physical
+    // (rightward back-swipe under LTR, leftward under RTL).
+    val swipeBackDirection = if (LocalLayoutDirection.current == LayoutDirection.Rtl) {
+        NavSwipeDirection.RightToLeft
+    } else {
+        NavSwipeDirection.LeftToRight
+    }
+
     val navEntries: NavEntryBuilder.() -> Unit = {
-        entry<Screen.Main> {
+        entry<Screen.Main>(swipeDismiss = swipeBackDirection) {
             if (!remoteDataReady || !hasAppliedDefaultTab) {
                 Box(
                     modifier = Modifier
@@ -792,7 +812,7 @@ fun MainUI(
                 )
             }
         }
-        entry<Screen.About> {
+        entry<Screen.About>(swipeDismiss = swipeBackDirection) {
             val aboutScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             BarBlurHost(
                 bottomBarBlurEnabled = false,
@@ -838,7 +858,7 @@ fun MainUI(
                 }
             }
         }
-        entry<Screen.Theme> {
+        entry<Screen.Theme>(swipeDismiss = swipeBackDirection) {
             val themeScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             BarBlurHost(
                 bottomBarBlurEnabled = false,
@@ -894,7 +914,7 @@ fun MainUI(
                 }
             }
         }
-        entry<Screen.Visibility> {
+        entry<Screen.Visibility>(swipeDismiss = swipeBackDirection) {
             val visibilityScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             BarBlurHost(
                 bottomBarBlurEnabled = false,
@@ -943,7 +963,7 @@ fun MainUI(
                 }
             }
         }
-        entry<Screen.TandemDebug> {
+        entry<Screen.TandemDebug>(swipeDismiss = swipeBackDirection) {
             val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
             BarBlurHost(
@@ -1011,6 +1031,7 @@ fun MainUI(
                     (context as? Activity)?.finish()
                 }
             },
+            effects = navEffects,
             content = navEntries,
         )
 
