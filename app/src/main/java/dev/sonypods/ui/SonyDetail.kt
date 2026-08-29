@@ -62,7 +62,6 @@ data class SonyDetailActions(
     val onPlaybackNext: () -> Unit = {},
     val onPlaybackVolumeChange: (Int) -> Unit = {},
     val onPowerOff: () -> Unit = {},
-    val onRefresh: () -> Unit = {},
 )
 
 /** Maps Sony battery levels to the [BatteryParams] container used by the battery card. */

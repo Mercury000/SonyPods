@@ -72,6 +72,12 @@ object SonyEngineHost {
     private const val PROFILE_HID_HOST = 4
     private const val STARTUP_ANNOUNCE_COUNT = 10
     private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
+    /**
+     * Status requests below this cache age are answered by republishing the
+     * NTFY-maintained state instead of re-querying the headset. Beyond it, one
+     * burst runs as drift repair for a possibly missed NTFY.
+     */
+    private const val REFRESH_REPAIR_INTERVAL_MS = 60_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
     private const val CONNECT_IN_FLIGHT_TIMEOUT_MS = 15_000L
@@ -1934,13 +1940,24 @@ object SonyEngineHost {
                 repo.disconnect()
             }
 
-            SonyBridge.CMD_REFRESH -> if (
-                repo.state.value.deviceInfo.protocolReady && repo.hasLiveTransport()
-            ) {
-                repo.refreshBasics()
-            } else {
-                runCatching { reconcileConnection() }
-                    .onFailure { Log.w(TAG, "manual refresh reconnect failed", it) }
+            SonyBridge.CMD_REFRESH -> {
+                // Answer from the engine's cache: the headset keeps it current via
+                // NTFY pushes, so a re-query returns the same values one radio
+                // round-trip later. MIUI re-registers its headset callbacks
+                // constantly and the connect popup polls every 15s — for those a
+                // republish is the whole answer. A real burst runs only on an
+                // explicit user request, when the channel looks uncertain, or when
+                // the last burst is old enough that a missed NTFY could have
+                // drifted the cache.
+                appContext?.let { publish(it, snapshot()) }
+                if (!repo.state.value.deviceInfo.protocolReady || !repo.hasLiveTransport()) {                    runCatching { reconcileConnection() }
+                        .onFailure { Log.w(TAG, "manual refresh reconnect failed", it) }
+                } else if (
+                    intent.getBooleanExtra(SonyBridge.EXTRA_FORCE_REFRESH, false) ||
+                    repo.fullRefreshAgeMs() >= REFRESH_REPAIR_INTERVAL_MS
+                ) {
+                    repo.refreshBasics()
+                }
             }
 
             SonyBridge.CMD_IMAGE_READY -> {

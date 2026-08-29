@@ -48,6 +48,7 @@ import androidx.compose.runtime.key
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
@@ -259,7 +260,6 @@ fun MainUI(
              onMultipointAlertReply = { positive -> SonyBridge.replyMultipointAlert(context, positive) },
             onFixedSourceChange = { address -> SonyBridge.setFixedSource(context, address) },
             onMusicHandOverChange = { enabled -> SonyBridge.setMusicHandOver(context, enabled) },
-            onRefresh = { SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) },
         )
     }
 
@@ -316,15 +316,22 @@ fun MainUI(
         onExternalDetailRequestConsumed()
     }
 
-    // Re-read the device when the detail page becomes visible, the way every Sound Connect
-    // card issues its GET on becoming visible instead of drawing whatever the last session
-    // left behind. The connection-time burst is a single shot taken seconds earlier: the
-    // headset's music info in particular is UNSETTLED until the phone's AVRCP metadata
-    // reaches it, and a reply that says so leaves the song/artist/album rows empty with
-    // nothing scheduled to ask again.
+    // The only documented gap in the NTFY-maintained state is playback metadata
+    // right after connect: the connection-time burst can be answered before the
+    // phone's AVRCP data reaches the headset, and AVRCP settling does not
+    // reliably produce an invalidation NTFY, so nothing would re-ask. That gap
+    // has a visible symptom — ask again only when that symptom is present.
+    // Otherwise opening the page is a read of the mirrored state: no commands.
     LaunchedEffect(showEarphoneDetail, connectedDeviceAddress) {
-        if (showEarphoneDetail && connectedDeviceAddress.isNotBlank()) {
-            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH)
+        if (!showEarphoneDetail || connectedDeviceAddress.isBlank()) return@LaunchedEffect
+        if (!sonyState.supportsPlaybackControl) return@LaunchedEffect
+        val metadataEmpty = sonyState.playbackTrack.isNullOrBlank() &&
+            sonyState.playbackArtist.isNullOrBlank() &&
+            sonyState.playbackAlbum.isNullOrBlank()
+        if (metadataEmpty || sonyState.playbackStatus == PlaybackStatus.UNKNOWN) {
+            SonyBridge.sendCommand(context, SonyBridge.CMD_REFRESH) {
+                putExtra(SonyBridge.EXTRA_FORCE_REFRESH, true)
+            }
         }
     }
 

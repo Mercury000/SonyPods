@@ -976,7 +976,11 @@ class SonyHeadphoneRepository private constructor(
      *   so consumers can wait for the replies instead of rendering defaults; a later
      *   user-triggered refresh must not re-arm it and close an open detail page.
      */
+    /** Wall clock of the last full refresh burst; see [fullRefreshAgeMs]. */
+    private var lastFullRefreshAtMs = 0L
+
     fun refreshBasics(initial: Boolean = false) {
+        lastFullRefreshAtMs = SystemClock.elapsedRealtime()
         if (!_state.value.deviceInfo.protocolReady) {
             if (_state.value.connectedDevice != null && _state.value.endpointDiagnostic != null) {
                 appendLog("Refresh requested for unsupported endpoint; rerunning GATT diagnostics")
@@ -1001,6 +1005,13 @@ class SonyHeadphoneRepository private constructor(
             .forEach(::sendCommand)
         updatePlaybackStatusFromAudioManager()
     }
+
+    /**
+     * Age of the last full refresh burst. The engine answers most status requests
+     * from the cache — the headset pushes NTFYs on change — and uses this to tell
+     * when a burst is due again as drift repair for a possibly missed push.
+     */
+    fun fullRefreshAgeMs(): Long = SystemClock.elapsedRealtime() - lastFullRefreshAtMs
 
     /**
      * Start waiting for the values the burst about to be sent will bring back.

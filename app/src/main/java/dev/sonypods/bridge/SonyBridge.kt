@@ -49,6 +49,8 @@ object SonyBridge {
     const val EXTRA_SUPPRESS_CONNECT_POPUP = "suppress_connect_popup"
     /** Address of the terminal A2DP disconnect which caused this state transition. */
     const val EXTRA_PHYSICAL_DISCONNECT_ADDRESS = "physical_a2dp_disconnect_address"
+    /** CMD_REFRESH: run a real query burst even when the engine's cache is young. */
+    const val EXTRA_FORCE_REFRESH = "force_refresh"
 
     // Commands understood by the engine.
     const val CMD_SET_NOISE_CONTROL = "set_noise_control"
