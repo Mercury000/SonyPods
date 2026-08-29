@@ -32,19 +32,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.navigation3.runtime.NavKey
-import androidx.navigation3.runtime.entryProvider
-import androidx.navigation3.runtime.rememberDecoratedNavEntries
-import androidx.navigation3.ui.NavDisplay
 import androidx.compose.runtime.key
+import kotlinx.serialization.Serializable
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
@@ -54,6 +49,9 @@ import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.ui.components.BarBackdropContent
+import dev.sonypods.ui.components.BarBlurHost
+import dev.sonypods.ui.components.BlurredBar
 import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
@@ -73,29 +71,31 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
-import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.nav.core.NavBackStack
+import top.yukonga.miuix.kmp.nav.core.NavDisplay
+import top.yukonga.miuix.kmp.nav.core.NavEntryBuilder
+import top.yukonga.miuix.kmp.nav.core.NavKey
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 private const val CONNECT_TIMEOUT_MS = 25_000L
 
+@Serializable
 sealed interface Screen : NavKey {
-    data object Main : Screen
-    data object About : Screen
-    data object Theme : Screen
-    data object TandemDebug : Screen
-    data object Visibility : Screen
+    @Serializable data object Main : Screen
+    @Serializable data object About : Screen
+    @Serializable data object Theme : Screen
+    @Serializable data object TandemDebug : Screen
+    @Serializable data object Visibility : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
 @Composable
 fun MainUI(
-    backStack: SnapshotStateList<Screen>,
+    backStack: NavBackStack,
     themeMode: MutableState<Int> = mutableStateOf(0),
     onThemeModeChange: (Int) -> Unit = {},
     accentMode: MutableState<Int> = mutableStateOf(0),
@@ -154,16 +154,6 @@ fun MainUI(
     val useIosBottomBar = floatingBottomBar.value && floatingBottomBarStyle.value == 1
     val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
     val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
-    // Bottom-bar blur owns the glass sampling layer, mirroring the miuix example app:
-    // both the classic texture blur and the iOS liquid-glass bar read from this backdrop.
-    val backdrop = if (blurBottomBar.value) {
-        rememberLayerBackdrop {
-            drawRect(backgroundColor)
-            drawContent()
-        }
-    } else {
-        null
-    }
 
     val appConfig = remember { ConfigManager.current() }
     val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
@@ -652,7 +642,16 @@ fun MainUI(
         }
     }
 
-    val entryProvider = entryProvider<Screen> {
+    // miuix-nav rejects duplicate contentKeys on the stack (a double-tap on an
+    // entry point would push the same data object twice and throw), so push only
+    // when the target is not already on top.
+    fun openScreen(screen: Screen) {
+        if (backStack.lastOrNull() != screen) {
+            backStack.add(screen)
+        }
+    }
+
+    val navEntries: NavEntryBuilder.() -> Unit = {
         entry<Screen.Main> {
             if (!remoteDataReady || !hasAppliedDefaultTab) {
                 Box(
@@ -671,7 +670,6 @@ fun MainUI(
                 blurBottomBar = blurBottomBar.value,
                 iosBottomBar = useIosBottomBar,
                 blurTopBar = blurTopBar,
-                backdrop = backdrop,
                 backgroundColor = backgroundColor,
                 overlayBottomBar = overlayBottomBar,
                 pageBottomContentPadding = pageBottomContentPadding,
@@ -725,7 +723,7 @@ fun MainUI(
                     startupTab.value = it
                     ConfigManager.updateStartupTab(it)
                 },
-                onOpenVisibility = { backStack.add(Screen.Visibility) },
+                onOpenVisibility = { openScreen(Screen.Visibility) },
                 appLanguage = appLanguage,
                 onAppLanguageChange = {
                     appLanguage.value = it
@@ -776,14 +774,14 @@ fun MainUI(
                     fusionMoreClickAction.value = it
                     ConfigManager.updateFusionMoreClickAction(it)
                 },
-                onOpenTandemDebug = { backStack.add(Screen.TandemDebug) },
+                onOpenTandemDebug = { openScreen(Screen.TandemDebug) },
                 fakeDeviceId = fakeDeviceId,
                 onFakeDeviceIdChange = {
                     fakeDeviceId.value = it
                     ConfigManager.updateFakeDeviceId(it)
                 },
-                onOpenTheme = { backStack.add(Screen.Theme) },
-                onOpenAbout = { backStack.add(Screen.About) },
+                onOpenTheme = { openScreen(Screen.Theme) },
+                onOpenAbout = { openScreen(Screen.About) },
                 showRestartScopeDialog = showRestartScopeDialog,
                 restartingScopes = restartingScopes,
                 onShowRestartScopeDialog = { showRestartScopeDialog = true },
@@ -796,232 +794,204 @@ fun MainUI(
         }
         entry<Screen.About> {
             val aboutScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            val aboutTopBarBackdrop = if (blurTopBar.value) {
-                rememberLayerBackdrop {
-                    drawRect(backgroundColor)
-                    drawContent()
-                }
-            } else {
-                null
-            }
-
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = stringResource(R.string.about),
-                        largeTitle = stringResource(R.string.about),
-                        modifier = if (aboutTopBarBackdrop != null) {
-                            Modifier.textureBlur(
-                                backdrop = aboutTopBarBackdrop,
-                                shape = RectangleShape,
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.about),
+                                largeTitle = stringResource(R.string.about),
+                                color = Color.Transparent,
+                                scrollBehavior = aboutScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { backStack.removeLast() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
                             )
-                        } else {
-                            Modifier
-                        },
-                        color = if (aboutTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
-                        scrollBehavior = aboutScrollBehavior,
-                        navigationIcon = {
-                            IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                            }
                         }
-                    )
-                }
-            ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor)
-                        .then(if (aboutTopBarBackdrop != null) Modifier.layerBackdrop(aboutTopBarBackdrop) else Modifier)
-                        .padding(padding),
-                ) {
-                    AboutPage(
-                        modifier = Modifier
-                            .overScrollVertical()
-                            .nestedScroll(aboutScrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(bottom = pageBottomContentPadding),
-                    )
+                    }
+                ) { padding ->
+                    // No box padding: the page scrolls under the top bar (padding goes
+                    // into its scroll contentPadding), so the blurred bar samples real
+                    // content instead of the flat backdrop base.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            AboutPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(aboutScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }
         entry<Screen.Theme> {
             val themeScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            val themeTopBarBackdrop = if (blurTopBar.value) {
-                rememberLayerBackdrop {
-                    drawRect(backgroundColor)
-                    drawContent()
-                }
-            } else {
-                null
-            }
-
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = stringResource(R.string.theme_title),
-                        largeTitle = stringResource(R.string.theme_title),
-                        modifier = if (themeTopBarBackdrop != null) {
-                            Modifier.textureBlur(
-                                backdrop = themeTopBarBackdrop,
-                                shape = RectangleShape,
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.theme_title),
+                                largeTitle = stringResource(R.string.theme_title),
+                                color = Color.Transparent,
+                                scrollBehavior = themeScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { backStack.removeLast() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
                             )
-                        } else {
-                            Modifier
-                        },
-                        color = if (themeTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
-                        scrollBehavior = themeScrollBehavior,
-                        navigationIcon = {
-                            IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                            }
                         }
-                    )
-                }
-            ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor)
-                        .then(if (themeTopBarBackdrop != null) Modifier.layerBackdrop(themeTopBarBackdrop) else Modifier)
-                        .padding(padding),
-                ) {
-                    ThemeSettingsPage(
-                        modifier = Modifier
-                            .overScrollVertical()
-                            .nestedScroll(themeScrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(bottom = pageBottomContentPadding),
-                        themeMode = themeMode,
-                        onThemeModeChange = onThemeModeChange,
-                        accentMode = accentMode,
-                        onAccentModeChange = onAccentModeChange,
-                        floatingBottomBar = floatingBottomBar,
-                        onFloatingBottomBarChange = onFloatingBottomBarChange,
-                        blurBottomBar = blurBottomBar,
-                        onBlurBottomBarChange = onBlurBottomBarChange,
-                        floatingBottomBarStyle = floatingBottomBarStyle,
-                        onFloatingBottomBarStyleChange = onFloatingBottomBarStyleChange,
-                        blurTopBar = blurTopBar,
-                        onBlurTopBarChange = onBlurTopBarChange,
-                    )
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            ThemeSettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(themeScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                                themeMode = themeMode,
+                                onThemeModeChange = onThemeModeChange,
+                                accentMode = accentMode,
+                                onAccentModeChange = onAccentModeChange,
+                                floatingBottomBar = floatingBottomBar,
+                                onFloatingBottomBarChange = onFloatingBottomBarChange,
+                                blurBottomBar = blurBottomBar,
+                                onBlurBottomBarChange = onBlurBottomBarChange,
+                                floatingBottomBarStyle = floatingBottomBarStyle,
+                                onFloatingBottomBarStyleChange = onFloatingBottomBarStyleChange,
+                                blurTopBar = blurTopBar,
+                                onBlurTopBarChange = onBlurTopBarChange,
+                            )
+                        }
+                    }
                 }
             }
         }
         entry<Screen.Visibility> {
             val visibilityScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            val visibilityTopBarBackdrop = if (blurTopBar.value) {
-                rememberLayerBackdrop {
-                    drawRect(backgroundColor)
-                    drawContent()
-                }
-            } else {
-                null
-            }
-
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = stringResource(R.string.visibility_settings_title),
-                        largeTitle = stringResource(R.string.visibility_settings_title),
-                        modifier = if (visibilityTopBarBackdrop != null) {
-                            Modifier.textureBlur(
-                                backdrop = visibilityTopBarBackdrop,
-                                shape = RectangleShape,
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.visibility_settings_title),
+                                largeTitle = stringResource(R.string.visibility_settings_title),
+                                color = Color.Transparent,
+                                scrollBehavior = visibilityScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { backStack.removeLast() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                }
                             )
-                        } else {
-                            Modifier
-                        },
-                        color = if (visibilityTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
-                        scrollBehavior = visibilityScrollBehavior,
-                        navigationIcon = {
-                            IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                            }
                         }
-                    )
-                }
-            ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor)
-                        .then(if (visibilityTopBarBackdrop != null) Modifier.layerBackdrop(visibilityTopBarBackdrop) else Modifier)
-                        .padding(padding),
-                ) {
-                    VisibilitySettingsPage(
-                        modifier = Modifier
-                            .overScrollVertical()
-                            .nestedScroll(visibilityScrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(bottom = pageBottomContentPadding),
-                        visibility = visibility.value,
-                        onVisibilityChange = { newVisibility ->
-                            visibility.value = newVisibility
-                            ConfigManager.updateVisibility(newVisibility)
-                        },
-                    )
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            VisibilitySettingsPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(visibilityScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                    bottom = pageBottomContentPadding,
+                                ),
+                                visibility = visibility.value,
+                                onVisibilityChange = { newVisibility ->
+                                    visibility.value = newVisibility
+                                    ConfigManager.updateVisibility(newVisibility)
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
         entry<Screen.TandemDebug> {
             val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            val debugTopBarBackdrop = if (blurTopBar.value) {
-                rememberLayerBackdrop {
-                    drawRect(backgroundColor)
-                    drawContent()
-                }
-            } else {
-                null
-            }
             var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
-
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = stringResource(R.string.tandem_debug_title),
-                        largeTitle = stringResource(R.string.tandem_debug_title),
-                        modifier = if (debugTopBarBackdrop != null) {
-                            Modifier.textureBlur(
-                                backdrop = debugTopBarBackdrop,
-                                shape = RectangleShape,
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.tandem_debug_title),
+                                largeTitle = stringResource(R.string.tandem_debug_title),
+                                color = Color.Transparent,
+                                scrollBehavior = debugScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { backStack.removeLast() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = { clearLogsRequest++ }) {
+                                        Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
+                                    }
+                                }
                             )
-                        } else {
-                            Modifier
-                        },
-                        color = if (debugTopBarBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface,
-                        scrollBehavior = debugScrollBehavior,
-                        navigationIcon = {
-                            IconButton(onClick = { backStack.removeLast() }) {
-                                Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { clearLogsRequest++ }) {
-                                Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
-                            }
                         }
-                    )
-                }
-            ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor)
-                        .then(if (debugTopBarBackdrop != null) Modifier.layerBackdrop(debugTopBarBackdrop) else Modifier)
-                        .padding(padding),
-                ) {
-                    TandemDebugPage(
-                        modifier = Modifier.nestedScroll(debugScrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(0.dp),
-                        clearRequest = clearLogsRequest,
-                    )
+                    }
+                ) { padding ->
+                    // See Screen.About: the page scrolls under the top bar.
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            TandemDebugPage(
+                                modifier = Modifier.nestedScroll(debugScrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    top = padding.calculateTopPadding(),
+                                ),
+                                clearRequest = clearLogsRequest,
+                            )
+                        }
+                    }
                 }
             }
         }
     }
-
-    val entries = rememberDecoratedNavEntries(
-        backStack = backStack,
-        entryProvider = entryProvider
-    )
 
     // Outer transparent Scaffold: provides a root-level MiuixPopupHost so that
     // OverlayDialog-based composables (e.g. MultipointAlertDialog) render even
@@ -1033,14 +1003,15 @@ fun MainUI(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) {
         NavDisplay(
-            entries = entries,
+            backStack = backStack,
             onBack = {
                 if (backStack.size > 1) {
                     backStack.removeLast()
                 } else {
                     (context as? Activity)?.finish()
                 }
-            }
+            },
+            content = navEntries,
         )
 
         // Device-driven multipoint reconnection alert: shown globally once the engine

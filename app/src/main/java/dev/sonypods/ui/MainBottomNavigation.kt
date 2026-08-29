@@ -4,16 +4,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.zIndex
+import dev.sonypods.ui.components.barBlurBackground
 import dev.sonypods.ui.components.liquid.IosLiquidGlassNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
+import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.NavigationItem
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
@@ -40,18 +41,22 @@ internal fun MainBottomNavigation(
         return
     }
 
-    val barModifier = if (blur && backdrop != null) {
-        Modifier.textureBlur(
-            backdrop = backdrop,
-            shape = RoundedCornerShape(if (floating) 50.dp else 0.dp),
+    // Glass bar parameters follow the miuix example app: 16f radius with a surface
+    // scrim and a faint content-color tint, falling back to the opaque surface when
+    // blur is off or the RuntimeShader path is unavailable.
+    val barModifier = Modifier
+        .barBlurBackground(
+            shape = if (floating) {
+                RoundedCornerShape(FloatingToolbarDefaults.CornerRadius)
+            } else {
+                RectangleShape
+            },
         )
-    } else {
-        Modifier
-    }
+        .zIndex(2f)
 
     if (floating) {
         FloatingNavigationBar(
-            modifier = barModifier.zIndex(2f),
+            modifier = barModifier,
             color = if (blur) Color.Transparent else MiuixTheme.colorScheme.surfaceContainer,
         ) {
             tabs.forEach { tab ->
@@ -64,10 +69,12 @@ internal fun MainBottomNavigation(
             }
         }
     } else {
+        // The classic full-width bar keeps miuix's divider hairline (the floating
+        // pill has none by default), matching the miuix example app.
         NavigationBar(
-            modifier = barModifier.zIndex(2f),
+            modifier = barModifier,
             color = if (blur) Color.Transparent else MiuixTheme.colorScheme.surface,
-            showDivider = false,
+            showDivider = !floating,
         ) {
             tabs.forEach { tab ->
                 NavigationBarItem(
