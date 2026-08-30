@@ -309,27 +309,36 @@ internal fun IslandLayerBackHandlers(
             finishPredictiveBack()
         } catch (_: CancellationException) {
             if (!motion.predictiveCommitting) {
-                coroutineScope {
-                    launch {
-                        motion.progress.animateTo(
-                            0f,
-                            tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
-                        )
+                // activity-compose cancels the coroutine running this handler the
+                // moment the gesture is cancelled (ComposePredictiveBackHandler's
+                // onBackCancelled calls activeJob.cancel()), so nothing here may
+                // suspend: a coroutineScope/animateTo in this catch would die with
+                // the first suspension and freeze the layer at the release position.
+                // Spring back from the composition scope instead, and only release
+                // predictiveActive once the settle has finished.
+                scope.launch {
+                    coroutineScope {
+                        launch {
+                            motion.progress.animateTo(
+                                0f,
+                                tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
+                            )
+                        }
+                        launch {
+                            motion.backdropIntensity.animateTo(
+                                1f,
+                                tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
+                            )
+                        }
+                        launch {
+                            motion.coveredDepth.animateTo(
+                                1f,
+                                tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
+                            )
+                        }
                     }
-                    launch {
-                        motion.backdropIntensity.animateTo(
-                            1f,
-                            tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
-                        )
-                    }
-                    launch {
-                        motion.coveredDepth.animateTo(
-                            1f,
-                            tween(PREDICTIVE_CANCEL_DURATION, easing = FastOutSlowInEasing),
-                        )
-                    }
+                    motion.predictiveActive = false
                 }
-                motion.predictiveActive = false
             }
         }
     }
