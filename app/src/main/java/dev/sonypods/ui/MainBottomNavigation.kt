@@ -1,7 +1,9 @@
 package dev.sonypods.ui
 
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -14,6 +16,10 @@ import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.NavigationItem
+import top.yukonga.miuix.kmp.basic.NavigationRail
+import top.yukonga.miuix.kmp.basic.NavigationRailItem
+import top.yukonga.miuix.kmp.basic.NavigationRailValue
+import top.yukonga.miuix.kmp.basic.rememberNavigationRailState
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -84,6 +90,34 @@ internal fun MainBottomNavigation(
                     label = tab.title(),
                 )
             }
+        }
+    }
+}
+
+@Composable
+internal fun MainNavigationRail(
+    tabs: List<MainTab>,
+    selectedTab: MainTab,
+    expandRail: Boolean,
+    onTabClick: (MainTab) -> Unit,
+) {
+    val railState = rememberNavigationRailState(
+        initialValue = if (expandRail) NavigationRailValue.Expanded else NavigationRailValue.Collapsed,
+    )
+    LaunchedEffect(expandRail) {
+        if (expandRail) railState.expand() else railState.collapse()
+    }
+    NavigationRail(
+        state = railState,
+        modifier = Modifier.fillMaxHeight(),
+    ) {
+        tabs.forEach { tab ->
+            NavigationRailItem(
+                selected = selectedTab == tab,
+                onClick = { onTabClick(tab) },
+                icon = tab.icon,
+                label = tab.title(),
+            )
         }
     }
 }

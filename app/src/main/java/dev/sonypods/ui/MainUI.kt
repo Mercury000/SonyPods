@@ -64,6 +64,7 @@ import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.components.BarBackdropContent
 import dev.sonypods.ui.components.BarBlurHost
 import dev.sonypods.ui.components.BlurredBar
+import dev.sonypods.ui.components.shouldShowSplitPane
 import dev.sonypods.ui.nav.BACKGROUND_PARALLAX
 import dev.sonypods.ui.nav.BACKGROUND_SCALE_REDUCTION
 import dev.sonypods.ui.nav.EFFECT_VISIBILITY_THRESHOLD
@@ -186,6 +187,7 @@ fun MainUI(
     // The floating bar's style: 0 = miuix default pill, 1 = iOS liquid glass. Only
     // meaningful while the floating bar itself is on.
     val useIosBottomBar = floatingBottomBar.value && floatingBottomBarStyle.value == 1
+    val useRail = shouldShowSplitPane() && !floatingBottomBar.value && !useIosBottomBar
     // Constant page bottom padding like the reference (28dp); the vertical give comes
     // from the bottom-bar slot itself collapsing when the bar hides, not extra padding.
     val pageBottomContentPadding = 28.dp
@@ -1269,9 +1271,17 @@ fun MainUI(
                                 .fillMaxSize()
                                 .graphicsLayer {
                                     val depth = motion[0].coveredDepth.value.coerceIn(0f, 1f)
-                                    scaleX = 1f - depth * BACKGROUND_SCALE_REDUCTION
-                                    scaleY = scaleX
-                                    translationX = -size.width * depth * BACKGROUND_PARALLAX
+                                    if (useRail) {
+                                        // miuix-wide-screen: the covered page (Rail + content)
+                                        // parallaxes at 25 % width so the entire previous
+                                        // page slides as one visible unit.
+                                        translationX = -size.width * depth * 0.25f
+                                        alpha = 1f - 0.1f * depth
+                                    } else {
+                                        scaleX = 1f - depth * BACKGROUND_SCALE_REDUCTION
+                                        scaleY = scaleX
+                                        translationX = -size.width * depth * BACKGROUND_PARALLAX
+                                    }
                                 },
                     tabs = tabs,
                     selectedTab = selectedTab,

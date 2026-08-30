@@ -10,6 +10,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,6 +39,8 @@ import dev.sonypods.ui.components.BarBackdropContent
 import dev.sonypods.ui.components.BarBlurHost
 import dev.sonypods.ui.components.BlurredBar
 import dev.sonypods.ui.components.LocalBarBlurBackdrop
+import dev.sonypods.ui.components.shouldExpandNavigationRail
+import dev.sonypods.ui.components.shouldShowSplitPane
 import dev.sonypods.ui.dialogs.RestartScope
 import dev.sonypods.ui.dialogs.RestartScopeDialog
 import dev.sonypods.ui.pages.AboutPage
@@ -156,34 +160,14 @@ internal fun MainTabsScaffold(
         }
     }
 
+    val isWideScreen = shouldShowSplitPane()
+    val expandRail = shouldExpandNavigationRail()
+    val useRail = isWideScreen && !floatingBottomBar && !iosBottomBar
+
     // The record layer for the bottom bar's glass sampling lives in MainUI's root
     // host (shared with the predictive backdrop, like the reference); top bars get
     // their own per-page hosts inside the pager.
-    Scaffold(
-        modifier = modifier,
-            bottomBar = {
-                // The bar belongs to the root layer only: it slides away while a pushed
-                // screen covers this entry and slides back up when the root returns.
-                AnimatedVisibility(
-                    visible = bottomBarVisible,
-                    enter = slideInVertically(tween(260)) { it } + fadeIn(tween(180)),
-                    exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(140)),
-                ) {
-                    MainBottomNavigation(
-                        tabs = tabs,
-                        selectedTab = tabs.getOrElse(mainPagerState.selectedPage) { selectedTab },
-                        floating = floatingBottomBar,
-                        blur = blurBottomBar,
-                        iosStyle = iosBottomBar,
-                        backdrop = LocalBarBlurBackdrop.current,
-                        onTabClick = {
-                            mainPagerState.animateToPage(it.ordinal)
-                            onTabSelected(it)
-                        },
-                    )
-                }
-            }
-        ) { padding ->
+    val scaffoldContent: @Composable (PaddingValues) -> Unit = { padding ->
             // Full-bleed record layer: the content extends under the bar so the glass
             // sampling sees real page content mid-scroll. The bar-slot height flows
             // into the pages' scroll padding instead — it collapses when the bar
@@ -290,7 +274,54 @@ internal fun MainTabsScaffold(
                 onDismissRequest = { if (!restartingScopes) onDismissRestartScopeDialog() },
                 onConfirm = onRestartScopes,
             )
+    }
+
+    if (useRail) {
+        Row(modifier = modifier.fillMaxSize()) {
+            MainNavigationRail(
+                tabs = tabs,
+                selectedTab = tabs.getOrElse(mainPagerState.selectedPage) { selectedTab },
+                expandRail = expandRail,
+                onTabClick = {
+                    mainPagerState.animateToPage(it.ordinal)
+                    onTabSelected(it)
+                },
+            )
+            Scaffold(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+            ) { padding ->
+                scaffoldContent(padding)
+            }
         }
+    } else {
+        Scaffold(
+            modifier = modifier,
+            bottomBar = {
+                AnimatedVisibility(
+                    visible = bottomBarVisible,
+                    enter = slideInVertically(tween(260)) { it } + fadeIn(tween(180)),
+                    exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(140)),
+                ) {
+                    MainBottomNavigation(
+                        tabs = tabs,
+                        selectedTab = tabs.getOrElse(mainPagerState.selectedPage) { selectedTab },
+                        floating = floatingBottomBar,
+                        blur = blurBottomBar,
+                        iosStyle = iosBottomBar,
+                        backdrop = LocalBarBlurBackdrop.current,
+                        onTabClick = {
+                            mainPagerState.animateToPage(it.ordinal)
+                            onTabSelected(it)
+                        },
+                    )
+                }
+            }
+        ) { padding ->
+            scaffoldContent(padding)
+        }
+    }
 }
 
 @Composable
