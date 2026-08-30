@@ -268,6 +268,9 @@ internal fun IslandLayerBackHandlers(
     val scope = rememberCoroutineScope()
 
     suspend fun finishPredictiveBack() {
+        // A commit settle or the fallback BackHandler can invoke this twice; a second
+        // run on an already-dismissed layer would re-animate it out of thin air.
+        if (motion.predictiveCommitting) return
         motion.predictiveCommitting = true
         val duration = predictiveSettleDuration(
             progress = motion.progress.value,

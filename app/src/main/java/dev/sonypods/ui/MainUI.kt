@@ -766,7 +766,12 @@ fun MainUI(
             enabled = predictiveBack.value && layers.size == k + 1,
             motion = motion[k],
             maxTranslationPercent = predictiveDistance,
-            onDismissed = { layers = layers.take(k) },
+            onDismissed = {
+                // A predictive commit already slid the layer off-screen; drop its retained
+                // content so the post-commit recomposition cannot replay an exit animation.
+                lastScreens[k] = null
+                layers = layers.take(k)
+            },
         )
     }
     if (!predictiveBack.value) {
