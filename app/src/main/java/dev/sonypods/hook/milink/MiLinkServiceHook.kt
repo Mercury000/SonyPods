@@ -60,6 +60,7 @@ object MiLinkServiceHook : HookContext() {
     private val spatialAudioHook = MiLinkSpatialAudioHook(this)
     private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
     private val leAudioIdentityHook = MiLinkLeAudioIdentityHook(this)
+    private val deviceMetaGuardHook = MiLinkDeviceMetaGuardHook(this)
 
     override fun onHook() {
         hookContextEntry()
@@ -69,6 +70,7 @@ object MiLinkServiceHook : HookContext() {
         spatialAudioHook.hookCirculateHeadsetServiceInfo()
         remoteProtocolHook.hookRemoteProtocol()
         leAudioIdentityHook.hookIdentityUnification()
+        deviceMetaGuardHook.hookDeviceMetaGuard()
     }
 
     override fun onBeforeReload() {
