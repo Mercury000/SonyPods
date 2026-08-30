@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -99,6 +100,12 @@ import kotlin.math.sign
 import kotlin.math.sin
 
 private val LocalIosTabScale = staticCompositionLocalOf { { 1f } }
+
+// The pill stretches edge to edge on phone-width windows; on wide windows (pad,
+// landscape) it wraps to content width instead — like miuix's floating bar, whose
+// pill is content-sized and centered, never edge to edge. One tab column per item,
+// 76dp being miuix's floating-item minimum width.
+private val IosTabMaxTabWidth = 76.dp
 
 private val iosIndicatorSpecular: Highlight = Highlight(
     width = 1.dp,
@@ -386,7 +393,9 @@ internal fun IosLiquidGlassNavigationBar(
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
+                .align(Alignment.CenterHorizontally)
                 .padding(bottom = bottomPaddingValue, start = 24.dp, end = 24.dp)
+                .widthIn(max = IosTabMaxTabWidth * tabsCount + 8.dp)
                 .fillMaxWidth(),
             contentAlignment = Alignment.CenterStart,
         ) {
