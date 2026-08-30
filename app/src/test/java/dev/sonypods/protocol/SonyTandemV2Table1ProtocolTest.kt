@@ -797,6 +797,19 @@ class SonyTandemV2Table1ProtocolTest {
     }
 
     @Test
+    fun eqEbbSetParam_customEqBands_omitPresetByte() {
+        // SC `gf0.g` SET body is [type][count][steps] — no preset byte.
+        assertArrayEquals(
+            byteArrayOf(0x0E, 0x58, 0x31, 0x03, 0x06, 0x07, 0x08),
+            SonyTandemV2Table1Protocol.buildSetEqPreset(
+                EqPresetId.CUSTOM,
+                EqEbbInquiredType.CUSTOM_EQ,
+                bandSteps = listOf(6, 7, 8),
+            ),
+        )
+    }
+
+    @Test
     fun v1EqEbbTypeCode_rejectsUnsupportedV2Types() {
         assertThrows(IllegalArgumentException::class.java) {
             SonyTandemV1Table1Protocol.v1TypeCode(EqEbbInquiredType.CUSTOM_EQ)

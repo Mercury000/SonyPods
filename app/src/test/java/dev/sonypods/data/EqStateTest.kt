@@ -1,6 +1,7 @@
 package dev.sonypods.data
 
 import dev.sonypods.ble.DiscoveredSonyDevice
+import dev.sonypods.headphones.EqBandStepScale
 import dev.sonypods.headphones.EqWriteContext
 import dev.sonypods.headphones.HeadphoneAdapterRegistry
 import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
@@ -48,5 +49,21 @@ class EqStateTest {
             byteArrayOf(0x0E, 0x58, 0x00, 0xA2.toByte(), 0x06, 0x0D, 0x0B, 0x0A, 0x0A, 0x0B, 0x0C),
             command.bytes,
         )
+    }
+
+    @Test
+    fun tenBandDisplayKeepsAllTenBandsWithCenterSix() {
+        // WF-1000XM6-style raw array (SC `EqBandSteps10band`, 0..12 centered
+        // at 6): ten frequency steps and no Clear Bass slot — none dropped.
+        val raw = listOf(6, 7, 5, 6, 6, 8, 6, 4, 6, 12)
+
+        assertEquals(
+            listOf(0, 1, -1, 0, 0, 2, 0, -2, 0, 6),
+            displayEqBands(raw, clearBassSlot = false, scale = EqBandStepScale.TEN_BAND),
+        )
+        assertEquals(6, displayEqStepToRaw(0, EqBandStepScale.TEN_BAND))
+        assertEquals(12, displayEqStepToRaw(6, EqBandStepScale.TEN_BAND))
+        assertEquals(0, displayEqStepToRaw(-6, EqBandStepScale.TEN_BAND))
+        assertEquals(6, displayEqStep(12, EqBandStepScale.TEN_BAND))
     }
 }

@@ -4,6 +4,33 @@ import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.ParsedTandemResponse
 
+/**
+ * Band step encoding, per SC `EqBandStepsStandard` / `EqBandSteps10band`:
+ * standard devices (Clear Bass slot + 5 bands) carry raw steps 0..20 centered
+ * at 10, while 10-band devices (31 Hz..16 kHz, no Clear Bass slot) carry raw
+ * steps 0..12 centered at 6.
+ */
+enum class EqBandStepScale(val rawCenter: Int, val displayRange: IntRange) {
+    STANDARD(10, -10..10),
+    TEN_BAND(6, -6..6);
+
+    fun displayOf(rawStep: Int): Int =
+        (rawStep - rawCenter).coerceIn(displayRange.first, displayRange.last)
+
+    fun rawOf(displayStep: Int): Int =
+        (displayStep.coerceIn(displayRange.first, displayRange.last) + rawCenter).coerceIn(0, 255)
+
+    companion object {
+        fun forConfig(config: EqDeviceConfig): EqBandStepScale =
+            if (config.isTenBand) TEN_BAND else STANDARD
+    }
+}
+
+/** True when the raw band array carries Clear Bass at index 0 — every
+ * `EqBandStepsStandard` geometry; 10-band arrays have no Clear Bass slot. */
+fun hasClearBassSlot(config: EqDeviceConfig): Boolean =
+    config.hasClearBass && !config.isTenBand
+
 data class EqDeviceConfig(
     val availablePresets: List<EqPresetId>,
     val writeInquiredType: EqEbbInquiredType,
@@ -12,6 +39,10 @@ data class EqDeviceConfig(
     val extendedInfoQueryTypes: List<EqEbbInquiredType> = emptyList(),
     val bandCount: Int,
     val hasClearBass: Boolean,
+    /** Extended info reported the SC `EqBandSteps10band` geometry: ten
+     * frequency bands (31 Hz..16 kHz) and no Clear Bass slot in the raw array,
+     * with raw steps 0..12 centered at 6. */
+    val isTenBand: Boolean = false,
     val clearBassWriteMode: ClearBassWriteMode = ClearBassWriteMode.EBB_PARAM,
     val bandLabels: List<String> = emptyList(),
 )
@@ -88,15 +119,15 @@ class EqProtocolEngine(
     }
 
     companion object {
-        const val BAND_STEP_CENTER: Int = 10
-
         private val DEFAULT_BAND_LABELS = listOf("400 Hz", "1 kHz", "2.5 kHz", "6.3 kHz", "16 kHz")
 
         fun uiCapability(config: EqDeviceConfig): EqUiCapability {
             val labels = config.bandLabels.ifEmpty { DEFAULT_BAND_LABELS }
+            val scale = EqBandStepScale.forConfig(config)
+            val clearBassSlot = hasClearBassSlot(config)
             val visibleCount = if (config.bandLabels.isNotEmpty()) {
                 config.bandLabels.size
-            } else if (config.hasClearBass) {
+            } else if (clearBassSlot) {
                 (config.bandCount - 1).coerceAtLeast(0)
             } else {
                 config.bandCount.coerceAtLeast(0)
@@ -105,10 +136,10 @@ class EqProtocolEngine(
                 availablePresets = config.availablePresets,
                 visibleBandCount = visibleCount,
                 bandLabels = labels,
-                bandDisplayRange = -10..10,
-                hasClearBass = config.hasClearBass,
-                clearBassDisplayRange = -10..10,
-                bandStepCenter = BAND_STEP_CENTER,
+                bandDisplayRange = scale.displayRange,
+                hasClearBass = clearBassSlot,
+                clearBassDisplayRange = EqBandStepScale.STANDARD.displayRange,
+                bandStepCenter = scale.rawCenter,
             )
         }
     }

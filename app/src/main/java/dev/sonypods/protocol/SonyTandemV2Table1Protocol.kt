@@ -433,6 +433,12 @@ object SonyTandemV2Table1Protocol {
                 }
                 byteArrayOf(typeCode, base.code, ultMode, bandSteps.size.toByte()) + bands
             }
+            EqEbbInquiredType.CUSTOM_EQ.code -> {
+                // SC `gf0.g` SET body is [type][count][steps] — the CUSTOM_EQ
+                // payload has no preset byte (builder `hf0.a.c`), unlike the
+                // PRESET_EQ family.
+                byteArrayOf(typeCode, bandSteps.size.toByte()) + bands
+            }
             EqEbbInquiredType.SOUND_EFFECT.code,
             EqEbbInquiredType.CUSTOMIZABLE_SOUND_EFFECT_SELECT.code -> {
                 // SC `gf0.z0`/`gf0.v0` build exactly [type][SoundEffectType] and

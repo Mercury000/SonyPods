@@ -17,9 +17,11 @@ import dev.sonypods.ble.SonyBleClientListener
 import dev.sonypods.ble.SonyBleConnectionInfo
 import dev.sonypods.ble.UnsupportedEndpointDiagnostics
 import dev.sonypods.headphones.ConnectedHeadphoneProfile
+import dev.sonypods.headphones.EqBandStepScale
 import dev.sonypods.headphones.EqUiCapability
 import dev.sonypods.headphones.EqWriteContext
 import dev.sonypods.headphones.eqUiCapability
+import dev.sonypods.headphones.hasClearBassSlot
 import dev.sonypods.headphones.HeadphoneAdapterRegistry
 import dev.sonypods.headphones.HeadphoneCommand
 import dev.sonypods.headphones.HeadphoneFeature
@@ -121,7 +123,6 @@ private fun flexibleLeAudioAlertTargetsLeAudio(messageType: Int): Boolean =
         SonyTandemV2Table1Protocol.FLEXIBLE_ENTER_PAIRING_WITH_CONNECTION_MODE,
         SonyTandemV2Table1Protocol.LE_AUDIO_FLEXIBLE_MESSAGE_TYPE_TO_LE,
     )
-private const val EQ_BAND_STEP_CENTER = 10
 private const val EQ_CLEAR_BASS_RAW_INDEX = 0
 private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
@@ -246,7 +247,6 @@ data class EqState(
     val clearBass: Int? = null,
     val bandSteps: List<Int> = emptyList(),
     val rawBandSteps: List<Int> = emptyList(),
-    val bandStepCenter: Int = EQ_BAND_STEP_CENTER,
     val usesCustomEqPayload: Boolean = false,
     val raw: List<Int> = emptyList(),
 )
@@ -1325,21 +1325,28 @@ class SonyHeadphoneRepository private constructor(
         }
         val cachedBandCount = entry.eqBandInfo.size.takeIf { it > 0 } ?: currentEq.bandCount
         val cachedHasClearBass = entry.eqHasClearBass
+        // Mirror applyEqEbbExtendedInfo: a cached ten-frequency-band table with
+        // no Clear Bass entry is the SC `EqBandSteps10band` geometry.
+        val cachedIsTenBand = entry.eqBandInfo.size == 10 && cachedHasClearBass != true
+        var restoredFeatures = capabilities.features
+        // Devices without the EBB function still have Clear Bass as the
+        // SPECIFIC_INFORMATION band of the PRESET_EQ array, and canWrite()
+        // gates the slider on this feature; ten-band devices have none.
+        if (cachedHasClearBass == true) {
+            restoredFeatures = restoredFeatures + HeadphoneFeature.CLEAR_BASS
+        } else if (cachedIsTenBand) {
+            restoredFeatures = restoredFeatures - HeadphoneFeature.CLEAR_BASS
+        }
+        if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
+            restoredFeatures = restoredFeatures + HeadphoneFeature.MULTIPOINT
+        }
         val restoredCapabilities = capabilities.copy(
-            features = if (cachedHasClearBass == true) {
-                // Mirror applyEqEbbExtendedInfo: PRESET_EQ-layout devices without
-                // the EBB function still have Clear Bass, and canWrite() gates
-                // the slider on this feature.
-                capabilities.features + HeadphoneFeature.CLEAR_BASS
-            } else if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
-                capabilities.features + HeadphoneFeature.MULTIPOINT
-            } else {
-                capabilities.features
-            },
+            features = restoredFeatures,
             eqConfig = currentEq.copy(
                 availablePresets = cachedPresets.ifEmpty { currentEq.availablePresets },
                 bandCount = cachedBandCount,
-                hasClearBass = entry.eqHasClearBass ?: currentEq.hasClearBass,
+                hasClearBass = cachedHasClearBass ?: currentEq.hasClearBass,
+                isTenBand = cachedIsTenBand || currentEq.isTenBand,
             ),
             supportsWindNoiseReduction = capabilities.supportsWindNoiseReduction ||
                 (entry.supportsV1WindNoise == true),
@@ -2119,16 +2126,25 @@ class SonyHeadphoneRepository private constructor(
             return
         }
         val eq = _state.value.eqState
-        val rawIndex = index + EQ_FIRST_FREQUENCY_RAW_INDEX
+        val eqConfig = _state.value.connectedProfile?.capabilities?.eqConfig
+        val scale = eqConfig?.let(EqBandStepScale::forConfig) ?: EqBandStepScale.STANDARD
+        val clearBassSlot = eqConfig?.let(::hasClearBassSlot) ?: true
+        // Ten-band arrays (SC `EqBandSteps10band`) have no Clear Bass slot, so
+        // frequency steps start at raw index 0.
+        val rawIndex = index + if (clearBassSlot) EQ_FIRST_FREQUENCY_RAW_INDEX else 0
         if (index !in eq.bandSteps.indices || rawIndex !in eq.rawBandSteps.indices) {
             appendLog("CUSTOM EQ band change ignored index=$index bands=${eq.bandSteps.size} raw=${eq.rawBandSteps.size}")
             return
         }
         val targetPreset = eq.bandEditPreset()
         val rawSteps = eq.rawBandSteps.toMutableList()
-        rawSteps[rawIndex] = displayEqStepToRaw(level)
+        rawSteps[rawIndex] = displayEqStepToRaw(level, scale)
         updateEqBands(rawSteps, targetPreset)
-        sendEqBandSteps("SET CUSTOM EQ band ${index + 1}=${level.coerceIn(-10, 10)}", rawSteps, targetPreset)
+        sendEqBandSteps(
+            "SET CUSTOM EQ band ${index + 1}=${level.coerceIn(scale.displayRange.first, scale.displayRange.last)}",
+            rawSteps,
+            targetPreset,
+        )
         refreshEqState()
     }
 
@@ -3000,6 +3016,9 @@ class SonyHeadphoneRepository private constructor(
                 "preset=${response.preset} clearBass=${response.clearBass} bands=${response.bandSteps} values=${response.values}"
         )
         _state.update { current ->
+            val eqConfig = current.connectedProfile?.capabilities?.eqConfig
+            val scale = eqConfig?.let(EqBandStepScale::forConfig) ?: EqBandStepScale.STANDARD
+            val clearBassSlot = eqConfig?.let(::hasClearBassSlot) ?: true
             val hasEqBands = response.bandSteps.isNotEmpty() &&
                 response.type in setOf(
                     EqEbbInquiredType.PRESET_EQ,
@@ -3010,12 +3029,17 @@ class SonyHeadphoneRepository private constructor(
                     EqEbbInquiredType.EBB,
                 )
             val displayedBands = if (hasEqBands) {
-                displayEqBands(response.bandSteps)
+                displayEqBands(response.bandSteps, clearBassSlot, scale)
             } else {
                 current.eqState.bandSteps
             }
-            val clearBassFromEq = if (hasEqBands && response.bandSteps.size > EQ_CLEAR_BASS_RAW_INDEX) {
-                displayEqStep(response.bandSteps[EQ_CLEAR_BASS_RAW_INDEX])
+            // Only standard-geometry arrays carry Clear Bass at raw index 0; on
+            // a 10-band device that slot is the 31 Hz step and must not leak
+            // into the Clear Bass state.
+            val clearBassFromEq = if (hasEqBands && clearBassSlot &&
+                response.bandSteps.size > EQ_CLEAR_BASS_RAW_INDEX
+            ) {
+                displayEqStep(response.bandSteps[EQ_CLEAR_BASS_RAW_INDEX], scale)
             } else {
                 null
             }
@@ -3064,6 +3088,10 @@ class SonyHeadphoneRepository private constructor(
         if (response.bands.isNotEmpty()) {
             val normalBands = response.bands.filter { it.type != EqBandInformationType.SPECIFIC_INFORMATION }
             val hasClearBass = response.bands.any { it.type == EqBandInformationType.SPECIFIC_INFORMATION }
+            // SC `EqBandSteps10band`: ten frequency bands and no Clear Bass slot
+            // mean raw steps 0..12 centered at 6 — the preset-array Clear Bass of
+            // the standard geometry does not exist on this device.
+            val isTenBand = !hasClearBass && normalBands.size == 10
             val dynamicLabels = normalBands.map { band ->
                 when (band.type) {
                     EqBandInformationType.HZ -> {
@@ -3089,7 +3117,10 @@ class SonyHeadphoneRepository private constructor(
                         bandCount = response.bands.size,
                         hasClearBass = hasClearBass,
                         bandLabels = dynamicLabels,
+                        isTenBand = isTenBand,
                     )
+                    val scale = EqBandStepScale.forConfig(updatedEqConfig)
+                    val clearBassSlot = hasClearBassSlot(updatedEqConfig)
                     current.copy(
                         connectedProfile = profile.copy(
                             capabilities = profile.capabilities.copy(
@@ -3099,12 +3130,26 @@ class SonyHeadphoneRepository private constructor(
                                 // the PRESET_EQ array (LinkBuds S): the extended
                                 // info is the authoritative capability signal,
                                 // without which canWrite() blocked the slider.
-                                features = if (hasClearBass) {
-                                    profile.capabilities.features + HeadphoneFeature.CLEAR_BASS
-                                } else {
-                                    profile.capabilities.features
+                                // Ten-band devices are the opposite: no Clear
+                                // Bass anywhere, so an EBB probe hit must not
+                                // keep the slider alive.
+                                features = when {
+                                    hasClearBass -> profile.capabilities.features + HeadphoneFeature.CLEAR_BASS
+                                    isTenBand -> profile.capabilities.features - HeadphoneFeature.CLEAR_BASS
+                                    else -> profile.capabilities.features
                                 },
                             )
+                        ),
+                        // The geometry can land after a param response already
+                        // displayed bandSteps with the standard scale — re-derive
+                        // the display values from the raw steps.
+                        eqState = current.eqState.copy(
+                            bandSteps = displayEqBands(current.eqState.rawBandSteps, clearBassSlot, scale),
+                            clearBass = if (clearBassSlot && current.eqState.rawBandSteps.size > EQ_CLEAR_BASS_RAW_INDEX) {
+                                displayEqStep(current.eqState.rawBandSteps[EQ_CLEAR_BASS_RAW_INDEX], scale)
+                            } else {
+                                current.eqState.clearBass
+                            },
                         ),
                         eqUiCapability = EqProtocolEngine.uiCapability(updatedEqConfig),
                     )
@@ -3199,13 +3244,16 @@ class SonyHeadphoneRepository private constructor(
 
     private fun updateEqBands(rawSteps: List<Int>, preset: EqPresetId? = _state.value.eqState.preset) {
         _state.update {
+            val eqConfig = it.connectedProfile?.capabilities?.eqConfig
+            val scale = eqConfig?.let(EqBandStepScale::forConfig) ?: EqBandStepScale.STANDARD
+            val clearBassSlot = eqConfig?.let(::hasClearBassSlot) ?: true
             it.copy(
                 eqState = it.eqState.copy(
                     preset = preset ?: it.eqState.preset,
                     rawBandSteps = rawSteps,
-                    bandSteps = displayEqBands(rawSteps),
-                    clearBass = if (rawSteps.size > EQ_CLEAR_BASS_RAW_INDEX) {
-                        displayEqStep(rawSteps[EQ_CLEAR_BASS_RAW_INDEX])
+                    bandSteps = displayEqBands(rawSteps, clearBassSlot, scale),
+                    clearBass = if (clearBassSlot && rawSteps.size > EQ_CLEAR_BASS_RAW_INDEX) {
+                        displayEqStep(rawSteps[EQ_CLEAR_BASS_RAW_INDEX], scale)
                     } else {
                         it.eqState.clearBass
                     },
@@ -4582,7 +4630,11 @@ private fun EqState.bandEditPreset(): EqPresetId =
     }
 
 internal fun EqState.withClearBassSynced(level: Int): EqState {
-    val clamped = level.coerceIn(-10, 10)
+    // Clear Bass exists only on the standard geometry (SC `EqBandStepsStandard`).
+    val clamped = level.coerceIn(
+        EqBandStepScale.STANDARD.displayRange.first,
+        EqBandStepScale.STANDARD.displayRange.last,
+    )
     val syncedRawSteps = rawBandSteps.takeIf { it.size > EQ_CLEAR_BASS_RAW_INDEX }
         ?.toMutableList()
         ?.also { it[EQ_CLEAR_BASS_RAW_INDEX] = displayEqStepToRaw(clamped) }
@@ -4598,20 +4650,30 @@ internal fun EqState.withClearBassSynced(level: Int): EqState {
     )
 }
 
-internal fun displayEqStep(rawStep: Int): Int =
-    (rawStep - EQ_BAND_STEP_CENTER).coerceIn(-10, 10)
+internal fun displayEqStep(
+    rawStep: Int,
+    scale: EqBandStepScale = EqBandStepScale.STANDARD,
+): Int = scale.displayOf(rawStep)
 
-internal fun displayEqBands(rawSteps: List<Int>): List<Int> {
-    val displaySteps = rawSteps.map(::displayEqStep)
-    return if (displaySteps.size > EQ_FIRST_FREQUENCY_RAW_INDEX) {
+internal fun displayEqBands(
+    rawSteps: List<Int>,
+    clearBassSlot: Boolean = true,
+    scale: EqBandStepScale = EqBandStepScale.STANDARD,
+): List<Int> {
+    val displaySteps = rawSteps.map { scale.displayOf(it) }
+    // Only the standard geometry (SC `EqBandStepsStandard`) carries Clear Bass
+    // in the raw array at index 0; 10-band arrays are pure frequency steps.
+    return if (clearBassSlot && displaySteps.size > EQ_FIRST_FREQUENCY_RAW_INDEX) {
         displaySteps.drop(EQ_FIRST_FREQUENCY_RAW_INDEX)
     } else {
         displaySteps
     }
 }
 
-internal fun displayEqStepToRaw(displayStep: Int): Int =
-    (displayStep.coerceIn(-10, 10) + EQ_BAND_STEP_CENTER).coerceIn(0, 255)
+internal fun displayEqStepToRaw(
+    displayStep: Int,
+    scale: EqBandStepScale = EqBandStepScale.STANDARD,
+): Int = scale.rawOf(displayStep)
 
 fun featureStatusesFor(profile: ConnectedHeadphoneProfile?): List<FeatureStatus> = listOf(
     FeatureStatus("扫描与连接", profile?.let { "${it.protocolName} via ${it.transport}" } ?: "BLE scan, GATT/SPP discovery", true),

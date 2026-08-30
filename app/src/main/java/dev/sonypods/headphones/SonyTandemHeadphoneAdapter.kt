@@ -525,14 +525,15 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         val rawSteps = if (currentRawSteps.size == bandCount) {
             currentRawSteps.toMutableList()
         } else {
-            MutableList(bandCount) { EqProtocolEngine.BAND_STEP_CENTER }
+            MutableList(bandCount) { EqBandStepScale.forConfig(config).rawCenter }
         }
         rawSteps[0] = clearBassDisplayStepToRaw(level)
         return rawSteps
     }
 
+    /** Clear Bass exists only on the standard geometry (SC `EqBandStepsStandard`). */
     private fun clearBassDisplayStepToRaw(level: Int): Int =
-        (level.coerceIn(-10, 10) + EqProtocolEngine.BAND_STEP_CENTER).coerceIn(0, 255)
+        EqBandStepScale.STANDARD.rawOf(level)
 
     override fun buildRefreshNoiseControlCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> =
         buildList {
