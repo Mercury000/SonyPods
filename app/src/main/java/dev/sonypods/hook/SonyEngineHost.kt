@@ -1181,12 +1181,15 @@ object SonyEngineHost {
      */
     private fun profileService(getter: String, className: String): Any? {
         adapterService()?.let { adapter ->
-            runCatching {
-                val result = adapter.javaClass.getMethod(getter)
+            val answered = runCatching {
+                adapter.javaClass.getMethod(getter)
                     .apply { isAccessible = true }
                     .invoke(adapter)
-                (result as? java.util.Optional<*>)?.orElse(null) ?: result
-            }.getOrNull()?.let { return it }
+            }.getOrNull()
+            // An empty Optional is the stack's authoritative "profile is not up"; unwrapping it
+            // with elvis would hand the Optional itself back as the service.
+            if (answered is java.util.Optional<*>) return answered.orElse(null)
+            if (answered != null) return answered
         }
         val loader = appContext?.classLoader ?: return null
         return runCatching {
