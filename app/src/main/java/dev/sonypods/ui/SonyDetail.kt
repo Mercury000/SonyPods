@@ -57,6 +57,7 @@ data class SonyDetailActions(
     val onOpenGestureOperations: () -> Unit = {},
     val onOpenMoreSettings: () -> Unit = {},
     val onOpenMultipointSettings: () -> Unit = {},
+    val onOpenEqDetail: () -> Unit = {},
     val onPlaybackPrevious: () -> Unit = {},
     val onPlaybackPlayPause: () -> Unit = {},
     val onPlaybackNext: () -> Unit = {},

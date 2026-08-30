@@ -56,7 +56,6 @@ import dev.sonypods.config.CardLocation
 import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DseeGeneration
-import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.SmartTalkingDetectionSensitivity
 import dev.sonypods.protocol.SmartTalkingModeOutTime
 import dev.sonypods.protocol.SoundQualityCodec
@@ -789,49 +788,28 @@ private fun MultipointEntryContent(
 
 @Composable
 private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
-    val presets = uiState.eqAvailablePresets.takeIf { it.isNotEmpty() }
-        ?: listOfNotNull(uiState.eqPreset).ifEmpty { listOf(EqPresetId.OFF) }
     val currentPreset = uiState.eqPreset
 
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
-        OverlayDropdownPreference(
+        BasicComponent(
             title = stringResource(R.string.sony_eq_title),
-            items = presets.map { it.localizedName() },
-            selectedIndex = presets.indexOf(currentPreset).coerceAtLeast(0),
-            onSelectedIndexChange = { actions.onEqPresetChange(presets[it]) }
-        )
-
-        // Band/Clear Bass writes always land on a user preset, so only surface the
-        // fine-tune sliders once one of those presets is active.
-        val fineTuneVisible = currentPreset in listOf(
-            EqPresetId.CUSTOM,
-            EqPresetId.USER_SETTING1,
-            EqPresetId.USER_SETTING2,
-        )
-        if (fineTuneVisible) {
-            if (uiState.eqHasClearBass) {
-                LabeledLevelSlider(
-                    label = stringResource(R.string.eq_clear_bass),
-                    value = uiState.eqClearBass,
-                    range = uiState.eqClearBassMin..uiState.eqClearBassMax,
-                    onValueChange = actions.onClearBassChange,
-                )
-            }
-
-            val bandSteps = uiState.eqBandSteps
-            if (bandSteps.isNotEmpty()) {
-                val bandRange = uiState.eqBandMin..uiState.eqBandMax
-                bandSteps.forEachIndexed { index, step ->
-                    LabeledLevelSlider(
-                        label = uiState.eqBandLabels.getOrNull(index)
-                            ?: stringResource(R.string.eq_band_fmt, index + 1),
-                        value = step,
-                        range = bandRange,
-                        onValueChange = { actions.onCustomEqBandChange(index, it) },
+            onClick = { actions.onOpenEqDetail() },
+            endActions = {
+                currentPreset?.let {
+                    Text(
+                        text = it.localizedName(),
+                        fontSize = MiuixTheme.textStyles.body2.fontSize,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                        modifier = Modifier.padding(end = 8.dp),
                     )
                 }
-            }
-        }
+                Icon(
+                    imageVector = MiuixIcons.Basic.ArrowRight,
+                    contentDescription = null,
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                )
+            },
+        )
     }
 }
 

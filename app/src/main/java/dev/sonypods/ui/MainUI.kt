@@ -76,6 +76,7 @@ import dev.sonypods.ui.nav.LAYER_ENTER_DURATION
 import dev.sonypods.ui.nav.LAYER_EXIT_DURATION
 import dev.sonypods.ui.nav.MAX_LAYERS
 import dev.sonypods.ui.nav.PredictiveBackBackdrop
+import dev.sonypods.ui.pages.EqDetailPage
 import dev.sonypods.ui.pages.GestureOperationsPage
 import dev.sonypods.ui.pages.MoreSettingsPage
 import dev.sonypods.ui.pages.MultipointSettingsPage
@@ -123,6 +124,7 @@ sealed interface Screen {
     data object EarphoneMoreSettings : Screen
     data object EarphoneGestureOperations : Screen
     data object EarphoneMultipointSettings : Screen
+    data object EarphoneEqDetail : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
@@ -252,6 +254,7 @@ fun MainUI(
             Screen.EarphoneMoreSettings,
             Screen.EarphoneGestureOperations,
             Screen.EarphoneMultipointSettings,
+            Screen.EarphoneEqDetail,
         )
     }
     val earphoneDetailOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
@@ -1072,6 +1075,7 @@ fun MainUI(
                                     onOpenMoreSettings = { openScreen(Screen.EarphoneMoreSettings) },
                                     onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
                                     onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
+                                    onOpenEqDetail = { openScreen(Screen.EarphoneEqDetail) },
                                 ),
                                 visibility = visibility.value,
                                 listState = detailListState,
@@ -1131,6 +1135,7 @@ fun MainUI(
                                 actions = sonyActions.copy(
                                     onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
                                     onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
+                                    onOpenEqDetail = { openScreen(Screen.EarphoneEqDetail) },
                                 ),
                                 visibility = visibility.value,
                             )
@@ -1229,6 +1234,48 @@ fun MainUI(
                                 bottomContentPadding = pageBottomContentPadding,
                                 uiState = sonyState,
                                 actions = sonyActions,
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            Screen.EarphoneEqDetail -> {
+            val eqScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+            BarBlurHost(
+                bottomBarBlurEnabled = false,
+                topBarBlurEnabled = blurTopBar.value,
+            ) {
+                Scaffold(
+                    topBar = {
+                        BlurredBar(topGradient = true) {
+                            TopAppBar(
+                                title = stringResource(R.string.sony_eq_title),
+                                largeTitle = stringResource(R.string.sony_eq_title),
+                                color = Color.Transparent,
+                                scrollBehavior = eqScrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { closeLayer() }) {
+                                        Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
+                                    }
+                                },
+                            )
+                        }
+                    },
+                ) { padding ->
+                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(backgroundColor),
+                        ) {
+                            EqDetailPage(
+                                modifier = Modifier
+                                    .overScrollVertical()
+                                    .nestedScroll(eqScrollBehavior.nestedScrollConnection),
+                                uiState = sonyState,
+                                actions = sonyActions,
+                                contentPadding = padding,
                             )
                         }
                     }
