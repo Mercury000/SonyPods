@@ -292,8 +292,6 @@ object ConfigManager {
 
     fun islandDurationSeconds(): Int = current().islandDurationSeconds.normalizedIslandDuration()
 
-    fun notificationClickAction(): Int = current().notificationClickAction.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP)
-
     fun popupOnConnect(): Boolean = current().popupOnConnect
 
     fun connectDialogMode(): Int = current().connectDialogMode.coerceIn(
@@ -308,8 +306,6 @@ object ConfigManager {
     fun popupAllowlist(): Set<String> = current().popupAllowlist
 
     fun popupDenylist(): Set<String> = current().popupDenylist
-
-    fun moreClickAction(): Int = current().moreClickAction.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)
 
     fun fusionMoreClickAction(): Int = current().fusionMoreClickAction.coerceIn(
         FUSION_MORE_CLICK_SYSTEM_SETTINGS,
@@ -326,8 +322,6 @@ object ConfigManager {
 
     fun ancCycleModes(): Set<String> = current().ancCycleModes.normalizedAncCycleModes()
 
-    fun startupTab(): Int = current().startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES)
-
     fun visibility(): VisibilityConfig = current().visibility
 
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
@@ -339,10 +333,6 @@ object ConfigManager {
     fun updateIslandMode(islandMode: Int) = save { it.copy(superIslandMode = islandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)) }
 
     fun updateIslandDurationSeconds(seconds: Int) = save { it.copy(islandDurationSeconds = seconds.normalizedIslandDuration()) }
-
-    fun updateNotificationClickAction(action: Int) = save {
-        it.copy(notificationClickAction = action.coerceIn(NOTIFICATION_CLICK_MODULE_POPUP, NOTIFICATION_CLICK_HEYTAP))
-    }
 
     fun updateNotificationEnabled(enabled: Boolean) = save { it.copy(notificationEnabled = enabled) }
 
@@ -357,8 +347,6 @@ object ConfigManager {
     fun updatePopupAllowlist(packages: Set<String>) = save { it.copy(popupAllowlist = packages.normalizedPackageSet()) }
 
     fun updatePopupDenylist(packages: Set<String>) = save { it.copy(popupDenylist = packages.normalizedPackageSet()) }
-
-    fun updateMoreClickAction(action: Int) = save { it.copy(moreClickAction = action.coerceIn(MORE_CLICK_HEYTAP, MORE_CLICK_MODULE)) }
 
     fun updateFusionMoreClickAction(action: Int) = save {
         it.copy(fusionMoreClickAction = action.coerceIn(FUSION_MORE_CLICK_SYSTEM_SETTINGS, FUSION_MORE_CLICK_MODULE))
@@ -377,8 +365,6 @@ object ConfigManager {
         save { it.copy(ancImplementationCapabilityOverride = override.normalizedCapabilityOverride()) }
 
     fun updateAncCycleModes(modes: Set<String>) = save { it.copy(ancCycleModes = modes.normalizedAncCycleModes()) }
-
-    fun updateStartupTab(tab: Int) = save { it.copy(startupTab = tab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES)) }
 
     fun updateVisibility(visibility: VisibilityConfig) = save { it.copy(visibility = visibility) }
 

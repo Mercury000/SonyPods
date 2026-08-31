@@ -86,10 +86,10 @@ class PopupActivity : ComponentActivity() {
             }
             if (!configReady) return@setContent
 
-            val appConfig = ConfigManager.current()
-            if (appConfig.notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
-                LaunchedEffect(appConfig.notificationClickAction) {
-                    openNotificationTarget(appConfig.notificationClickAction, bluetoothDevice)
+            val notificationClickAction = LegacyConfigMigrator.readNotificationClickAction(this)
+            if (notificationClickAction != ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP) {
+                LaunchedEffect(notificationClickAction) {
+                    openNotificationTarget(notificationClickAction, bluetoothDevice)
                     finish()
                 }
                 return@setContent
@@ -106,7 +106,7 @@ class PopupActivity : ComponentActivity() {
             AppTheme(colorSchemeMode = colorSchemeMode, accentMode = uiPrefs.getInt("accent_mode", 0)) {
                 PopupContent(
                     onMore = {
-                        openMoreTarget(ConfigManager.current().moreClickAction, bluetoothDevice)
+                        openMoreTarget(LegacyConfigMigrator.readMoreClickAction(this), bluetoothDevice)
                         finish()
                     },
                     onDone = { finish() }

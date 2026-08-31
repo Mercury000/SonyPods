@@ -13,8 +13,9 @@ import io.github.libxposed.service.XposedService
  * and mirrored into the remote store on every save. The remote store is now the ONLY
  * persistence for hook-consumed data (the module app keeps no local copy), so this
  * object moves whatever a legacy install still holds locally into the shared store and
- * then deletes the local file. Pure app-local appearance keys move to their own file so
- * the shared-name file can go away entirely.
+ * then deletes the local file. Pure app-local keys — appearance plus the module UI's own
+ * startup tab and click actions — move to their own file so the shared-name file can go
+ * away entirely.
  *
  * This is the single place where legacy key names are known; nothing else may read or
  * write them.
@@ -22,8 +23,16 @@ import io.github.libxposed.service.XposedService
 object LegacyConfigMigrator {
     private const val TAG = "SonyPods-App"
 
-    /** App-local appearance prefs. Never consumed by hook processes; stay in a local file. */
+    /** App-local keys that live in [UI_PREFS_NAME]. */
     const val UI_PREFS_NAME = "sonypods_ui"
+
+    /**
+     * App-local keys, all stored in [UI_PREFS_NAME]. The appearance keys were always
+     * local; the startup tab and the notification/more click actions used to ride inside
+     * the shared remote config blob and are pulled out so the module UI never depends on
+     * the LSPosed service. The [ConfigManager.PREF_KEY_*] names double as the key names
+     * here, so a legacy direct key and the migrated value share one name.
+     */
     private val UI_KEYS = listOf(
         "theme_mode",
         "accent_mode",
@@ -31,23 +40,25 @@ object LegacyConfigMigrator {
         "blur_bottom_bar",
         "blur_top_bar",
         "app_language",
+        ConfigManager.PREF_KEY_STARTUP_TAB,
+        ConfigManager.PREF_KEY_NOTIFICATION_CLICK_ACTION,
+        ConfigManager.PREF_KEY_MORE_CLICK_ACTION,
     )
 
     /**
-     * Move the appearance keys into [UI_PREFS_NAME]. Runs from Application.onCreate,
-     * before any activity reads them in attachBaseContext. The legacy file is kept here
-     * on purpose: its config may still be needed by [migrateToRemote] once the LSPosed
-     * service binds.
+     * Move the app-local keys into [UI_PREFS_NAME], per key and only when the target
+     * does not already hold one. Runs from Application.onCreate, before any activity
+     * reads them in attachBaseContext. The legacy file is kept here on purpose: its
+     * config may still be needed by [migrateToRemote] once the LSPosed service binds.
      */
     fun migrateUiPrefs(context: Context) {
         runCatching {
             val ui = context.getSharedPreferences(UI_PREFS_NAME, Context.MODE_PRIVATE)
-            if (ui.all.isNotEmpty()) return
             val legacy = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
             var moved = 0
             val editor = ui.edit()
             for (key in UI_KEYS) {
-                if (!legacy.contains(key)) continue
+                if (!legacy.contains(key) || ui.contains(key)) continue
                 when (val value = legacy.all[key]) {
                     is Int -> editor.putInt(key, value).also { moved++ }
                     is Boolean -> editor.putBoolean(key, value).also { moved++ }
@@ -89,6 +100,66 @@ object LegacyConfigMigrator {
             val deleted = context.deleteSharedPreferences(ConfigManager.PREFS_NAME)
             Log.d(TAG, "legacy local prefs ${ConfigManager.PREFS_NAME} deleted=$deleted")
         }.onFailure { Log.w(TAG, "migrateToRemote failed", it) }
+    }
+
+    /** App-local prefs handle for the module UI's own appearance/startup settings. */
+    fun appOnlyPrefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(UI_PREFS_NAME, Context.MODE_PRIVATE)
+
+    fun readStartupTab(context: Context): Int =
+        appOnlyPrefs(context)
+            .getInt(ConfigManager.PREF_KEY_STARTUP_TAB, ConfigManager.STARTUP_TAB_MODULE)
+            .coerceIn(ConfigManager.STARTUP_TAB_MODULE, ConfigManager.STARTUP_TAB_EARPHONES)
+
+    fun writeStartupTab(context: Context, value: Int) {
+        appOnlyPrefs(context).edit().putInt(ConfigManager.PREF_KEY_STARTUP_TAB, value).apply()
+    }
+
+    fun readNotificationClickAction(context: Context): Int =
+        appOnlyPrefs(context)
+            .getInt(ConfigManager.PREF_KEY_NOTIFICATION_CLICK_ACTION, ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP)
+            .coerceIn(ConfigManager.NOTIFICATION_CLICK_MODULE_POPUP, ConfigManager.NOTIFICATION_CLICK_HEYTAP)
+
+    fun writeNotificationClickAction(context: Context, value: Int) {
+        appOnlyPrefs(context).edit().putInt(ConfigManager.PREF_KEY_NOTIFICATION_CLICK_ACTION, value).apply()
+    }
+
+    fun readMoreClickAction(context: Context): Int =
+        appOnlyPrefs(context)
+            .getInt(ConfigManager.PREF_KEY_MORE_CLICK_ACTION, ConfigManager.MORE_CLICK_MODULE)
+            .coerceIn(ConfigManager.MORE_CLICK_HEYTAP, ConfigManager.MORE_CLICK_MODULE)
+
+    fun writeMoreClickAction(context: Context, value: Int) {
+        appOnlyPrefs(context).edit().putInt(ConfigManager.PREF_KEY_MORE_CLICK_ACTION, value).apply()
+    }
+
+    /**
+     * Pull the app-only fields from the freshly attached remote config into the local
+     * [UI_PREFS_NAME] file. These fields previously lived inside the shared config_json
+     * blob; the module UI now reads them locally so its startup never depends on the
+     * LSPosed service. This one-shot copy preserves the value older builds saved
+     * remotely — once a key exists locally it is authoritative and never overwritten.
+     */
+    fun migrateAppOnlyPrefsToUi(context: Context) {
+        runCatching {
+            val ui = appOnlyPrefs(context)
+            val config = ConfigManager.current()
+            val editor = ui.edit()
+            var moved = 0
+            fun moveIfAbsent(key: String, value: Int) {
+                if (!ui.contains(key)) {
+                    editor.putInt(key, value)
+                    moved++
+                }
+            }
+            moveIfAbsent(ConfigManager.PREF_KEY_STARTUP_TAB, config.startupTab)
+            moveIfAbsent(ConfigManager.PREF_KEY_NOTIFICATION_CLICK_ACTION, config.notificationClickAction)
+            moveIfAbsent(ConfigManager.PREF_KEY_MORE_CLICK_ACTION, config.moreClickAction)
+            editor.apply()
+            if (moved > 0) {
+                Log.d(TAG, "migrateAppOnlyPrefsToUi: moved $moved key(s) from remote config into $UI_PREFS_NAME")
+            }
+        }.onFailure { Log.w(TAG, "migrateAppOnlyPrefsToUi failed", it) }
     }
 
     /**

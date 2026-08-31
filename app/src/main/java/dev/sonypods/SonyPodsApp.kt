@@ -41,6 +41,9 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         // saves buffered while the service was unavailable. Config is fully loaded
         // BEFORE listeners fire so the UI never renders defaults over real values.
         ConfigManager.attachStore(remotePrefs)
+        // App-only fields (startup tab, click actions) move out of the shared blob into
+        // local UI prefs; pull any value older builds saved remotely in on the first bind.
+        LegacyConfigMigrator.migrateAppOnlyPrefsToUi(this)
         PodImagePrefs.attachStore(remotePrefs)
         ModelImageSync.onServiceBound(this)
         UnifiedDeviceIdentityService.initialize(remotePrefs)

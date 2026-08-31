@@ -59,6 +59,7 @@ import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.components.BarBackdropContent
@@ -164,9 +165,6 @@ fun MainUI(
     var mainTabsGeneration by remember { mutableIntStateOf(0) }
     var bluetoothState by remember { mutableStateOf(readBluetoothState(context)) }
     var xposedService by remember { mutableStateOf(SonyPodsApp.xposedService) }
-    var remoteDataReady by remember {
-        mutableStateOf(ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached())
-    }
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
     var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
@@ -195,14 +193,14 @@ fun MainUI(
     val pageBottomContentPadding = 28.dp
 
     val appConfig = remember { ConfigManager.current() }
-    val notificationClickAction = remember { mutableStateOf(appConfig.notificationClickAction) }
+    val notificationClickAction = remember { mutableStateOf(LegacyConfigMigrator.readNotificationClickAction(context)) }
     val notificationEnabled = remember { mutableStateOf(appConfig.notificationEnabled) }
     val popupOnConnect = remember { mutableStateOf(appConfig.popupOnConnect) }
     val connectDialogMode = remember { mutableStateOf(appConfig.connectDialogMode) }
     val popupAllowlist = remember { mutableStateOf(appConfig.popupAllowlist) }
     val popupDenylist = remember { mutableStateOf(appConfig.popupDenylist) }
     val suppressPopupInGameOrLandscape = remember { mutableStateOf(appConfig.suppressPopupInGameOrLandscape) }
-    val moreClickAction = remember { mutableStateOf(appConfig.moreClickAction) }
+    val moreClickAction = remember { mutableStateOf(LegacyConfigMigrator.readMoreClickAction(context)) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
@@ -210,7 +208,7 @@ fun MainUI(
     val islandMode = remember { mutableStateOf(appConfig.superIslandMode) }
     val islandDurationSeconds = remember { mutableStateOf(appConfig.islandDurationSeconds) }
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
-    val startupTab = remember { mutableStateOf(appConfig.startupTab) }
+    val startupTab = remember { mutableStateOf(LegacyConfigMigrator.readStartupTab(context)) }
     val visibility = remember { mutableStateOf(appConfig.visibility) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.loadCurrent()) }
 
@@ -341,28 +339,36 @@ fun MainUI(
         )
     }
 
-    LaunchedEffect(remoteDataReady, startupTab.value, openEarphoneDetailAddress.value) {
-        if (remoteDataReady && !hasAppliedDefaultTab) {
-            // remoteDataReady becomes true in the service callback, while the Compose
-            // mirror below is updated by a later effect. Read the already-attached
-            // authoritative store here so the in-memory default cannot win that race.
-            val configuredStartupTab = ConfigManager.startupTab()
-            startupTab.value = configuredStartupTab
-            selectedTab = if (
-                !openEarphoneDetailAddress.value.isNullOrBlank() ||
-                configuredStartupTab == ConfigManager.STARTUP_TAB_EARPHONES
-            ) {
-                MainTab.Earphones
-            } else {
-                MainTab.Module
-            }
-            hasAppliedDefaultTab = true
-            mainTabsGeneration++
-            Log.d(
-                "SonyPods-App",
-                "startup page applied config=$configuredStartupTab selected=$selectedTab connected=$sonyConnected",
-            )
+    // The startup page is an app-local preference now, read synchronously at
+    // composition: the default tab applies on the first frame without waiting for the
+    // LSPosed remote-pref store, so the module UI stays usable while the module is
+    // disabled. The first launch after the app-only split can compose before the
+    // migration lands the saved value locally; the bind re-application below closes
+    // that window.
+    fun applyStartupTabSelection() {
+        val configuredStartupTab = startupTab.value
+        val target = if (
+            !openEarphoneDetailAddress.value.isNullOrBlank() ||
+            configuredStartupTab == ConfigManager.STARTUP_TAB_EARPHONES
+        ) {
+            MainTab.Earphones
+        } else {
+            MainTab.Module
         }
+        if (selectedTab != target) {
+            selectedTab = target
+            mainTabsGeneration++
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (hasAppliedDefaultTab) return@LaunchedEffect
+        applyStartupTabSelection()
+        hasAppliedDefaultTab = true
+        Log.d(
+            "SonyPods-App",
+            "startup page applied config=${startupTab.value} selected=$selectedTab connected=$sonyConnected",
+        )
     }
 
     // The fusion device center can enter the module while the existing MainActivity
@@ -551,7 +557,6 @@ fun MainUI(
                     earphonePrefs.value = PodImagePrefs.load(it)
                 }
             }
-            remoteDataReady = ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached()
         }
         SonyPodsApp.addServiceListener(serviceListener)
 
@@ -580,24 +585,30 @@ fun MainUI(
     LaunchedEffect(xposedService) {
         if (xposedService == null) return@LaunchedEffect
         val c = ConfigManager.current()
-        notificationClickAction.value = c.notificationClickAction
         notificationEnabled.value = c.notificationEnabled
         popupOnConnect.value = c.popupOnConnect
         connectDialogMode.value = c.connectDialogMode
         popupAllowlist.value = c.popupAllowlist
         popupDenylist.value = c.popupDenylist
         suppressPopupInGameOrLandscape.value = c.suppressPopupInGameOrLandscape
-        moreClickAction.value = c.moreClickAction
         fusionMoreClickAction.value = c.fusionMoreClickAction
         logLevel.value = c.logLevel
         fakeDeviceId.value = c.fakeDeviceId
         islandMode.value = c.superIslandMode
         islandDurationSeconds.value = c.islandDurationSeconds
         ancCycleModes.value = c.ancCycleModes
-        startupTab.value = c.startupTab
         visibility.value = c.visibility
         earphonePrefs.value = PodImagePrefs.loadCurrent()
-        remoteDataReady = ConfigManager.isStoreAttached() && PodImagePrefs.isStoreAttached()
+        // First launch after the app-only split: migrateAppOnlyPrefsToUi ran during
+        // bind (before this listener fired), so local prefs now holds the startup tab
+        // the user saved in the old remote config. Apply it if composition already
+        // read a default; skip while a detail flow is open so a fast manual
+        // navigation is never yanked.
+        val migratedStartupTab = LegacyConfigMigrator.readStartupTab(context)
+        if (migratedStartupTab != startupTab.value) {
+            startupTab.value = migratedStartupTab
+            if (layers.isEmpty()) applyStartupTabSelection()
+        }
     }
 
     // Hook liveness ping: the bluetooth-process hook answers UI_INIT with SERVICE_ALIVE.
@@ -1305,7 +1316,7 @@ fun MainUI(
             captureForEffects = rootEngaged,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                if (!remoteDataReady || !hasAppliedDefaultTab) {
+                if (!hasAppliedDefaultTab) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -1384,7 +1395,7 @@ fun MainUI(
                 startupTab = startupTab,
                 onStartupTabChange = {
                     startupTab.value = it
-                    ConfigManager.updateStartupTab(it)
+                    LegacyConfigMigrator.writeStartupTab(context, it)
                 },
                 onOpenVisibility = { openScreen(Screen.Visibility) },
                 appLanguage = appLanguage,
@@ -1395,7 +1406,7 @@ fun MainUI(
                 notificationClickAction = notificationClickAction,
                 onNotificationClickActionChange = {
                     notificationClickAction.value = it
-                    ConfigManager.updateNotificationClickAction(it)
+                    LegacyConfigMigrator.writeNotificationClickAction(context, it)
                 },
                 notificationEnabled = notificationEnabled,
                 onNotificationEnabledChange = {
@@ -1430,7 +1441,7 @@ fun MainUI(
                 moreClickAction = moreClickAction,
                 onMoreClickActionChange = {
                     moreClickAction.value = it
-                    ConfigManager.updateMoreClickAction(it)
+                    LegacyConfigMigrator.writeMoreClickAction(context, it)
                 },
                 fusionMoreClickAction = fusionMoreClickAction,
                 onFusionMoreClickActionChange = {
