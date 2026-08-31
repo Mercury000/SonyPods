@@ -16,6 +16,7 @@ import dev.sonypods.ble.SonyBleClient
 import dev.sonypods.ble.SonyBleClientListener
 import dev.sonypods.ble.SonyBleConnectionInfo
 import dev.sonypods.ble.UnsupportedEndpointDiagnostics
+import dev.sonypods.config.ConfigManager
 import dev.sonypods.headphones.ConnectedHeadphoneProfile
 import dev.sonypods.headphones.EqBandStepScale
 import dev.sonypods.headphones.EqUiCapability
@@ -513,7 +514,7 @@ data class SoundQualityState(
 )
 
 /** Current sound pressure readout from SAFE_LISTENING_RET_EXTENDED_PARAM. */
-enum class SafeListeningStatus { UNKNOWN, VALID, NOT_PLAYING, IN_CALL, DETACHED }
+enum class SafeListeningStatus { UNKNOWN, VALID, NOT_PLAYING, IN_CALL, DETACHED, ROOT_REQUIRED }
 
 data class SafeListeningState(
     /** Headset-reported sound pressure in dB; null until a VALID read. */
@@ -743,16 +744,12 @@ class SonyHeadphoneRepository private constructor(
 
     /** True once the module asked the headset to enter preview mode, and so owes
      * it a matching off. SC's readout presenter pairs setPreview(true) on attach
-     * with setPreview(false) on detach; the other way to make the readout carry
-     * a level is the persistent Safe Listening feature, which drives the
-     * headset's listening-log collection and belongs to the user — the module
-     * neither enables nor disables that one. */
+     * with setPreview(false) on detach. The other way to make the readout carry a
+     * level is the persistent Safe Listening feature, which drives the headset's
+     * listening-log collection and belongs to the user: when SC's mirrored
+     * preference says it is on, the module only re-asserts it (as SC does on every
+     * connect) and owes nothing on exit. */
     private var safeListeningPreviewRequested = false
-
-    /** Set once a param reply showed both switches off, i.e. the pending
-     * activation step is "ask for preview" rather than "read the current param".
-     * Cleared on disarm so the next arm reads before it writes. */
-    private var safeListeningBothSwitchesOff = false
 
     private var safeListeningActivationAttempts = 0
 
@@ -785,39 +782,54 @@ class SonyHeadphoneRepository private constructor(
     }
 
     /** Arm the Safe Listening sound-pressure poll. Called by the engine when the
-     * sound-pressure card becomes visible. The readout answers with a zero level
-     * until either the user's Safe Listening feature or preview mode is on, so
-     * the poll does not start until a param reply confirms one of them — SC
-     * likewise only runs its timer while the state machine sits in PREVIEW. */
+     * sound-pressure card becomes visible. The readout only reports a live level
+     * once one of the two switches is on, so the poll waits for the NTFY_PARAM that
+     * confirms the write — SC likewise only runs its timer once its state machine
+     * has settled in PREVIEW (readout card) or ON/PAUSE (playback card). */
     fun startSafeListeningPoll() {
         safeListeningPollArmed = true
-        safeListeningBothSwitchesOff = false
         safeListeningActivationAttempts = 0
         mainHandler.removeCallbacks(safeListeningPollRunnable)
         mainHandler.removeCallbacks(safeListeningActivationRunnable)
         pumpSafeListeningActivation()
     }
 
-    /** Re-issues the pending activation step on SC's 2s cadence: reading the
-     * current param, or asking for preview once that read said both switches are
-     * off. Driven by a timer rather than by the incoming notify because a
-     * dropped frame produces no notify to retry from. */
+    /** Assert the activation SC's mirrored preference calls for, re-issuing it on
+     * SC's 2s cadence until NTFY_PARAM confirms. Timer-driven rather than
+     * notify-driven because a dropped SET_PARAM produces no notify to retry from.
+     * GET_PARAM has no part in this: its reply carries an unrelated flag, not the
+     * two switches. */
     private fun pumpSafeListeningActivation() {
         if (!safeListeningPollArmed) return
+        val scMode = ConfigManager.current().scSafeListeningMode
+        if (scMode == ConfigManager.SC_SL_MODE_UNKNOWN) {
+            // Without SC's switch there is no way to tell whether enabling preview
+            // would turn the user's own listening-log collection off, and the headset
+            // cannot be asked. Write nothing and let the card say why.
+            _state.update {
+                it.copy(safeListeningState = SafeListeningState(
+                    status = SafeListeningStatus.ROOT_REQUIRED,
+                ))
+            }
+            return
+        }
         if (safeListeningActivationAttempts >= SAFE_LISTENING_ACTIVATION_MAX_ATTEMPTS) {
             appendLog("Safe listening activation unconfirmed; polling the readout anyway")
             startSafeListeningReadoutPoll()
             return
         }
         safeListeningActivationAttempts++
-        if (safeListeningBothSwitchesOff) {
+        if (scMode == ConfigManager.SC_SL_MODE_ON) {
+            // Re-assert the value the user already chose, which is what SC sends on
+            // every connect. It re-arms measurement after a reconnect and leaves
+            // nothing to restore on exit.
+            sendSafeListeningCommand("SET safe listening on") {
+                SonyTandemV2Table2Protocol.buildSetSafeListeningParam(it, first = true, second = false)
+            }
+        } else {
             safeListeningPreviewRequested = true
             sendSafeListeningCommand("SET safe listening preview on") {
                 SonyTandemV2Table2Protocol.buildSetSafeListeningParam(it, first = false, second = true)
-            }
-        } else {
-            sendSafeListeningCommand("GET safe listening param") {
-                SonyTandemV2Table2Protocol.buildGetSafeListeningParam(it)
             }
         }
         mainHandler.postDelayed(safeListeningActivationRunnable, SAFE_LISTENING_ACTIVATION_RETRY_MS)
@@ -835,7 +847,6 @@ class SonyHeadphoneRepository private constructor(
      * preview mode the module itself asked for is turned back off. */
     fun stopSafeListeningPoll() {
         safeListeningPollArmed = false
-        safeListeningBothSwitchesOff = false
         safeListeningActivationAttempts = 0
         mainHandler.removeCallbacks(safeListeningPollRunnable)
         mainHandler.removeCallbacks(safeListeningActivationRunnable)
@@ -3545,23 +3556,15 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applySafeListeningParam(response: ParsedTandemResponse.SafeListeningParam) {
-        // Payload is (safeListening, preview), ON=0x00. Both make the readout
-        // carry a real level, and the headset refuses preview while the user's
-        // Safe Listening feature is on, so preview is only ever asked for when
-        // this reply says both are off.
         if (!safeListeningPollArmed) return
-        val featureOn = response.first == 0x00
-        val previewOn = response.second == 0x00
-        safeListeningBothSwitchesOff = !featureOn && !previewOn
-        if (safeListeningBothSwitchesOff) {
-            mainHandler.removeCallbacks(safeListeningActivationRunnable)
-            pumpSafeListeningActivation()
-            return
-        }
-        // Active, so the readout carries a real level from here on. Only a
-        // headset in one of those two states answers the capability query that
-        // names its minimum poll interval; read it event-driven rather than on a
-        // fixed delay.
+        // Only NTFY_PARAM answers for the two switches; a RET_PARAM reply carries an
+        // unrelated flag that stays 0x00 whatever the switches are, so it is neither
+        // requested nor trusted here.
+        val previewOn = response.previewOn ?: return
+        if (!response.featureOn && !previewOn) return
+        // Activation confirmed. Only a headset in one of those two states answers the
+        // capability query that names its minimum poll interval; read it event-driven
+        // rather than on a fixed delay.
         startSafeListeningReadoutPoll()
         sendSafeListeningCommand("GET SAFE_LISTENING capability") {
             SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(it)

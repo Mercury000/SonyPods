@@ -126,6 +126,14 @@ data class AppConfig(
     val ancImplementationCapabilityOverride: Int = ConfigManager.CAPABILITY_OVERRIDE_AUTO,
     val ancCycleModes: Set<String> = ConfigManager.DEFAULT_ANC_CYCLE_MODES,
     val startupTab: Int = ConfigManager.STARTUP_TAB_MODULE,
+    /**
+     * Mirror of Sound Connect's app-global `KEY_SL_MODE` — its persistent
+     * listening-log switch — read with root by the app process. The headphone has no
+     * readable copy of that switch, and it decides whether the sound-pressure
+     * readout may be activated with preview (SC off) or has to be re-asserted with
+     * setParamOn (SC on). [ConfigManager.SC_SL_MODE_UNKNOWN] when root is missing.
+     */
+    val scSafeListeningMode: Int = ConfigManager.SC_SL_MODE_UNKNOWN,
     val visibility: VisibilityConfig = VisibilityConfig(),
 )
 
@@ -203,6 +211,11 @@ object ConfigManager {
 
     const val STARTUP_TAB_MODULE = 0
     const val STARTUP_TAB_EARPHONES = 1
+
+    /** Sound Connect's mirrored Safe Listening switch; UNKNOWN means it was unreadable. */
+    const val SC_SL_MODE_UNKNOWN = -1
+    const val SC_SL_MODE_OFF = 0
+    const val SC_SL_MODE_ON = 1
 
     /** Cycle order of the notification/island ANC button; values are [dev.sonypods.protocol.NoiseControlMode] names. */
     val ANC_CYCLE_MODE_ORDER = listOf("NOISE_CANCELLING", "AMBIENT_SOUND", "OFF")
@@ -368,6 +381,10 @@ object ConfigManager {
     fun updateAncCycleModes(modes: Set<String>) = save { it.copy(ancCycleModes = modes.normalizedAncCycleModes()) }
 
     fun updateVisibility(visibility: VisibilityConfig) = save { it.copy(visibility = visibility) }
+
+    fun updateScSafeListeningMode(mode: Int) = save {
+        it.copy(scSafeListeningMode = mode.coerceIn(SC_SL_MODE_UNKNOWN, SC_SL_MODE_ON))
+    }
 
     /** Mutate, normalize, cache, and persist the config to the cross-process store. */
     private fun save(mutate: (AppConfig) -> AppConfig) {

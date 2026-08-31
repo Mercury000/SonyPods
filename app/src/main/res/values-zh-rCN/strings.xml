@@ -194,6 +194,13 @@
     <string name="sl_not_playing">未在播放</string>
     <string name="sl_in_call">通话中</string>
     <string name="sl_detached">未佩戴</string>
+    <string name="sl_root_required">请授予 root 权限</string>
+    <string name="cd_sl_root_help">为什么需要 root 权限</string>
+    <string name="sl_root_help_title">为什么需要 root 权限</string>
+    <string name="sl_root_help_summary">显示当前声压，需要先让耳机开始测量。</string>
+    <string name="sl_root_help_owner">这个测量开关由 Sound Connect 维护，耳机本身不提供读取方式，只有在写入的那一刻才能知道它的状态。</string>
+    <string name="sl_root_help_risk">如果直接写入，可能会关掉你在 Sound Connect 中开启的听音记录。为了不改动这项设置，模块会用 root 权限从 Sound Connect 读取该开关的当前值。</string>
+    <string name="sl_root_help_without">未授予 root 权限时，模块不会向耳机写入任何内容，因此不显示声压数值。如果你不需要此功能，也可在设置中隐藏。如果需要，请授予 root 权限后重启 APP。</string>
     <string name="playback_unknown_track">未知曲目</string>
     <string name="playback_unknown_artist">未知歌手</string>
     <string name="playback_unknown_album">未知专辑</string>

@@ -221,6 +221,9 @@ object SonyTandemV2Table2Protocol {
     fun buildGetSafeListeningStatus(type: SafeListeningInquiredTypeTable2): ByteArray =
         TandemMessage(DT, SL_GET_STATUS, byteArrayOf(type.code)).toByteArray()
 
+    /** SAFE_LISTENING_GET_PARAM (0x56). Kept for the Tandem debug page; the engine
+     * does not use it, because the reply (0x57) carries a single unrelated flag that
+     * reads ENABLE whatever the two switches are — not the switch states. */
     fun buildGetSafeListeningParam(type: SafeListeningInquiredTypeTable2): ByteArray =
         TandemMessage(DT, SL_GET_PARAM, byteArrayOf(type.code)).toByteArray()
 
@@ -307,7 +310,8 @@ object SonyTandemV2Table2Protocol {
             VG_RET_PARAM, VG_NTFY_PARAM -> parseVoiceGuidance(payload, raw)
             SL_RET_CAPABILITY -> parseSafeListeningCapability(payload, raw)
             SL_RET_STATUS, SL_NTFY_STATUS -> parseSafeListening(payload, raw)
-            SL_RET_PARAM, SL_NTFY_PARAM -> parseSafeListeningParam(payload, raw)
+            SL_RET_PARAM -> parseSafeListeningParam(payload, raw, carriesPreview = false)
+            SL_NTFY_PARAM -> parseSafeListeningParam(payload, raw, carriesPreview = true)
             SL_RET_EXTENDED_PARAM -> parseSafeListeningExtendedParam(payload, raw)
             LEA_RET_CAPABILITY, LEA_RET_STATUS, LEA_NTFY_STATUS,
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLea(command, payload, raw)
@@ -486,13 +490,19 @@ object SonyTandemV2Table2Protocol {
         )
     }
 
-    /** SAFE_LISTENING_RET_PARAM (0x57) / NTFY_PARAM (0x59): payload
-     * [type, safeListening, preview], both bytes ON=0x00. */
-    private fun parseSafeListeningParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
+    /** RET_PARAM (0x57) is [type, EnableDisable] — the persistent feature flag
+     * only. NTFY_PARAM (0x59) is [type, safeListening, preview]. ENABLE and ON
+     * are both 0x00. A 0x57 read cannot answer for preview, so it reports null
+     * rather than defaulting to a value the headset never sent. */
+    private fun parseSafeListeningParam(
+        payload: ByteArray,
+        raw: ByteArray,
+        carriesPreview: Boolean,
+    ): ParsedTandemResponse =
         ParsedTandemResponse.SafeListeningParam(
             type = payload.firstOrNull()?.let { SafeListeningInquiredTypeTable2.fromCode(it) },
-            first = payload.getOrNull(1)?.unsigned ?: 0,
-            second = payload.getOrNull(2)?.unsigned ?: 0,
+            featureOn = payload.getOrNull(1)?.unsigned == 0x00,
+            previewOn = if (carriesPreview) payload.getOrNull(2)?.unsigned == 0x00 else null,
             raw = raw,
         )
 

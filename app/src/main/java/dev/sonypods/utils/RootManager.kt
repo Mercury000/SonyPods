@@ -13,6 +13,18 @@ object RootManager {
         "com.sony.songpal.mdr",
     )
 
+    private val allowedReadPaths = setOf(
+        "/data/data/com.sony.songpal.mdr/shared_prefs/safe_listening_settings_preference.xml",
+    )
+
+    /** Read one of [allowedReadPaths] as root. The allowlist keeps the path out of
+     * the shell word that `su -c` parses. Null means the read failed — no root, or
+     * the file does not exist. */
+    fun readTextAsRoot(path: String): String? {
+        if (path !in allowedReadPaths) return null
+        return runRootText("cat $path")
+    }
+
     fun restartPackages(packages: Collection<String>): Boolean {
         val targets = packages.distinct().filter { it in allowedScopes && it.matches(packageNameRegex) }
         if (targets.isEmpty()) return false

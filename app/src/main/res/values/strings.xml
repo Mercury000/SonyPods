@@ -193,6 +193,13 @@
     <string name="sl_not_playing">Not playing</string>
     <string name="sl_in_call">In call</string>
     <string name="sl_detached">Not worn</string>
+    <string name="sl_root_required">Grant root access</string>
+    <string name="cd_sl_root_help">Why root access is needed</string>
+    <string name="sl_root_help_title">Why root access is needed</string>
+    <string name="sl_root_help_summary">Showing the current sound pressure requires the headphones to start measuring first.</string>
+    <string name="sl_root_help_owner">That measurement switch is maintained by Sound Connect. The headphones offer no way to read it back — its state is only revealed at the moment something writes to it.</string>
+    <string name="sl_root_help_risk">Writing to it blindly could turn off the listening history you enabled in Sound Connect. To leave that setting untouched, this module reads the switch\'s current value from Sound Connect with root access.</string>
+    <string name="sl_root_help_without">Without root access the module writes nothing to your headphones, so no sound pressure value is shown. If you do not need this feature, you can also hide it in the visibility settings. If you do, grant root access and restart the app.</string>
     <string name="playback_unknown_track">Unknown track</string>
     <string name="playback_unknown_artist">Unknown artist</string>
     <string name="playback_unknown_album">Unknown album</string>

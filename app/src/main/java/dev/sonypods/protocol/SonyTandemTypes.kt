@@ -697,28 +697,31 @@ sealed interface ParsedTandemResponse {
         }
     }
 
-    /** SAFE_LISTENING_NTFY_PARAM (0x59): the SET_PARAM confirmation, payload
-     * [type, onOff1, onOff2]. Arrives when the headset turns the feature on —
-     * the event that makes reading its capability (minimum interval) reliable. */
+    /** SAFE_LISTENING_RET_PARAM (0x57) and NTFY_PARAM (0x59) do not share a
+     * layout. 0x57 is [type, EnableDisable] — the persistent Safe Listening
+     * feature flag alone, with no preview byte, because the headset does not
+     * report preview state (SC tracks that locally). 0x59 is [type,
+     * safeListening, preview]. ENABLE and ON are both 0x00. `previewOn` is null
+     * when the frame cannot answer for it. */
     data class SafeListeningParam(
         val type: SafeListeningInquiredTypeTable2?,
-        val first: Int,
-        val second: Int,
+        val featureOn: Boolean,
+        val previewOn: Boolean?,
         override val raw: ByteArray,
     ) : ParsedTandemResponse {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is SafeListeningParam) return false
             return type == other.type &&
-                first == other.first &&
-                second == other.second &&
+                featureOn == other.featureOn &&
+                previewOn == other.previewOn &&
                 raw.contentEquals(other.raw)
         }
 
         override fun hashCode(): Int {
             var result = type.hashCode()
-            result = 31 * result + first
-            result = 31 * result + second
+            result = 31 * result + featureOn.hashCode()
+            result = 31 * result + previewOn.hashCode()
             result = 31 * result + raw.contentHashCode()
             return result
         }

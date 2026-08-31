@@ -65,6 +65,7 @@ import com.mercury.sonypods.R
 import dev.sonypods.ui.SonyDetailActions
 import dev.sonypods.ui.dialogs.ConnectionQualityConfirmDialog
 import dev.sonypods.ui.dialogs.LdacEnableConfirmDialog
+import dev.sonypods.ui.dialogs.SafeListeningRootHelpDialog
 import dev.sonypods.ui.components.AncSwitch
 import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.localizedName
@@ -83,6 +84,7 @@ import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 
@@ -992,12 +994,14 @@ private fun SafeListeningCard(uiState: SonyStateSnapshot) {
     val status = uiState.safeListeningStatus?.let { name ->
         runCatching { SafeListeningStatus.valueOf(name) }.getOrNull()
     } ?: SafeListeningStatus.UNKNOWN
+    var showRootHelp by remember { mutableStateOf(false) }
     val value: String = when (status) {
         SafeListeningStatus.VALID ->
             uiState.safeListeningLevelDb?.let { stringResource(R.string.sl_dB, it) } ?: "—"
         SafeListeningStatus.NOT_PLAYING -> stringResource(R.string.sl_not_playing)
         SafeListeningStatus.IN_CALL -> stringResource(R.string.sl_in_call)
         SafeListeningStatus.DETACHED -> stringResource(R.string.sl_detached)
+        SafeListeningStatus.ROOT_REQUIRED -> stringResource(R.string.sl_root_required)
         SafeListeningStatus.UNKNOWN -> "—"
     }
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
@@ -1012,10 +1016,24 @@ private fun SafeListeningCard(uiState: SonyStateSnapshot) {
                     } else {
                         MiuixTheme.colorScheme.onSurfaceVariantSummary
                     },
+                    modifier = Modifier.align(Alignment.CenterVertically),
                 )
+                if (status == SafeListeningStatus.ROOT_REQUIRED) {
+                    IconButton(
+                        onClick = { showRootHelp = true },
+                        modifier = Modifier.align(Alignment.CenterVertically),
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Info,
+                            contentDescription = stringResource(R.string.cd_sl_root_help),
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+                }
             },
         )
     }
+    SafeListeningRootHelpDialog(show = showRootHelp) { showRootHelp = false }
 }
 
 @Composable

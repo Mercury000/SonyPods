@@ -95,6 +95,7 @@ import dev.sonypods.ui.dialogs.LeAudioAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioPairingHelpDialog
 import dev.sonypods.ui.dialogs.PowerOffDialog
 import dev.sonypods.utils.RootManager
+import dev.sonypods.utils.SoundConnectPrefs
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -175,6 +176,22 @@ fun MainUI(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Sound Connect owns the persistent Safe Listening switch and the headphone has
+    // no readable copy of it, so mirror SC's own preference into the config the
+    // bluetooth process reads. Refreshing on every foreground also covers the return
+    // from Sound Connect, after its Tandem lease is released.
+    LaunchedEffect(appForeground) {
+        if (!appForeground) return@LaunchedEffect
+        val mode = withContext(Dispatchers.IO) { SoundConnectPrefs.readSafeListeningMode() }
+        ConfigManager.updateScSafeListeningMode(
+            when (mode) {
+                true -> ConfigManager.SC_SL_MODE_ON
+                false -> ConfigManager.SC_SL_MODE_OFF
+                null -> ConfigManager.SC_SL_MODE_UNKNOWN
+            }
+        )
     }
 
         // State authority lives in the bluetooth process; mirror it here.
