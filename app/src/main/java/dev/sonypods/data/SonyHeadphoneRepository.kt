@@ -128,8 +128,6 @@ private fun flexibleLeAudioAlertTargetsLeAudio(messageType: Int): Boolean =
 private const val EQ_CLEAR_BASS_RAW_INDEX = 0
 private const val EQ_FIRST_FREQUENCY_RAW_INDEX = 1
 private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
-private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
-private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
 private const val PLAYBACK_METADATA_REFETCH_DELAY_MS = 50L
 
 /** Fallback poll interval (seconds) for the Safe Listening sound-pressure
@@ -723,8 +721,6 @@ class SonyHeadphoneRepository private constructor(
         },
     )
     private var disableUnpairPending = false
-    private val playbackRefreshRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
-    private val playbackReconcileRunnable = Runnable { refreshPlaybackStatusAfterCommand() }
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
     // whole playback block; 50ms debounce coalesces notification bursts.
     private val playbackMetadataRefetchRunnable = Runnable {
@@ -2573,7 +2569,6 @@ class SonyHeadphoneRepository private constructor(
         if (!canWrite(HeadphoneFeature.PLAYBACK_CONTROL)) return
         clearPendingPlaybackTransition()
         dispatchPlayback(PlaybackControl.TRACK_DOWN, mediaFallback = { mediaController.previous() })
-        schedulePlaybackStateRefresh()
     }
 
     fun playbackPlayPause() {
@@ -2584,15 +2579,12 @@ class SonyHeadphoneRepository private constructor(
             if (control == PlaybackControl.PAUSE) PlaybackStatus.PAUSED else PlaybackStatus.PLAYING
         )
         dispatchPlayback(control, mediaFallback = { mediaController.playPause() })
-        schedulePlaybackStateRefresh()
-        schedulePlaybackStateReconcile()
     }
 
     fun playbackNext() {
         if (!canWrite(HeadphoneFeature.PLAYBACK_CONTROL)) return
         clearPendingPlaybackTransition()
         dispatchPlayback(PlaybackControl.TRACK_UP, mediaFallback = { mediaController.next() })
-        schedulePlaybackStateRefresh()
     }
 
     fun setPlaybackVolume(volume: Int) {
@@ -2726,7 +2718,6 @@ class SonyHeadphoneRepository private constructor(
             clearPendingPlaybackTransition()
             pendingQuickAccessFunctionCodes = null
             mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
-            mainHandler.removeCallbacks(playbackRefreshRunnable)
             stopSafeListeningPoll()
             awaitingCapabilityInfo = false
             pendingCapabilityCounter = null
@@ -3302,32 +3293,11 @@ class SonyHeadphoneRepository private constructor(
             .forEach(::sendCommandIfReady)
     }
 
-    private fun refreshPlaybackStatusAfterCommand() {
-        if (_state.value.connectedDevice == null) return
-        if (shouldUseTandemPlaybackStatus()) {
-            refreshPlaybackState()
-        } else {
-            updatePlaybackStatusFromAudioManager(force = true)
-        }
-    }
-
-    private fun schedulePlaybackStateRefresh() {
-        mainHandler.removeCallbacks(playbackRefreshRunnable)
-        mainHandler.postDelayed(playbackRefreshRunnable, PLAYBACK_REFRESH_AFTER_COMMAND_MS)
-    }
-
-    private fun schedulePlaybackStateReconcile() {
-        mainHandler.removeCallbacks(playbackReconcileRunnable)
-        mainHandler.postDelayed(playbackReconcileRunnable, PLAYBACK_RECONCILE_AFTER_COMMAND_MS)
-    }
-
     private fun clearPendingPlaybackTransition() {
         pendingPlaybackStatus = null
-        mainHandler.removeCallbacks(playbackReconcileRunnable)
     }
 
     private fun beginPlaybackStatusTransition(expected: PlaybackStatus) {
-        mainHandler.removeCallbacks(playbackReconcileRunnable)
         pendingPlaybackStatus = PendingPlaybackStatus(
             expected = expected,
             ignoreOppositeUntilMs = SystemClock.elapsedRealtime() + PLAYBACK_STALE_RESPONSE_WINDOW_MS,
