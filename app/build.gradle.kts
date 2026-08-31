@@ -1,5 +1,9 @@
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLClassLoader
+import javax.imageio.ImageIO
 
 plugins {
     alias(libs.plugins.agp.app)
@@ -21,6 +25,16 @@ val signingProperties = listOf(
 val DEVELOPER_GITHUB_ID = "Mercury000"
 val DEVELOPER_NAME_FALLBACK = "Mercury"
 
+// WebP encoder (libwebp via JNI, natives bundled for Linux/Windows/macOS x64 + Linux aarch64)
+// for the About-page avatar. Loaded lazily in an isolated URLClassLoader so it works
+// identically on local machines and CI without extra native tooling installed.
+val webpClassLoader: ClassLoader by lazy {
+    val webpConfig = configurations.detachedConfiguration(
+        dependencies.create("com.github.gotson:webp-imageio:0.2.2")
+    )
+    URLClassLoader(webpConfig.files.map { it.toURI().toURL() }.toTypedArray(), javaClass.classLoader)
+}
+
 if (signingProperties.all { providers.gradleProperty(it).isPresent }) {
     apksign {
         storeFileProperty = "KEYSTORE_FILE"
@@ -41,6 +55,10 @@ android {
         versionCode = 19
         versionName = "1.6.1"
         buildConfigField("long", "BUILD_TIMESTAMP", System.currentTimeMillis().toString())
+        ndk {
+            // Modern phones are arm64-only; x86/armeabi-v7a legacy ABIs are dead weight.
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -74,6 +92,12 @@ android {
         jniLibs {
             // Replaces the removed manifest android:extractNativeLibs="false".
             useLegacyPackaging = false
+        }
+        dex {
+            // Default (false) stores classes.dex uncompressed for direct mmap, which
+            // wastes ~2MB on a side-loaded module APK. Legacy packaging = compressed
+            // dex extracted at install, like every normal app.
+            useLegacyPackaging = true
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -162,6 +186,30 @@ val generateDeveloperProfile = tasks.register("generateDeveloperProfile") {
             else -> null
         }
 
+        /** Best-effort PNG/JPG/WebP -> WebP. Returns null if conversion fails (keep original). */
+        fun toWebp(bytes: ByteArray): ByteArray? {
+            return try {
+                // Register the TwelveMonkeys SPI explicitly instead of relying on ServiceLoader
+                // discovery, which is unreliable on the Gradle buildscript classpath.
+                val registry = javax.imageio.spi.IIORegistry.getDefaultInstance()
+                for (spiClass in listOf(
+                    "com.luciad.imageio.webp.WebPImageReaderSpi",
+                    "com.luciad.imageio.webp.WebPImageWriterSpi",
+                )) {
+                    val spi = Class.forName(spiClass, true, webpClassLoader)
+                        .getDeclaredConstructor().newInstance()
+                    registry.registerServiceProvider(spi)
+                }
+                val img = ImageIO.read(ByteArrayInputStream(bytes)) ?: return null
+                ByteArrayOutputStream().use { out ->
+                    if (ImageIO.write(img, "webp", out)) out.toByteArray() else null
+                }
+            } catch (e: Throwable) {
+                logger.warn("generateDeveloperProfile: toWebp failed: $e")
+                null
+            }
+        }
+
         val cachedMeta = cacheDir.resolve("profile.properties").takeIf { it.isFile() }
         val cacheIsFresh = cachedMeta != null &&
             System.currentTimeMillis() - cachedMeta.lastModified() < 24 * 60 * 60 * 1000L
@@ -208,6 +256,10 @@ val generateDeveloperProfile = tasks.register("generateDeveloperProfile") {
                 avatar = "png" to fallbackAvatar.readBytes()
                 logger.warn("generateDeveloperProfile: no cached avatar, using bundled fallback")
             }
+        }
+
+        avatar = avatar?.let { (ext, bytes) ->
+            toWebp(bytes)?.let { "webp" to it } ?: (ext to bytes)
         }
 
         writeRes(name ?: DEVELOPER_NAME_FALLBACK, id ?: DEVELOPER_GITHUB_ID, avatar!!)
