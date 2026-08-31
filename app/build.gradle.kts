@@ -52,8 +52,8 @@ android {
         applicationId = "com.mercury.sonypods"
         minSdk = 34
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.6.1"
+        versionCode = 20
+        versionName = "1.6.2"
         buildConfigField("long", "BUILD_TIMESTAMP", System.currentTimeMillis().toString())
         ndk {
             // Modern phones are arm64-only; x86/armeabi-v7a legacy ABIs are dead weight.
