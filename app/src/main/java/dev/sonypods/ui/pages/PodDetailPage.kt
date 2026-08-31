@@ -800,13 +800,16 @@ private fun EqCard(uiState: SonyStateSnapshot, actions: SonyDetailActions) {
                         text = it.localizedName(),
                         fontSize = MiuixTheme.textStyles.body2.fontSize,
                         color = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                        modifier = Modifier.padding(end = 8.dp),
+                        modifier = Modifier
+                            .align(Alignment.CenterVertically)
+                            .padding(end = 8.dp),
                     )
                 }
                 Icon(
                     imageVector = MiuixIcons.Basic.ArrowRight,
                     contentDescription = null,
                     tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                    modifier = Modifier.align(Alignment.CenterVertically),
                 )
             },
         )
