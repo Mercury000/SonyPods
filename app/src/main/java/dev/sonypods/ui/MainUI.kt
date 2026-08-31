@@ -327,7 +327,7 @@ fun MainUI(
             onMultipointUnpair = { address -> SonyBridge.unpairMultipointDevice(context, address) },
             onSourceSwitchEnabledChange = { enabled -> SonyBridge.setSourceSwitchEnabled(context, enabled) },
             onMultipointEnabledChange = { enabled -> SonyBridge.setMultipointEnabled(context, enabled) },
-             onLeAudioEnabledChange = { enabled -> SonyBridge.setLeAudioEnabled(context, enabled) },
+            onLeAudioEnabledChange = { enabled -> SonyBridge.setLeAudioEnabled(context, enabled) },
             onUpscalingEnabledChange = { enabled -> SonyBridge.setUpscalingEnabled(context, enabled) },
             onConnectionQualityChange = { mode -> SonyBridge.setConnectionQuality(context, mode.name) },
              onLeAudioAlertReply = { positive -> SonyBridge.replyLeAudioAlert(context, positive) },
@@ -404,9 +404,12 @@ fun MainUI(
 
     // Connection lost while the earphone flow is open: the detail page is gated on a
     // live, fully-probed session, so drop the flow back to the device picker.
+    // This is a forced move, NOT a user choice to stay on the picker, so it must not
+    // set [pickerRequested] — once the control connection is established again the
+    // auto-open rule below re-enters the detail page.
     LaunchedEffect(canShowDetailPage) {
         if (!canShowDetailPage && earphoneDetailOpen) {
-            popToEarphonePicker()
+            layers = emptyList()
         }
     }
 
