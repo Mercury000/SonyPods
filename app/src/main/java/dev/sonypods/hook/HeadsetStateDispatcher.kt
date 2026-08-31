@@ -102,6 +102,7 @@ object HeadsetStateDispatcher : HookContext() {
 
         hookLeAudioConnectionState()
         hookLeAudioActiveDevice()
+        hookDeviceLevelDisconnect()
 
         hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
             val currState = args[2] as Int
@@ -349,6 +350,77 @@ object HeadsetStateDispatcher : HookContext() {
             }
         }.onFailure {
             Log.d("SonyPods-Engine", "LeAudioService.notifyActiveDeviceChanged hook skipped", it)
+        }
+    }
+
+    /**
+     * The engine half of the dual-identity circulate race fix.
+     *
+     * A device-level disconnect — the Settings "断开连接" button or a circulate release —
+     * enters the stack through `AdapterService.disconnectAllEnabledProfiles` (verified in
+     * bluetooth.apk jadx: it is the only device-level disconnect entry). Under LC3 the
+     * Tandem session rides a raw GATT client on the LE identity, and `disconnectAllEnabledProfiles`
+     * only tears down *profiles* — never that client — so the LE ACL survives the release by
+     * ~1.7 s (measured: our GATT holds it ~700 ms, then the stack's 1 s link idle timer).
+     * The target host's connect command leaves the source 3–8 ms after the release and lands
+     * inside that window, which is the probabilistic transfer drop. Pure classic has no such
+     * GATT holder, tears down immediately, and never drops.
+     *
+     * Closing the Tandem session at the release entry makes the LE ACL fall on its own,
+     * exactly like a pure-classic teardown — the race disappears without delaying the
+     * target's connect at all. This replaces the former milink-side settle gate, whose
+     * ACL-down broadcast never reaches the milink process.
+     */
+    private fun hookDeviceLevelDisconnect() {
+        // The binder entry may live on AdapterService or on its IBluetooth binder inner class
+        // (AOSP: AdapterService$BluetoothServiceBinder) depending on the ROM, so search the
+        // class AND every declared inner class for the method name rather than betting on one
+        // declaration site. Non-device overloads no-op on the args guard below.
+        val candidateClasses = buildList {
+            val adapter = "com.android.bluetooth.btservice.AdapterService"
+            add(adapter)
+            runCatching { findClass(adapter).declaredClasses.map { it.name } }
+                .getOrElse { emptyList() }
+                .forEach { add(it) }
+        }
+        var hooked = 0
+        candidateClasses.forEach { className ->
+            val methods = runCatching {
+                findClass(className).declaredMethods
+                    .filter { it.name == "disconnectAllEnabledProfiles" }
+            }.getOrElse { emptyList() }
+            methods.forEach { method ->
+                runCatching {
+                    hookBefore(
+                        method,
+                        logicalRole = "adapter-device-level-disconnect:$className:" +
+                            method.parameterTypes.joinToString(",") { it.simpleName },
+                    ) {
+                        armDeviceLevelDisconnect(args.getOrNull(0) as? BluetoothDevice)
+                    }
+                    hooked++
+                }.onFailure {
+                    Log.w("SonyPods-Engine", "hook $className.disconnectAllEnabledProfiles failed", it)
+                }
+            }
+        }
+        if (hooked == 0) {
+            Log.w(
+                "SonyPods-Engine",
+                "hook AdapterService.disconnectAllEnabledProfiles skipped: no overload found " +
+                    "in $candidateClasses",
+            )
+        } else {
+            Log.d("SonyPods-Engine", "hooked $hooked disconnectAllEnabledProfiles overload(s) for device-level release")
+        }
+    }
+
+    private fun armDeviceLevelDisconnect(device: BluetoothDevice?) {
+        val target = device ?: return
+        if (!isSonyPod(target)) return
+        val address = runCatching { target.address }.getOrNull() ?: return
+        Handler(android.os.Looper.getMainLooper()).post {
+            SonyEngineHost.onDeviceLevelDisconnect(address)
         }
     }
 

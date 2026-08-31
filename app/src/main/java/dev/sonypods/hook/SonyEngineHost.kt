@@ -160,6 +160,15 @@ object SonyEngineHost {
     private var lastConnectAttemptMs = 0L
     /** Prevent startAfterReload and the A2DP proxy callback from opening two sessions. */
     private var connectInFlightAddress: String? = null
+    /**
+     * A headset deliberately released by a device-level disconnect (Settings "断开连接" or a
+     * circulate release). While set, [reconcileConnection] must not re-dial it: the release is
+     * still tearing the headset down, and an auto-reconnect re-opens the GATT hold that the
+     * release is supposed to let fall — re-creating the very overlap that makes the dual-identity
+     * transfer drop. Cleared by the first genuine profile-level connect ([onLinkConnected]).
+     */
+    @Volatile
+    private var releasedAddress: String? = null
     /** Snapshot retained for the rare path where a reload request is rejected after shutdown. */
     private var preparedReloadAddress: String? = null
     /**
@@ -574,8 +583,21 @@ object SonyEngineHost {
         val device = allConnected?.firstOrNull { HeadsetStateDispatcher.isSonyPod(it) }
             ?: gattConnectedSonyDevice()
             ?: return
+        val deviceAddress = runCatching { device.address }.getOrNull() ?: return
+        if (matchesReleasedHeadset(deviceAddress)) {
+            Log.d(TAG, "reconcile skipped: $deviceAddress was deliberately released by a device-level disconnect")
+            return
+        }
         Log.d(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
         connectDevice(device, force = true)
+    }
+
+    /** Whether [address] belongs to the headset this host deliberately released at the last device-level disconnect. */
+    private fun matchesReleasedHeadset(address: String): Boolean {
+        val released = releasedAddress ?: return false
+        if (released.equals(address, ignoreCase = true)) return true
+        return SonyDeviceService.resolveControlAddress(address)
+            ?.let { it.equals(released, ignoreCase = true) } == true
     }
 
     /**
@@ -841,6 +863,12 @@ object SonyEngineHost {
      * Tandem transport blip never moves a profile state machine.
      */
     fun onLinkConnected(address: String) {
+        // A real profile-level connect is the headset choosing this host again; the deliberate
+        // release that suppressed [reconcileConnection] is over.
+        if (releasedAddress != null && matchesReleasedHeadset(address)) {
+            Log.d(TAG, "headset reconnected; release hold cleared for $address")
+            releasedAddress = null
+        }
         linkTracker.onLinkConnected(address)
     }
 
@@ -878,6 +906,61 @@ object SonyEngineHost {
             Log.d(TAG, "disconnecting Tandem session from $address")
             repo?.disconnect()
         }
+    }
+
+    /**
+     * A device-level disconnect (Settings "断开连接" or a circulate release) tears the headset
+     * away from this host, and [HeadsetStateDispatcher] hands us the address the moment the
+     * stack's `disconnectAllEnabledProfiles` entry runs.
+     *
+     * Under LC3 the Tandem session rides a raw GATT client on the LE identity, which a
+     * profile-level teardown never closes: the LE ACL then survives the release by ~1.7 s,
+     * overlapping the target host's incoming connect — the dual-identity transfer race.
+     * Closing the session here makes that ACL fall on its own, matching a pure-classic
+     * teardown. The release enters the stack on both identities (LE first, classic ~18 ms
+     * later), so either address may be the first to arrive; match the live session across
+     * the whole headset rather than by a single address.
+     */
+    @SuppressLint("MissingPermission")
+    fun onDeviceLevelDisconnect(address: String) {
+        val repo = repository
+        if (repo == null) {
+            Log.d(TAG, "device-level disconnect for $address ignored: repository not up")
+            return
+        }
+        // Suppress the auto-reconnect for this headset no matter how the release resolves: the
+        // teardown is still in progress, and reconcileConnection must not re-open the GATT hold
+        // the release is supposed to let fall. Cleared by the first genuine profile connect.
+        val control = SonyDeviceService.resolveControlAddress(address)
+            ?.takeIf { !it.equals(address, ignoreCase = true) }
+            ?: address
+        releasedAddress = control
+        val session = repo.state.value.connectedDevice?.address
+        if (session == null) {
+            Log.d(TAG, "device-level disconnect for $address: no live Tandem session to release")
+            return
+        }
+        val related = buildSet {
+            add(address.uppercase())
+            SonyDeviceService.resolveControlAddress(address)?.let { add(it.uppercase()) }
+            SonyDeviceService.leAudioAliasSnapshot().forEach { (le, control) ->
+                if (control.equals(address, ignoreCase = true)) add(le.uppercase())
+            }
+        }
+        if (session.uppercase() !in related) {
+            Log.d(TAG, "device-level disconnect for $address does not match session $session")
+            return
+        }
+        val sessionDevice = runCatching {
+            appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+                ?.getRemoteDevice(session)
+        }.getOrNull()
+        if (sessionDevice == null) {
+            Log.w(TAG, "device-level disconnect for $address: cannot resolve session device $session")
+            return
+        }
+        Log.i(TAG, "device-level disconnect for $address; releasing Tandem session $session")
+        disconnectDevice(sessionDevice, forceTeardown = true)
     }
 
     /**
