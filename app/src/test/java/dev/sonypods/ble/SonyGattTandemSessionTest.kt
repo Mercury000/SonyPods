@@ -90,15 +90,17 @@ class SonyGattTandemSessionTest {
     }
 
     @Test
-    fun aRetransmittedFrameIsAckedButDispatchedOnce() {
+    fun aRetransmittedFrameIsAckedAndRedispatched() {
         val session = session()
         val frame = SonyTandemFraming.encode(0x0C, 1, bytes("03 00 41"))
 
         session.onNotification(frame)
         session.onNotification(frame)
 
-        assertEquals(1, payloads.size)
-        // Both copies are acknowledged, or the headset keeps resending.
+        // Every copy is ACKed so the headset stops retransmitting. The payload is
+        // redispatched each time too: re-applying an identical status is idempotent,
+        // and the dedup that used to suppress it was misclassifying new frames.
+        assertEquals(2, payloads.size)
         assertEquals(2, writes.size)
     }
 

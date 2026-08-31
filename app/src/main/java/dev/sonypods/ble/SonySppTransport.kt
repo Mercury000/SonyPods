@@ -17,7 +17,6 @@ internal class SonySppTransport(
     private val output = socket.outputStream
     private val closed = AtomicBoolean(false)
     private val pendingWrites = ConcurrentLinkedQueue<SppPayloadMapping>()
-    private val rxSequenceTracker = SppRxSequenceTracker()
     private val lock = Any()
 
     private var readerThread: Thread? = null
@@ -60,7 +59,6 @@ internal class SonySppTransport(
             awaitingFrame = null
             awaitingRetryPolicy = null
             ackGeneration += 1
-            rxSequenceTracker.reset()
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { socket.close() }
@@ -164,14 +162,10 @@ internal class SonySppTransport(
             SonySppFrameType.DATA_MDR,
             SonySppFrameType.DATA_MDR_NO2,
             SonySppFrameType.LARGE_DATA_MDR -> {
-                // Retransmitted frames must still be ACKed, but the Tandem payload
-                // is dispatched only once for each consecutive RX sequence value.
+                // ACK the frame so the headset stops retransmitting; the payload is
+                // always dispatched — re-applying an identical status is idempotent.
                 sendAck(sequence)
-                if (rxSequenceTracker.shouldDispatch(type, sequence)) {
-                    SonySppPayloadMapper.inboundToTandemBytes(type, payload)?.let(onPayload)
-                } else {
-                    log("SPP RX duplicate ${type.name} seq=${sequence.u}; ACKed without redispatch")
-                }
+                SonySppPayloadMapper.inboundToTandemBytes(type, payload)?.let(onPayload)
             }
             SonySppFrameType.SHOT_MDR,
             SonySppFrameType.SHOT_MDR_NO2 -> {
@@ -288,7 +282,6 @@ internal class SonySppTransport(
             awaitingFrame = null
             awaitingRetryPolicy = null
             ackGeneration += 1
-            rxSequenceTracker.reset()
             runCatching { socket.close() }
             onClosed(reason)
         }

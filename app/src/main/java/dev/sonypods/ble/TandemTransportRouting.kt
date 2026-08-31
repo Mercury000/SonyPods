@@ -106,31 +106,6 @@ internal fun SonySppFrameType.retryPolicy(): SppRetryPolicy? = when (this) {
     SonySppFrameType.UNKNOWN -> null
 }
 
-/**
- * Consecutive-duplicate suppression for inbound data frames, per frame type.
- *
- * The sequence number alternates within one frame type's own space: SC builds a framer per
- * `CommandTableSet` (`le0.C22925e`), and each one counts independently — so Table1 (DATA_MDR_NO2)
- * and Table2 (DATA_MDR) frames sharing a transport are two streams, not one. One shared
- * last-sequence value would read the second stream's frame as a retransmission of the first's and
- * drop it while still ACKing it: a silent loss whose likeliest victim is the largest reply on the
- * link, the playback metadata. Keying by type cannot miss a real retransmission — a resend carries
- * the type it was sent as.
- */
-internal class SppRxSequenceTracker {
-    private val lastSequence = mutableMapOf<SonySppFrameType, Byte>()
-
-    fun shouldDispatch(type: SonySppFrameType, sequence: Byte): Boolean {
-        if (lastSequence[type] == sequence) return false
-        lastSequence[type] = sequence
-        return true
-    }
-
-    fun reset() {
-        lastSequence.clear()
-    }
-}
-
 enum class SonySppFrameType(val code: Byte, val ackRequired: Boolean) {
     DATA_MDR(0x0C, true),
     DATA_MDR_NO2(0x0E, true),

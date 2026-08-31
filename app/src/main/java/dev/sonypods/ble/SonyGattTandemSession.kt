@@ -33,7 +33,6 @@ internal class SonyGattTandemSession(
     private val scheduleTimeout: (delayMs: Long, action: () -> Unit) -> Unit,
 ) {
     private val pendingWrites = ConcurrentLinkedQueue<Outbound>()
-    private val rxSequenceTracker = SppRxSequenceTracker()
     private val lock = Any()
     private val inboundFrame = mutableListOf<Byte>()
     private var inFrame = false
@@ -125,7 +124,6 @@ internal class SonyGattTandemSession(
             ackGeneration += 1
             inboundFrame.clear()
             inFrame = false
-            rxSequenceTracker.reset()
         }
     }
 
@@ -155,14 +153,11 @@ internal class SonyGattTandemSession(
             SonySppFrameType.DATA_MDR,
             SonySppFrameType.DATA_MDR_NO2,
             SonySppFrameType.LARGE_DATA_MDR -> {
-                // A retransmission still has to be ACKed, but its payload is dispatched once.
+                // ACK the frame so the headset stops retransmitting; the payload is
+                // always dispatched — re-applying an identical status is idempotent.
                 sendAck(frame.sequence)
-                if (rxSequenceTracker.shouldDispatch(type, frame.sequence)) {
-                    SonySppPayloadMapper.inboundToTandemBytes(type, frame.payload)?.let {
-                        onPayload(channel, it)
-                    }
-                } else {
-                    log("GATT[$channel] RX duplicate ${type.name} seq=${frame.sequence.u}; ACKed without redispatch")
+                SonySppPayloadMapper.inboundToTandemBytes(type, frame.payload)?.let {
+                    onPayload(channel, it)
                 }
             }
             SonySppFrameType.SHOT_MDR,
