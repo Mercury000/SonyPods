@@ -189,6 +189,11 @@
     <string name="playback_previous">上一首</string>
     <string name="playback_play_pause">播放/暂停</string>
     <string name="playback_next">下一首</string>
+    <string name="sl_current_pressure">当前声压</string>
+    <string name="sl_dB">%1$d dB</string>
+    <string name="sl_not_playing">未在播放</string>
+    <string name="sl_in_call">通话中</string>
+    <string name="sl_detached">未佩戴</string>
     <string name="playback_unknown_track">未知曲目</string>
     <string name="playback_unknown_artist">未知歌手</string>
     <string name="playback_unknown_album">未知专辑</string>

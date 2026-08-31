@@ -188,6 +188,11 @@
     <string name="playback_previous">Prev</string>
     <string name="playback_play_pause">Play/Pause</string>
     <string name="playback_next">Next</string>
+    <string name="sl_current_pressure">Current sound pressure</string>
+    <string name="sl_dB">%1$d dB</string>
+    <string name="sl_not_playing">Not playing</string>
+    <string name="sl_in_call">In call</string>
+    <string name="sl_detached">Not worn</string>
     <string name="playback_unknown_track">Unknown track</string>
     <string name="playback_unknown_artist">Unknown artist</string>
     <string name="playback_unknown_album">Unknown album</string>

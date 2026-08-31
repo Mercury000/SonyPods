@@ -85,6 +85,8 @@ import dev.sonypods.protocol.AssignableSettingsActionFunction
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTandemConstants
 import dev.sonypods.protocol.SonyTandemV2Table1Protocol
+import dev.sonypods.protocol.SonyTandemV2Table2Protocol
+import dev.sonypods.protocol.SafeListeningInquiredTypeTable2
 import dev.sonypods.protocol.MultipointDevice
 import dev.sonypods.protocol.hexString
 import dev.sonypods.protocol.unsigned
@@ -129,6 +131,11 @@ private const val PLAYBACK_STALE_RESPONSE_WINDOW_MS = 2_500L
 private const val PLAYBACK_REFRESH_AFTER_COMMAND_MS = 1_200L
 private const val PLAYBACK_RECONCILE_AFTER_COMMAND_MS = 2_800L
 private const val PLAYBACK_METADATA_REFETCH_DELAY_MS = 50L
+
+/** Fallback poll interval (seconds) for the Safe Listening sound-pressure
+ * readout when the device's own minimum interval (SL_RET_CAPABILITY) is unknown.
+ * SC polls at the device-reported value — `1000 * minimumInterval`. */
+private const val SAFE_LISTENING_POLL_DEFAULT_INTERVAL_S = 10
 
 /** 连接质量切换重连窗口的硬上限；官方连接进度框同为 30s 自动关闭。 */
 private const val CONNECTION_QUALITY_SWITCH_TIMEOUT_MS = 30_000L
@@ -500,6 +507,15 @@ data class SoundQualityState(
     val dseeActive: Boolean = false,
 )
 
+/** Current sound pressure readout from SAFE_LISTENING_RET_EXTENDED_PARAM. */
+enum class SafeListeningStatus { UNKNOWN, VALID, NOT_PLAYING, IN_CALL, DETACHED }
+
+data class SafeListeningState(
+    /** Headset-reported sound pressure in dB; null until a VALID read. */
+    val levelDb: Int? = null,
+    val status: SafeListeningStatus = SafeListeningStatus.UNKNOWN,
+)
+
 data class SonyHeadphoneUiState(
     val scanState: String = "Idle",
     val isScanning: Boolean = false,
@@ -526,6 +542,10 @@ data class SonyHeadphoneUiState(
     val playbackStatus: PlaybackStatus = PlaybackStatus.UNKNOWN,
     val playbackState: PlaybackState = PlaybackState(),
     val soundQualityState: SoundQualityState = SoundQualityState(),
+    val safeListeningState: SafeListeningState = SafeListeningState(),
+    /** Device-reported minimum poll interval (seconds) for the sound-pressure
+     * readout, from SL_RET_CAPABILITY; null until probed. */
+    val safeListeningMinimumInterval: Int? = null,
     /** DSEE / DSEE Extreme (AUDIO-domain upscaling) toggle; null until answered
      * or unsupported — the UI only draws it when the profile advertises it. */
     val upscalingEnabled: Boolean? = null,
@@ -711,6 +731,59 @@ class SonyHeadphoneRepository private constructor(
         if (_state.value.deviceInfo.protocolReady && _state.value.connectedDevice != null) {
             refreshPlaybackState()
         }
+    }
+    /** Safe Listening current-sound-pressure poll. Armed only while the module
+     * UI shows the detail page (battery: SC polls at the device's minimum
+     * interval, and only while the screen reading it is in front). Re-arms
+     * itself; self-stops on stop()/disconnect. */
+    private var safeListeningPollArmed = false
+    private val safeListeningPollRunnable: Runnable = Runnable {
+        if (!safeListeningPollArmed) return@Runnable
+        val profile = _state.value.connectedProfile
+        val type = profile?.capabilities?.safeListeningInquiredType
+        if (profile != null && type != null && profile.supports(HeadphoneFeature.SAFE_LISTENING)) {
+            val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
+                ?: profile.defaultResponseChannel()
+            sendCommandIfReady(
+                HeadphoneCommand(
+                    label = "GET safe listening level",
+                    bytes = SonyTandemV2Table2Protocol.buildGetSafeListeningExtendedParam(type),
+                    channel = channel,
+                )
+            )
+        }
+        val intervalSec = _state.value.safeListeningMinimumInterval?.takeIf { it > 0 }
+            ?: SAFE_LISTENING_POLL_DEFAULT_INTERVAL_S
+        mainHandler.postDelayed(safeListeningPollRunnable, 1000L * intervalSec)
+    }
+
+    /** Arm the Safe Listening sound-pressure poll (first query immediate).
+     * Called by the engine when the module detail page becomes visible. Also
+     * turns the headset's Safe Listening feature on (SC's IDLE→ToON setParamOn):
+     * until then it answers the readout with a zero level. */
+    fun startSafeListeningPoll() {
+        safeListeningPollArmed = true
+        mainHandler.removeCallbacks(safeListeningPollRunnable)
+        val profile = _state.value.connectedProfile
+        val type = profile?.capabilities?.safeListeningInquiredType
+        if (profile != null && type != null && profile.supports(HeadphoneFeature.SAFE_LISTENING)) {
+            val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
+                ?: profile.defaultResponseChannel()
+            sendCommandIfReady(
+                HeadphoneCommand(
+                    label = "SET safe listening on",
+                    bytes = SonyTandemV2Table2Protocol.buildSetSafeListeningParam(type, first = true, second = false),
+                    channel = channel,
+                )
+            )
+        }
+        mainHandler.post(safeListeningPollRunnable)
+    }
+
+    /** Disarm the Safe Listening poll; called when the module detail page hides. */
+    fun stopSafeListeningPoll() {
+        safeListeningPollArmed = false
+        mainHandler.removeCallbacks(safeListeningPollRunnable)
     }
     /** 连接质量切换窗口的硬上限：官方连接进度框同为 30s 自动关闭。 */
     private val connectionQualitySwitchTimeoutRunnable = Runnable {
@@ -968,7 +1041,10 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun readCapabilityCache(address: String): CapabilityCacheEntry? {
-        return capabilityCache[address]
+        val entry = capabilityCache[address] ?: return null
+        // A stale-version entry was written by a probe that queried fewer tables;
+        // treating it as a miss rebuilds the cache once with the current probe.
+        return entry.takeIf { it.version == CapabilityProbeCache.CURRENT_CACHE_VERSION }
     }
 
     /** Encode and hand the current cache map to the durable writer. The in-process
@@ -1209,7 +1285,9 @@ class SonyHeadphoneRepository private constructor(
             return
         }
         supportCommands.forEach { command ->
-            pendingSupportFunctionTables += if (command.channel == TandemChannel.GATT_V2_MC) {
+            // The Table2 query may ride the HPC channel (LE Audio has no MC at
+            // probe time), so classify by the request's dataType, not the channel.
+            pendingSupportFunctionTables += if (command.bytes.firstOrNull() == SonyTandemConstants.DATA_MDR_NO2) {
                 dev.sonypods.protocol.SonyTable.NO_2
             } else {
                 dev.sonypods.protocol.SonyTable.NO_1
@@ -1278,6 +1356,8 @@ class SonyHeadphoneRepository private constructor(
                 } else {
                     it.playbackState
                 },
+                safeListeningMinimumInterval = entry.safeListeningMinimumInterval?.takeIf { value -> value > 0 }
+                    ?: it.safeListeningMinimumInterval,
                 quickAccessState = quickAccess ?: it.quickAccessState,
                 gestureOperationsState = if (gestureCapabilities.isNotEmpty()) {
                     it.gestureOperationsState.copy(capabilities = gestureCapabilities)
@@ -1450,6 +1530,7 @@ class SonyHeadphoneRepository private constructor(
         val eqConfig = profile.capabilities.eqConfig
         val entry = CapabilityCacheEntry(
             counter = counter,
+            version = CapabilityProbeCache.CURRENT_CACHE_VERSION,
             identifier = pendingCapabilityIdentifier,
             variant = profile.protocolName,
             transport = profile.transport.name,
@@ -1461,6 +1542,8 @@ class SonyHeadphoneRepository private constructor(
             playVolumeStep = _state.value.playbackState.musicVolumeStep.takeIf { it > 0 }
                 ?: capabilityCache[address]?.playVolumeStep
                 ?: -1,
+            safeListeningMinimumInterval = _state.value.safeListeningMinimumInterval
+                ?: capabilityCache[address]?.safeListeningMinimumInterval,
             multipointGsSlot = profile.multipointGsSlot ?: capabilityCache[address]?.multipointGsSlot ?: -1,
             multipointEnabled = _state.value.multipointState.multipointEnabled
                 ?: capabilityCache[address]?.multipointEnabled,
@@ -2644,6 +2727,7 @@ class SonyHeadphoneRepository private constructor(
             pendingQuickAccessFunctionCodes = null
             mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
             mainHandler.removeCallbacks(playbackRefreshRunnable)
+            stopSafeListeningPoll()
             awaitingCapabilityInfo = false
             pendingCapabilityCounter = null
             pendingCapabilityIdentifier = ""
@@ -2881,6 +2965,9 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.Table2Common -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.Table2Generic -> applyTable2Diagnostic(channel, parsed)
             is ParsedTandemResponse.SupportFunction -> applySupportFunction(parsed)
+            is ParsedTandemResponse.SafeListeningExtendedParam -> applySafeListeningExtendedParam(parsed)
+            is ParsedTandemResponse.SafeListeningCapability -> applySafeListeningCapability(parsed)
+            is ParsedTandemResponse.SafeListeningParam -> applySafeListeningParam(parsed)
             is ParsedTandemResponse.ProtocolInfo -> applyProtocolInfo(parsed)
             is ParsedTandemResponse.ConnectCapabilityInfo -> applyConnectCapabilityInfo(parsed)
             is ParsedTandemResponse.NcAsmCapabilityInfo -> applyNcAsmCapabilityInfo(parsed)
@@ -3383,6 +3470,68 @@ class SonyHeadphoneRepository private constructor(
         _state.update {
             it.copy(soundQualityState = it.soundQualityState.copy(codec = response.codec))
         }
+    }
+
+    private fun applySafeListeningExtendedParam(response: ParsedTandemResponse.SafeListeningExtendedParam) {
+        // errorCause is the wire SafeListeningErrorCause: 0xFF (OUT_OF_RANGE) is
+        // the valid-value case the UI displays; the level byte is a placeholder
+        // (255) for every other cause, so only VALID reads carry a level.
+        // SC's SafeListeningErrorCause.fromByteCode defaults ANY unknown byte to
+        // OUT_OF_RANGE (this device reports 0x03), i.e. the valid-value branch.
+        val status = when (response.errorCause) {
+            0xFF -> SafeListeningStatus.VALID
+            0x00 -> SafeListeningStatus.NOT_PLAYING
+            0x01 -> SafeListeningStatus.IN_CALL
+            0x02 -> SafeListeningStatus.DETACHED
+            else -> SafeListeningStatus.VALID
+        }
+        _state.update {
+            it.copy(safeListeningState = SafeListeningState(
+                levelDb = if (status == SafeListeningStatus.VALID) response.level else null,
+                status = status,
+            ))
+        }
+    }
+
+    private fun applySafeListeningCapability(response: ParsedTandemResponse.SafeListeningCapability) {
+        if (response.minimumInterval <= 0) return
+        _state.update { it.copy(safeListeningMinimumInterval = response.minimumInterval) }
+        // The poll read the device interval now; restart it so the new cadence
+        // applies immediately instead of at the next fallback tick.
+        if (safeListeningPollArmed) {
+            mainHandler.removeCallbacks(safeListeningPollRunnable)
+            mainHandler.post(safeListeningPollRunnable)
+        }
+        // saveCapabilityCache runs before the per-domain capability replies land,
+        // so persist the SL minimum interval here when it arrives (mirrors
+        // applyPlaybackCapability's playVolumeStep update).
+        val address = _state.value.connectedDevice?.address ?: return
+        val existing = capabilityCache[address] ?: return
+        if (existing.safeListeningMinimumInterval != response.minimumInterval) {
+            capabilityCache[address] = existing.copy(safeListeningMinimumInterval = response.minimumInterval)
+            persistCapabilityCache()
+        }
+    }
+
+    private fun applySafeListeningParam(response: ParsedTandemResponse.SafeListeningParam) {
+        // The SET_PARAM confirmation (first byte ON=0x00) is the event that the
+        // headset's Safe Listening feature is on — only then does it answer the
+        // capability query that names its minimum poll interval. Read it here,
+        // event-driven rather than on a fixed delay.
+        if (!safeListeningPollArmed) return
+        if (response.first != 0x00) return
+        val profile = _state.value.connectedProfile ?: return
+        val type = profile.capabilities.safeListeningInquiredType ?: return
+        if (!profile.supports(HeadphoneFeature.SAFE_LISTENING)) return
+        val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
+            ?: profile.defaultResponseChannel()
+        sendCommandIfReady(
+            HeadphoneCommand(
+                label = "GET SAFE_LISTENING capability ${type.name}",
+                bytes = SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(type),
+                channel = channel,
+            )
+        )
     }
 
     /** Only `VALID` means DSEE is actively processing; OFF/INVALID hide it. */

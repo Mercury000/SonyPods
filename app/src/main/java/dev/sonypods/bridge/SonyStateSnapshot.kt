@@ -214,6 +214,12 @@ data class SonyStateSnapshot(
     val dseeGeneration: DseeGeneration? = null,
     val dseeActive: Boolean = false,
     val scanState: String? = null,
+    /** Safe Listening current-sound-pressure readout. The row only draws when
+     * [supportsSafeListening] (probe-derived); [safeListeningStatus] is a
+     * [dev.sonypods.data.SafeListeningStatus] name. */
+    val supportsSafeListening: Boolean = false,
+    val safeListeningLevelDb: Int? = null,
+    val safeListeningStatus: String? = null,
 ) {
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
     val systemBatteryLevel: Int?
@@ -355,6 +361,9 @@ data class SonyStateSnapshot(
         dseeGeneration?.let { putString(KEY_DSEE_GENERATION, it.name) }
         putBoolean(KEY_DSEE_ACTIVE, dseeActive)
         scanState?.let { putString(KEY_SCAN_STATE, it) }
+        putBoolean(KEY_SUPPORTS_SAFE_LISTENING, supportsSafeListening)
+        safeListeningLevelDb?.let { putInt(KEY_SL_LEVEL, it) }
+        safeListeningStatus?.let { putString(KEY_SL_STATUS, it) }
     }
 
     companion object {
@@ -476,6 +485,9 @@ data class SonyStateSnapshot(
         private const val KEY_DSEE_GENERATION = "dsee_generation"
         private const val KEY_DSEE_ACTIVE = "dsee_active"
         private const val KEY_SCAN_STATE = "scan_state"
+        private const val KEY_SUPPORTS_SAFE_LISTENING = "supports_safe_listening"
+        private const val KEY_SL_LEVEL = "sl_level"
+        private const val KEY_SL_STATUS = "sl_status"
 
         fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
             connected = bundle.getBoolean(KEY_CONNECTED, false),
@@ -605,6 +617,9 @@ data class SonyStateSnapshot(
             },
             dseeActive = bundle.getBoolean(KEY_DSEE_ACTIVE, false),
             scanState = bundle.getString(KEY_SCAN_STATE),
+            supportsSafeListening = bundle.getBoolean(KEY_SUPPORTS_SAFE_LISTENING, false),
+            safeListeningLevelDb = bundle.optInt(KEY_SL_LEVEL),
+            safeListeningStatus = bundle.getString(KEY_SL_STATUS),
         )
 
         fun fromUiState(state: SonyHeadphoneUiState): SonyStateSnapshot {
@@ -729,6 +744,10 @@ data class SonyStateSnapshot(
                 dseeGeneration = state.soundQualityState.dseeGeneration,
                 dseeActive = state.soundQualityState.dseeActive,
                 scanState = state.scanState,
+                supportsSafeListening = state.connectedProfile
+                    ?.supports(dev.sonypods.headphones.HeadphoneFeature.SAFE_LISTENING) == true,
+                safeListeningLevelDb = state.safeListeningState.levelDb,
+                safeListeningStatus = state.safeListeningState.status.name,
             )
         }
 

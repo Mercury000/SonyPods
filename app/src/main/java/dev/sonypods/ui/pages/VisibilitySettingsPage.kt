@@ -92,6 +92,10 @@ fun VisibilitySettingsPage(
                 locationSelector(R.string.sony_eq_title, visibility.eq) { visibility.copy(eq = it) }()
                 locationSelector(R.string.playback_title, visibility.playback) { visibility.copy(playback = it) }()
                 locationSelector(
+                    R.string.sl_current_pressure,
+                    visibility.safeListening,
+                ) { visibility.copy(safeListening = it) }()
+                locationSelector(
                     R.string.connection_quality_title,
                     visibility.connectionQuality,
                 ) { visibility.copy(connectionQuality = it) }()

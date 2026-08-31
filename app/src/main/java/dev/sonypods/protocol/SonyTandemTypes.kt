@@ -645,6 +645,85 @@ sealed interface ParsedTandemResponse {
         }
     }
 
+    /** SAFE_LISTENING_RET_EXTENDED_PARAM (0x5B): [type, level, errorCause].
+     * `level` is the headset-reported current sound pressure in dB (0-255,
+     * 0xFF is a placeholder when nothing is playing); `errorCause` is the
+     * wire SafeListeningErrorCause byte: 0=NOT_PLAYING, 1=IN_CALL, 2=DETACHED,
+     * 0xFF=OUT_OF_RANGE (the valid-value case the UI displays). */
+    data class SafeListeningExtendedParam(
+        val type: SafeListeningInquiredTypeTable2?,
+        val level: Int,
+        val errorCause: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SafeListeningExtendedParam) return false
+            return type == other.type &&
+                level == other.level &&
+                errorCause == other.errorCause &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = type.hashCode()
+            result = 31 * result + level
+            result = 31 * result + errorCause
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
+
+    data class SafeListeningCapability(
+        val type: SafeListeningInquiredTypeTable2?,
+        /** Minimum poll interval (seconds) for the sound-pressure readout; SC
+         * refreshes every `1000 * minimumInterval`. 0/null = unknown. */
+        val minimumInterval: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SafeListeningCapability) return false
+            return type == other.type &&
+                minimumInterval == other.minimumInterval &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = type.hashCode()
+            result = 31 * result + minimumInterval
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
+
+    /** SAFE_LISTENING_NTFY_PARAM (0x59): the SET_PARAM confirmation, payload
+     * [type, onOff1, onOff2]. Arrives when the headset turns the feature on —
+     * the event that makes reading its capability (minimum interval) reliable. */
+    data class SafeListeningParam(
+        val type: SafeListeningInquiredTypeTable2?,
+        val first: Int,
+        val second: Int,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SafeListeningParam) return false
+            return type == other.type &&
+                first == other.first &&
+                second == other.second &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = type.hashCode()
+            result = 31 * result + first
+            result = 31 * result + second
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
+
     data class MultipointCapability(
         val inquiredType: Int,
         val maxPairedDevices: Int,

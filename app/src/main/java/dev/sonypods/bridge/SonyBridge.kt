@@ -119,6 +119,12 @@ object SonyBridge {
     const val CMD_SURFACES_READY = "surfaces_ready"
     const val CMD_DEBUG_RAW = "debug_raw"
 
+    /** Arm/disarm the Safe Listening sound-pressure poll. The module detail page
+     * sends START while it is visible so the readout is live only when read
+     * (battery); the engine disarms on disconnect too. */
+    const val CMD_SL_POLL_START = "sl_poll_start"
+    const val CMD_SL_POLL_STOP = "sl_poll_stop"
+
     /** The process that hosts the engine; all commands are addressed to it. */
     const val ENGINE_PACKAGE = "com.android.bluetooth"
     const val OFFICIAL_APP_PACKAGE = "com.sony.songpal.mdr"
@@ -234,6 +240,9 @@ object SonyBridge {
 
     fun setUpscalingEnabled(context: Context, enabled: Boolean) =
         sendCommand(context, CMD_SET_UPSCALING_ENABLED) { putExtra(EXTRA_BOOL, enabled) }
+
+    fun setSafeListeningPollActive(context: Context, active: Boolean) =
+        sendCommand(context, if (active) CMD_SL_POLL_START else CMD_SL_POLL_STOP)
 
     const val CMD_SET_CONNECTION_QUALITY = "set_connection_quality"
 

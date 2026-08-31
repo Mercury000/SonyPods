@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,6 +43,8 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -50,8 +53,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
+import dev.sonypods.data.SafeListeningStatus
 import dev.sonypods.config.CardLocation
 import dev.sonypods.config.VisibilityConfig
 import dev.sonypods.protocol.ConnectionQualityMode
@@ -71,6 +76,8 @@ import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -268,6 +275,13 @@ internal fun LazyListScope.podControlItems(
     if (visibility.playback.renderedHere() && uiState.supportsPlaybackControl) {
         item {
             PlaybackCard(uiState = uiState, actions = actions)
+        }
+    }
+
+    // 当前声压 (Safe Listening) — below the playback controls, its own card.
+    if (visibility.safeListening.renderedHere() && uiState.supportsSafeListening) {
+        item {
+            SafeListeningCard(uiState = uiState)
         }
     }
 
@@ -971,6 +985,67 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
                 )
             }
         }
+    }
+}
+
+/** 当前声压 (Safe Listening) card, styled like the firmware row: title on the
+ * left with the live readout on the right. Also arms the sound-pressure poll
+ * while this card is actually shown AND the module is in the foreground (a
+ * backgrounded activity keeps the composition alive, so DisposableEffect alone
+ * cannot see it). */
+@Composable
+private fun SafeListeningCard(uiState: SonyStateSnapshot) {
+    val status = uiState.safeListeningStatus?.let { name ->
+        runCatching { SafeListeningStatus.valueOf(name) }.getOrNull()
+    } ?: SafeListeningStatus.UNKNOWN
+    val value: String = when (status) {
+        SafeListeningStatus.VALID ->
+            uiState.safeListeningLevelDb?.let { stringResource(R.string.sl_dB, it) } ?: "—"
+        SafeListeningStatus.NOT_PLAYING -> stringResource(R.string.sl_not_playing)
+        SafeListeningStatus.IN_CALL -> stringResource(R.string.sl_in_call)
+        SafeListeningStatus.DETACHED -> stringResource(R.string.sl_detached)
+        SafeListeningStatus.UNKNOWN -> "—"
+    }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var appForeground by remember {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            appForeground = when (event) {
+                Lifecycle.Event.ON_START -> true
+                Lifecycle.Event.ON_STOP -> false
+                else -> appForeground
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(appForeground, uiState.connected, uiState.supportsSafeListening) {
+        SonyBridge.setSafeListeningPollActive(
+            context,
+            appForeground && uiState.connected && uiState.supportsSafeListening,
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { SonyBridge.setSafeListeningPollActive(context, false) }
+    }
+    Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+        BasicComponent(
+            title = stringResource(R.string.sl_current_pressure),
+            endActions = {
+                Text(
+                    text = value,
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = if (status == SafeListeningStatus.VALID) {
+                        MiuixTheme.colorScheme.onSurface
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
+                )
+            },
+        )
     }
 }
 

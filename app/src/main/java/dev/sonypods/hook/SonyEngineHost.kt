@@ -2088,6 +2088,9 @@ object SonyEngineHost {
 
             SonyBridge.CMD_DEBUG_RAW ->
                 repo.runDebugAction("raw", intent.getStringExtra(SonyBridge.EXTRA_STRING))
+
+            SonyBridge.CMD_SL_POLL_START -> repo.startSafeListeningPoll()
+            SonyBridge.CMD_SL_POLL_STOP -> repo.stopSafeListeningPoll()
         }
     }
 

@@ -16,6 +16,10 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class CapabilityCacheEntry(
     val counter: Int,
+    /** Bumped whenever the probe's completeness changes (e.g. a new table is
+     * queried). Entries written by an older probe lack the field and decode to 0,
+     * so they fail the current-version check and trigger one fresh probe. */
+    val version: Int = 0,
     val identifier: String = "",
     /** Protocol variant name, e.g. "V1_TABLE_1" / "V2_TABLE_1" (informational). */
     val variant: String = "",
@@ -28,6 +32,10 @@ data class CapabilityCacheEntry(
      * Restored on a cache hit so the volume row appears without waiting for the
      * capability round-trip. */
     val playVolumeStep: Int = -1,
+    /** Safe Listening minimum poll interval (seconds) from SL_RET_CAPABILITY;
+     * SC refreshes the current-sound-pressure readout every `1000 * it`.
+     * Null until the SL capability is probed. */
+    val safeListeningMinimumInterval: Int? = null,
     /** GS slot for the "同时连接2台设备" setting; -1 = not discovered yet. */
     val multipointGsSlot: Int = -1,
     /** Last device-confirmed value of the GS multipoint setting. */
@@ -143,6 +151,11 @@ data class GeneralSettingCapabilityCache(
  */
 object CapabilityProbeCache {
     const val PREFS_KEY = "capability_probe_cache"
+
+    /** Current capability-cache schema. Bump when a probe change makes older
+     * entries incomplete (see [CapabilityCacheEntry.version]); stale entries are
+     * treated as cache misses so a fresh probe rebuilds them once. */
+    const val CURRENT_CACHE_VERSION = 2
 
     private val json = Json {
         ignoreUnknownKeys = true

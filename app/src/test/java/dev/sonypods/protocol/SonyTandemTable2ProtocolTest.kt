@@ -239,6 +239,101 @@ class SonyTandemTable2ProtocolTest {
         assertEquals(emptyList<SonySupportedFunction>(), parsed.functions)
     }
 
+    // ── V2 Table2: Safe Listening (current sound pressure) ────────────────
+
+    @Test
+    fun v2_buildGetSafeListeningExtendedParam_tws1() {
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x5A, 0x01),
+            SonyTandemV2Table2Protocol.buildGetSafeListeningExtendedParam(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1
+            ),
+        )
+    }
+
+    @Test
+    fun v2_buildGetSafeListeningCapability_tws1() {
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x50, 0x01),
+            SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1
+            ),
+        )
+    }
+
+    @Test
+    fun v2_buildSetSafeListeningParam_on() {
+        // SAFE_LISTENING_SET_PARAM (0x58) (ON, OFF): SC's setParamOn activation
+        // that makes the headset report a live sound pressure.
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x58, 0x01, 0x00, 0x01),
+            SonyTandemV2Table2Protocol.buildSetSafeListeningParam(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1,
+                first = true,
+                second = false,
+            ),
+        )
+    }
+
+    @Test
+    fun v2_parse_safeListeningRetExtendedParam_validLevel() {
+        // SAFE_LISTENING_RET_EXTENDED_PARAM (0x5B): [type][level][errorCause];
+        // errorCause 0xFF (OUT_OF_RANGE) is the valid-value case.
+        val raw = byteArrayOf(0x0F, 0x5B, 0x01, 0x48, 0xFF.toByte())
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+
+        assertTrue(
+            "Expected SafeListeningExtendedParam but got ${parsed::class.simpleName}",
+            parsed is ParsedTandemResponse.SafeListeningExtendedParam,
+        )
+        parsed as ParsedTandemResponse.SafeListeningExtendedParam
+        assertEquals(SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1, parsed.type)
+        assertEquals(0x48, parsed.level)
+        assertEquals(0xFF, parsed.errorCause)
+    }
+
+    @Test
+    fun v2_parse_safeListeningRetExtendedParam_notPlaying() {
+        val raw = byteArrayOf(0x0F, 0x5B, 0x01, 0xFF.toByte(), 0x00)
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.SafeListeningExtendedParam)
+        parsed as ParsedTandemResponse.SafeListeningExtendedParam
+        assertEquals(0xFF, parsed.level)
+        assertEquals(0x00, parsed.errorCause)
+    }
+
+    @Test
+    fun v2_parse_safeListeningRetCapability_minimumInterval() {
+        // SAFE_LISTENING_RET_CAPABILITY (0x51), HBS/TWS 9-byte layout:
+        // [cmd][type][roundBase][timestampBase(4B BE)][minimumInterval][logCapacity].
+        // minimumInterval is payload[6] = raw[8].
+        val raw = byteArrayOf(0x0F, 0x51, 0x01, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x0A, 0x05)
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+
+        assertTrue(
+            "Expected SafeListeningCapability but got ${parsed::class.simpleName}",
+            parsed is ParsedTandemResponse.SafeListeningCapability,
+        )
+        parsed as ParsedTandemResponse.SafeListeningCapability
+        assertEquals(SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1, parsed.type)
+        assertEquals(10, parsed.minimumInterval)
+    }
+
+    @Test
+    fun v2_parse_safeListeningNtfyParam_confirmation() {
+        // SAFE_LISTENING_NTFY_PARAM (0x59): [type, onOff1=ON(0x00), onOff2=OFF(0x01)]
+        // — the SET_PARAM confirmation that the feature turned on.
+        val raw = byteArrayOf(0x0F, 0x59, 0x01, 0x00, 0x01)
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+
+        assertTrue(parsed is ParsedTandemResponse.SafeListeningParam)
+        parsed as ParsedTandemResponse.SafeListeningParam
+        assertEquals(SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1, parsed.type)
+        assertEquals(0x00, parsed.first)
+        assertEquals(0x01, parsed.second)
+    }
+
     @Test
     fun v2_parse_systemRetParam_returnsTable2Generic() {
         val raw = byteArrayOf(0x0F, 0xF7.toByte(), 0x00, 0x02, 0x00)

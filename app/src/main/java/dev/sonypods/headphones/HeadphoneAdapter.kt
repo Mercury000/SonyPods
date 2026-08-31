@@ -48,6 +48,9 @@ enum class HeadphoneFeature {
     GESTURE_OPERATIONS,
     SPEAK_TO_CHAT,
     MULTIPOINT,
+    /** Safe Listening: the current sound pressure (dB) readout polled from the
+     * headset via SAFE_LISTENING_GET_EXTENDED_PARAM (V2 Table2). */
+    SAFE_LISTENING,
 }
 
 enum class LeaDeviceKind {
@@ -187,6 +190,10 @@ data class HeadphoneCapabilities(
     val supportsWindNoiseReduction: Boolean = false,
     val supportsSpeakToChat: Boolean = false,
     val speakToChatType: dev.sonypods.protocol.SystemInquiredType? = null,
+    /** Safe Listening inquired type this device's current-sound-pressure query
+     * uses, from the advertised SAFE_LISTENING_* FunctionType (V2 Table2).
+     * Null = the support-function list advertised none of them. */
+    val safeListeningInquiredType: dev.sonypods.protocol.SafeListeningInquiredTypeTable2? = null,
 )
 
 data class ConnectedHeadphoneProfile(

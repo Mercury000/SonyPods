@@ -5,6 +5,7 @@ import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.SafeListeningInquiredTypeTable2
 import dev.sonypods.protocol.SonySupportedFunction
 import dev.sonypods.protocol.SonyTable
 import dev.sonypods.protocol.SonyV1FunctionType
@@ -41,16 +42,25 @@ object SonyCapabilityProbe {
         profile: ConnectedHeadphoneProfile,
         availableChannels: Set<TandemChannel> = emptySet(),
     ): List<HeadphoneCommand> = buildList {
+        val deviceInfoChannel = profile.channelFor(HeadphoneFeature.DEVICE_INFO)
         add(buildGetSupportFunctionCommand(profile))
+        // The Table2 support function carries the Table2 FunctionTypes (Safe
+        // Listening, LEA, peripheral, ...). Prefer the MC endpoint, but under LE
+        // Audio only the HPC service is up at probe time — the device answers
+        // Table2 queries on it too (the inbound parser routes by dataType, and
+        // a 0x0F frame on HPC resolves to the V2 Table2 codec).
         if (
-            TandemChannel.GATT_V2_MC in availableChannels &&
             profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
         ) {
             add(
                 HeadphoneCommand(
                     label = "GET support function Table2",
                     bytes = SonyTandemV2Table2Protocol.buildGetSupportFunction(),
-                    channel = TandemChannel.GATT_V2_MC,
+                    channel = if (TandemChannel.GATT_V2_MC in availableChannels) {
+                        TandemChannel.GATT_V2_MC
+                    } else {
+                        deviceInfoChannel
+                    },
                 )
             )
         }
@@ -192,6 +202,21 @@ object SonyCapabilityProbe {
                     // capability probe, so no command is emitted here.
                     ProbeDomain.LEA -> Unit
 
+                    // The Safe Listening capability reply names the device's
+                    // minimum poll interval (SC polls sound pressure at it); the
+                    // inquired type itself comes from the FunctionType. The
+                    // extended-param readout needs no probe — it just works.
+                    ProbeDomain.SAFE_LISTENING ->
+                        function.safeListeningInquired(profile)?.let { type ->
+                            add(
+                                HeadphoneCommand(
+                                    label = "GET SAFE_LISTENING capability ${type.name}",
+                                    bytes = SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(type),
+                                    channel = profile.channelFor(HeadphoneFeature.SAFE_LISTENING),
+                                )
+                            )
+                        }
+
                     ProbeDomain.NONE -> Unit
                 }
             }
@@ -230,6 +255,10 @@ object SonyCapabilityProbe {
         val playTypes = mutableSetOf<PlayInquiredType>()
         var playbackHasMute = false
         var gestureSettingsType: SystemInquiredType? = null
+        // The SAFE_LISTENING_* FunctionType the device advertises names the
+        // inquired type for the current-sound-pressure query (1:1, SC's
+        // DeviceCapabilityTableset2 gates on these same four types).
+        var safeListeningType: SafeListeningInquiredTypeTable2? = null
         val leaKind = functions.firstNotNullOfOrNull { it.leaDeviceKind() }
         // SC picks the upscaling inquired type the same way (`u70.p1`): the plain
         // UPSCALING_AUTO_OFF generation wins over the WITH_STATUS_DISABLE_REASON
@@ -321,6 +350,15 @@ object SonyCapabilityProbe {
                 ProbeDomain.LEA -> {
                     if (function.leaDeviceKind() != null) {
                         features.add(HeadphoneFeature.LEA_STATUS)
+                    }
+                }
+
+                ProbeDomain.SAFE_LISTENING -> {
+                    function.safeListeningInquired(profile)?.let { type ->
+                        features.add(HeadphoneFeature.SAFE_LISTENING)
+                        if (safeListeningType == null) {
+                            safeListeningType = type
+                        }
                     }
                 }
 
@@ -533,6 +571,7 @@ object SonyCapabilityProbe {
             playbackControlType = playTypes.firstOrNull() ?: fallback.playbackControlType,
             playbackVolumeHasMute = playbackHasMute,
             gestureSettingsType = gestureSettingsType ?: fallback.gestureSettingsType,
+            safeListeningInquiredType = safeListeningType ?: fallback.safeListeningInquiredType,
             lea = lea,
         )
     }
@@ -628,7 +667,7 @@ object SonyCapabilityProbe {
     // ── FunctionType → domain & inquired-type mapping (SC §9.3–9.5) ──────────
 
     enum class ProbeDomain {
-        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, NONE,
+        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, SAFE_LISTENING, NONE,
     }
 
     private val V1_NC_ASM_TYPES = setOf(
@@ -798,6 +837,13 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING,
         SonyV2FunctionType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD,
         SonyV2FunctionType.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> ProbeDomain.LEA
+
+        SonyV2FunctionType.SAFE_LISTENING_HBS_1,
+        SonyV2FunctionType.SAFE_LISTENING_TWS_1,
+        SonyV2FunctionType.SAFE_LISTENING_HBS_2,
+        SonyV2FunctionType.SAFE_LISTENING_TWS_2,
+        SonyV2FunctionType.SAFE_VOLUME_CONTROL,
+        SonyV2FunctionType.MAX_VOLUME_LEVEL_LIMIT -> ProbeDomain.SAFE_LISTENING
 
         else -> ProbeDomain.NONE
     }
@@ -969,6 +1015,24 @@ object SonyCapabilityProbe {
                 SonyV1FunctionType.ASSIGNABLE_SETTINGS -> SystemInquiredType.ASSIGNABLE_SETTINGS
                 else -> null
             }
+            else -> null
+        }
+    }
+
+    /** V2 SAFE_LISTENING_* FunctionType → the inquired type the
+     * GET_EXTENDED_PARAM query uses. Only the HBS/TWS generation types carry the
+     * current-sound-pressure readout (and the capability's minimum poll
+     * interval); SAFE_VOLUME_CONTROL / MAX_VOLUME_LEVEL_LIMIT are separate
+     * safe-listening subsystems with their own layouts. Table2 only. */
+    private fun SonySupportedFunction.safeListeningInquired(
+        profile: ConnectedHeadphoneProfile?,
+    ): SafeListeningInquiredTypeTable2? {
+        if (isV1(profile)) return null
+        return when (v2Type()) {
+            SonyV2FunctionType.SAFE_LISTENING_HBS_1 -> SafeListeningInquiredTypeTable2.SAFE_LISTENING_HBS_1
+            SonyV2FunctionType.SAFE_LISTENING_TWS_1 -> SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1
+            SonyV2FunctionType.SAFE_LISTENING_HBS_2 -> SafeListeningInquiredTypeTable2.SAFE_LISTENING_HBS_2
+            SonyV2FunctionType.SAFE_LISTENING_TWS_2 -> SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_2
             else -> null
         }
     }

@@ -63,6 +63,7 @@ data class VisibilityConfig(
     val speakToChat: CardLocation = CardLocation.DETAIL,
     val eq: CardLocation = CardLocation.DETAIL,
     val playback: CardLocation = CardLocation.DETAIL,
+    val safeListening: CardLocation = CardLocation.DETAIL,
     val connectionQuality: CardLocation = CardLocation.DETAIL,
     val dsee: CardLocation = CardLocation.DETAIL,
     val ldac: CardLocation = CardLocation.DETAIL,
@@ -91,7 +92,7 @@ data class VisibilityConfig(
     /** Whether any card is parked on the more-settings sub-page. */
     val hasMorePageContent: Boolean
         get() = CardLocation.MORE in listOf(
-            speakToChat, eq, playback, connectionQuality, dsee, ldac,
+            speakToChat, eq, playback, safeListening, connectionQuality, dsee, ldac,
             leAudioCard, leAudioToggle, gestures, multipoint, firmware,
         )
 }

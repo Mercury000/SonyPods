@@ -224,6 +224,30 @@ object SonyTandemV2Table2Protocol {
     fun buildGetSafeListeningParam(type: SafeListeningInquiredTypeTable2): ByteArray =
         TandemMessage(DT, SL_GET_PARAM, byteArrayOf(type.code)).toByteArray()
 
+    /** SAFE_LISTENING_GET_EXTENDED_PARAM (0x5A): the headset replies with the
+     * current sound pressure level (RET_EXTENDED_PARAM 0x5B, [type, level, errorCause]). */
+    fun buildGetSafeListeningExtendedParam(type: SafeListeningInquiredTypeTable2): ByteArray =
+        TandemMessage(DT, SL_GET_EXTENDED_PARAM, byteArrayOf(type.code)).toByteArray()
+
+    /** SAFE_LISTENING_GET_CAPABILITY (0x50): the reply (RET_CAPABILITY 0x51)
+     * carries the device's Safe Listening config, including the minimum poll
+     * interval SC uses for the current-sound-pressure readout. */
+    fun buildGetSafeListeningCapability(type: SafeListeningInquiredTypeTable2): ByteArray =
+        TandemMessage(DT, SL_GET_CAPABILITY, byteArrayOf(type.code)).toByteArray()
+
+    /** SAFE_LISTENING_SET_PARAM (0x58): SC turns the feature on with (ON, OFF)
+     * — the SL state machine's IDLE→ToON `setParamOn`. Until it is on, the
+     * headset answers the extended-param readout with a zero level. */
+    fun buildSetSafeListeningParam(
+        type: SafeListeningInquiredTypeTable2,
+        first: Boolean,
+        second: Boolean,
+    ): ByteArray = TandemMessage(
+        DT,
+        SL_SET_PARAM,
+        byteArrayOf(type.code, onOffValue(first), onOffValue(second)),
+    ).toByteArray()
+
     fun buildGetLeaStatus(type: LeaInquiredTypeTable2): ByteArray =
         TandemMessage(DT, LEA_GET_STATUS, byteArrayOf(type.code)).toByteArray()
 
@@ -278,8 +302,11 @@ object SonyTandemV2Table2Protocol {
             PERI_NTFY_EXTENDED_PARAM -> parsePeripheralExtendedParam(payload, raw)
             VG_RET_CAPABILITY, VG_RET_STATUS, VG_NTFY_STATUS,
             VG_RET_PARAM, VG_NTFY_PARAM -> parseVoiceGuidance(payload, raw)
-            SL_RET_CAPABILITY, SL_RET_STATUS, SL_NTFY_STATUS,
-            SL_RET_PARAM, SL_NTFY_PARAM -> parseSafeListening(payload, raw)
+            SL_RET_CAPABILITY -> parseSafeListeningCapability(payload, raw)
+            SL_RET_STATUS, SL_NTFY_STATUS,
+            SL_RET_PARAM -> parseSafeListening(payload, raw)
+            SL_NTFY_PARAM -> parseSafeListeningParam(payload, raw)
+            SL_RET_EXTENDED_PARAM -> parseSafeListeningExtendedParam(payload, raw)
             LEA_RET_CAPABILITY, LEA_RET_STATUS, LEA_NTFY_STATUS,
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLea(command, payload, raw)
             PARTY_RET_CAPABILITY, PARTY_RET_STATUS, PARTY_NTFY_STATUS,
@@ -453,6 +480,48 @@ object SonyTandemV2Table2Protocol {
             family = Table2Family.SAFE_LISTENING.name,
             inquiredType = type?.code?.unsigned,
             values = payload.drop(1).map { it.unsigned },
+            raw = raw,
+        )
+    }
+
+    /** SAFE_LISTENING_NTFY_PARAM (0x59): the SET_PARAM confirmation, payload
+     * [type, onOff1, onOff2] — the headset's acknowledgement that the feature is
+     * on. */
+    private fun parseSafeListeningParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
+        ParsedTandemResponse.SafeListeningParam(
+            type = payload.firstOrNull()?.let { SafeListeningInquiredTypeTable2.fromCode(it) },
+            first = payload.getOrNull(1)?.unsigned ?: 0,
+            second = payload.getOrNull(2)?.unsigned ?: 0,
+            raw = raw,
+        )
+
+    /** SAFE_LISTENING_RET_EXTENDED_PARAM: payload [type, level, errorCause]. */
+    private fun parseSafeListeningExtendedParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
+        ParsedTandemResponse.SafeListeningExtendedParam(
+            type = payload.firstOrNull()?.let { SafeListeningInquiredTypeTable2.fromCode(it) },
+            level = payload.getOrNull(1)?.unsigned ?: 0,
+            errorCause = payload.getOrNull(2)?.unsigned ?: 0,
+            raw = raw,
+        )
+
+    /** SAFE_LISTENING_RET_CAPABILITY (HBS/TWS): payload after dataType+command is
+     * [type, roundBase, timestampBase(4B BE), minimumInterval, logCapacity] — the
+     * exact five fields SC's SlDeviceData carries (`wv.a.m112083J`). The headset
+     * reports its minimum poll interval (seconds) here; SC polls the current
+     * sound pressure every `1000 * minimumInterval`. */
+    private fun parseSafeListeningCapability(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+        val type = payload.firstOrNull()?.let { SafeListeningInquiredTypeTable2.fromCode(it) }
+        if (payload.size < 7) {
+            return ParsedTandemResponse.Table2Generic(
+                family = Table2Family.SAFE_LISTENING.name,
+                inquiredType = type?.code?.unsigned,
+                values = payload.map { it.unsigned },
+                raw = raw,
+            )
+        }
+        return ParsedTandemResponse.SafeListeningCapability(
+            type = type,
+            minimumInterval = payload[6].unsigned,
             raw = raw,
         )
     }
