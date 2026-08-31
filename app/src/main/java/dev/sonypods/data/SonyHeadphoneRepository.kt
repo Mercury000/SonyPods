@@ -579,6 +579,12 @@ data class SonyHeadphoneUiState(
         get() = connectedProfile?.capabilitiesKnown == true
 }
 
+/** Direction of a debug-log frame: what the module sent, what it received, or a state line. */
+enum class DebugLogKind { TX, RX, INFO }
+
+/** A single debug-page line; [text] is the human-readable line, [kind] drives its rendering. */
+data class DebugLogEntry(val text: String, val kind: DebugLogKind)
+
 /**
  * @param resourceContext base module context. It is retained as the primary constructor
  *   context for callers hosted in the Bluetooth process.
@@ -589,7 +595,7 @@ class SonyHeadphoneRepository private constructor(
     resourceContext: Context,
     systemContext: Context = resourceContext,
     remoteModelInfoReader: (() -> String?)? = null,
-    private val debugLogForwarder: ((String) -> Unit)? = null,
+    private val debugLogForwarder: ((String, DebugLogKind) -> Unit)? = null,
 ) : SonyBleClientListener {
     private val appContext = systemContext.applicationContext ?: systemContext
     private val client = SonyBleClient(appContext, this)
@@ -598,7 +604,7 @@ class SonyHeadphoneRepository private constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val leAudioProfileGateway = LeAudioProfileGateway(appContext)
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
-    private val _debugLogs = MutableStateFlow<List<String>>(emptyList())
+    private val _debugLogs = MutableStateFlow<List<DebugLogEntry>>(emptyList())
     private val leAudioCoordinator = LeAudioSwitchCoordinator(
         object : LeAudioSwitchCoordinator.Callbacks {
             override fun requestPairedHistory(): Boolean {
@@ -834,7 +840,7 @@ class SonyHeadphoneRepository private constructor(
      * state and re-run its collectors. In the engine process, lines additionally
      * reach the app's copy of this buffer via the ACTION_DEBUG_LOG broadcast.
      */
-    val debugLogs: StateFlow<List<String>> = _debugLogs.asStateFlow()
+    val debugLogs: StateFlow<List<DebugLogEntry>> = _debugLogs.asStateFlow()
 
     fun startScan() {
         _state.update {
@@ -2526,7 +2532,7 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun sendCommand(command: HeadphoneCommand) {
-        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}")
+        appendLog("${command.label} [${command.channel}] -> ${command.bytes.hexString()}", kind = DebugLogKind.TX)
         client.sendToChannel(command.channel, command.bytes)
     }
 
@@ -2807,7 +2813,6 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onMessage(channel: TandemChannel, raw: ByteArray) {
-        appendLog("RX [$channel] ${raw.hexString()}")
         val profile = _state.value.connectedProfile
             ?: runCatching { ensureConnectedProfile() }.getOrNull()
             ?: run {
@@ -2815,6 +2820,7 @@ class SonyHeadphoneRepository private constructor(
                 return
             }
         val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)
+        appendLog("RX [$channel] ${raw.hexString()} · ${parsed::class.simpleName}", kind = DebugLogKind.RX)
         when (parsed) {
             is ParsedTandemResponse.DeviceInfo -> applyDeviceInfo(parsed)
             is ParsedTandemResponse.CommonStatus -> applyCommonStatus(parsed)
@@ -4467,7 +4473,7 @@ class SonyHeadphoneRepository private constructor(
         }.getOrNull()
     }
 
-    private fun appendLog(message: String, writeLogcat: Boolean = true) {
+    private fun appendLog(message: String, kind: DebugLogKind = DebugLogKind.INFO, writeLogcat: Boolean = true) {
         if (writeLogcat) {
             // BASIC logcat carries only warnings and errors; every repository
             // event line is routine and goes to logcat at DEBUG. The debug page
@@ -4477,12 +4483,14 @@ class SonyHeadphoneRepository private constructor(
         // Deliberately not part of _state: a log line must not re-emit the whole UI
         // state (and re-run every collector) — with the old field, one appendLog
         // produced two logcat lines and a full state cascade.
-        _debugLogs.value = (listOf(message) + _debugLogs.value).take(DEBUG_LOG_CAPACITY)
-        debugLogForwarder?.invoke(message)
+        // Appended at the tail so the debug page reads as a stable log tail (the page
+        // follows the newest entry) instead of a prepend-shifted wall that jitters.
+        _debugLogs.value = (_debugLogs.value + DebugLogEntry(message, kind)).takeLast(DEBUG_LOG_CAPACITY)
+        debugLogForwarder?.invoke(message, kind)
     }
 
-    fun ingestRemoteDebugLog(message: String) {
-        appendLog(message, writeLogcat = false)
+    fun ingestRemoteDebugLog(message: String, kind: DebugLogKind = DebugLogKind.INFO) {
+        appendLog(message, kind = kind, writeLogcat = false)
     }
 
     companion object {
@@ -4493,7 +4501,7 @@ class SonyHeadphoneRepository private constructor(
             resourceContext: Context,
             systemContext: Context = resourceContext,
             remoteModelInfoReader: (() -> String?)? = null,
-            debugLogForwarder: ((String) -> Unit)? = null,
+            debugLogForwarder: ((String, DebugLogKind) -> Unit)? = null,
         ): SonyHeadphoneRepository {
             return instance ?: synchronized(this) {
                 instance ?: SonyHeadphoneRepository(

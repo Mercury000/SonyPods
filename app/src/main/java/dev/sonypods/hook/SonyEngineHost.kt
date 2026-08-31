@@ -269,12 +269,13 @@ object SonyEngineHost {
             ctx,
             ctx,
             catalogReader,
-            debugLogForwarder = { line ->
+            debugLogForwarder = { line, kind ->
                 if (ConfigManager.logLevel() == ConfigManager.LOG_LEVEL_DEBUG) {
                     runCatching {
                         ctx.sendBroadcast(
                             Intent(SonyBridge.ACTION_DEBUG_LOG).apply {
                                 putExtra(SonyBridge.EXTRA_STRING, line)
+                                putExtra(SonyBridge.EXTRA_LOG_KIND, kind.name)
                                 setPackage("com.mercury.sonypods")
                                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                             }

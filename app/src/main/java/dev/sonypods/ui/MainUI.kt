@@ -107,6 +107,8 @@ import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Pause
+import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -953,6 +955,7 @@ fun MainUI(
             Screen.TandemDebug -> {
             val debugScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             var clearLogsRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+            var debugPaused by remember { mutableStateOf(false) }
             BarBlurHost(
                 bottomBarBlurEnabled = false,
                 topBarBlurEnabled = blurTopBar.value,
@@ -971,6 +974,12 @@ fun MainUI(
                                     }
                                 },
                                 actions = {
+                                    IconButton(onClick = { debugPaused = !debugPaused }) {
+                                        Icon(
+                                            imageVector = if (debugPaused) MiuixIcons.Play else MiuixIcons.Pause,
+                                            contentDescription = if (debugPaused) "Resume" else "Pause",
+                                        )
+                                    }
                                     IconButton(onClick = { clearLogsRequest++ }) {
                                         Icon(imageVector = MiuixIcons.Delete, contentDescription = stringResource(R.string.cd_clear_logs))
                                     }
@@ -992,6 +1001,7 @@ fun MainUI(
                                     top = padding.calculateTopPadding(),
                                 ),
                                 clearRequest = clearLogsRequest,
+                                paused = debugPaused,
                             )
                         }
                     }

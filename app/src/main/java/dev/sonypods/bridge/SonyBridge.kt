@@ -32,6 +32,8 @@ object SonyBridge {
     const val EXTRA_INT = "value_int"
     const val EXTRA_BOOL = "value_bool"
     const val EXTRA_STRING = "value_string"
+    /** Direction of a debug-log frame (TX/RX/INFO). */
+    const val EXTRA_LOG_KIND = "log_kind"
     const val EXTRA_INDEX = "index"
     const val EXTRA_KEY_CODE = "gesture_key_code"
     const val EXTRA_ACTION_CODE = "gesture_action_code"
