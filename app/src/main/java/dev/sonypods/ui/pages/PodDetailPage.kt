@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -43,8 +42,6 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -53,7 +50,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.bridge.MultipointSnapshot
 import dev.sonypods.data.SafeListeningStatus
@@ -76,8 +72,6 @@ import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.components.PodStatus
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -989,10 +983,10 @@ private fun PlaybackCard(uiState: SonyStateSnapshot, actions: SonyDetailActions)
 }
 
 /** 当前声压 (Safe Listening) card, styled like the firmware row: title on the
- * left with the live readout on the right. Also arms the sound-pressure poll
- * while this card is actually shown AND the module is in the foreground (a
- * backgrounded activity keeps the composition alive, so DisposableEffect alone
- * cannot see it). */
+ * left with the live readout on the right. The poll behind the readout is armed
+ * by MainUI, which owns the layer stack and the foreground state this card
+ * cannot see — a backgrounded activity, or a page pushed on top, keeps the
+ * composition alive. */
 @Composable
 private fun SafeListeningCard(uiState: SonyStateSnapshot) {
     val status = uiState.safeListeningStatus?.let { name ->
@@ -1005,31 +999,6 @@ private fun SafeListeningCard(uiState: SonyStateSnapshot) {
         SafeListeningStatus.IN_CALL -> stringResource(R.string.sl_in_call)
         SafeListeningStatus.DETACHED -> stringResource(R.string.sl_detached)
         SafeListeningStatus.UNKNOWN -> "—"
-    }
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var appForeground by remember {
-        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
-    }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            appForeground = when (event) {
-                Lifecycle.Event.ON_START -> true
-                Lifecycle.Event.ON_STOP -> false
-                else -> appForeground
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(appForeground, uiState.connected, uiState.supportsSafeListening) {
-        SonyBridge.setSafeListeningPollActive(
-            context,
-            appForeground && uiState.connected && uiState.supportsSafeListening,
-        )
-    }
-    DisposableEffect(Unit) {
-        onDispose { SonyBridge.setSafeListeningPollActive(context, false) }
     }
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         BasicComponent(

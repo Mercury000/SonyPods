@@ -52,12 +52,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.key
 import dev.sonypods.bridge.SonyBridge
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.sonypods.bridge.SonyRemoteState
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.protocol.PlaybackStatus
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.SonyPodsApp
 import com.mercury.sonypods.R
+import dev.sonypods.config.CardLocation
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
@@ -156,6 +160,22 @@ fun MainUI(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    // 声压轮询门控的一部分:模块是否在前台(后台时 composition 仍在,须显式观察)。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var appForeground by remember {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            appForeground = when (event) {
+                Lifecycle.Event.ON_START -> true
+                Lifecycle.Event.ON_STOP -> false
+                else -> appForeground
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
         // State authority lives in the bluetooth process; mirror it here.
     LaunchedEffect(Unit) { SonyRemoteState.start(context) }
@@ -258,6 +278,14 @@ fun MainUI(
         )
     }
     val earphoneDetailOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
+    // 声压卡片实际可见 = 它所在的页(详情页/更多设置页,取决于显隐配置)是栈顶、
+    // 未被上层覆盖。仅这时才轮询。
+    val slCardPage = when (visibility.value.safeListening) {
+        CardLocation.DETAIL -> Screen.EarphoneDetail
+        CardLocation.MORE -> Screen.EarphoneMoreSettings
+        CardLocation.HIDDEN -> null
+    }
+    val slCardOnTop = slCardPage != null && layers.lastOrNull() == slCardPage
 
     // Set while the user is deliberately on the device picker, so the auto-open effect
     // below does not drag them back into the detail page.
@@ -421,6 +449,17 @@ fun MainUI(
         ) {
             openEarphoneDetail()
         }
+    }
+
+    // 声压轮询仅在声压卡片实际可见时进行:模块前台 + 卡片所在页是栈顶 + 控制连接就绪。
+    LaunchedEffect(appForeground, slCardOnTop, sonyConnected, sonyState.supportsSafeListening) {
+        SonyBridge.setSafeListeningPollActive(
+            context,
+            appForeground && slCardOnTop && sonyConnected && sonyState.supportsSafeListening,
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { SonyBridge.setSafeListeningPollActive(context, false) }
     }
 
     // The only documented gap in the NTFY-maintained state is playback metadata

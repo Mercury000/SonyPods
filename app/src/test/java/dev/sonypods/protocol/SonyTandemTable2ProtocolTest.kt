@@ -262,9 +262,46 @@ class SonyTandemTable2ProtocolTest {
     }
 
     @Test
-    fun v2_buildSetSafeListeningParam_on() {
-        // SAFE_LISTENING_SET_PARAM (0x58) (ON, OFF): SC's setParamOn activation
-        // that makes the headset report a live sound pressure.
+    fun v2_buildGetSafeListeningParam_tws1() {
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x56, 0x01),
+            SonyTandemV2Table2Protocol.buildGetSafeListeningParam(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1
+            ),
+        )
+    }
+
+    @Test
+    fun v2_buildSetSafeListeningParam_previewOn() {
+        // SAFE_LISTENING_SET_PARAM (0x58) (OFF, ON): SC's setParamPreview, the
+        // activation its live sound-pressure view uses.
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x58, 0x01, 0x01, 0x00),
+            SonyTandemV2Table2Protocol.buildSetSafeListeningParam(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1,
+                first = false,
+                second = true,
+            ),
+        )
+    }
+
+    @Test
+    fun v2_buildSetSafeListeningParam_off() {
+        // (OFF, OFF): SC's setParamOff, sent when the readout view detaches.
+        assertArrayEquals(
+            byteArrayOf(0x0F, 0x58, 0x01, 0x01, 0x01),
+            SonyTandemV2Table2Protocol.buildSetSafeListeningParam(
+                SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1,
+                first = false,
+                second = false,
+            ),
+        )
+    }
+
+    @Test
+    fun v2_buildSetSafeListeningParam_featureOn() {
+        // (ON, OFF): SC's setParamOn, which enables the headset's persistent
+        // listening-log collection. The module never sends this one.
         assertArrayEquals(
             byteArrayOf(0x0F, 0x58, 0x01, 0x00, 0x01),
             SonyTandemV2Table2Protocol.buildSetSafeListeningParam(
@@ -322,8 +359,8 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v2_parse_safeListeningNtfyParam_confirmation() {
-        // SAFE_LISTENING_NTFY_PARAM (0x59): [type, onOff1=ON(0x00), onOff2=OFF(0x01)]
-        // — the SET_PARAM confirmation that the feature turned on.
+        // SAFE_LISTENING_NTFY_PARAM (0x59): [type, safeListening=ON(0x00),
+        // preview=OFF(0x01)] — the user's Safe Listening feature is on.
         val raw = byteArrayOf(0x0F, 0x59, 0x01, 0x00, 0x01)
         val parsed = SonyTandemV2Table2Protocol.parse(raw)
 
@@ -332,6 +369,22 @@ class SonyTandemTable2ProtocolTest {
         assertEquals(SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1, parsed.type)
         assertEquals(0x00, parsed.first)
         assertEquals(0x01, parsed.second)
+    }
+
+    @Test
+    fun v2_parse_safeListeningRetParam_previewOn() {
+        // SAFE_LISTENING_RET_PARAM (0x57) carries the same layout as NTFY_PARAM,
+        // so the reply to GET_PARAM must parse as SafeListeningParam too.
+        val raw = byteArrayOf(0x0F, 0x57, 0x01, 0x01, 0x00)
+        val parsed = SonyTandemV2Table2Protocol.parse(raw)
+
+        assertTrue(
+            "Expected SafeListeningParam but got ${parsed::class.simpleName}",
+            parsed is ParsedTandemResponse.SafeListeningParam,
+        )
+        parsed as ParsedTandemResponse.SafeListeningParam
+        assertEquals(0x01, parsed.first)
+        assertEquals(0x00, parsed.second)
     }
 
     @Test

@@ -729,57 +729,68 @@ class SonyHeadphoneRepository private constructor(
         }
     }
     /** Safe Listening current-sound-pressure poll. Armed only while the module
-     * UI shows the detail page (battery: SC polls at the device's minimum
-     * interval, and only while the screen reading it is in front). Re-arms
-     * itself; self-stops on stop()/disconnect. */
+     * UI actually shows the sound-pressure card (battery: SC polls at the
+     * device's minimum interval, and only while the view reading it is
+     * attached). Re-arms itself; self-stops on stop()/disconnect. */
     private var safeListeningPollArmed = false
+
+    /** True once the module asked the headset to enter preview mode, and so owes
+     * it a matching off. SC's readout presenter pairs setPreview(true) on attach
+     * with setPreview(false) on detach; the other way to make the readout carry
+     * a level is the persistent Safe Listening feature, which drives the
+     * headset's listening-log collection and belongs to the user — the module
+     * neither enables nor disables that one. */
+    private var safeListeningPreviewRequested = false
+
     private val safeListeningPollRunnable: Runnable = Runnable {
         if (!safeListeningPollArmed) return@Runnable
-        val profile = _state.value.connectedProfile
-        val type = profile?.capabilities?.safeListeningInquiredType
-        if (profile != null && type != null && profile.supports(HeadphoneFeature.SAFE_LISTENING)) {
-            val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
-                ?: profile.defaultResponseChannel()
-            sendCommandIfReady(
-                HeadphoneCommand(
-                    label = "GET safe listening level",
-                    bytes = SonyTandemV2Table2Protocol.buildGetSafeListeningExtendedParam(type),
-                    channel = channel,
-                )
-            )
+        sendSafeListeningCommand("GET safe listening level") {
+            SonyTandemV2Table2Protocol.buildGetSafeListeningExtendedParam(it)
         }
         val intervalSec = _state.value.safeListeningMinimumInterval?.takeIf { it > 0 }
             ?: SAFE_LISTENING_POLL_DEFAULT_INTERVAL_S
         mainHandler.postDelayed(safeListeningPollRunnable, 1000L * intervalSec)
     }
 
+    private fun sendSafeListeningCommand(
+        label: String,
+        build: (SafeListeningInquiredTypeTable2) -> ByteArray,
+    ) {
+        val profile = _state.value.connectedProfile ?: return
+        val type = profile.capabilities.safeListeningInquiredType ?: return
+        if (!profile.supports(HeadphoneFeature.SAFE_LISTENING)) return
+        val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
+            ?: profile.defaultResponseChannel()
+        sendCommandIfReady(
+            HeadphoneCommand(label = "$label ${type.name}", bytes = build(type), channel = channel)
+        )
+    }
+
     /** Arm the Safe Listening sound-pressure poll (first query immediate).
-     * Called by the engine when the module detail page becomes visible. Also
-     * turns the headset's Safe Listening feature on (SC's IDLE→ToON setParamOn):
-     * until then it answers the readout with a zero level. */
+     * Called by the engine when the sound-pressure card becomes visible. Reads
+     * the current param first: the readout answers with a zero level until
+     * either the user's Safe Listening feature or preview mode is on, and which
+     * of the two it is decides whether the module may enable preview itself. */
     fun startSafeListeningPoll() {
         safeListeningPollArmed = true
         mainHandler.removeCallbacks(safeListeningPollRunnable)
-        val profile = _state.value.connectedProfile
-        val type = profile?.capabilities?.safeListeningInquiredType
-        if (profile != null && type != null && profile.supports(HeadphoneFeature.SAFE_LISTENING)) {
-            val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
-                ?: profile.defaultResponseChannel()
-            sendCommandIfReady(
-                HeadphoneCommand(
-                    label = "SET safe listening on",
-                    bytes = SonyTandemV2Table2Protocol.buildSetSafeListeningParam(type, first = true, second = false),
-                    channel = channel,
-                )
-            )
+        sendSafeListeningCommand("GET safe listening param") {
+            SonyTandemV2Table2Protocol.buildGetSafeListeningParam(it)
         }
         mainHandler.post(safeListeningPollRunnable)
     }
 
-    /** Disarm the Safe Listening poll; called when the module detail page hides. */
+    /** Disarm the Safe Listening poll; called when the card hides or the link
+     * drops. Leaves the headset's own Safe Listening setting alone — only a
+     * preview mode the module itself asked for is turned back off. */
     fun stopSafeListeningPoll() {
         safeListeningPollArmed = false
         mainHandler.removeCallbacks(safeListeningPollRunnable)
+        if (!safeListeningPreviewRequested) return
+        safeListeningPreviewRequested = false
+        sendSafeListeningCommand("SET safe listening off") {
+            SonyTandemV2Table2Protocol.buildSetSafeListeningParam(it, first = false, second = false)
+        }
     }
     /** 连接质量切换窗口的硬上限：官方连接进度框同为 30s 自动关闭。 */
     private val connectionQualitySwitchTimeoutRunnable = Runnable {
@@ -3484,24 +3495,27 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun applySafeListeningParam(response: ParsedTandemResponse.SafeListeningParam) {
-        // The SET_PARAM confirmation (first byte ON=0x00) is the event that the
-        // headset's Safe Listening feature is on — only then does it answer the
-        // capability query that names its minimum poll interval. Read it here,
-        // event-driven rather than on a fixed delay.
+        // Payload is (safeListening, preview), ON=0x00. Both make the readout
+        // carry a real level, and the headset refuses preview while the user's
+        // Safe Listening feature is on, so ask for preview only when both are
+        // off — once, since a refusal would otherwise loop on every notify.
         if (!safeListeningPollArmed) return
-        if (response.first != 0x00) return
-        val profile = _state.value.connectedProfile ?: return
-        val type = profile.capabilities.safeListeningInquiredType ?: return
-        if (!profile.supports(HeadphoneFeature.SAFE_LISTENING)) return
-        val channel = profile.bindingFor(HeadphoneFeature.SAFE_LISTENING)?.channel
-            ?: profile.defaultResponseChannel()
-        sendCommandIfReady(
-            HeadphoneCommand(
-                label = "GET SAFE_LISTENING capability ${type.name}",
-                bytes = SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(type),
-                channel = channel,
-            )
-        )
+        val featureOn = response.first == 0x00
+        val previewOn = response.second == 0x00
+        if (!featureOn && !previewOn) {
+            if (safeListeningPreviewRequested) return
+            safeListeningPreviewRequested = true
+            sendSafeListeningCommand("SET safe listening preview on") {
+                SonyTandemV2Table2Protocol.buildSetSafeListeningParam(it, first = false, second = true)
+            }
+            return
+        }
+        // Only a headset in one of those two states answers the capability query
+        // that names its minimum poll interval. Read it here, event-driven
+        // rather than on a fixed delay.
+        sendSafeListeningCommand("GET SAFE_LISTENING capability") {
+            SonyTandemV2Table2Protocol.buildGetSafeListeningCapability(it)
+        }
     }
 
     /** Only `VALID` means DSEE is actively processing; OFF/INVALID hide it. */

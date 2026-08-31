@@ -235,9 +235,12 @@ object SonyTandemV2Table2Protocol {
     fun buildGetSafeListeningCapability(type: SafeListeningInquiredTypeTable2): ByteArray =
         TandemMessage(DT, SL_GET_CAPABILITY, byteArrayOf(type.code)).toByteArray()
 
-    /** SAFE_LISTENING_SET_PARAM (0x58): SC turns the feature on with (ON, OFF)
-     * — the SL state machine's IDLE→ToON `setParamOn`. Until it is on, the
-     * headset answers the extended-param readout with a zero level. */
+    /** SAFE_LISTENING_SET_PARAM (0x58): payload [type, safeListening, preview].
+     * (ON, OFF) is SC's `setParamOn` — it enables the persistent Safe Listening
+     * feature, i.e. the headset's listening-log collection, which is the user's
+     * own setting. (OFF, ON) is `setParamPreview`, what SC's live sound-pressure
+     * view uses; (OFF, OFF) is `setParamOff`. The extended-param readout answers
+     * with a zero level until one of the two is on. */
     fun buildSetSafeListeningParam(
         type: SafeListeningInquiredTypeTable2,
         first: Boolean,
@@ -303,9 +306,8 @@ object SonyTandemV2Table2Protocol {
             VG_RET_CAPABILITY, VG_RET_STATUS, VG_NTFY_STATUS,
             VG_RET_PARAM, VG_NTFY_PARAM -> parseVoiceGuidance(payload, raw)
             SL_RET_CAPABILITY -> parseSafeListeningCapability(payload, raw)
-            SL_RET_STATUS, SL_NTFY_STATUS,
-            SL_RET_PARAM -> parseSafeListening(payload, raw)
-            SL_NTFY_PARAM -> parseSafeListeningParam(payload, raw)
+            SL_RET_STATUS, SL_NTFY_STATUS -> parseSafeListening(payload, raw)
+            SL_RET_PARAM, SL_NTFY_PARAM -> parseSafeListeningParam(payload, raw)
             SL_RET_EXTENDED_PARAM -> parseSafeListeningExtendedParam(payload, raw)
             LEA_RET_CAPABILITY, LEA_RET_STATUS, LEA_NTFY_STATUS,
             LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLea(command, payload, raw)
@@ -484,9 +486,8 @@ object SonyTandemV2Table2Protocol {
         )
     }
 
-    /** SAFE_LISTENING_NTFY_PARAM (0x59): the SET_PARAM confirmation, payload
-     * [type, onOff1, onOff2] — the headset's acknowledgement that the feature is
-     * on. */
+    /** SAFE_LISTENING_RET_PARAM (0x57) / NTFY_PARAM (0x59): payload
+     * [type, safeListening, preview], both bytes ON=0x00. */
     private fun parseSafeListeningParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
         ParsedTandemResponse.SafeListeningParam(
             type = payload.firstOrNull()?.let { SafeListeningInquiredTypeTable2.fromCode(it) },
