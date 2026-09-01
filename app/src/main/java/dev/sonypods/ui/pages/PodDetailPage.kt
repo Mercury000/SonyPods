@@ -281,12 +281,17 @@ internal fun LazyListScope.podControlItems(
         }
     }
 
-    // While LE Audio carries the audio these cards degrade to a greyed-out note;
-    // the paired switches let the user hide them outright for that duration.
+    // SC's C12089d0.mo24713c(): the dual-mode card hides only when the phone
+    // cannot use LE Audio AND the headset declares the connection-mode restriction.
+    // When the phone can use LE Audio the card stays visible (greyed out) so the
+    // user can see the current mode.  The user visibility toggle overrides even
+    // that hiding.
     val hideConnectionQuality = uiState.connectionQualityRestrictedByLea &&
+        !uiState.phoneSupportsLeAudio &&
         !visibility.leaRestrictedConnectionQuality
     val hideLdac = uiState.usingLeAudio && !visibility.leaRestrictedLdac
-    val hideMultipoint = uiState.connectedViaLeAudio && !visibility.leaRestrictedMultipoint
+    val multipointLeaRestricted = uiState.multipointLeaRestricted
+    val hideMultipoint = multipointLeaRestricted && !visibility.leaRestrictedMultipoint
 
     if (visibility.connectionQuality.renderedHere() &&
         uiState.supportsConnectionQuality && !hideConnectionQuality
@@ -346,11 +351,18 @@ internal fun LazyListScope.podControlItems(
         }
     }
 
-    if (visibility.multipoint.renderedHere() && uiState.supportsMultipoint && !hideMultipoint) {
+    // SC `so.C28522r.mo24713c()`: the card is shown when the device declares
+    // multipoint through a Table2 FunctionType (`mo58509L0()`), or when the runtime
+    // GS-slot discovery found the "同时连接2台设备" slot, or when the device only
+    // declares the LEA restriction — that last case renders the DISABLED_BY_LE_AUDIO
+    // card rather than nothing.
+    val multipointDeclared = uiState.supportsMultipoint || uiState.supportsMultipointViaFunction ||
+        multipointLeaRestricted
+    if (visibility.multipoint.renderedHere() && multipointDeclared && !hideMultipoint) {
         item {
             MultipointEntryCard(
                 state = uiState.multipoint,
-                leAudioRestricted = uiState.connectedViaLeAudio,
+                leAudioRestricted = multipointLeaRestricted,
                 onOpen = actions.onOpenMultipointSettings,
             )
         }

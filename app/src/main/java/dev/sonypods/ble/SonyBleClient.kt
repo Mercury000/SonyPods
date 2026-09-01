@@ -135,7 +135,16 @@ interface SonyBleClientListener {
     fun onScanStateChanged(scanning: Boolean)
     fun onConnectionStateChanged(connected: Boolean, device: DiscoveredSonyDevice?)
     fun onReady(info: SonyBleConnectionInfo)
-    fun onMessage(channel: TandemChannel, raw: ByteArray)
+    /**
+     * @param sourceAddress the device whose transport session produced this frame,
+     *   captured when the session was created rather than read from the current
+     *   connection. Sound Connect gets this for free: its dispatcher
+     *   (`le0.C22925e`) is one instance per device and only feeds that device's
+     *   own handlers, so a late frame from a headset that has since been replaced
+     *   can never reach the new one's state. Null only for frames that arrived
+     *   before any session existed.
+     */
+    fun onMessage(channel: TandemChannel, raw: ByteArray, sourceAddress: String?)
     fun onLog(message: String)
 }
 
@@ -498,22 +507,45 @@ class SonyBleClient(
         )
     }
 
-    fun connect(device: DiscoveredSonyDevice) {
+    /**
+     * A headset-directed Tandem target migration (LEA_NTFY_PARAM 0x0E): connect
+     * the identity the headset itself named, over the transport it named. Sound
+     * Connect's `changeTandemConnectionProfile` (`C14356p0.m62041c0`) does the
+     * same — the named address is used verbatim, never folded onto the control
+     * identity, and SPP vs GATT comes from the ConnectionType, not from link
+     * heuristics.
+     */
+    fun connectTandemTarget(address: String, connectionType: dev.sonypods.protocol.LeaConnectionType) {
+        connect(
+            DiscoveredSonyDevice(
+                name = "Sony audio device",
+                address = address,
+                rssi = 0,
+                source = "tandem-migration",
+                isLikelyControlEndpoint = true,
+            ),
+            tandemMigration = connectionType,
+        )
+    }
+
+    fun connect(device: DiscoveredSonyDevice, tandemMigration: dev.sonypods.protocol.LeaConnectionType? = null) {
         if (!hasConnectPermission()) {
             listener.onBluetoothUnavailable("Bluetooth connect permission is missing")
             return
         }
         stopScan()
-        // Resolve identities only after knowing which transport Tandem will run on. With LE
-        // Audio up Sound Connect aims its GATT session at the LEA pairing-service identifier;
-        // on this platform the stack registers the LE_AUDIO profile (and its active device)
-        // under BOTH bonded identities — the dual/control one included — and the headset
-        // applies phone-initiated settings only on the session matching that registration
-        // (writes echoed correctly on the pure-LE session yet had no effect; the same write
-        // applied when aimed at the dual address). Keep the requested address, mirroring the
-        // pairing-record identifier rather than remapping onto the pure-LE identity.
+        // Tandem always runs on the control identity of a dual-mode headset. The
+        // previous "LE Audio is up, keep the requested address" branch is what let the
+        // pure-LE half carry a session of its own, announce its own identifier, report
+        // its own capability counter and overwrite the profile with an LEA-only
+        // support-function list. It also contradicted its own recorded evidence: writes
+        // echoed correctly on the pure-LE session yet had no effect, while the same
+        // write applied when aimed at the dual address. Retarget whenever a control
+        // alias exists; a device with no alias resolves to itself and is left alone.
+        // Exception: a headset-directed migration names its target explicitly.
         val requested = adapter?.getRemoteDevice(device.address)
-        val target = if (requested != null && !isLeAudioConnected(requested)) {
+        val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
+        val target = if (tandemMigration == null && requested != null && !control.equals(device.address, ignoreCase = true)) {
             resolveControlTarget(device)
         } else {
             device
@@ -523,7 +555,14 @@ class SonyBleClient(
             listener.onBluetoothUnavailable("Cannot resolve remote device ${target.address}")
             return
         }
-        if (shouldUseSpp(target, remote)) {
+        // A migration forces the transport from the headset's ConnectionType; every
+        // other path keeps the SPP-vs-GATT heuristic.
+        val useSpp = when (tandemMigration) {
+            null -> shouldUseSpp(target, remote)
+            dev.sonypods.protocol.LeaConnectionType.SPP -> true
+            else -> false
+        }
+        if (useSpp) {
             connectSpp(target, remote)
             return
         }
@@ -853,9 +892,10 @@ class SonyBleClient(
                 // throws otherwise, killing the SPP thread and the whole probe).
                 listener.onConnectionStateChanged(true, connectedDevice)
                 var createdTransport: SonySppTransport? = null
+                val sppOwner = connectedDevice?.address
                 val transport = SonySppTransport(
                     socket = socket,
-                    onPayload = { payload -> listener.onMessage(TandemChannel.SPP_MDR, payload) },
+                    onPayload = { payload -> listener.onMessage(TandemChannel.SPP_MDR, payload, sppOwner) },
                     onClosed = { reason ->
                         log(reason ?: "SPP transport closed")
                         // Object identity alone is not enough. A new connection publishes its
@@ -1058,12 +1098,16 @@ class SonyBleClient(
     private fun createGattSessions() {
         gattSessions.values.forEach { it.close() }
         gattSessions.clear()
+        // Bind the owning device now, the way SC's per-device dispatcher does: a
+        // frame this session reassembles later belongs to THIS headset even if
+        // the connection has since moved on.
+        val sessionOwner = connectedDevice?.address
         gattEndpoints.forEach { (channel, endpoint) ->
             gattSessions[channel] = SonyGattTandemSession(
                 channel = channel,
                 writableValueLength = writableValueLength,
                 writeBytes = { bytes -> enqueueGattWrite(endpoint, bytes) },
-                onPayload = { ch, payload -> listener.onMessage(ch, payload) },
+                onPayload = { ch, payload -> listener.onMessage(ch, payload, sessionOwner) },
                 onFailure = { reason -> listener.onBluetoothUnavailable(reason) },
                 log = ::log,
                 scheduleTimeout = { delayMs, action ->
@@ -1130,7 +1174,7 @@ class SonyBleClient(
             session.onNotification(value)
             return
         }
-        listener.onMessage(channel, value)
+        listener.onMessage(channel, value, connectedDevice?.address)
     }
 
     private fun beginUnsupportedEndpointProbe(

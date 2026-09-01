@@ -120,17 +120,27 @@ internal fun GestureOperationsPage(
         // Quick Access talks to the headset's SAR/Spotify service directory over
         // classic Bluetooth; under LC3 the headset refuses the writes, so the card
         // greys out (mirroring the multipoint card) — or hides, per the visibility
-        // setting.
-        val quickAccessRestricted = uiState.connectedViaLeAudio
-        if (uiState.quickAccessActions.isNotEmpty() &&
-            !(quickAccessRestricted && !visibility.leaRestrictedQuickAccess)
+        // setting.  Which functions actually lose availability comes from the
+        // capability table (SC's FunctionCantBeUsedWithLEAConnectionType), not from
+        // the mere fact that LE Audio is up.
+        //
+        // The greyed card must render even with no action list: the LE identity's
+        // capability table (which the headset itself serves once the link is LC3,
+        // whichever address was dialed) declares 0x4C but omits QUICK_ACCESS
+        // entirely, so no capability reply ever populates the actions. SC keeps the
+        // card visible in exactly this state — the declaration alone is the
+        // evidence that the function exists but is unavailable over LE Audio.
+        val quickAccessLeaRestricted = uiState.quickAccessLeaRestricted
+        val showQuickAccess = uiState.quickAccessActions.isNotEmpty() || quickAccessLeaRestricted
+        if (showQuickAccess &&
+            !(quickAccessLeaRestricted && !visibility.leaRestrictedQuickAccess)
         ) {
             item("quick-access") {
                 QuickAccessCard(
                     actions = uiState.quickAccessActions,
                     currentFunctionCodes = uiState.quickAccessFunctionCodes,
                     onFunctionChange = actions.onQuickAccessFunctionChange,
-                    enabled = !quickAccessRestricted,
+                    enabled = !quickAccessLeaRestricted,
                 )
             }
         }

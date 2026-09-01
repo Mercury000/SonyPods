@@ -245,6 +245,17 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             ) {
                 addAll(buildRefreshMultipointCommands(profile))
             }
+            // GS status/param reads for the "同时连接2台设备" slot. The slot is
+            // discovered by the capability probe from the advertised
+            // GENERAL_SETTING FunctionTypes (SC §9.3); it is NOT gated on
+            // HeadphoneFeature.MULTIPOINT, which only the peripheral domain
+            // grants — a GS-driven device never gains that feature. The refresh
+            // rides the Table1 connection channel once the slot is known.
+            if (profile.multipointGsSlot != null &&
+                profile.protocolFor(HeadphoneFeature.DEVICE_INFO) == HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+            ) {
+                addAll(buildRefreshGeneralSettingMultipointCommands(profile))
+            }
             if (profile.supports(HeadphoneFeature.WEARING_STATUS)) {
                 codecFor(profile, HeadphoneFeature.WEARING_STATUS).buildGetWearingStatus()?.let {
                     add(command(profile, HeadphoneFeature.WEARING_STATUS, "GET Wearing status", it))
@@ -806,7 +817,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         } + listOf(
             multipointCommand(profile, "GET source switch status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.SOURCE_SWITCH_CONTROL)),
             multipointCommand(profile, "GET music hand-over status", SonyTandemV2Table2Protocol.buildGetPeripheralParam(PeripheralInquiredTypeTable2.MUSIC_HAND_OVER_SETTING)),
-        ) + buildRefreshGeneralSettingMultipointCommands(profile)
+        )
     }
 
     /**

@@ -21,7 +21,7 @@ import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.device.UnifiedDeviceIdentityService
-import java.io.File
+import dev.sonypods.config.CapabilityStorage
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -56,8 +56,6 @@ import kotlinx.coroutines.cancel
  */
 object SonyEngineHost {
     private const val TAG = "SonyPods-Engine"
-    /** Probe-cache persistence file in the host process's own data directory. */
-    private const val CAPABILITY_CACHE_FILE = "sonypods_capability_cache.json"
     /** Audio Stream Control Service: only an LE Audio identity carries it. */
     private val ASCS_SERVICE_UUID: java.util.UUID =
         java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
@@ -290,17 +288,10 @@ object SonyEngineHost {
         }
         repository = repo
         // The probe cache is consumed only by this process's repository, so it
-        // persists into THIS process's data directory — no app-process detour, no
-        // waking the module app for every probe write. A local file survives scope
-        // restarts just as well as the former shared-store round trip did.
-        val capabilityCacheFile = File(ctx.filesDir, CAPABILITY_CACHE_FILE)
-        runCatching {
-            if (capabilityCacheFile.isFile) repo.installCapabilityCache(capabilityCacheFile.readText())
-        }.onFailure { Log.w(TAG, "capability cache restore failed", it) }
-        repo.attachCapabilityCacheWriter { json ->
-            runCatching { capabilityCacheFile.writeText(json) }
-                .onFailure { Log.w(TAG, "capability cache persist failed", it) }
-        }
+        // persists into THIS process's own SQLite database — the same
+        // `exchanged_capabilities` shape Sound Connect uses. A DB survives scope
+        // restarts exactly as the former JSON file did.
+        repo.attachCapabilityStorage(CapabilityStorage(ctx))
 
         registerCommandReceiver(ctx)
         announceEngineReadyToOfficialApp(ctx)
@@ -529,6 +520,14 @@ object SonyEngineHost {
         }
         val repo = repository ?: return
         val address = runCatching { device.address }.getOrNull() ?: return
+        // A headset-directed Tandem migration (0x0E) names the identity Tandem
+        // moves to; connecting anything else in the window would fight it. The
+        // repository clears the pending migration on completion or timeout.
+        val migrationTarget = repo.pendingTandemMigrationTarget()
+        if (migrationTarget != null && !migrationTarget.equals(address, ignoreCase = true)) {
+            Log.d(TAG, "connect deferred: headset-directed Tandem migration to $migrationTarget in flight")
+            return
+        }
         val current = repo.state.value
         val alreadyLive = current.connectedDevice?.address.equals(address, ignoreCase = true) &&
             current.deviceInfo.protocolReady &&

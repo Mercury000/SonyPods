@@ -1,15 +1,5 @@
 package dev.sonypods.headphones
 
-import dev.sonypods.config.CapabilityCacheEntry
-import dev.sonypods.config.CapabilityProbeCache
-import dev.sonypods.config.CapabilityValueCache
-import dev.sonypods.config.EqBandInfoCache
-import dev.sonypods.config.GeneralSettingCapabilityCache
-import dev.sonypods.config.GestureActionCapabilityCache
-import dev.sonypods.config.GestureKeyCapabilityCache
-import dev.sonypods.config.GesturePresetCapabilityCache
-import dev.sonypods.config.QuickAccessActionCapabilityCache
-import dev.sonypods.config.QuickAccessCapabilityCache
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NcAsmInquiredType
@@ -30,6 +20,7 @@ import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,70 +31,6 @@ import org.junit.Test
  * probes and to the engine's feature/query/writable sets.
  */
 class SonyCapabilityProbeTest {
-
-    @Test
-    fun capabilityCache_preservesMultipointSlotAndLastKnownValue() {
-        val entry = CapabilityCacheEntry(
-            counter = 3,
-            multipointGsSlot = 0xD2,
-            multipointEnabled = true,
-        )
-
-        val decoded = CapabilityProbeCache.decode(
-            CapabilityProbeCache.encode(mapOf("AA:BB:CC:DD:EE:FF" to entry)),
-        ).getValue("AA:BB:CC:DD:EE:FF")
-
-        assertEquals(0xD2, decoded.multipointGsSlot)
-        assertEquals(true, decoded.multipointEnabled)
-    }
-
-    @Test
-    fun capabilityCache_roundTripsDetailedCapabilityPayloads() {
-        val entry = CapabilityCacheEntry(
-            counter = 7,
-            capabilityValues = listOf(CapabilityValueCache("NCASM", 0x19, listOf(1, 2, 3))),
-            eqBandInfo = listOf(EqBandInfoCache(0x01, 400)),
-            eqAvailablePresetCodes = listOf(0x00, 0x01),
-            eqHasClearBass = true,
-            playbackSupportsButtons = true,
-            playbackSupportsMetadata = false,
-            quickAccessCapability = QuickAccessCapabilityCache(
-                keyCode = 0x00,
-                typeCode = 0x00,
-                actions = listOf(QuickAccessActionCapabilityCache(0x00, 0x01, listOf(0x01, 0x02))),
-            ),
-            gestureCapabilities = listOf(
-                GestureKeyCapabilityCache(
-                    keyCode = 0x00,
-                    typeCode = 0x00,
-                    defaultPresetCode = 0x20,
-                    presets = listOf(0x20),
-                    actionsByPreset = listOf(
-                        GesturePresetCapabilityCache(
-                            presetCode = 0x20,
-                            actions = listOf(GestureActionCapabilityCache(0x00, 0x20, listOf(0x20))),
-                        ),
-                    ),
-                ),
-            ),
-            multipointTypeCode = 0x00,
-            maxPairedDevices = 8,
-            maxConnectedDevices = 2,
-            supportsFileTransfer = true,
-            generalSettingCapability = GeneralSettingCapabilityCache(
-                settingType = 0x00,
-                stringFormat = 0x01,
-                title = "MULTIPOINT_SETTING",
-                description = "two devices",
-            ),
-        )
-
-        val decoded = CapabilityProbeCache.decode(
-            CapabilityProbeCache.encode(mapOf("AA:BB:CC:DD:EE:FF" to entry)),
-        ).getValue("AA:BB:CC:DD:EE:FF")
-
-        assertEquals(entry, decoded)
-    }
 
     private val v2Profile = ConnectedHeadphoneProfile(
         adapterId = "sony-tandem",
@@ -421,6 +348,26 @@ class SonyCapabilityProbeTest {
     }
 
     @Test
+    fun probeCommands_generatesGsGetCapForAdvertisedGeneralSetting() {
+        // The device advertises GENERAL_SETTING_2 (0xD2) → the probe must emit
+        // GET_GS_CAPABILITY for that slot. SC enumerates every advertised GS type
+        // (uv.d.c / wv.e.e: GsInquiredType.isGeneralSettingType) without any
+        // MULTIPOINT-support gate; the slot's reply ("MULTIPOINT_SETTING") is
+        // what enables the 2-device switch.
+        val commands = SonyCapabilityProbe.buildCapabilityProbeCommands(
+            profile = v2Profile,
+            functions = listOf(fn(SonyV2FunctionType.GENERAL_SETTING_2)),
+        )
+        val gs = commands.firstOrNull { it.label.contains("GET GS capability") }
+        assertNotNull("expected a GET GS capability probe", gs)
+        assertEquals(
+            // [DATA_MDR 0x0E][GS_GET_CAPABILITY 0xD0][slot 0xD2][language 0x01]
+            listOf(0x0E, 0xD0, 0xD2, 0x01),
+            gs!!.bytes.toList().map { it.toInt().and(0xFF) },
+        )
+    }
+
+    @Test
     fun applyToProfile_recordsProbeEvidenceAndKeepsStaticMarkers() {
         val applied = SonyCapabilityProbe.applyToProfile(
             profile = v2Profile,
@@ -494,12 +441,6 @@ class SonyCapabilityProbeTest {
         assertEquals(1, commands.size)
         assertEquals("GET AUDIO capability upscaling", commands.single().label)
         assertEquals("0E E0 01", commands.single().bytes.joinToString(" ") { "%02X".format(it) })
-    }
-
-    /** An empty function list is not a table, so it must not open the gate either. */
-    @Test
-    fun restoreFunctions_withNoCachedFunctions_yieldsNothingToApply() {
-        assertTrue(SonyCapabilityProbe.restoreFunctions(v2Profile, emptyList()).isEmpty())
     }
 
     @Test

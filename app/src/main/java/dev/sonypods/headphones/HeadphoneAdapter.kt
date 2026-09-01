@@ -11,6 +11,7 @@ import dev.sonypods.protocol.ParsedTandemResponse
 import dev.sonypods.protocol.PlaybackControl
 import dev.sonypods.protocol.PlayInquiredType
 import dev.sonypods.protocol.PowerInquiredType
+import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.AssignableSettingsMapping
 import dev.sonypods.protocol.AssignableSettingsPreset
 import dev.sonypods.protocol.SystemInquiredType
@@ -173,6 +174,16 @@ data class HeadphoneCapabilities(
     /** 支持列表宣告 0x4D（连接质量在 LE Audio 下不可用）：卡片保留但置灰，
      * 右侧显示「不可用」。会话级状态——随当前传输的能力表变化。 */
     val connectionQualityRestrictedByLea: Boolean = false,
+    /**
+     * SC 的 `FunctionCantBeUsedWithLEAConnectionType` 对应的 FunctionType 集合。
+     * 来自能力表 support-function list 中所有 `*_CANT_BE_USED_WITH_LEA_CONNECTION`
+     * 条目，决定哪些功能在 LE Audio 连接下不可用。
+     *
+     * 对照 SC `DeviceCapabilityTableset2.x1()`：每个 FunctionCantBeUsedWithLEAConnectionType
+     * 映射到一个 FunctionType，能力表的 support-function list 包含该 FunctionType
+     * 时，对应功能在 LEA 下不可用。
+     */
+    val leaRestrictedFunctionTypes: Set<SonyV2FunctionType> = emptySet(),
     /** UpscalingType byte from AUDIO_RET_CAPABILITY (`cf0.e0`) — the DSEE
      * generation: DSEE_HX=0, DSEE=1, DSEE_HX_AI/Extreme=2, DSEE_ULTIMATE=3.
      * The official title/description strings are picked from this, not from
@@ -194,7 +205,46 @@ data class HeadphoneCapabilities(
      * uses, from the advertised SAFE_LISTENING_* FunctionType (V2 Table2).
      * Null = the support-function list advertised none of them. */
     val safeListeningInquiredType: dev.sonypods.protocol.SafeListeningInquiredTypeTable2? = null,
-)
+    /** SC `mo58509L0()`: the device's support-function list contains a Table2
+     *  multipoint FunctionType (PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT or the
+     *  CLASS_OF_DEVICE variants).  Independent of the runtime GS-slot discovery
+     *  that sets [ConnectedHeadphoneProfile.multipointState].supported. */
+    val supportsMultipointViaFunction: Boolean = false,
+    /** SC `u70.C29444f` registers the 0x0D EXECUTE_TANDEM_TARGET_CHANGE handler
+     *  only when the device declares `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD`
+     *  (0x43). Without the declaration the notification has no defined meaning. */
+    val declaresTandemTargetChange: Boolean = false,
+    /** SC `C14319c.mo61835c` registers the 0x0E CHANGE_TANDEM_CONNECTION_PROFILE_
+     *  FOR_ANDROID observer only when the device declares 0x44. */
+    val declaresChangeTandemConnectionProfile: Boolean = false,
+) {
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.PAIRING_DEVICE_MANAGEMENT` → 多点连接 */
+    val multipointLeaRestricted: Boolean
+        get() = SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.QUICK_ACCESS` → Quick Access */
+    val quickAccessLeaRestricted: Boolean
+        get() = SonyV2FunctionType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.SOUND_AR` → Sound AR */
+    val soundArLeaRestricted: Boolean
+        get() = SonyV2FunctionType.SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.BGM_MODE` → BGM 模式 */
+    val bgmModeLeaRestricted: Boolean
+        get() = SonyV2FunctionType.BGM_MODE_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.VOICE_ASSISTANT_SETTINGS` → 语音助手设置 */
+    val voiceAssistantLeaRestricted: Boolean
+        get() = SonyV2FunctionType.VOICE_ASSISTANT_SETTINGS_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.SOUND_AR_OPTIMIZATION` → Sound AR 优化 */
+    val soundArOptimizationLeaRestricted: Boolean
+        get() = SonyV2FunctionType.SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `…SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION_WITH_HEAD_TRACKING`,
+     *  whose FunctionType is `HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION` (0x46) —
+     *  a different declaration from plain Sound AR optimization (0x4B) above. */
+    val headTrackerLeaRestricted: Boolean
+        get() = SonyV2FunctionType.HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+    /** SC `FunctionCantBeUsedWithLEAConnectionType.LINK_AUTO_SWITCH` → 自动切换 */
+    val linkAutoSwitchLeaRestricted: Boolean
+        get() = SonyV2FunctionType.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION in leaRestrictedFunctionTypes
+}
 
 data class ConnectedHeadphoneProfile(
     val adapterId: String,

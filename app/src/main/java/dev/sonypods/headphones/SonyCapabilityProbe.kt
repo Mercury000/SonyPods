@@ -11,7 +11,6 @@ import dev.sonypods.protocol.SonyTable
 import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.SystemInquiredType
-import dev.sonypods.config.FunctionCode
 import dev.sonypods.protocol.SonyTandemV2Table2Protocol
 
 /**
@@ -217,6 +216,21 @@ object SonyCapabilityProbe {
                             )
                         }
 
+                    // General Setting slots ride the Table1 connection channel. The
+                    // device advertises them as FunctionTypes (0xD1..0xD4) and the
+                    // code is itself the slot; probing every advertised one mirrors
+                    // SC (it enumerates the function list and probes any GS type).
+                    ProbeDomain.GENERAL_SETTING ->
+                        deviceInfoCodec.buildGetGeneralSettingCapability(function.code)?.let { bytes ->
+                            add(
+                                HeadphoneCommand(
+                                    label = "GET GS capability 0x%02X".format(function.code.toInt() and 0xFF),
+                                    bytes = bytes,
+                                    channel = profile.channelFor(HeadphoneFeature.DEVICE_INFO),
+                                )
+                            )
+                        }
+
                     ProbeDomain.NONE -> Unit
                 }
             }
@@ -274,14 +288,29 @@ object SonyCapabilityProbe {
         // 官方分支③的判定来源：耳机宣告「连接质量在 LE Audio 下不可用」（0x4D）。
         // 此时卡片保留但置灰——与「直接隐藏」不同，这是会话级运行时状态。
         var qualityLeaRestricted = false
+        // SC 的 FunctionCantBeUsedWithLEAConnectionType：能力表中所有
+        // *_CANT_BE_USED_WITH_LEA_CONNECTION 条目，决定哪些功能在 LEA 下不可用。
+        // 对照 SC DeviceCapabilityTableset2.x1()：检查 support-function list 是否
+        // 包含对应的 FunctionType。
+        val leaRestrictedTypes = mutableSetOf<SonyV2FunctionType>()
         val leaControlSupported = functions.any {
             it.v2Type() == SonyV2FunctionType.CLASSIC_ONLY_LE_CLASSIC_SETTING
         }
+        // SC mo58509L0(): the support-function list contains a Table2 multipoint
+        // FunctionType — the device *declares* multipoint support regardless of
+        // whether a runtime GS slot has been discovered yet.
+        var supportsMultipointViaFunction = false
+        // SC registers the tandem-target instruction handlers only for devices
+        // that declare the corresponding FunctionType (u70.C29444f / C14319c).
+        var declaresTandemTargetChange = false
+        var declaresChangeTandemConnectionProfile = false
 
         for (function in functions) {
             if (function.isPowerOff(profile)) {
                 features.add(HeadphoneFeature.POWER_OFF)
             }
+            function.v2Type()?.takeIf { it in SonyV2FunctionType.LEA_RESTRICTION_TYPES }
+                ?.let { leaRestrictedTypes.add(it) }
             when (function.v2Type()) {
                 SonyV2FunctionType.UPSCALING_AUTO_OFF -> upscalingPlain = true
                 SonyV2FunctionType.UPSCALING_AUTO_OFF_WITH_STATUS_DISABLE_REASON ->
@@ -292,6 +321,14 @@ object SonyCapabilityProbe {
                     qualityLdacStatus = true
                 SonyV2FunctionType.CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION ->
                     qualityLeaRestricted = true
+                SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT,
+                SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE,
+                SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE ->
+                    supportsMultipointViaFunction = true
+                SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD ->
+                    declaresTandemTargetChange = true
+                SonyV2FunctionType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID ->
+                    declaresChangeTandemConnectionProfile = true
                 else -> Unit
             }
             when (function.domain(profile)) {
@@ -361,6 +398,11 @@ object SonyCapabilityProbe {
                         }
                     }
                 }
+
+                // General Setting slots carry no feature flag of their own; the
+                // GS capability reply (e.g. "MULTIPOINT_SETTING") is what the
+                // engine matches to enable the 2-device switch.
+                ProbeDomain.GENERAL_SETTING -> Unit
 
                 ProbeDomain.NONE -> Unit
             }
@@ -564,6 +606,7 @@ object SonyCapabilityProbe {
                 ?: fallback.connectionQualityInquiredTypeCode,
             // 限制标记是会话级的（随当前传输的能力表变化），不从 fallback 继承。
             connectionQualityRestrictedByLea = qualityLeaRestricted,
+            leaRestrictedFunctionTypes = leaRestrictedTypes,
             codecIndicatorSupported = codecIndicatorSupported,
             upscalingIndicatorSupported = upscalingIndicatorSupported,
             alertSupported = alertSupported,
@@ -572,6 +615,12 @@ object SonyCapabilityProbe {
             playbackVolumeHasMute = playbackHasMute,
             gestureSettingsType = gestureSettingsType ?: fallback.gestureSettingsType,
             safeListeningInquiredType = safeListeningType ?: fallback.safeListeningInquiredType,
+            supportsMultipointViaFunction = supportsMultipointViaFunction,
+            // Device declarations — stable across sessions, so a partial rebuild
+            // keeps what the fallback knew.
+            declaresTandemTargetChange = declaresTandemTargetChange || fallback.declaresTandemTargetChange,
+            declaresChangeTandemConnectionProfile =
+                declaresChangeTandemConnectionProfile || fallback.declaresChangeTandemConnectionProfile,
             lea = lea,
         )
     }
@@ -629,45 +678,10 @@ object SonyCapabilityProbe {
         )
     }
 
-    /**
-     * Reconstruct the ordered [SonySupportedFunction] list from persisted
-     * [FunctionCode]s for a given profile. Codes are interpreted against the
-     * profile's protocol generation exactly as the live probe does (V1 and V2
-     * byte codes collide, so the generation decides the enum table). Unknown
-     * codes are dropped. Used to restore a probe-derived profile from the
-     * capability-probe cache without re-running the probe.
-     */
-    fun restoreFunctions(
-        profile: ConnectedHeadphoneProfile,
-        codes: List<FunctionCode>,
-    ): List<SonySupportedFunction> {
-        if (codes.isEmpty()) return emptyList()
-        val v1 = listOf(
-            profile.protocolFor(HeadphoneFeature.NOISE_CONTROL),
-            profile.protocolFor(HeadphoneFeature.EQ),
-            profile.protocolFor(HeadphoneFeature.BATTERY),
-        ).any { it.name.startsWith("SONY_TANDEM_V1") }
-        return codes.mapNotNull { fc ->
-            val byte = fc.code.toByte()
-            if (v1) {
-                SonyV1FunctionType.fromByteCode(byte).takeIf { it != SonyV1FunctionType.OUT_OF_RANGE }
-                    ?.let { SonySupportedFunction(it.code, fc.order, SonyTable.NO_1) }
-            } else {
-                val table = runCatching { SonyTable.valueOf(fc.table) }
-                    .getOrDefault(SonyTable.NO_1)
-                    .takeIf { it != SonyTable.INVALID }
-                    ?: SonyTable.NO_1
-                SonyV2FunctionType.fromByteCode(table, byte)
-                    .takeIf { it != SonyV2FunctionType.OUT_OF_RANGE }
-                    ?.let { SonySupportedFunction(it.code, fc.order, table) }
-            }
-        }
-    }
-
     // ── FunctionType → domain & inquired-type mapping (SC §9.3–9.5) ──────────
 
     enum class ProbeDomain {
-        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, SAFE_LISTENING, NONE,
+        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, SAFE_LISTENING, GENERAL_SETTING, NONE,
     }
 
     private val V1_NC_ASM_TYPES = setOf(
@@ -845,6 +859,14 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.SAFE_VOLUME_CONTROL,
         SonyV2FunctionType.MAX_VOLUME_LEVEL_LIMIT -> ProbeDomain.SAFE_LISTENING
 
+        // SC probes every GENERAL_SETTING the device advertises, unconditionally:
+        // the slot's GET_CAPABILITY reply names the setting it carries (e.g.
+        // "MULTIPOINT_SETTING"), which is what establishes the 2-device switch.
+        SonyV2FunctionType.GENERAL_SETTING_1,
+        SonyV2FunctionType.GENERAL_SETTING_2,
+        SonyV2FunctionType.GENERAL_SETTING_3,
+        SonyV2FunctionType.GENERAL_SETTING_4 -> ProbeDomain.GENERAL_SETTING
+
         else -> ProbeDomain.NONE
     }
 
@@ -863,6 +885,10 @@ object SonyCapabilityProbe {
         SonyV1FunctionType.CRADLE_BATTERY_LEVEL -> ProbeDomain.BATTERY
 
         SonyV1FunctionType.SMART_TALKING_MODE -> ProbeDomain.SYSTEM
+
+        SonyV1FunctionType.GENERAL_SETTING1,
+        SonyV1FunctionType.GENERAL_SETTING2,
+        SonyV1FunctionType.GENERAL_SETTING3 -> ProbeDomain.GENERAL_SETTING
         else -> ProbeDomain.NONE
     }
 

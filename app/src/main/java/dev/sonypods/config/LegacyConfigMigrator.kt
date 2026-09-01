@@ -92,9 +92,6 @@ object LegacyConfigMigrator {
                     Log.d(TAG, "copied legacy earphone metadata (${earphonesJson.length} bytes)")
                 }
             }
-            // The probe cache moved into the engine's own process-local storage; drop
-            // the orphaned remote-store copy written by older builds.
-            remote.edit().remove(CapabilityProbeCache.PREFS_KEY).apply()
             // The remote store is authoritative from here on; the local copy is redundant
             // for migrated installs and empty for fresh ones.
             val deleted = context.deleteSharedPreferences(ConfigManager.PREFS_NAME)

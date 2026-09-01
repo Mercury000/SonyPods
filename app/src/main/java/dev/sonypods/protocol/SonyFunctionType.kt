@@ -258,6 +258,35 @@ enum class SonyV2FunctionType(val code: Byte, val table: SonyTable) {
     companion object {
         fun fromByteCode(table: SonyTable, byteCode: Byte): SonyV2FunctionType =
             entries.firstOrNull { it.table == table && it.code == byteCode } ?: OUT_OF_RANGE
+
+        /**
+         * The FunctionTypes SC's `FunctionCantBeUsedWithLEAConnectionType` maps to
+         * (one per entry, `getFunctionTypeTableSet2()`). Declaring one of these in
+         * the support-function list is what gives a feature the "unusable while LE
+         * Audio carries the audio" concept at all — SC's `mo58685x1()` is a plain
+         * membership test against the declared list.
+         *
+         * `BGM_MODE_SMALL_MIDDLE_LARGE_AND_ERRORCODE` looks out of place but is
+         * SC's own mapping for `BGM_MODE_ERROR_CODE_IN_LISTENING_OPTION`.
+         * Codes are unique across the set, so a code alone identifies the entry.
+         */
+        val LEA_RESTRICTION_TYPES: Set<SonyV2FunctionType> = setOf(
+            BGM_MODE_CANT_BE_USED_WITH_LEA_CONNECTION,
+            HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION,
+            PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION,
+            SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION,
+            GATT_CONNECTABLE_CANT_BE_USED_WITH_LEA_CONNECTION,
+            SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION,
+            QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION,
+            CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION,
+            VOICE_ASSISTANT_SETTINGS_CANT_BE_USED_WITH_LEA_CONNECTION,
+            VOICE_ASSISTANT_WAKE_WORD_CANT_BE_USED_WITH_LEA_CONNECTION,
+            BGM_MODE_SMALL_MIDDLE_LARGE_AND_ERRORCODE,
+            LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION,
+        )
+
+        fun leaRestrictionFromCode(code: Int): SonyV2FunctionType? =
+            LEA_RESTRICTION_TYPES.firstOrNull { (it.code.toInt() and 0xFF) == (code and 0xFF) }
     }
 }
 

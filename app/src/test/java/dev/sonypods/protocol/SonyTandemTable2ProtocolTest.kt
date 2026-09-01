@@ -359,23 +359,24 @@ class SonyTandemTable2ProtocolTest {
 
     @Test
     fun v2_parse_safeListeningNtfyParam_confirmation() {
-        // SAFE_LISTENING_NTFY_PARAM (0x59): [type, safeListening=ON(0x00),
-        // preview=OFF(0x01)] — the user's Safe Listening feature is on.
+        // SAFE_LISTENING_NTFY_PARAM (0x59): [type, feature, preview], ON=0x00 —
+        // the user's Safe Listening feature on, preview off.
         val raw = byteArrayOf(0x0F, 0x59, 0x01, 0x00, 0x01)
         val parsed = SonyTandemV2Table2Protocol.parse(raw)
 
         assertTrue(parsed is ParsedTandemResponse.SafeListeningParam)
         parsed as ParsedTandemResponse.SafeListeningParam
         assertEquals(SafeListeningInquiredTypeTable2.SAFE_LISTENING_TWS_1, parsed.type)
-        assertEquals(0x00, parsed.first)
-        assertEquals(0x01, parsed.second)
+        assertTrue(parsed.featureOn)
+        assertEquals(false, parsed.previewOn)
     }
 
     @Test
-    fun v2_parse_safeListeningRetParam_previewOn() {
-        // SAFE_LISTENING_RET_PARAM (0x57) carries the same layout as NTFY_PARAM,
-        // so the reply to GET_PARAM must parse as SafeListeningParam too.
-        val raw = byteArrayOf(0x0F, 0x57, 0x01, 0x01, 0x00)
+    fun v2_parse_safeListeningRetParam_featureOnly() {
+        // SAFE_LISTENING_RET_PARAM (0x57) carries only the feature flag:
+        // [type, EnableDisable]. The headset does not report preview state on a
+        // read, so previewOn is null rather than a value it never sent.
+        val raw = byteArrayOf(0x0F, 0x57, 0x01, 0x00, 0x00)
         val parsed = SonyTandemV2Table2Protocol.parse(raw)
 
         assertTrue(
@@ -383,8 +384,8 @@ class SonyTandemTable2ProtocolTest {
             parsed is ParsedTandemResponse.SafeListeningParam,
         )
         parsed as ParsedTandemResponse.SafeListeningParam
-        assertEquals(0x01, parsed.first)
-        assertEquals(0x00, parsed.second)
+        assertTrue(parsed.featureOn)
+        assertEquals(null, parsed.previewOn)
     }
 
     @Test

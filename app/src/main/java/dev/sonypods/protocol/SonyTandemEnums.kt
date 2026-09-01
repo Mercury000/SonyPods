@@ -239,6 +239,39 @@ enum class LeaInquiredType(val code: Byte) {
     TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD(0x00),
     HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD(0x01),
     TWS_SUPPORTS_LEA_UNI_LEA_BROAD(0x02),
+
+    /** The persistent "低功耗音频" setting (SC `CLASSIC_ONLY_LE_CLASSIC_SETTING`). */
+    CLASSIC_ONLY_LE_CLASSIC_SETTING(0x0C),
+
+    /**
+     * The headset asks the phone to move Tandem off the current target. SC
+     * answers by disconnecting the current target so its holding device is
+     * promoted (`d30.C15456c` → `C22925e.m89635e`). Payload is `[type]` only.
+     */
+    EXECUTE_TANDEM_TARGET_CHANGE(0x0D),
+
+    /**
+     * The headset names the transport and address Tandem should move to.
+     * Payload is `[type][ConnectionType][BD_ADDR 17 ASCII bytes]` (SC
+     * `kf0.C21788h`, total 20 bytes with the command byte).
+     */
+    CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID(0x0E),
+
+    /** The headset warns that the Tandem link is going down. Payload `[type]`. */
+    NOTIFY_DISCONNECTING_TANDEM(0x0F),
+}
+
+/** SC `mdr.v2.table1.lea.param.ConnectionType` — which transport Tandem moves to. */
+enum class LeaConnectionType(val code: Byte) {
+    SPP(0x00),
+    BLE_GATT(0x01),
+    OUT_OF_RANGE(0xFF.toByte()),
+    ;
+
+    companion object {
+        fun fromCode(code: Byte): LeaConnectionType =
+            entries.firstOrNull { it.code == code } ?: OUT_OF_RANGE
+    }
 }
 
 enum class LeaEnableDisable(val code: Byte) {

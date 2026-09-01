@@ -1,8 +1,5 @@
 package dev.sonypods.protocol
 
-import dev.sonypods.config.CapabilityCacheEntry
-import dev.sonypods.config.CapabilityProbeCache
-import dev.sonypods.config.FunctionCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -92,30 +89,5 @@ class SonyTandemCapabilityInfoTest {
         val response = SonyTandemV2Table1Protocol.parse(raw) as ParsedTandemResponse.ConnectCapabilityInfo
         assertEquals(5, response.capabilityCounter)
         assertEquals("A".repeat(128), response.identifier)
-    }
-
-    // ── Cache JSON round-trip ──
-
-    @Test
-    fun cache_roundTripsThroughJson() {
-        val entries = mapOf(
-            "AA:BB:CC:DD:EE:FF" to CapabilityCacheEntry(
-                counter = 0x07,
-                identifier = "LinkBuds S",
-                variant = "SONY_TANDEM_V2_TABLE_1",
-                transport = "SPP",
-                functions = listOf(FunctionCode(0x61, 0), FunctionCode(0x50, 1), FunctionCode(0xFF, 2)),
-                savedAtMs = 1234L,
-            )
-        )
-        val encoded = CapabilityProbeCache.encode(entries)
-        assertEquals(entries, CapabilityProbeCache.decode(encoded))
-    }
-
-    @Test
-    fun cache_decodeCorruptOrBlankJsonReturnsEmpty() {
-        assertTrue(CapabilityProbeCache.decode("not-json").isEmpty())
-        assertTrue(CapabilityProbeCache.decode(null).isEmpty())
-        assertTrue(CapabilityProbeCache.decode("").isEmpty())
     }
 }

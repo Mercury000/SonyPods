@@ -74,6 +74,9 @@ data class SonyStateSnapshot(
     val supportsPowerOff: Boolean = false,
     val supportsGestureOperations: Boolean = false,
     val supportsMultipoint: Boolean = false,
+    /** SC `mo58509L0()`: the device's support-function list declares multipoint
+     *  via Table2 FunctionType, independent of the runtime GS-slot discovery. */
+    val supportsMultipointViaFunction: Boolean = false,
     val supportsNoiseControl: Boolean = false,
     val supportsEq: Boolean = false,
     val supportsPlaybackControl: Boolean = false,
@@ -130,6 +133,11 @@ data class SonyStateSnapshot(
     val connectionQualityEnabled: Boolean? = null,
     val supportsConnectionQuality: Boolean = false,
     val connectionQualityRestrictedByLea: Boolean = false,
+    /**
+     * SC 的 FunctionCantBeUsedWithLEAConnectionType 对应的 FunctionType 集合。
+     * 来自能力表 support-function list，决定哪些功能在 LE Audio 连接下不可用。
+     */
+    val leaRestrictedFunctionTypes: Set<dev.sonypods.protocol.SonyV2FunctionType> = emptySet(),
     val connectionQualitySwitching: Boolean = false,
     val leaStreamingStatusL: String? = null,
     val leaStreamingStatusR: String? = null,
@@ -248,6 +256,23 @@ data class SonyStateSnapshot(
     val connectedViaLeAudio: Boolean
         get() = leAudioSystemConnected == true || usingLeAudio
 
+    /**
+     * SC `mo58685x1(type)` narrowed to the current connection: the headset declares the
+     * function unusable while LE Audio carries the audio, and LE Audio is in fact carrying
+     * it. A headset that never declares the entry has no restriction concept at all, so
+     * these stay false however the connection is routed.
+     */
+    private fun leaRestricted(type: dev.sonypods.protocol.SonyV2FunctionType): Boolean =
+        connectedViaLeAudio && type in leaRestrictedFunctionTypes
+
+    val quickAccessLeaRestricted: Boolean
+        get() = leaRestricted(dev.sonypods.protocol.SonyV2FunctionType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION)
+
+    val multipointLeaRestricted: Boolean
+        get() = leaRestricted(
+            dev.sonypods.protocol.SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION,
+        )
+
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(KEY_CONNECTED, connected)
         putBoolean(KEY_PROTOCOL_READY, protocolReady)
@@ -263,6 +288,7 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_POWER_OFF, supportsPowerOff)
         putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
         putBoolean(KEY_SUPPORTS_MULTIPOINT, supportsMultipoint)
+        putBoolean(KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION, supportsMultipointViaFunction)
         putBoolean(KEY_SUPPORTS_NOISE_CONTROL, supportsNoiseControl)
         putBoolean(KEY_SUPPORTS_EQ, supportsEq)
         putBoolean(KEY_SUPPORTS_PLAYBACK, supportsPlaybackControl)
@@ -308,6 +334,7 @@ data class SonyStateSnapshot(
         connectionQualityEnabled?.let { putBoolean(KEY_CONNECTION_QUALITY_ENABLED, it) }
         putBoolean(KEY_SUPPORTS_CONNECTION_QUALITY, supportsConnectionQuality)
         putBoolean(KEY_CONNECTION_QUALITY_RESTRICTED, connectionQualityRestrictedByLea)
+        putIntegerArrayList(KEY_LEA_RESTRICTED_TYPES, ArrayList(leaRestrictedFunctionTypes.map { it.code.toInt() and 0xFF }))
         putBoolean(KEY_CONNECTION_QUALITY_SWITCHING, connectionQualitySwitching)
         leaStatus?.let { putString(KEY_LEA, it) }
         leaStreamingStatusL?.let { putString(KEY_LEA_STREAMING_L, it) }
@@ -383,6 +410,7 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_POWER_OFF = "supports_power_off"
         private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
         private const val KEY_SUPPORTS_MULTIPOINT = "supports_multipoint"
+        private const val KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION = "supports_multipoint_via_function"
         private const val KEY_SUPPORTS_NOISE_CONTROL = "supports_noise_control"
         private const val KEY_SUPPORTS_EQ = "supports_eq"
         private const val KEY_SUPPORTS_PLAYBACK = "supports_playback"
@@ -434,6 +462,7 @@ data class SonyStateSnapshot(
         private const val KEY_CONNECTION_QUALITY_ENABLED = "connection_quality_enabled"
         private const val KEY_SUPPORTS_CONNECTION_QUALITY = "supports_connection_quality"
         private const val KEY_CONNECTION_QUALITY_RESTRICTED = "connection_quality_restricted"
+        private const val KEY_LEA_RESTRICTED_TYPES = "lea_restricted_types"
         private const val KEY_CONNECTION_QUALITY_SWITCHING = "connection_quality_switching"
         private const val KEY_LEA = "lea"
         private const val KEY_LEA_STREAMING_L = "lea_streaming_l"
@@ -504,6 +533,7 @@ data class SonyStateSnapshot(
             supportsPowerOff = bundle.getBoolean(KEY_SUPPORTS_POWER_OFF, false),
             supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
             supportsMultipoint = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT, false),
+            supportsMultipointViaFunction = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION, false),
             supportsNoiseControl = bundle.getBoolean(KEY_SUPPORTS_NOISE_CONTROL, false),
             supportsEq = bundle.getBoolean(KEY_SUPPORTS_EQ, false),
             supportsPlaybackControl = bundle.getBoolean(KEY_SUPPORTS_PLAYBACK, false),
@@ -553,6 +583,10 @@ data class SonyStateSnapshot(
             } else null,
             supportsConnectionQuality = bundle.getBoolean(KEY_SUPPORTS_CONNECTION_QUALITY, false),
             connectionQualityRestrictedByLea = bundle.getBoolean(KEY_CONNECTION_QUALITY_RESTRICTED, false),
+            leaRestrictedFunctionTypes = bundle.getIntegerArrayList(KEY_LEA_RESTRICTED_TYPES)
+                ?.mapNotNullTo(mutableSetOf()) {
+                    dev.sonypods.protocol.SonyV2FunctionType.leaRestrictionFromCode(it)
+                } ?: emptySet(),
             connectionQualitySwitching = bundle.getBoolean(KEY_CONNECTION_QUALITY_SWITCHING, false),
             leaStatus = bundle.getString(KEY_LEA),
             leaStreamingStatusL = bundle.getString(KEY_LEA_STREAMING_L),
@@ -639,6 +673,8 @@ data class SonyStateSnapshot(
                 supportsPowerOff = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.POWER_OFF) == true,
                 supportsGestureOperations = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.GESTURE_OPERATIONS) == true,
                 supportsMultipoint = state.multipointState.supported,
+                supportsMultipointViaFunction = state.connectedProfile
+                    ?.capabilities?.supportsMultipointViaFunction == true,
                 supportsNoiseControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.NOISE_CONTROL) == true,
                 supportsEq = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.EQ) == true,
                 supportsPlaybackControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.PLAYBACK_CONTROL) == true,
@@ -686,6 +722,8 @@ data class SonyStateSnapshot(
                     ?.supports(dev.sonypods.headphones.HeadphoneFeature.CONNECTION_QUALITY) == true,
                 connectionQualityRestrictedByLea = state.connectedProfile
                     ?.capabilities?.connectionQualityRestrictedByLea == true,
+                leaRestrictedFunctionTypes = state.connectedProfile
+                    ?.capabilities?.leaRestrictedFunctionTypes.orEmpty(),
                 connectionQualitySwitching = state.connectionQualitySwitching,
                 leaStreamingStatusL = state.leaState.streamingStatusL,
                 leaStreamingStatusR = state.leaState.streamingStatusR,

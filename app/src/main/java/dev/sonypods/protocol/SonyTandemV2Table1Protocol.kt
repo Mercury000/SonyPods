@@ -64,6 +64,8 @@ object SonyTandemV2Table1Protocol {
     private const val GS_DISPLAY_LANGUAGE_ENGLISH: Byte = 0x01
     // The official app's slot-title match (`GsTitleTitle.MULTIPOINT_SETTING`).
     const val GS_TITLE_MULTIPOINT_SETTING = "MULTIPOINT_SETTING"
+    /** Wire form of a Bluetooth address as the headset spells it (17 ASCII bytes). */
+    private val MDR_BLUETOOTH_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
     // ── Alert (bf0/*): device-driven FIXED_MESSAGE confirmation loop. When a
     // multipoint toggle needs a disconnect/reconnect, the device replies with
     // ALERT_NTFY_PARAM (0x99, FIXED_MESSAGE=0x00, AlertMessageType, AlertActionType)
@@ -1000,13 +1002,12 @@ object SonyTandemV2Table1Protocol {
             } else {
                 parseLeaStatus(payload, raw)
             }
-            LEA_RET_PARAM, LEA_NTFY_PARAM -> if (
-                payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
-            ) {
-                parseLeaParameterNotification(payload, raw)
-            } else {
-                parseLeaParam(payload, raw)
-            }
+            LEA_RET_PARAM, LEA_NTFY_PARAM -> parseLeaTandemTargetInstruction(payload, raw)
+                ?: if (payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING) {
+                    parseLeaParameterNotification(payload, raw)
+                } else {
+                    parseLeaParam(payload, raw)
+                }
             SYSTEM_RET_PARAM, SYSTEM_NTFY_PARAM -> parseSystemRetParam(payload, raw)
             SYSTEM_RET_EXT_PARAM, SYSTEM_NTFY_EXT_PARAM -> parseSystemRetExtendedParam(payload, raw)
             GS_RET_CAPABILITY -> parseGeneralSettingCapability(payload, raw)
@@ -1585,7 +1586,9 @@ object SonyTandemV2Table1Protocol {
             LeaInquiredType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
             LeaInquiredType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD ->
                 payload.getOrNull(2)?.toLeaStreamingStatus() to payload.getOrNull(3)?.toLeaStreamingStatus()
-            null -> null to null
+            // Only the three device-kind types carry streaming status; the
+            // target-change and setting types never appear on LEA_*_STATUS.
+            else -> null to null
         }
         return ParsedTandemResponse.LeaStatus(
             type = type,
@@ -1638,6 +1641,56 @@ object SonyTandemV2Table1Protocol {
                 if (positive) ALERT_ACTION_POSITIVE else ALERT_ACTION_NEGATIVE,
             ),
         )
+    /**
+     * LEA_NTFY_PARAM target-change instructions (SC `kf0.AbstractC21786g.b`
+     * accepts exactly four inquired types on this command; the 0x0C one is the
+     * persistent LE-Audio setting handled separately).
+     *
+     * - 0x0D / 0x0F: payload is `[type]` alone — SC checks `bArr.length == 2`
+     *   counting the command byte (`kf0.C21792j`).
+     * - 0x0E: payload is `[type][ConnectionType][BD_ADDR 17 ASCII]` — SC checks
+     *   `bArr.length == 20` and that bytes 3..19 parse as a Bluetooth address
+     *   (`kf0.C21788h`).
+     *
+     * Returns null when the payload is not one of these, so the caller falls
+     * through to the other LEA_*_PARAM shapes.
+     */
+    private fun parseLeaTandemTargetInstruction(
+        payload: ByteArray,
+        raw: ByteArray,
+    ): ParsedTandemResponse? {
+        val typeCode = payload.firstOrNull() ?: return null
+        val type = LeaInquiredType.entries.firstOrNull { it.code == typeCode } ?: return null
+        return when (type) {
+            LeaInquiredType.EXECUTE_TANDEM_TARGET_CHANGE,
+            LeaInquiredType.NOTIFY_DISCONNECTING_TANDEM -> {
+                if (payload.size != 1) return null
+                ParsedTandemResponse.LeaTandemTargetInstruction(
+                    type = type,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
+
+            LeaInquiredType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID -> {
+                if (payload.size != 19) return null
+                val connectionType = LeaConnectionType.fromCode(payload[1])
+                if (connectionType == LeaConnectionType.OUT_OF_RANGE) return null
+                val address = String(payload, 2, 17, Charsets.US_ASCII)
+                if (!MDR_BLUETOOTH_ADDRESS.matches(address)) return null
+                ParsedTandemResponse.LeaTandemTargetInstruction(
+                    type = type,
+                    connectionType = connectionType,
+                    targetAddress = address,
+                    values = payload.unsignedList(),
+                    raw = raw,
+                )
+            }
+
+            else -> null
+        }
+    }
+
     private fun parseLeaParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val typeCode = payload.firstOrNull()
         val type = LeaInquiredType.entries.firstOrNull { it.code == typeCode }

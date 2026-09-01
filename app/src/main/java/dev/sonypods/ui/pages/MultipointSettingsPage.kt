@@ -82,7 +82,9 @@ internal fun MultipointSettingsPage(
     // Sony's LC3 links carry no second device. The dashboard card stops being a link then, so this
     // page is normally out of reach — but the connection can hand over to LE Audio while it is
     // already open, and the switch must not stay live into a write the headset would refuse.
-    val leAudioRestricted = uiState.connectedViaLeAudio
+    // Whether it does comes from the capability table (SC's
+    // FunctionCantBeUsedWithLEAConnectionType), not from LE Audio being up on its own.
+    val leAudioRestricted = uiState.multipointLeaRestricted
 
     var pendingDisconnect by remember { mutableStateOf<MultipointDeviceSnapshot?>(null) }
     var pendingUnpair by remember { mutableStateOf<MultipointDeviceSnapshot?>(null) }

@@ -269,6 +269,46 @@ sealed interface ParsedTandemResponse {
         override val raw: ByteArray,
     ) : ParsedTandemResponse
 
+    /**
+     * The headset's Tandem-target instructions (LEA_NTFY_PARAM, SC
+     * `kf0.AbstractC21786g` family). A Sony headset with two bonded identities
+     * decides itself which one carries Tandem and says so:
+     *
+     * - [LeaInquiredType.EXECUTE_TANDEM_TARGET_CHANGE] (0x0D) — move off the
+     *   current target; SC disconnects it so the holding identity is promoted.
+     * - [LeaInquiredType.NOTIFY_DISCONNECTING_TANDEM] (0x0F) — the link is about
+     *   to go down.
+     * - [LeaInquiredType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID] (0x0E) —
+     *   names the transport and address to move to; [connectionType] and
+     *   [targetAddress] are set only for this one.
+     */
+    data class LeaTandemTargetInstruction(
+        val type: LeaInquiredType,
+        val connectionType: LeaConnectionType? = null,
+        val targetAddress: String? = null,
+        val values: List<Int>,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is LeaTandemTargetInstruction) return false
+            return type == other.type &&
+                connectionType == other.connectionType &&
+                targetAddress == other.targetAddress &&
+                values == other.values &&
+                raw.contentEquals(other.raw)
+        }
+
+        override fun hashCode(): Int {
+            var result = type.hashCode()
+            result = 31 * result + connectionType.hashCode()
+            result = 31 * result + targetAddress.hashCode()
+            result = 31 * result + values.hashCode()
+            result = 31 * result + raw.contentHashCode()
+            return result
+        }
+    }
+
     /** Table2 LEA_RET_CAPABILITY (0x61); its shape depends on the inquired type. */
     data class LeaCapability(
         val inquiredTypeCode: Int,

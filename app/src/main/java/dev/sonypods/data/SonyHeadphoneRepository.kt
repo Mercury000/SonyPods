@@ -41,17 +41,10 @@ import dev.sonypods.leaudio.LeAudioSwitchCoordinator
 import dev.sonypods.leaudio.LeAudioDevicePairer
 import dev.sonypods.leaudio.LeAudioProfileGateway
 import dev.sonypods.media.MediaPlaybackController
-import dev.sonypods.config.CapabilityCacheEntry
-import dev.sonypods.config.CapabilityValueCache
-import dev.sonypods.config.CapabilityProbeCache
-import dev.sonypods.config.EqBandInfoCache
-import dev.sonypods.config.FunctionCode
-import dev.sonypods.config.GeneralSettingCapabilityCache
-import dev.sonypods.config.GestureActionCapabilityCache
-import dev.sonypods.config.GestureKeyCapabilityCache
-import dev.sonypods.config.GesturePresetCapabilityCache
-import dev.sonypods.config.QuickAccessActionCapabilityCache
-import dev.sonypods.config.QuickAccessCapabilityCache
+import dev.sonypods.config.CapabilityCacheManager
+import dev.sonypods.config.CapabilityStorage
+import dev.sonypods.device.UnifiedDeviceIdentityService
+import dev.sonypods.device.IdentityType
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DeviceInfoType
@@ -62,6 +55,8 @@ import dev.sonypods.protocol.EqBandInformationType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
+import dev.sonypods.protocol.LeaConnectionType
+import dev.sonypods.protocol.LeaInquiredType
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -145,6 +140,30 @@ private const val SAFE_LISTENING_ACTIVATION_MAX_ATTEMPTS = 8
 
 /** 连接质量切换重连窗口的硬上限；官方连接进度框同为 30s 自动关闭。 */
 private const val CONNECTION_QUALITY_SWITCH_TIMEOUT_MS = 30_000L
+
+/** `exchanged_capabilities.store_group`: SC passes 0 for the V1 command
+ * tableset and 1 for V2, so the two generations never share a row. */
+private const val STORE_GROUP_V1 = 0
+private const val STORE_GROUP_V2 = 1
+
+/** `exchanged_capabilities.command_table_number`: SC's TandemfamilyTableNumber
+ * MDR_NO1 / MDR_NO2. */
+private const val TANDEM_TABLE_NUMBER_NO1 = 12
+private const val TANDEM_TABLE_NUMBER_NO2 = 14
+
+/** Idle window after the last capability reply before the working set is written
+ * to SQLite, so one connect costs one write per row (SC writes once, at the end
+ * of its initializer). */
+private const val CAPABILITY_SAVE_DEBOUNCE_MS = 1_500L
+
+/** Headset-named Tandem migration: how long to give the new link before
+ * reconnecting to the target address (SC connects straight after its own
+ * disconnect; the new link needs a moment to come up first on our stack). */
+private const val TANDEM_MIGRATION_RECONNECT_DELAY_MS = 2_000L
+
+/** How long a pending migration may stay unresolved before ordinary
+ * connection management resumes. */
+private const val TANDEM_MIGRATION_TIMEOUT_MS = 15_000L
 private const val GESTURE_REFRESH_AFTER_WRITE_MS = 450L
 /** Keep the optimistic GS value alive while the device asks for reconnection
  * confirmation and while the link is being re-established. */
@@ -191,10 +210,58 @@ private val ESSENTIAL_INITIAL_VALUE_DOMAINS = setOf(
 )
 private val MULTIPOINT_ADDRESS = Regex("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
 
-private fun List<CapabilityValueCache>.replaceCapabilityValue(value: CapabilityValueCache): List<CapabilityValueCache> =
-    filterNot {
-        it.domain == value.domain && it.inquiredTypeCode == value.inquiredTypeCode
-    } + value
+/**
+ * One Tandem session's capability initializer, mirroring Sound Connect's
+ * `uv.d.c` (V1) / `wv.e.e` (V2).
+ *
+ * SC creates one of these per connection and registers it on that connection's
+ * own dispatcher (`le0.C22925e.m89633c`), unregistering when the initializer
+ * returns. Every value the initializer decides on — the identifier and tableset
+ * counter from CONNECT_RET_CAPABILITY_INFO, the store group, the
+ * support-function collector — is therefore instance state, and a frame from a
+ * headset that has since been replaced can never reach a newer session's state.
+ *
+ * Ours is selected by the inbound frame's source address for the same reason,
+ * and holds the same values so nothing is read off a global that a reconnect may
+ * already have moved.
+ */
+private class CapabilityProbeSession(
+    /** The headset this session belongs to; frames are matched against it. */
+    var deviceAddress: String?,
+    /** `exchanged_capabilities.store_group`, fixed at session start. */
+    val storeGroup: Int,
+) {
+    /** CONNECT_RET_CAPABILITY_INFO is outstanding. */
+    var awaitingCapabilityInfo = false
+
+    /** Identifier and tableset revision the headset reported, verbatim. */
+    var identifier: String? = null
+    var capabilityCounter: Int? = null
+
+    /** A live per-domain probe is running, so its replies are worth storing. */
+    var probing = false
+
+    /** Stored capabilities are being replayed; replies must not be re-recorded. */
+    var replaying = false
+
+    /**
+     * One entry per GET_SUPPORT_FUNCTION that went out, removed as its reply
+     * lands: the probe completes when this empties and nothing else ends the
+     * wait. A list, not a set, so two requests mapping to the same table still
+     * expect two replies.
+     */
+    val pendingSupportFunctionTables = mutableListOf<dev.sonypods.protocol.SonyTable>()
+
+    /**
+     * A GET_SUPPORT_FUNCTION burst is out and its replies are still being
+     * collected. Without it a duplicate or unsolicited RET_SUPPORT_FUNCTION
+     * arriving after the probe closed would rebuild the profile from that one
+     * table alone, narrowing what the full set had produced.
+     */
+    var supportFunctionProbeRunning = false
+    val supportFunctionsByTable =
+        mutableMapOf<dev.sonypods.protocol.SonyTable, List<SonySupportedFunction>>()
+}
 
 private data class PendingPlaybackStatus(
     val expected: PlaybackStatus,
@@ -881,42 +948,93 @@ class SonyHeadphoneRepository private constructor(
 
     // ── Capability-probe cache (SC `exchanged_capabilities` semantics) ──
 
-    /** Durable writer for the encoded cache map. The engine is the only consumer of
-     * the probe cache, so persistence lives in the host process's own data directory;
-     * the writer is wired by [dev.sonypods.hook.SonyEngineHost]. */
+    /** SQLite capability storage + working set, the Sound Connect
+     * `exchanged_capabilities` shape. Wired by [dev.sonypods.hook.SonyEngineHost]. */
     @Volatile
-    private var cacheWriter: ((String) -> Unit)? = null
+    private var capabilityStorage: CapabilityStorage? = null
+
+    @Volatile
+    private var capabilityCacheManager: CapabilityCacheManager? = null
+
+    /**
+     * Debounced flush of the capability working set (see [scheduleCapabilitySave]).
+     *
+     * Deliberately does NOT close the recording window: SC's initializer records
+     * every PersistableCapability reply it processes and stores once at the end,
+     * and our per-domain probes are fire-and-forget with multi-second gaps (SPP
+     * playback/gesture replies land ~2.5s after the support-function burst). A
+     * save timer firing inside such a gap used to flip `probing` off and tear the
+     * row down to the support-function blobs alone — the stored set then had no
+     * GS capability reply, and the multipoint slot could never be restored. The
+     * window stays open for the whole session; recording stops with the session
+     * itself at disconnect.
+     */
+    private val capabilitySaveRunnable = Runnable {
+        capabilityCacheManager?.saveAll()
+    }
 
     /** Hook-host fallback invoked only when the current model has no catalog image. */
     @Volatile
     private var modelCatalogFallbackRequester: ((String?, String?, Int?) -> Unit)? = null
 
-    /** In-process cache overlay: consulted before the prefs store on every connect. */
-    private val capabilityCache = ConcurrentHashMap<String, CapabilityCacheEntry>()
+    /**
+     * The live Tandem session's capability initializer. Recreated for every
+     * session, exactly as SC constructs one `uv.d.c` / `wv.e.e` per connection;
+     * frames are matched against its [CapabilityProbeSession.deviceAddress] so a
+     * late reply from a replaced headset cannot touch it.
+     */
+    private var capabilitySession: CapabilityProbeSession? = null
 
-    private var awaitingCapabilityInfo = false
-    private var pendingCapabilityCounter: Int? = null
-    private var pendingCapabilityIdentifier = ""
+    /**
+     * Cached capability session from a completed probe, preserved across a Tandem
+     * target migration (SC `je0.C19229b.m77698c0`: "Tandem target change case.
+     * Keep mActiveMdr instance.").  When the target identity disconnects and the
+     * holding identity is about to promote, the session is stashed here keyed by
+     * the physical headset's control address.  The next `probeCapabilities()` call
+     * for the same control address restores it instead of re-probing.
+     */
+    private var cachedTandemTargetSession: CapabilityProbeSession? = null
+
+    /**
+     * A headset-directed Tandem target migration in flight (LEA_NTFY_PARAM
+     * 0x0D / 0x0E). Sound Connect keeps the same session across the move
+     * ("Tandem target change case. Keep mActiveMdr instance."); ours is
+     * transport-level, so the equivalent is stashing the completed capability
+     * session ([cachedTandemTargetSession]) and restoring it on the promoted
+     * identity instead of re-running the initializer.
+     *
+     * 0x0E names the address (and ConnectionType) Tandem moves to; 0x0D only
+     * asks the current target to close, leaving the promotion to whatever
+     * reconnects next.
+     */
+    private class PendingTandemMigration(
+        val targetAddress: String?,
+        val connectionType: LeaConnectionType?,
+    )
+
+    private var pendingTandemMigration: PendingTandemMigration? = null
+
+    /** Address a headset-directed migration is moving Tandem to, if one is in flight. */
+    fun pendingTandemMigrationTarget(): String? = pendingTandemMigration?.targetAddress
+
+    /**
+     * Safety valve: a migration that never lands (the new link never comes up,
+     * the connect fails) must not block ordinary connects forever.
+     */
+    private val tandemMigrationTimeoutRunnable = Runnable {
+        if (pendingTandemMigration != null) {
+            appendLog("Tandem migration timed out; clearing pending state")
+            pendingTandemMigration = null
+        }
+    }
+
+    private fun scheduleTandemMigrationTimeout() {
+        mainHandler.removeCallbacks(tandemMigrationTimeoutRunnable)
+        mainHandler.postDelayed(tandemMigrationTimeoutRunnable, TANDEM_MIGRATION_TIMEOUT_MS)
+    }
+
     /** Set only by the official device-originated flexible Alert type 13. */
     private var skipLeAudioPairingGuide = false
-    /**
-     * One entry per GET_SUPPORT_FUNCTION command that went out, removed as its
-     * RET_SUPPORT_FUNCTION comes back. We sent the requests, so the number of replies to
-     * expect is known exactly: the probe finishes when this empties, and nothing else ends
-     * the wait — no clock. A link that dies clears it through [clearSupportFunctionProbeState].
-     *
-     * A list rather than a set so two requests that map to the same table still expect two
-     * replies.
-     */
-    private val pendingSupportFunctionTables = mutableListOf<dev.sonypods.protocol.SonyTable>()
-    /**
-     * A GET_SUPPORT_FUNCTION burst is out and its replies are still being collected. Without
-     * it a duplicate or unsolicited RET_SUPPORT_FUNCTION arriving after the probe closed would
-     * re-run [finishSupportFunctionProbe] against that one table alone, narrowing a profile
-     * that was built from the full set.
-     */
-    private var supportFunctionProbeRunning = false
-    private val supportFunctionsByTable = mutableMapOf<dev.sonypods.protocol.SonyTable, List<SonySupportedFunction>>()
     /**
      * Domains from [HeadphoneAdapterRegistry.initialValueDomains] that the connection-time
      * refresh burst has not been answered on yet. Empty means either "not armed" or
@@ -958,8 +1076,9 @@ class SonyHeadphoneRepository private constructor(
         }
     }
     private val capabilityInfoTimeoutRunnable = Runnable {
-        if (awaitingCapabilityInfo) {
-            awaitingCapabilityInfo = false
+        val session = capabilitySession
+        if (session != null && session.awaitingCapabilityInfo) {
+            session.awaitingCapabilityInfo = false
             appendLog("GET_CAPABILITY_INFO timed out; falling back to full support-function probe")
             // A hot-reload or a transport failure may invalidate the repository while
             // this delayed callback is still queued.  Do not let the fallback probe
@@ -1050,16 +1169,20 @@ class SonyHeadphoneRepository private constructor(
         // the next libxposed generation, so explicitly clear every connection-scoped
         // value here; otherwise protocolReady remains true while availableChannels()
         // is empty and the next generation will never reconnect.
+        pendingTandemMigration = null
+        cachedTandemTargetSession = null
         onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
         pendingQuickAccessFunctionCodes = null
-        cacheWriter = null
+        capabilityCacheManager?.clear()
         modelCatalogFallbackRequester = null
     }
 
-    /** Wire the durable cache writer (host-process local file). */
-    fun attachCapabilityCacheWriter(writer: ((String) -> Unit)?) {
-        cacheWriter = writer
+    /** Wire the SQLite capability storage (Sound Connect `exchanged_capabilities`
+     * shape) and its in-memory working set. */
+    fun attachCapabilityStorage(storage: CapabilityStorage) {
+        capabilityStorage = storage
+        capabilityCacheManager = CapabilityCacheManager(storage)
     }
 
     /**
@@ -1099,29 +1222,6 @@ class SonyHeadphoneRepository private constructor(
             }
         }
         return refreshed
-    }
-
-    /** Install a cache map restored from the host-process persistence file. */
-    fun installCapabilityCache(json: String) {
-        val entries = CapabilityProbeCache.decode(json)
-        if (entries.isNotEmpty()) {
-            capabilityCache.clear()
-            capabilityCache.putAll(entries)
-            appendLog("Capability cache installed ${entries.size} entries from persisted store", writeLogcat = false)
-        }
-    }
-
-    private fun readCapabilityCache(address: String): CapabilityCacheEntry? {
-        val entry = capabilityCache[address] ?: return null
-        // A stale-version entry was written by a probe that queried fewer tables;
-        // treating it as a miss rebuilds the cache once with the current probe.
-        return entry.takeIf { it.version == CapabilityProbeCache.CURRENT_CACHE_VERSION }
-    }
-
-    /** Encode and hand the current cache map to the durable writer. The in-process
-     * overlay is already up to date at every call site, so nothing to reinstall. */
-    private fun persistCapabilityCache() {
-        cacheWriter?.invoke(CapabilityProbeCache.encode(capabilityCache))
     }
 
     /**
@@ -1306,8 +1406,90 @@ class SonyHeadphoneRepository private constructor(
      * support-function probe on a mismatch or when the device never replies.
      */
     private fun probeCapabilities() {
-        if (awaitingCapabilityInfo) return
+        val connectedAddress = _state.value.connectedDevice?.address
+        // SC Tandem target migration: "Keep mActiveMdr instance." When the target
+        // identity disconnects and the holding identity promotes, the completed
+        // capability session stashes in [cachedTandemTargetSession].  If the new
+        // identity resolves to the same physical headset (same control address),
+        // restore the session instead of re-probing — the capability tableset does
+        // not change across a target migration. This check runs BEFORE the
+        // holding-identity skip below: a migration that promotes the pure-LE half
+        // makes that half the target, and skipping first would strand the session.
+        val cached = cachedTandemTargetSession
+        if (cached != null && connectedAddress != null) {
+            val cachedControl = cached.deviceAddress?.let {
+                UnifiedDeviceIdentityService.resolveControlAddress(it)
+            }
+            val newControl = UnifiedDeviceIdentityService.resolveControlAddress(connectedAddress)
+            if (cachedControl.equals(newControl, ignoreCase = true)) {
+                appendLog(
+                    "Restoring cached capability session for tandem target migration: " +
+                        "control=$newControl, identifier=${cached.identifier}"
+                )
+                capabilitySession = cached
+                cached.deviceAddress = connectedAddress
+                cachedTandemTargetSession = null
+                pendingTandemMigration = null
+                mainHandler.removeCallbacks(tandemMigrationTimeoutRunnable)
+                // The session is complete — replay the capability table onto the
+                // new profile so the UI stays populated while the initializer gate
+                // opens.
+                val functions = cached.supportFunctionsByTable
+                    .toSortedMap(compareBy { it.ordinal })
+                    .values
+                    .flatten()
+                    .distinctBy { it.table to it.code }
+                if (functions.isNotEmpty()) {
+                    _state.update { current ->
+                        val profile = current.connectedProfile?.let { profile ->
+                            SonyCapabilityProbe.applyToProfile(profile, functions, profile.transport)
+                        } ?: current.connectedProfile
+                        current.copy(
+                            connectedProfile = profile,
+                            eqUiCapability = profile?.eqUiCapability,
+                            supportedFeatures = featureStatusesFor(profile),
+                        )
+                    }
+                }
+                refreshBasics(initial = true)
+                return
+            } else {
+                // Different physical headset — drop the stale cache.
+                appendLog(
+                    "Discarding cached tandem session: " +
+                        "cached=$cachedControl, new=$newControl"
+                )
+                cachedTandemTargetSession = null
+                pendingTandemMigration = null
+                mainHandler.removeCallbacks(tandemMigrationTimeoutRunnable)
+            }
+        }
+        // Tandem target is the single identity that carries control and therefore owns the
+        // capability tableset; the other bonded identity of a dual-mode headset is only a
+        // holding connection (Sound Connect `je0.C19229b`: one target + one holding slot,
+        // and only the target's session ever runs the initializer). A pure-LE holding
+        // identity advertises a different, LEA-only support-function list, so letting it
+        // probe would build the profile from the wrong identity.
+        if (connectedAddress != null) {
+            if (isLeOnlyHoldingIdentity(connectedAddress)) {
+                appendLog(
+                    "Skipping capability probe for LE holding identity $connectedAddress; " +
+                        "control identity owns the tableset"
+                )
+                refreshBasics(initial = true)
+                return
+            }
+        }
+        // One initializer per physical headset at a time, whatever the transport.
+        capabilitySession?.let { live ->
+            if (live.awaitingCapabilityInfo || live.supportFunctionProbeRunning) return
+        }
         val profile = ensureConnectedProfile()
+        val session = CapabilityProbeSession(
+            deviceAddress = _state.value.connectedDevice?.address,
+            storeGroup = storeGroupFor(profile),
+        )
+        capabilitySession = session
         // SC C30916e opens every session with CONNECT_GET_PROTOCOL_INFO
         // (m112238v0 runs before the capability gate) — keep that order. Sending
         // this query directly AFTER a capability exchange deterministically wedges
@@ -1332,7 +1514,7 @@ class SonyHeadphoneRepository private constructor(
                 SonyCapabilityProbe.buildGetCapabilityInfoCommand(profile)
             }.getOrNull()
             if (capabilityInfoCommand != null) {
-                awaitingCapabilityInfo = true
+                session.awaitingCapabilityInfo = true
                 appendLog("Sending GET_CAPABILITY_INFO (SC counter gate)")
                 sendCommand(capabilityInfoCommand)
                 mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
@@ -1345,6 +1527,10 @@ class SonyHeadphoneRepository private constructor(
 
     /** The RET_SUPPORT_FUNCTION-driven probe (used on counter mismatch / no reply). */
     private fun runProbeFromSupportFunction(profile: ConnectedHeadphoneProfile) {
+        val session = capabilitySession ?: CapabilityProbeSession(
+            deviceAddress = _state.value.connectedDevice?.address,
+            storeGroup = storeGroupFor(profile),
+        ).also { capabilitySession = it }
         clearSupportFunctionProbeState()
         val supportCommands = runCatching {
             SonyCapabilityProbe.buildGetSupportFunctionCommands(profile, client.availableChannels())
@@ -1358,326 +1544,225 @@ class SonyHeadphoneRepository private constructor(
         supportCommands.forEach { command ->
             // The Table2 query may ride the HPC channel (LE Audio has no MC at
             // probe time), so classify by the request's dataType, not the channel.
-            pendingSupportFunctionTables += if (command.bytes.firstOrNull() == SonyTandemConstants.DATA_MDR_NO2) {
+            session.pendingSupportFunctionTables += if (command.bytes.firstOrNull() == SonyTandemConstants.DATA_MDR_NO2) {
                 dev.sonypods.protocol.SonyTable.NO_2
             } else {
                 dev.sonypods.protocol.SonyTable.NO_1
             }
         }
-        supportFunctionProbeRunning = true
+        session.supportFunctionProbeRunning = true
         appendLog(
             "Probing support function (SC C29903d/C30916e capability sequence); " +
-                "awaiting ${supportCommands.size} table(s) $pendingSupportFunctionTables"
+                "awaiting ${supportCommands.size} table(s) ${session.pendingSupportFunctionTables}"
         )
         supportCommands.forEach(::sendCommand)
     }
 
-    /** CONNECT_RET_CAPABILITY_INFO (0x03): the capability counter gate. */
+    /**
+     * CONNECT_RET_CAPABILITY_INFO (0x03): the capability gate.
+     *
+     * Mirrors SC's `m109368F` (V1) / `m112161H` (V2): the reply carries the
+     * device's tableset revision and its identifier. When the stored counter for
+     * this (identifier, storeGroup, Table1) row matches, the whole per-domain
+     * probe is omitted and the tableset is rebuilt from the stored raw capability
+     * bytes; otherwise a full probe runs and repopulates the row.
+     */
     private fun applyConnectCapabilityInfo(response: ParsedTandemResponse.ConnectCapabilityInfo) {
-        if (!awaitingCapabilityInfo) return
-        awaitingCapabilityInfo = false
+        val session = capabilitySession ?: return
+        if (!session.awaitingCapabilityInfo) return
+        session.awaitingCapabilityInfo = false
         mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
-        val address = _state.value.connectedDevice?.address.orEmpty()
-        val cached = readCapabilityCache(address)
-        val identifierMatches = cached?.identifier.isNullOrBlank() ||
-            response.identifier.isBlank() ||
-            cached.identifier == response.identifier
-        if (cached != null && cached.counter == response.capabilityCounter && identifierMatches && restoreProfileFromCache(cached)) {
+        val identifier = response.identifier.takeIf { it.isNotBlank() }
+        session.identifier = identifier
+        session.capabilityCounter = response.capabilityCounter
+        val storeGroup = session.storeGroup
+        val storedCounter = identifier
+            ?.let { capabilityStorage?.readCounter(it, storeGroup, TANDEM_TABLE_NUMBER_NO1) }
+            ?: -1
+        if (storedCounter != -1 && storedCounter == response.capabilityCounter &&
+            identifier != null && restoreCapabilitiesFromStorage(session, identifier, storeGroup)
+        ) {
             appendLog(
-                "Capability counter ${response.capabilityCounter} matches cache " +
-                    "(identifier=${response.identifier}) → omit capability probe; restoring profile"
+                "Capability counter ${response.capabilityCounter} matches stored " +
+                    "(identifier=$identifier storeGroup=$storeGroup) → omit capability probe; " +
+                    "rebuilt from stored capabilities"
             )
-            clearSupportFunctionProbeState()
             refreshBasics(initial = true)
             return
         }
         appendLog(
-            "Capability counter ${response.capabilityCounter} cache=${cached?.counter ?: "none"} " +
-                "(identifier=${response.identifier}) → start get capability"
+            "Capability counter ${response.capabilityCounter} stored=" +
+                "${storedCounter.takeIf { it != -1 } ?: "none"} " +
+                "(identifier=$identifier storeGroup=$storeGroup) → start get capability"
         )
-        pendingCapabilityCounter = response.capabilityCounter
-        pendingCapabilityIdentifier = response.identifier
+        session.probing = true
         runProbeFromSupportFunction(ensureConnectedProfile())
     }
 
-    /** Re-derive the probe-derived profile from a cached function list. Returns
-     * false when the cached entry has no functions (nothing to restore). */
-    private fun restoreProfileFromCache(entry: CapabilityCacheEntry): Boolean {
-        if (entry.functions.isEmpty()) return false
+    /** SC's `store_group`: 0 for the V1 command tableset, 1 for V2. Fixed when the
+     * session's initializer is created, never re-read off a global that a
+     * reconnect may already have moved. */
+    private fun storeGroupFor(profile: ConnectedHeadphoneProfile): Int =
+        when (profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) {
+            HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1,
+            HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE2 -> STORE_GROUP_V1
+            else -> STORE_GROUP_V2
+        }
+
+    /**
+     * Whether [address] is the pure-LE half of a dual-mode headset — Sound
+     * Connect's "holding" identity. The control identity (whose
+     * [UnifiedDeviceIdentityService.resolveControlAddress] resolves to itself)
+     * is the Tandem target and owns the capability tableset; the LE half holds
+     * the link but must never run the initializer, or it would overwrite the
+     * tableset with its LEA-only support-function list.
+     */
+    private fun isLeOnlyHoldingIdentity(address: String): Boolean {
+        val type = UnifiedDeviceIdentityService.getIdentityType(address)
+        if (type != IdentityType.LE) return false
+        // A dual-mode headset bonds one control identity and one pure-LE identity.
+        // The control identity resolves to itself and is the Tandem target; the LE
+        // half resolves to the control address (≠ itself), making it holding.
+        // A genuinely LE-only device has no control alias — it resolves to itself —
+        // so it is not holding; it is the target.
+        val control = UnifiedDeviceIdentityService.resolveControlAddress(address)
+        return !control.equals(address, ignoreCase = true)
+    }
+
+    /** SC's `command_table_number`, taken from the frame's dataType. */
+    private fun tableNumberFor(raw: ByteArray): Int =
+        if (raw.firstOrNull() == SonyTandemConstants.DATA_MDR_NO2) {
+            TANDEM_TABLE_NUMBER_NO2
+        } else {
+            TANDEM_TABLE_NUMBER_NO1
+        }
+
+    /**
+     * Rebuild the capability tableset from the stored raw capability replies,
+     * re-parsing them exactly as a live probe would (SC `C29900a.m109330c` /
+     * `wv.a`: the stored bytes go back through the same parsers into the same
+     * builder). Nothing is derived from a summarized view, so no capability can
+     * be lost by having gone uncaptured.
+     *
+     * The support-function replies rebuild the profile first; every other stored
+     * reply is then applied against it.
+     */
+    private fun restoreCapabilitiesFromStorage(
+        session: CapabilityProbeSession,
+        identifier: String,
+        storeGroup: Int,
+    ): Boolean {
+        val storage = capabilityStorage ?: return false
         val profile = _state.value.connectedProfile ?: return false
-        val functions = SonyCapabilityProbe.restoreFunctions(profile, entry.functions)
-        if (functions.isEmpty()) return false
+        val stored = listOf(TANDEM_TABLE_NUMBER_NO1, TANDEM_TABLE_NUMBER_NO2)
+            .flatMap { table ->
+                storage.readCapabilities(identifier, storeGroup, table).orEmpty()
+                    .map { payload -> rawForStoredPayload(table, payload) }
+            }
+        if (stored.isEmpty()) return false
+        val parsedFrames = stored.mapNotNull { bytes ->
+            runCatching { HeadphoneAdapterRegistry.parse(profile, bytes) }.getOrNull()
+        }
+        val supportFunctions = parsedFrames
+            .filterIsInstance<ParsedTandemResponse.SupportFunction>()
+            .flatMap { it.functions }
+            .distinctBy { it.table to it.code }
+        if (supportFunctions.isEmpty()) return false
+        // A completed initializer always produced per-domain capability replies
+        // alongside the support-function lists; SC's one-pass save guarantees a
+        // stored row carries them. A row holding nothing but the support-function
+        // blobs is a torn write (the recording window closed mid-probe) — treat it
+        // as a miss so the full probe re-runs and rewrites the row complete.
+        val capabilityFrames = parsedFrames.filterNot {
+            it is ParsedTandemResponse.SupportFunction ||
+                it is ParsedTandemResponse.ConnectCapabilityInfo
+        }
+        if (capabilityFrames.isEmpty()) {
+            appendLog(
+                "Stored capabilities for $identifier contain no capability replies; " +
+                    "re-probing to rebuild the row",
+                writeLogcat = false,
+            )
+            return false
+        }
+
         val restored = SonyCapabilityProbe.applyToProfile(
-            profile, functions, profile.transport,
-            // A cache restore is not a live probe: claiming its evidence stamp
-            // would let the engine skip every later genuine probe burst.
+            profile,
+            supportFunctions,
+            profile.transport,
             markProbed = false,
         )
-            .withCachedCapabilityDetails(entry)
-            .withCachedMultipointSlot(entry)
-        _state.update {
-            val quickAccess = entry.quickAccessCapability?.toQuickAccessState(it.quickAccessState)
-            val gestureCapabilities = entry.gestureCapabilities.toGestureCapabilities()
-            it.copy(
+        _state.update { current ->
+            current.copy(
                 connectedProfile = restored,
                 eqUiCapability = restored.eqUiCapability,
                 supportedFeatures = featureStatusesFor(restored),
-                playbackState = if (entry.playVolumeStep > 0) {
-                    it.playbackState.copy(musicVolumeStep = entry.playVolumeStep)
-                } else {
-                    it.playbackState
-                },
-                safeListeningMinimumInterval = entry.safeListeningMinimumInterval?.takeIf { value -> value > 0 }
-                    ?: it.safeListeningMinimumInterval,
-                quickAccessState = quickAccess ?: it.quickAccessState,
-                gestureOperationsState = if (gestureCapabilities.isNotEmpty()) {
-                    it.gestureOperationsState.copy(capabilities = gestureCapabilities)
-                } else {
-                    it.gestureOperationsState
-                },
-                multipointState = it.multipointState.copy(
-                    supported = it.multipointState.supported || entry.multipointTypeCode != null,
-                    inquiredType = entry.multipointTypeCode ?: it.multipointState.inquiredType,
-                    maxPairedDevices = entry.maxPairedDevices.takeIf { value -> value > 0 }
-                        ?: it.multipointState.maxPairedDevices,
-                    maxConnectedDevices = entry.maxConnectedDevices.takeIf { value -> value > 0 }
-                        ?: it.multipointState.maxConnectedDevices,
-                    supportsFileTransfer = entry.supportsFileTransfer
-                        ?: it.multipointState.supportsFileTransfer,
-                ),
+                initialValuesReady = false,
+                essentialValuesReady = false,
             )
         }
+        // Replay only capability replies. The support-function replies have
+        // already built the profile above; routing them through the live probe
+        // completion state would dispatch a new probe burst and violate SC's
+        // cache-hit path.
+        session.replaying = true
+        try {
+            capabilityFrames.forEach { applyParsed(it, profile.defaultResponseChannel()) }
+        } finally {
+            session.replaying = false
+        }
         appendLog(
-            "Restored profile from cache: ${functions.size} functions, " +
-                "battery=${restored.capabilities.batteryQueries}, writableNC=${restored.protocolEvidence.count { it.startsWith("probe:NCASM") }}",
+            "Rebuilt capabilities from storage: ${stored.size} stored command(s), " +
+                "${supportFunctions.size} function(s)",
             writeLogcat = false,
         )
         return true
     }
 
-    /** Restore a freshly-resolved (neutral) profile from any cached probe result
-     * for this address, so an early connection-state event does not reset
-     * formFactor to UNKNOWN. Returns the input unchanged when there is nothing
-     * to restore. */
-    private fun resolveFromCache(resolved: ConnectedHeadphoneProfile, address: String?): ConnectedHeadphoneProfile {
-        if (address.isNullOrBlank()) return resolved
-        val entry = readCapabilityCache(address) ?: return resolved
-        if (entry.functions.isEmpty()) {
-            return resolved.withCachedCapabilityDetails(entry).withCachedMultipointSlot(entry)
-        }
-        val functions = SonyCapabilityProbe.restoreFunctions(resolved, entry.functions)
-        if (functions.isEmpty()) {
-            return resolved.withCachedCapabilityDetails(entry).withCachedMultipointSlot(entry)
-        }
-        return SonyCapabilityProbe.applyToProfile(resolved, functions, resolved.transport, markProbed = false)
-            .withCachedCapabilityDetails(entry)
-            .withCachedMultipointSlot(entry)
-    }
-
-    /** Restore capability details that cannot be re-derived from the support-function list. */
-    private fun ConnectedHeadphoneProfile.withCachedCapabilityDetails(entry: CapabilityCacheEntry): ConnectedHeadphoneProfile {
-        val currentEq = capabilities.eqConfig
-        val cachedPresets = entry.eqAvailablePresetCodes.mapNotNull { code ->
-            EqPresetId.entries.firstOrNull { it.code.toInt() and 0xFF == code }
-        }
-        val cachedBandCount = entry.eqBandInfo.size.takeIf { it > 0 } ?: currentEq.bandCount
-        val cachedHasClearBass = entry.eqHasClearBass
-        // Mirror applyEqEbbExtendedInfo: a cached ten-frequency-band table with
-        // no Clear Bass entry is the SC `EqBandSteps10band` geometry.
-        val cachedIsTenBand = entry.eqBandInfo.size == 10 && cachedHasClearBass != true
-        var restoredFeatures = capabilities.features
-        // Devices without the EBB function still have Clear Bass as the
-        // SPECIFIC_INFORMATION band of the PRESET_EQ array, and canWrite()
-        // gates the slider on this feature; ten-band devices have none.
-        if (cachedHasClearBass == true) {
-            restoredFeatures = restoredFeatures + HeadphoneFeature.CLEAR_BASS
-        } else if (cachedIsTenBand) {
-            restoredFeatures = restoredFeatures - HeadphoneFeature.CLEAR_BASS
-        }
-        if (entry.multipointTypeCode != null || entry.maxConnectedDevices > 0) {
-            restoredFeatures = restoredFeatures + HeadphoneFeature.MULTIPOINT
-        }
-        val restoredCapabilities = capabilities.copy(
-            features = restoredFeatures,
-            eqConfig = currentEq.copy(
-                availablePresets = cachedPresets.ifEmpty { currentEq.availablePresets },
-                bandCount = cachedBandCount,
-                hasClearBass = cachedHasClearBass ?: currentEq.hasClearBass,
-                isTenBand = cachedIsTenBand || currentEq.isTenBand,
-            ),
-            supportsWindNoiseReduction = capabilities.supportsWindNoiseReduction ||
-                (entry.supportsV1WindNoise == true),
-            upscalingInquiredTypeCode = capabilities.upscalingInquiredTypeCode
-                ?: entry.upscalingInquiredTypeCode,
-            upscalingTypeCode = capabilities.upscalingTypeCode ?: entry.upscalingTypeCode,
-        )
-        return copy(
-            capabilities = restoredCapabilities,
-            featureBindings = buildFeatureBindings(featureProtocolMap, restoredCapabilities),
-            multipointTypeCode = entry.multipointTypeCode ?: multipointTypeCode,
-        )
-    }
-
-    private fun QuickAccessCapabilityCache.toQuickAccessState(current: QuickAccessState): QuickAccessState? {
-        val key = QuickAccessKey.entries.firstOrNull { it.code.toInt() and 0xFF == keyCode }
-            ?: return null
-        val type = AssignableSettingsType.entries.firstOrNull { it.code.toInt() and 0xFF == typeCode }
-            ?: return null
-        return current.copy(
-            key = key,
-            type = type,
-            actions = actions.mapNotNull { action ->
-                AssignableSettingsAction.entries.firstOrNull {
-                    it.code.toInt() and 0xFF == action.actionCode
-                }?.let {
-                    QuickAccessActionState(
-                        action = it,
-                        currentFunctionCode = current.functionCodes.getOrNull(actions.indexOf(action)),
-                        defaultFunctionCode = action.defaultFunctionCode,
-                        availableFunctionCodes = action.availableFunctionCodes,
-                    )
-                }
+    /** Stored payloads omit the outer data type, as SC's `C15171e` does. */
+    private fun rawForStoredPayload(tableNumber: Int, payload: ByteArray): ByteArray =
+        byteArrayOf(
+            if (tableNumber == TANDEM_TABLE_NUMBER_NO2) {
+                SonyTandemConstants.DATA_MDR_NO2
+            } else {
+                SonyTandemConstants.DATA_MDR
             },
-        )
+        ) + payload
+
+    /**
+     * Whether a reply is one of SC's PersistableCapability commands — the
+     * capability grammar a tableset is built from, never live state. These are
+     * the frames stored verbatim so a counter hit can rebuild without probing.
+     */
+    private fun ParsedTandemResponse.isPersistableCapability(): Boolean = when (this) {
+        is ParsedTandemResponse.SupportFunction,
+        is ParsedTandemResponse.ConnectCapabilityInfo,
+        is ParsedTandemResponse.CapabilityInfo,
+        is ParsedTandemResponse.NcAsmCapabilityInfo,
+        is ParsedTandemResponse.EqEbbExtendedInfo,
+        is ParsedTandemResponse.PlaybackCapability,
+        is ParsedTandemResponse.UpscalingCapability,
+        is ParsedTandemResponse.QuickAccessCapability,
+        is ParsedTandemResponse.AssignableSettingsCapability,
+        is ParsedTandemResponse.AssignableSettingsPresets,
+        is ParsedTandemResponse.MultipointCapability,
+        is ParsedTandemResponse.GeneralSettingCapability,
+        is ParsedTandemResponse.SafeListeningCapability,
+        is ParsedTandemResponse.LeaCapability -> true
+        else -> false
     }
 
-    private fun List<GestureKeyCapabilityCache>.toGestureCapabilities(): List<AssignableSettingsKeyCapability> =
-        mapNotNull { keyCache ->
-            val key = AssignableSettingsKey.entries.firstOrNull {
-                it.code.toInt() and 0xFF == keyCache.keyCode
-            } ?: return@mapNotNull null
-            val type = AssignableSettingsType.entries.firstOrNull {
-                it.code.toInt() and 0xFF == keyCache.typeCode
-            } ?: return@mapNotNull null
-            val defaultPreset = AssignableSettingsPreset.entries.firstOrNull {
-                it.code.toInt() and 0xFF == keyCache.defaultPresetCode
-            } ?: return@mapNotNull null
-            val actionsByPreset = keyCache.actionsByPreset.mapNotNull { presetCache ->
-                val preset = AssignableSettingsPreset.entries.firstOrNull {
-                    it.code.toInt() and 0xFF == presetCache.presetCode
-                } ?: return@mapNotNull null
-                val actions = presetCache.actions.mapNotNull { actionCache ->
-                    val action = AssignableSettingsAction.entries.firstOrNull {
-                        it.code.toInt() and 0xFF == actionCache.actionCode
-                    } ?: return@mapNotNull null
-                    val defaultFunction = AssignableSettingsFunction.entries.firstOrNull {
-                        it.code.toInt() and 0xFF == actionCache.defaultFunctionCode
-                    } ?: return@mapNotNull null
-                    val functions = actionCache.availableFunctionCodes.mapNotNull { code ->
-                        AssignableSettingsFunction.entries.firstOrNull {
-                            it.code.toInt() and 0xFF == code
-                        }
-                    }
-                    AssignableSettingsActionCapability(
-                        action = action,
-                        defaultFunction = defaultFunction,
-                        availableFunctions = functions.ifEmpty { listOf(defaultFunction) },
-                    )
-                }
-                preset to actions
-            }.toMap()
-            AssignableSettingsKeyCapability(
-                key = key,
-                type = type,
-                defaultPreset = defaultPreset,
-                presets = keyCache.presets.mapNotNull { code ->
-                    AssignableSettingsPreset.entries.firstOrNull {
-                        it.code.toInt() and 0xFF == code
-                    }
-                },
-                actionsByPreset = actionsByPreset,
-            )
-        }
-
-    private fun ConnectedHeadphoneProfile.withCachedMultipointSlot(entry: CapabilityCacheEntry): ConnectedHeadphoneProfile =
-        entry.multipointGsSlot.takeIf { it >= 0 }?.let { copy(multipointGsSlot = it) } ?: this
-
-    /** Persist the current probe result (counter + function list) for this device. */
-    private fun saveCapabilityCache(functions: List<SonySupportedFunction>) {
-        val address = _state.value.connectedDevice?.address ?: return
-        val counter = pendingCapabilityCounter ?: return
-        val profile = _state.value.connectedProfile ?: return
-        val previous = capabilityCache[address]
-        val eqConfig = profile.capabilities.eqConfig
-        val entry = CapabilityCacheEntry(
-            counter = counter,
-            version = CapabilityProbeCache.CURRENT_CACHE_VERSION,
-            identifier = pendingCapabilityIdentifier,
-            variant = profile.protocolName,
-            transport = profile.transport.name,
-            functions = functions.map {
-                FunctionCode(it.code.toInt() and 0xFF, it.order, it.table.name)
-            },
-            // The PLAY capability RET may not have arrived yet at probe-save time;
-            // keep whatever was learned before, applyPlaybackCapability updates it.
-            playVolumeStep = _state.value.playbackState.musicVolumeStep.takeIf { it > 0 }
-                ?: capabilityCache[address]?.playVolumeStep
-                ?: -1,
-            safeListeningMinimumInterval = _state.value.safeListeningMinimumInterval
-                ?: capabilityCache[address]?.safeListeningMinimumInterval,
-            multipointGsSlot = profile.multipointGsSlot ?: capabilityCache[address]?.multipointGsSlot ?: -1,
-            multipointEnabled = _state.value.multipointState.multipointEnabled
-                ?: capabilityCache[address]?.multipointEnabled,
-            capabilityValues = previous?.capabilityValues.orEmpty(),
-            eqBandInfo = previous?.eqBandInfo.orEmpty(),
-            eqAvailablePresetCodes = eqConfig.availablePresets.map { it.code.toInt() and 0xFF },
-            eqHasClearBass = eqConfig.hasClearBass,
-            playbackSupportsButtons = previous?.playbackSupportsButtons,
-            playbackSupportsMetadata = previous?.playbackSupportsMetadata,
-            quickAccessCapability = previous?.quickAccessCapability,
-            gestureCapabilities = previous?.gestureCapabilities.orEmpty(),
-            multipointTypeCode = _state.value.multipointState.inquiredType
-                ?: previous?.multipointTypeCode,
-            maxPairedDevices = _state.value.multipointState.maxPairedDevices
-                .takeIf { it > 0 } ?: previous?.maxPairedDevices ?: 0,
-            maxConnectedDevices = _state.value.multipointState.maxConnectedDevices
-                .takeIf { it > 0 } ?: previous?.maxConnectedDevices ?: 0,
-            supportsFileTransfer = _state.value.multipointState.supportsFileTransfer
-                ?: previous?.supportsFileTransfer,
-            upscalingInquiredTypeCode = profile.capabilities.upscalingInquiredTypeCode
-                ?: previous?.upscalingInquiredTypeCode,
-            // The AUDIO capability RET usually lands after this save; keep the
-            // previously learned generation until applyUpscalingCapability updates it.
-            upscalingTypeCode = profile.capabilities.upscalingTypeCode
-                ?: previous?.upscalingTypeCode,
-            generalSettingCapability = previous?.generalSettingCapability,
-            supportsV1WindNoise = previous?.supportsV1WindNoise
-                ?: profile.capabilities.supportsWindNoiseReduction
-                    .takeIf { NcAsmInquiredType.V1_TABLE_SET1_NC_ASM in profile.capabilities.noiseControlQueryTypes },
-            savedAtMs = System.currentTimeMillis(),
-        )
-        capabilityCache[address] = entry
-        appendLog("Capability cache saved for $address counter=$counter functions=${functions.size}", writeLogcat = false)
-        persistCapabilityCache()
-    }
-
-    /** Update one device's persisted capability entry without losing fields from
-     * the earlier support-function save. */
-    private fun updateCapabilityCache(address: String, transform: (CapabilityCacheEntry) -> CapabilityCacheEntry) {
-        val current = capabilityCache[address] ?: return
-        val updated = transform(current).copy(savedAtMs = System.currentTimeMillis())
-        if (updated == current) return
-        capabilityCache[address] = updated
-        persistCapabilityCache()
-    }
-
-    /** Update the small amount of multipoint state that is useful before the
-     * first refresh response on the next connection. Capability cache writes are
-     * durable in the app process, so this also removes the visible GS discovery
-     * delay after a scope/process restart. */
-    private fun saveMultipointCache() {
-        val address = _state.value.connectedDevice?.address ?: return
-        val current = capabilityCache[address] ?: return
-        val profile = _state.value.connectedProfile
-        val multipoint = _state.value.multipointState
-        val updated = current.copy(
-            multipointGsSlot = profile?.multipointGsSlot ?: current.multipointGsSlot,
-            multipointEnabled = multipoint.multipointEnabled ?: current.multipointEnabled,
-            savedAtMs = System.currentTimeMillis(),
-        )
-        if (updated == current) return
-        capabilityCache[address] = updated
-        persistCapabilityCache()
+    /**
+     * Flush the working set to SQLite once the capability traffic has gone quiet.
+     *
+     * SC writes the whole table in one pass at the end of its initializer
+     * (`m65487h`). Our per-domain probes are fire-and-forget, so the equivalent
+     * moment is a short idle window after the last capability reply; coalescing
+     * also keeps one connect to a single write per row.
+     */
+    private fun scheduleCapabilitySave() {
+        mainHandler.removeCallbacks(capabilitySaveRunnable)
+        mainHandler.postDelayed(capabilitySaveRunnable, CAPABILITY_SAVE_DEBOUNCE_MS)
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -2794,11 +2879,48 @@ class SonyHeadphoneRepository private constructor(
             pendingQuickAccessFunctionCodes = null
             mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
             stopSafeListeningPoll()
-            awaitingCapabilityInfo = false
-            pendingCapabilityCounter = null
-            pendingCapabilityIdentifier = ""
+            // Flush whatever the session accumulated before dropping it: the link
+            // may have gone while the debounce window was still open. Then the
+            // initializer goes with the session, as SC's does when its Callable
+            // returns and unregisters from the dispatcher.
+            mainHandler.removeCallbacks(capabilitySaveRunnable)
+            capabilityCacheManager?.saveAll()
+            capabilityCacheManager?.clear()
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
-            clearSupportFunctionProbeState()
+            // SC's Tandem target migration ("Keep mActiveMdr instance"): when
+            // the headset initiates a target change or the link drops while a
+            // pending migration is recorded, stash the completed session so the
+            // next probe for the same control address can reuse it.
+            val session = capabilitySession
+            if (session != null && pendingTandemMigration != null &&
+                session.supportFunctionsByTable.isNotEmpty()
+            ) {
+                val controlAddress = _state.value.connectedDevice?.address?.let {
+                    UnifiedDeviceIdentityService.resolveControlAddress(it)
+                }
+                appendLog(
+                    "Caching capability session for target migration: " +
+                        "control=$controlAddress, identifier=${session.identifier}"
+                )
+                cachedTandemTargetSession = session
+            }
+            capabilitySession = null
+            // A 0x0E migration names the identity Tandem moves to. SC's
+            // `changeTandemConnectionProfile` connects that address (with the
+            // headset's ConnectionType) once its own disconnect completes; the
+            // delay gives the new link a moment to come up first.
+            pendingTandemMigration?.let { migration ->
+                val targetAddress = migration.targetAddress ?: return@let
+                val connectionType = migration.connectionType ?: LeaConnectionType.BLE_GATT
+                appendLog(
+                    "Tandem migration: reconnecting to headset-named target " +
+                        "$targetAddress over $connectionType"
+                )
+                mainHandler.postDelayed(
+                    { client.connectTandemTarget(targetAddress, connectionType) },
+                    TANDEM_MIGRATION_RECONNECT_DELAY_MS,
+                )
+            }
             clearInitialValueGate()
             // The setting transaction rides the live transport: once the link is gone it can
             // never see its 0x49 notification, so keeping the gate armed wedged the UI on
@@ -2829,18 +2951,30 @@ class SonyHeadphoneRepository private constructor(
             // Re-resolving to the neutral profile here would discard the
             // RET_SUPPORT_FUNCTION probe results (batteryQueries, writable NC
             // types), reverting refresh to single battery and disabling writes.
-            val sameDevice = it.connectedDevice?.address == device?.address
+            //
+            // A swap between the two bonded identities of one dual-mode headset is
+            // the SAME device — SC's Tandem target migration keeps the existing
+            // session and capabilities across the move ("Tandem target change
+            // case. Keep mActiveMdr instance."), it never re-initializes. So the
+            // profile survives an LE↔control address change too.
+            val sameDevice = it.connectedDevice?.address.equals(device?.address, ignoreCase = true) ||
+                it.connectedDevice?.address?.let { addr ->
+                    device?.address?.let { other ->
+                        UnifiedDeviceIdentityService.resolveControlAddress(addr)
+                            .equals(UnifiedDeviceIdentityService.resolveControlAddress(other), ignoreCase = true)
+                    }
+                } == true
             val profile = if (connected && device != null) {
                 if (sameDevice && it.connectedProfile != null) {
                     it.connectedProfile
                 } else {
                     // A connection-state event may arrive before the capability
-                    // probe runs (GATT and SPP each fire one). Resolving to the
-                    // neutral profile here would reset formFactor to UNKNOWN and
-                    // leave the headset rendered as TWS until a fresh probe lands.
-                    // If a probe result is cached for this device, restore it now.
-                    val resolved = HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
-                    resolveFromCache(resolved, device.address)
+                    // probe runs (GATT and SPP each fire one), so this is the
+                    // neutral profile. Nothing is restored here: like SC, the
+                    // capability tableset only exists once the initializer has
+                    // read CONNECT_RET_CAPABILITY_INFO and either replayed the
+                    // stored capabilities or probed.
+                    HeadphoneAdapterRegistry.resolve(device, deviceInfo.modelName)
                 }
             } else {
                 null
@@ -2888,19 +3022,17 @@ class SonyHeadphoneRepository private constructor(
                     !connected -> MultipointState()
                     sameDevice -> it.multipointState
                     else -> {
-                        val cached = device?.address?.let(::readCapabilityCache)
                         val optimisticValue = pendingForConnection?.let { request ->
                             if (request.decision == MultipointToggleDecision.CANCELLED) request.original else request.target
                         }
                         MultipointState(
-                            supported = profile?.supports(HeadphoneFeature.MULTIPOINT) == true,
-                            inquiredType = cached?.multipointTypeCode,
-                            maxPairedDevices = cached?.maxPairedDevices ?: 0,
-                            maxConnectedDevices = cached?.maxConnectedDevices ?: 0,
-                            supportsFileTransfer = cached?.supportsFileTransfer,
-                            // Restore the last confirmed value immediately. A
-                            // following GS GET still remains authoritative.
-                            multipointEnabled = optimisticValue ?: cached?.multipointEnabled,
+                            // The capability replay / probe establishes support;
+                            // a peripheral type code and a GS MULTIPOINT_SETTING
+                            // slot are the two things that can prove it, and
+                            // GS-driven devices only ever report the latter.
+                            supported = profile?.supports(HeadphoneFeature.MULTIPOINT) == true ||
+                                profile?.multipointGsSlot != null,
+                            multipointEnabled = optimisticValue,
                             pendingMultipointToggle = pendingForConnection
                                 ?.takeIf { it.decision != MultipointToggleDecision.CANCELLED }
                                 ?.target,
@@ -2962,7 +3094,21 @@ class SonyHeadphoneRepository private constructor(
         probeCapabilities()
     }
 
-    override fun onMessage(channel: TandemChannel, raw: ByteArray) {
+    override fun onMessage(channel: TandemChannel, raw: ByteArray, sourceAddress: String?) {
+        // A frame belongs to the transport session that produced it. SC gets this
+        // structurally — its dispatcher is one instance per device and only feeds
+        // that device's own handlers — so a reply that arrives after the headset
+        // has been replaced simply has nobody left to deliver to. Dropping the
+        // mismatch here is the same guarantee: without it a late reply would be
+        // applied to, and cached under, whichever headset is connected now.
+        val owner = capabilitySession?.deviceAddress ?: _state.value.connectedDevice?.address
+        if (sourceAddress != null && owner != null && !sourceAddress.equals(owner, ignoreCase = true)) {
+            appendLog(
+                "Drop RX [$channel] frame from $sourceAddress: session belongs to $owner",
+                writeLogcat = false,
+            )
+            return
+        }
         val profile = _state.value.connectedProfile
             ?: runCatching { ensureConnectedProfile() }.getOrNull()
             ?: run {
@@ -2971,6 +3117,31 @@ class SonyHeadphoneRepository private constructor(
             }
         val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)
         appendLog("RX [$channel] ${raw.hexString()} · ${parsed::class.simpleName}", kind = DebugLogKind.RX)
+        recordCapabilityIfPersistable(parsed, raw)
+        applyParsed(parsed, channel)
+        // After the handler, so the value is already in the state when the gate opens.
+        noteInitialValue(parsed)
+    }
+
+    /** SC persists every PersistableCapability reply (raw bytes) so a later hit
+     * rebuilds the tableset from them; mirror that into the SQLite cache. */
+    private fun recordCapabilityIfPersistable(parsed: ParsedTandemResponse, raw: ByteArray) {
+        val manager = capabilityCacheManager ?: return
+        val session = capabilitySession ?: return
+        if (!session.probing || session.replaying || !parsed.isPersistableCapability()) return
+        val identifier = session.identifier ?: return
+        val counter = session.capabilityCounter ?: return
+        manager.put(
+            identifier,
+            session.storeGroup,
+            tableNumberFor(raw),
+            counter,
+            raw.drop(1).toByteArray(),
+        )
+        scheduleCapabilitySave()
+    }
+
+    private fun applyParsed(parsed: ParsedTandemResponse, channel: TandemChannel) {
         when (parsed) {
             is ParsedTandemResponse.DeviceInfo -> applyDeviceInfo(parsed)
             is ParsedTandemResponse.CommonStatus -> applyCommonStatus(parsed)
@@ -3000,6 +3171,7 @@ class SonyHeadphoneRepository private constructor(
             )
             is ParsedTandemResponse.LeaSettingAvailability -> applyLeaSettingAvailability(parsed)
             is ParsedTandemResponse.LeaParameterNotification -> applyLeaParameterNotification(parsed)
+            is ParsedTandemResponse.LeaTandemTargetInstruction -> applyLeaTandemTargetInstruction(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
             is ParsedTandemResponse.QuickAccessCapability -> applyQuickAccessCapability(parsed)
             is ParsedTandemResponse.QuickAccessStatus -> applyQuickAccessStatus(parsed)
@@ -3039,8 +3211,6 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.NcAsmCapabilityInfo -> applyNcAsmCapabilityInfo(parsed)
             is ParsedTandemResponse.CapabilityInfo -> applyCapabilityInfo(parsed)
         }
-        // After the handler, so the value is already in the state when the gate opens.
-        noteInitialValue(parsed)
     }
 
     override fun onLog(message: String) {
@@ -3315,19 +3485,6 @@ class SonyHeadphoneRepository private constructor(
                 }
             }
         }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    eqBandInfo = response.bands.map { band ->
-                        EqBandInfoCache(
-                            typeCode = band.type?.code?.toInt()?.and(0xFF) ?: -1,
-                            value = band.value,
-                        )
-                    },
-                )
-            }
-        }
     }
 
     private fun sendEqBandSteps(label: String, rawSteps: List<Int>, preset: EqPresetId?) {
@@ -3465,29 +3622,6 @@ class SonyHeadphoneRepository private constructor(
         _state.update {
             it.copy(playbackState = it.playbackState.copy(musicVolumeStep = response.musicVolumeStep))
         }
-        // Mirror into the capability cache (official keeps the step in its
-        // capability DB) so a cache-hit reconnect restores the volume row
-        // without waiting for this round-trip. Entry creation stays owned by
-        // the probe path; only refresh an existing entry here.
-        val address = _state.value.connectedDevice?.address ?: return
-        val existing = capabilityCache[address] ?: return
-        if (existing.playVolumeStep != response.musicVolumeStep) {
-            capabilityCache[address] = existing.copy(playVolumeStep = response.musicVolumeStep)
-            persistCapabilityCache()
-        }
-        updateCapabilityCache(address) { entry ->
-            entry.copy(
-                capabilityValues = entry.capabilityValues.replaceCapabilityValue(
-                    CapabilityValueCache(
-                        domain = "PLAY",
-                        inquiredTypeCode = response.inquiredTypeCode,
-                        values = response.raw.unsignedList(),
-                    ),
-                ),
-                playbackSupportsButtons = response.supportsPlaybackButtons,
-                playbackSupportsMetadata = response.supportsMetadata,
-            )
-        }
     }
 
     /** Once a session exists, a name slot must never render blank: settled
@@ -3544,15 +3678,6 @@ class SonyHeadphoneRepository private constructor(
         // The poll read the device interval now; restart it so the new cadence
         // applies immediately instead of at the next fallback tick.
         startSafeListeningReadoutPoll()
-        // saveCapabilityCache runs before the per-domain capability replies land,
-        // so persist the SL minimum interval here when it arrives (mirrors
-        // applyPlaybackCapability's playVolumeStep update).
-        val address = _state.value.connectedDevice?.address ?: return
-        val existing = capabilityCache[address] ?: return
-        if (existing.safeListeningMinimumInterval != response.minimumInterval) {
-            capabilityCache[address] = existing.copy(safeListeningMinimumInterval = response.minimumInterval)
-            persistCapabilityCache()
-        }
     }
 
     private fun applySafeListeningParam(response: ParsedTandemResponse.SafeListeningParam) {
@@ -3658,11 +3783,6 @@ class SonyHeadphoneRepository private constructor(
                     ),
                 ),
             )
-        }
-        _state.value.connectedDevice?.address?.let { address ->
-            updateCapabilityCache(address) { entry ->
-                entry.copy(upscalingTypeCode = response.upscalingTypeCode)
-            }
         }
     }
 
@@ -3792,6 +3912,73 @@ class SonyHeadphoneRepository private constructor(
         leAudioCoordinator.onHeadsetSetting(next.enabled)
     }
 
+    /**
+     * The headset's Tandem-target instructions (LEA_NTFY_PARAM 0x0D / 0x0E / 0x0F).
+     *
+     * A dual-identity Sony headset decides itself which bonded identity carries
+     * Tandem and says so on the live session. SC reacts by disconnecting the
+     * current target so its holding identity is promoted, and — crucially —
+     * keeps the same session object and the same capability tableset across the
+     * move ("Tandem target change case. Keep mActiveMdr instance."), never
+     * re-running its initializer against the new identity.
+     *
+     * Our transport reconnects rather than swapping a socket underneath, so the
+     * equivalent is [cachedTandemTargetSession]: the table stays keyed to the
+     * physical headset and is restored on the new identity instead of re-probed.
+     *
+     * Gating mirrors SC's registration: the 0x0D handler only exists for devices
+     * declaring `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD` (0x43,
+     * `u70.C29444f`), the 0x0E observer only for devices declaring
+     * `CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID` (0x44, `C14319c.mo61835c`).
+     */
+    private fun applyLeaTandemTargetInstruction(
+        response: ParsedTandemResponse.LeaTandemTargetInstruction,
+    ) {
+        val capabilities = _state.value.connectedProfile?.capabilities
+        when (response.type) {
+            LeaInquiredType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID -> {
+                if (capabilities?.declaresChangeTandemConnectionProfile != true) {
+                    appendLog("Ignoring 0x0E tandem profile change: device does not declare 0x44")
+                    return
+                }
+                val address = response.targetAddress
+                if (address.isNullOrBlank()) {
+                    appendLog("0x0E tandem profile change carries no target address; ignored")
+                    return
+                }
+                appendLog(
+                    "Headset moves Tandem to $address over ${response.connectionType}; " +
+                        "closing current target for migration"
+                )
+                pendingTandemMigration = PendingTandemMigration(address, response.connectionType)
+                scheduleTandemMigrationTimeout()
+                // SC `C14356p0.m62041c0` (changeTandemConnectionProfile): disconnect
+                // now, connect the named target when it lands — the reconnect is
+                // scheduled in onConnectionStateChanged.
+                mainHandler.post { client.disconnect() }
+            }
+
+            LeaInquiredType.EXECUTE_TANDEM_TARGET_CHANGE -> {
+                if (capabilities?.declaresTandemTargetChange != true) {
+                    appendLog("Ignoring 0x0D tandem target change: device does not declare 0x43")
+                    return
+                }
+                appendLog("Headset asks to move Tandem off the current target; closing it")
+                // No address named: promotion is left to whatever reconnects
+                // (SC `d30.C15456c`: "call Mdr.disconnectFromCurrentTandemTarget").
+                pendingTandemMigration = pendingTandemMigration
+                    ?: PendingTandemMigration(null, null)
+                scheduleTandemMigrationTimeout()
+                mainHandler.post { client.disconnect() }
+            }
+
+            LeaInquiredType.NOTIFY_DISCONNECTING_TANDEM ->
+                appendLog("Headset warns the Tandem link is going down")
+
+            else -> Unit
+        }
+    }
+
     private fun applyLeaSettingAvailability(
         response: ParsedTandemResponse.LeaSettingAvailability,
     ) {
@@ -3848,24 +4035,6 @@ class SonyHeadphoneRepository private constructor(
                 )
             )
         }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    quickAccessCapability = QuickAccessCapabilityCache(
-                        keyCode = response.key.code.toInt() and 0xFF,
-                        typeCode = response.type.code.toInt() and 0xFF,
-                        actions = response.actions.map { action ->
-                            QuickAccessActionCapabilityCache(
-                                actionCode = action.action.code.toInt() and 0xFF,
-                                defaultFunctionCode = action.defaultFunctionCode,
-                                availableFunctionCodes = action.availableFunctionCodes,
-                            )
-                        },
-                    ),
-                )
-            }
-        }
     }
 
     private fun applyQuickAccessStatus(response: ParsedTandemResponse.QuickAccessStatus) {
@@ -3893,35 +4062,6 @@ class SonyHeadphoneRepository private constructor(
                     rawCapability = response.values,
                 )
             )
-        }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    gestureCapabilities = response.keys.map { key ->
-                        GestureKeyCapabilityCache(
-                            keyCode = key.key.code.toInt() and 0xFF,
-                            typeCode = key.type.code.toInt() and 0xFF,
-                            defaultPresetCode = key.defaultPreset.code.toInt() and 0xFF,
-                            presets = key.presets.map { it.code.toInt() and 0xFF },
-                            actionsByPreset = key.actionsByPreset.map { (preset, actions) ->
-                                GesturePresetCapabilityCache(
-                                    presetCode = preset.code.toInt() and 0xFF,
-                                    actions = actions.map { action ->
-                                        GestureActionCapabilityCache(
-                                            actionCode = action.action.code.toInt() and 0xFF,
-                                            defaultFunctionCode = action.defaultFunction.code.toInt() and 0xFF,
-                                            availableFunctionCodes = action.availableFunctions.map {
-                                                it.code.toInt() and 0xFF
-                                            },
-                                        )
-                                    },
-                                )
-                            },
-                        )
-                    },
-                )
-            }
         }
     }
 
@@ -4029,17 +4169,6 @@ class SonyHeadphoneRepository private constructor(
                     raw = response.raw.unsignedList(),
                 ),
             )
-        }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    multipointTypeCode = response.inquiredType,
-                    maxPairedDevices = response.maxPairedDevices,
-                    maxConnectedDevices = response.maxConnectedDevices,
-                    supportsFileTransfer = response.fileTransferInMultiConnection == 0,
-                )
-            }
         }
     }
 
@@ -4158,27 +4287,6 @@ class SonyHeadphoneRepository private constructor(
             )
         }
         appendLog("GS multipoint slot discovered: 0x%02X (%s)".format(type, response.title))
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    capabilityValues = entry.capabilityValues.replaceCapabilityValue(
-                        CapabilityValueCache(
-                            domain = "GENERAL_SETTING",
-                            inquiredTypeCode = type,
-                            values = response.raw.unsignedList(),
-                        ),
-                    ),
-                    generalSettingCapability = GeneralSettingCapabilityCache(
-                        settingType = response.settingType,
-                        stringFormat = response.stringFormat,
-                        title = response.title,
-                        description = response.description,
-                    ),
-                )
-            }
-        }
-        saveMultipointCache()
         scheduleMultipointRefresh()
     }
 
@@ -4247,7 +4355,6 @@ class SonyHeadphoneRepository private constructor(
                 ),
             )
         }
-        saveMultipointCache()
     }
 
     private fun reconcileMultipointToggleTimeout() {
@@ -4266,7 +4373,6 @@ class SonyHeadphoneRepository private constructor(
                 pendingMultipointToggle = null,
             ))
         }
-        saveMultipointCache()
     }
 
     /** V2 Table1 ALERT_NTFY_PARAM (0x99, FIXED_MESSAGE): surface the multipoint
@@ -4425,24 +4531,28 @@ class SonyHeadphoneRepository private constructor(
         }
         val table = response.table.takeIf { it != dev.sonypods.protocol.SonyTable.INVALID }
             ?: dev.sonypods.protocol.SonyTable.NO_1
-        if (!supportFunctionProbeRunning) {
+        val session = capabilitySession
+        if (session == null || !session.supportFunctionProbeRunning) {
             // Every table we asked for has already been accounted for. Feeding this one
             // through would rebuild the profile from it alone, dropping the functions the
             // other tables contributed.
             appendLog("Support-function table $table arrived outside a probe; ignored")
             return
         }
-        supportFunctionsByTable[table] = response.functions
-        pendingSupportFunctionTables.remove(table)
-        if (pendingSupportFunctionTables.isNotEmpty()) {
-            appendLog("Support-function table $table received; waiting for $pendingSupportFunctionTables")
+        session.supportFunctionsByTable[table] = response.functions
+        session.pendingSupportFunctionTables.remove(table)
+        if (session.pendingSupportFunctionTables.isNotEmpty()) {
+            appendLog(
+                "Support-function table $table received; " +
+                    "waiting for ${session.pendingSupportFunctionTables}"
+            )
             return
         }
-        finishSupportFunctionProbe()
+        finishSupportFunctionProbe(session)
     }
 
-    private fun finishSupportFunctionProbe() {
-        val functions = supportFunctionsByTable
+    private fun finishSupportFunctionProbe(session: CapabilityProbeSession) {
+        val functions = session.supportFunctionsByTable
             .toSortedMap(compareBy { it.ordinal })
             .values
             .flatten()
@@ -4479,10 +4589,6 @@ class SonyHeadphoneRepository private constructor(
                 essentialValuesReady = false,
             )
         }
-        // Create the cache entry before dispatching the per-domain probes so a
-        // very fast device response cannot arrive before there is an entry to
-        // merge its detailed capability into.
-        saveCapabilityCache(functions)
         if (!alreadyProbed) {
             probeCommands.forEach(::sendCommand)
         }
@@ -4491,9 +4597,11 @@ class SonyHeadphoneRepository private constructor(
     }
 
     private fun clearSupportFunctionProbeState() {
-        supportFunctionProbeRunning = false
-        pendingSupportFunctionTables.clear()
-        supportFunctionsByTable.clear()
+        capabilitySession?.let { session ->
+            session.supportFunctionProbeRunning = false
+            session.pendingSupportFunctionTables.clear()
+            session.supportFunctionsByTable.clear()
+        }
     }
 
     /**
@@ -4523,16 +4631,6 @@ class SonyHeadphoneRepository private constructor(
                 )
             }
         }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                if (entry.supportsV1WindNoise == response.supportsSingleMicWindNoise) {
-                    entry
-                } else {
-                    entry.copy(supportsV1WindNoise = response.supportsSingleMicWindNoise)
-                }
-            }
-        }
     }
 
     private fun applyCapabilityInfo(response: ParsedTandemResponse.CapabilityInfo) {
@@ -4548,20 +4646,6 @@ class SonyHeadphoneRepository private constructor(
                         listOf("probe:ret-capability(${response.domain},type=$typeHex,len=${response.raw.size})"),
                 )
             )
-        }
-        val address = _state.value.connectedDevice?.address
-        if (!address.isNullOrBlank()) {
-            updateCapabilityCache(address) { entry ->
-                entry.copy(
-                    capabilityValues = entry.capabilityValues.replaceCapabilityValue(
-                        CapabilityValueCache(
-                            domain = response.domain,
-                            inquiredTypeCode = response.inquiredTypeCode,
-                            values = response.values,
-                        ),
-                    ),
-                )
-            }
         }
     }
 
