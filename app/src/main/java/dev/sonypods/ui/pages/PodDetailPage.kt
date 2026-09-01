@@ -281,13 +281,13 @@ internal fun LazyListScope.podControlItems(
         }
     }
 
-    // SC's C12089d0.mo24713c(): the dual-mode card hides only when the phone
-    // cannot use LE Audio AND the headset declares the connection-mode restriction.
-    // When the phone can use LE Audio the card stays visible (greyed out) so the
-    // user can see the current mode.  The user visibility toggle overrides even
-    // that hiding.
+    // SC's C12089d0.mo24713c() keeps the dual-mode card visible (greyed) whenever
+    // the phone can use LE Audio, hiding it only on LE-Audio-incapable phones —
+    // the card is the user's way to see/switch the connection mode. Our default
+    // (toggle on = show) mirrors that; the module's own visibility toggle then
+    // wins unconditionally, as it does for the multipoint and LDAC cards — a
+    // documented local-preference deviation, since SC has no such toggle.
     val hideConnectionQuality = uiState.connectionQualityRestrictedByLea &&
-        !uiState.phoneSupportsLeAudio &&
         !visibility.leaRestrictedConnectionQuality
     val hideLdac = uiState.usingLeAudio && !visibility.leaRestrictedLdac
     val multipointLeaRestricted = uiState.multipointLeaRestricted
