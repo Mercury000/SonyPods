@@ -205,20 +205,13 @@ data class HeadphoneCapabilities(
      * uses, from the advertised SAFE_LISTENING_* FunctionType (V2 Table2).
      * Null = the support-function list advertised none of them. */
     val safeListeningInquiredType: dev.sonypods.protocol.SafeListeningInquiredTypeTable2? = null,
-    /** SC `mo58509L0()`: the device's support-function list contains a Table2
-     *  multipoint FunctionType (PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT or the
-     *  CLASS_OF_DEVICE variants).  Independent of the runtime GS-slot discovery
-     *  that sets [ConnectedHeadphoneProfile.multipointState].supported.
-     *
-     *  ⚠ Boundary note: this was derived from reading `mo58509L0` as a raw
-     *  support-list membership test (0x30 || 0x32 || 0x33), but this device
-     *  (LinkBuds S) declares none of those and SC still shows its multipoint
-     *  card — so SC's gate most likely reads the *built* tableset state (GS /
-     *  peripheral capability results) rather than the raw list. On devices
-     *  where the two disagree this flag diverges from SC; on GS-driven devices
-     *  the [ConnectedHeadphoneProfile.multipointGsSlot] path carries the same
-     *  outcome. Re-verify `m58956p4`/`m58953o4` before relying on this flag
-     *  for a new model. */
+    /** SC `mo58509L0()`: the merged Table1+Table2 support-function list contains a
+     *  PAIRING_DEVICE_MANAGEMENT FunctionType (0x30/0x32/0x33). Verified against the
+     *  decompiled chain (`u4()` → the merged RET_SUPPORT_FUNCTION list the tableset
+     *  was built from) — a raw declaration test. GS-only devices (this LinkBuds S
+     *  declares none of the three) reach the multipoint card through SC's
+     *  `mo58500J()` instead — a GS slot whose capability reply names
+     *  MULTIPOINT_SETTING — mirrored by [ConnectedHeadphoneProfile.multipointGsSlot]. */
     val supportsMultipointViaFunction: Boolean = false,
     /** SC `u70.C29444f` registers the 0x0D EXECUTE_TANDEM_TARGET_CHANGE handler
      *  only when the device declares `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD`
