@@ -141,6 +141,9 @@ internal fun GestureOperationsPage(
                     currentFunctionCodes = uiState.quickAccessFunctionCodes,
                     onFunctionChange = actions.onQuickAccessFunctionChange,
                     enabled = !quickAccessLeaRestricted,
+                    unavailableReason = uiState.leaUnavailableReason(
+                        dev.sonypods.protocol.SonyV2FunctionType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION,
+                    ),
                 )
             }
         }
@@ -214,6 +217,8 @@ private fun QuickAccessCard(
     currentFunctionCodes: List<Int>,
     onFunctionChange: (Int, Int) -> Unit,
     enabled: Boolean = true,
+    /** Headset-reported reason, refining the greyed-out copy (null = generic). */
+    unavailableReason: dev.sonypods.protocol.LeaUnavailableReason? = null,
 ) {
     Card(modifier = Modifier.padding(horizontal = 12.dp)) {
         val contentAlpha = if (enabled) 1f else 0.38f
@@ -224,6 +229,8 @@ private fun QuickAccessCard(
         if (!enabled) {
             // 与「同时连接2台设备」相同：LE Audio 承载连接时隐藏选择器，
             // 在原位置居中说明这是连接方式决定的不可用，而非用户关闭。
+            // 文案对齐 SC：PRIOR 用 LEA_Switch_LEAudio_to_Classic_UnusableCard，
+            // 其余原因（含 SWITCH_ON——SC 用按钮区分它，不用文案）用通用句。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -231,7 +238,13 @@ private fun QuickAccessCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = stringResource(R.string.feature_unavailable_over_le_audio),
+                    text = stringResource(
+                        if (unavailableReason == dev.sonypods.protocol.LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR) {
+                            R.string.feature_unavailable_le_audio_prior
+                        } else {
+                            R.string.feature_unavailable_over_le_audio
+                        }
+                    ),
                     modifier = Modifier.padding(horizontal = 16.dp).alpha(contentAlpha),
                     fontSize = 16.sp,
                     textAlign = TextAlign.Center,

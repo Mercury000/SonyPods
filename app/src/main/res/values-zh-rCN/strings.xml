@@ -219,6 +219,7 @@
     <string name="dsee_extreme">DSEE Extreme</string>
     <string name="dsee_ultimate">DSEE Ultimate</string>
     <string name="feature_unavailable_over_le_audio">在通过 LE Audio 连接时，此功能不可用</string>
+    <string name="feature_unavailable_le_audio_prior">由于耳机设置为 [LE Audio优先]，因此不可用。</string>
     <string name="dsee_hx_description">修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，让您能享受到媲美高解析度的音质。</string>
     <string name="dsee_ultimate_description">利用人工智能技术增强流媒体或MP3等压缩音频源，以呈现清晰且富有动态感的声音。</string>
     <string name="dsee_description">修复在流媒体或MP3等压缩音频源中常丢失的细微声音频率，以还原出宽广、自然的音频效果。</string>

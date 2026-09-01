@@ -138,6 +138,12 @@ data class SonyStateSnapshot(
      * 来自能力表 support-function list，决定哪些功能在 LE Audio 连接下不可用。
      */
     val leaRestrictedFunctionTypes: Set<dev.sonypods.protocol.SonyV2FunctionType> = emptySet(),
+    /**
+     * SC `UnavailableReason` per LEA-restricted function, as reported by the
+     * headset over LEA_RET/NTFY_STATUS. Absent = not (yet) reported — the greying
+     * gate stays declaration-driven; this only refines the guidance copy.
+     */
+    val leaUnavailableReasons: Map<dev.sonypods.protocol.SonyV2FunctionType, dev.sonypods.protocol.LeaUnavailableReason> = emptyMap(),
     val connectionQualitySwitching: Boolean = false,
     val leaStreamingStatusL: String? = null,
     val leaStreamingStatusR: String? = null,
@@ -273,6 +279,15 @@ data class SonyStateSnapshot(
             dev.sonypods.protocol.SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION,
         )
 
+    /**
+     * The headset's own reason a restricted function is unusable right now
+     * (LEA_RET/NTFY_STATUS). Null = nothing reported — callers fall back to the
+     * generic unavailable copy.
+     */
+    fun leaUnavailableReason(
+        type: dev.sonypods.protocol.SonyV2FunctionType,
+    ): dev.sonypods.protocol.LeaUnavailableReason? = leaUnavailableReasons[type]
+
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(KEY_CONNECTED, connected)
         putBoolean(KEY_PROTOCOL_READY, protocolReady)
@@ -335,6 +350,14 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_CONNECTION_QUALITY, supportsConnectionQuality)
         putBoolean(KEY_CONNECTION_QUALITY_RESTRICTED, connectionQualityRestrictedByLea)
         putIntegerArrayList(KEY_LEA_RESTRICTED_TYPES, ArrayList(leaRestrictedFunctionTypes.map { it.code.toInt() and 0xFF }))
+        putIntegerArrayList(
+            KEY_LEA_UNAVAILABLE_FNS,
+            ArrayList(leaUnavailableReasons.keys.map { it.code.toInt() and 0xFF }),
+        )
+        putIntegerArrayList(
+            KEY_LEA_UNAVAILABLE_REASONS,
+            ArrayList(leaUnavailableReasons.values.map { it.code.toInt() and 0xFF }),
+        )
         putBoolean(KEY_CONNECTION_QUALITY_SWITCHING, connectionQualitySwitching)
         leaStatus?.let { putString(KEY_LEA, it) }
         leaStreamingStatusL?.let { putString(KEY_LEA_STREAMING_L, it) }
@@ -463,6 +486,8 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_CONNECTION_QUALITY = "supports_connection_quality"
         private const val KEY_CONNECTION_QUALITY_RESTRICTED = "connection_quality_restricted"
         private const val KEY_LEA_RESTRICTED_TYPES = "lea_restricted_types"
+        private const val KEY_LEA_UNAVAILABLE_FNS = "lea_unavailable_fns"
+        private const val KEY_LEA_UNAVAILABLE_REASONS = "lea_unavailable_reasons"
         private const val KEY_CONNECTION_QUALITY_SWITCHING = "connection_quality_switching"
         private const val KEY_LEA = "lea"
         private const val KEY_LEA_STREAMING_L = "lea_streaming_l"
@@ -587,6 +612,14 @@ data class SonyStateSnapshot(
                 ?.mapNotNullTo(mutableSetOf()) {
                     dev.sonypods.protocol.SonyV2FunctionType.leaRestrictionFromCode(it)
                 } ?: emptySet(),
+            leaUnavailableReasons = run {
+                val fns = bundle.getIntegerArrayList(KEY_LEA_UNAVAILABLE_FNS).orEmpty()
+                val reasons = bundle.getIntegerArrayList(KEY_LEA_UNAVAILABLE_REASONS).orEmpty()
+                fns.zip(reasons).mapNotNull { (fn, reason) ->
+                    dev.sonypods.protocol.SonyV2FunctionType.leaRestrictionFromCode(fn)
+                        ?.to(dev.sonypods.protocol.LeaUnavailableReason.fromCode(reason.toByte()))
+                }.toMap()
+            },
             connectionQualitySwitching = bundle.getBoolean(KEY_CONNECTION_QUALITY_SWITCHING, false),
             leaStatus = bundle.getString(KEY_LEA),
             leaStreamingStatusL = bundle.getString(KEY_LEA_STREAMING_L),
@@ -724,6 +757,7 @@ data class SonyStateSnapshot(
                     ?.capabilities?.connectionQualityRestrictedByLea == true,
                 leaRestrictedFunctionTypes = state.connectedProfile
                     ?.capabilities?.leaRestrictedFunctionTypes.orEmpty(),
+                leaUnavailableReasons = state.leaState.unavailableReasons,
                 connectionQualitySwitching = state.connectionQualitySwitching,
                 leaStreamingStatusL = state.leaState.streamingStatusL,
                 leaStreamingStatusR = state.leaState.streamingStatusR,

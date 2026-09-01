@@ -363,6 +363,9 @@ internal fun LazyListScope.podControlItems(
             MultipointEntryCard(
                 state = uiState.multipoint,
                 leAudioRestricted = multipointLeaRestricted,
+                unavailableReason = uiState.leaUnavailableReason(
+                    dev.sonypods.protocol.SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION,
+                ),
                 onOpen = actions.onOpenMultipointSettings,
             )
         }
@@ -678,6 +681,8 @@ private fun MultipointEntryCard(
     state: MultipointSnapshot,
     /** Connected over LE Audio, where the headset cannot hold a second device at all. */
     leAudioRestricted: Boolean,
+    /** Headset-reported reason, refining the greyed-out copy (null = generic). */
+    unavailableReason: dev.sonypods.protocol.LeaUnavailableReason? = null,
     onOpen: () -> Unit,
 ) {
     // Mirrors the official dashboard card (SC `so.q` /
@@ -701,6 +706,7 @@ private fun MultipointEntryCard(
                 slotCount = slotCount,
                 multipointDisabled = multipointDisabled,
                 leAudioRestricted = true,
+                unavailableReason = unavailableReason,
             )
         }
         return
@@ -725,6 +731,7 @@ private fun MultipointEntryContent(
     slotCount: Int,
     multipointDisabled: Boolean,
     leAudioRestricted: Boolean,
+    unavailableReason: dev.sonypods.protocol.LeaUnavailableReason? = null,
 ) {
     val contentAlpha = if (leAudioRestricted) 0.38f else 1f
     Row(
@@ -758,7 +765,15 @@ private fun MultipointEntryContent(
         ) {
             Text(
                 text = stringResource(
-                    if (leAudioRestricted) R.string.feature_unavailable_over_le_audio else R.string.off
+                    // 文案对齐 SC：PRIOR 用 LEA_Switch_LEAudio_to_Classic_UnusableCard，
+                    // 其余原因（含未上报）用通用句（LEA_AS_Info_Description）。
+                    when {
+                        leAudioRestricted && unavailableReason ==
+                            dev.sonypods.protocol.LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR ->
+                            R.string.feature_unavailable_le_audio_prior
+                        leAudioRestricted -> R.string.feature_unavailable_over_le_audio
+                        else -> R.string.off
+                    }
                 ),
                 modifier = Modifier.padding(horizontal = 16.dp).alpha(contentAlpha),
                 fontSize = 16.sp,

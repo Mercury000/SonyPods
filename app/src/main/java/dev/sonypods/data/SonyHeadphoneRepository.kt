@@ -57,6 +57,8 @@ import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.protocol.LeaConnectionType
 import dev.sonypods.protocol.LeaInquiredType
+import dev.sonypods.protocol.LeaUnavailableReason
+import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -156,10 +158,17 @@ private const val TANDEM_TABLE_NUMBER_NO2 = 14
  * of its initializer). */
 private const val CAPABILITY_SAVE_DEBOUNCE_MS = 1_500L
 
-/** Headset-named Tandem migration: how long to give the new link before
- * reconnecting to the target address (SC connects straight after its own
- * disconnect; the new link needs a moment to come up first on our stack). */
-private const val TANDEM_MIGRATION_RECONNECT_DELAY_MS = 2_000L
+/** Headset-named Tandem migration: how long to wait before the first connect
+ * attempt (SC connects straight after its own disconnect; the new link usually
+ * forms well under a second, and a failed attempt now retries instead of
+ * waiting out a fixed timer). */
+private const val TANDEM_MIGRATION_FIRST_DELAY_MS = 600L
+
+/** Backoff between retry attempts after a failed migration connect. */
+private const val TANDEM_MIGRATION_RETRY_DELAY_MS = 900L
+
+/** Retry budget for a headset-named migration connect. */
+private const val TANDEM_MIGRATION_MAX_ATTEMPTS = 8
 
 /** How long a pending migration may stay unresolved before ordinary
  * connection management resumes. */
@@ -341,6 +350,13 @@ data class LeaState(
     val pairedHistory: String? = null,
     /** LE endpoint addresses returned by the Sony LEA capability query. */
     val leAudioAddresses: List<String> = emptyList(),
+    /**
+     * Headset-reported runtime availability of LEA-restricted functions
+     * (LEA_RET/NTFY_STATUS, SC `d30.C15459f`/`C15462i`). The reason picks the
+     * guidance copy on the greyed cards; absence of an entry is the only
+     * available-ish state, so the greying gate stays declaration-driven.
+     */
+    val unavailableReasons: Map<SonyV2FunctionType, LeaUnavailableReason> = emptyMap(),
     val raw: List<Int> = emptyList(),
 )
 
@@ -1014,6 +1030,15 @@ class SonyHeadphoneRepository private constructor(
 
     private var pendingTandemMigration: PendingTandemMigration? = null
 
+    /** A migration connect attempt has been issued and not yet answered by a
+     * transport-up event — a disconnect arriving in this state is a failed
+     * attempt and re-arms the retry. */
+    private var tandemMigrationConnectOutstanding = false
+
+    /** Failed migration connect attempts so far (bounded by
+     * [TANDEM_MIGRATION_MAX_ATTEMPTS]); reset on transport-up. */
+    private var tandemMigrationAttempts = 0
+
     /** Address a headset-directed migration is moving Tandem to, if one is in flight. */
     fun pendingTandemMigrationTarget(): String? = pendingTandemMigration?.targetAddress
 
@@ -1025,6 +1050,8 @@ class SonyHeadphoneRepository private constructor(
         if (pendingTandemMigration != null) {
             appendLog("Tandem migration timed out; clearing pending state")
             pendingTandemMigration = null
+            tandemMigrationConnectOutstanding = false
+            tandemMigrationAttempts = 0
         }
     }
 
@@ -1170,6 +1197,8 @@ class SonyHeadphoneRepository private constructor(
         // value here; otherwise protocolReady remains true while availableChannels()
         // is empty and the next generation will never reconnect.
         pendingTandemMigration = null
+        tandemMigrationConnectOutstanding = false
+        tandemMigrationAttempts = 0
         cachedTandemTargetSession = null
         onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
@@ -2888,6 +2917,12 @@ class SonyHeadphoneRepository private constructor(
     }
 
     override fun onConnectionStateChanged(connected: Boolean, device: DiscoveredSonyDevice?) {
+        if (connected) {
+            // The transport answered a migration connect (or any connect) —
+            // later teardowns are ordinary disconnects, not failed attempts.
+            tandemMigrationConnectOutstanding = false
+            tandemMigrationAttempts = 0
+        }
         if (!connected) {
             clearPendingPlaybackTransition()
             pendingQuickAccessFunctionCodes = null
@@ -2921,18 +2956,44 @@ class SonyHeadphoneRepository private constructor(
             capabilitySession = null
             // A 0x0E migration names the identity Tandem moves to. SC's
             // `changeTandemConnectionProfile` connects that address (with the
-            // headset's ConnectionType) once its own disconnect completes; the
-            // delay gives the new link a moment to come up first.
+            // headset's ConnectionType) once its own disconnect completes — its
+            // holding link is already up, so the connect is instant. Ours dials,
+            // and the new link may not be formed yet at 0x0E time, so retry:
+            // an early attempt that fails re-arms through this same handler
+            // (migrationConnectOutstanding), bounded by attempt count and the
+            // pending-migration timeout.
             pendingTandemMigration?.let { migration ->
                 val targetAddress = migration.targetAddress ?: return@let
                 val connectionType = migration.connectionType ?: LeaConnectionType.BLE_GATT
+                if (tandemMigrationConnectOutstanding) {
+                    // The attempt we initiated failed (transport torn down again).
+                    tandemMigrationAttempts++
+                    if (tandemMigrationAttempts >= TANDEM_MIGRATION_MAX_ATTEMPTS) {
+                        appendLog(
+                            "Tandem migration to $targetAddress failed after " +
+                                "$tandemMigrationAttempts attempts; giving up"
+                        )
+                        pendingTandemMigration = null
+                        tandemMigrationConnectOutstanding = false
+                        return@let
+                    }
+                }
                 appendLog(
-                    "Tandem migration: reconnecting to headset-named target " +
-                        "$targetAddress over $connectionType"
+                    "Tandem migration: connecting to headset-named target " +
+                        "$targetAddress over $connectionType " +
+                        "(attempt ${tandemMigrationAttempts + 1})"
                 )
                 mainHandler.postDelayed(
-                    { client.connectTandemTarget(targetAddress, connectionType) },
-                    TANDEM_MIGRATION_RECONNECT_DELAY_MS,
+                    {
+                        if (pendingTandemMigration?.targetAddress != targetAddress) return@postDelayed
+                        client.connectTandemTarget(targetAddress, connectionType)
+                        // connectTandemTarget tears the previous GATT down
+                        // synchronously — that disconnect event is not a failure.
+                        // Only a teardown arriving AFTER this point counts.
+                        tandemMigrationConnectOutstanding = true
+                    },
+                    if (tandemMigrationConnectOutstanding) TANDEM_MIGRATION_RETRY_DELAY_MS
+                    else TANDEM_MIGRATION_FIRST_DELAY_MS,
                 )
             }
             clearInitialValueGate()
@@ -3184,6 +3245,7 @@ class SonyHeadphoneRepository private constructor(
                 )
             )
             is ParsedTandemResponse.LeaSettingAvailability -> applyLeaSettingAvailability(parsed)
+            is ParsedTandemResponse.LeaFunctionAvailability -> applyLeaFunctionAvailability(parsed)
             is ParsedTandemResponse.LeaParameterNotification -> applyLeaParameterNotification(parsed)
             is ParsedTandemResponse.LeaTandemTargetInstruction -> applyLeaTandemTargetInstruction(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
@@ -4004,6 +4066,26 @@ class SonyHeadphoneRepository private constructor(
         appendLog(
             "LE Audio setting availability=${response.available} notification=${response.isNotification}"
         )
+    }
+
+    /**
+     * LEA_RET/NTFY_STATUS for a restricted function (SC `d30.C15459f`/`C15462i`):
+     * the headset's own answer to "why is this unusable right now". Stored per
+     * restriction; the greyed cards read it back to pick guidance copy.
+     */
+    private fun applyLeaFunctionAvailability(response: ParsedTandemResponse.LeaFunctionAvailability) {
+        appendLog(
+            "LEA availability ${response.restrictedFunction.name}=${response.reason}" +
+                "${if (response.isNotification) " (ntfy)" else ""}"
+        )
+        _state.update {
+            it.copy(
+                leaState = it.leaState.copy(
+                    unavailableReasons = it.leaState.unavailableReasons +
+                        (response.restrictedFunction to response.reason),
+                )
+            )
+        }
     }
 
     private fun applyQuickAccess(response: ParsedTandemResponse.QuickAccess) {

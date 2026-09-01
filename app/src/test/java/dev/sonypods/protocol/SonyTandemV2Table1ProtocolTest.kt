@@ -1901,4 +1901,65 @@ class SonyTandemV2Table1ProtocolTest {
         assertEquals(SmartTalkingDetectionSensitivity.LOW, parsedType2.sensitivity)
         assertEquals(SmartTalkingModeOutTime.NONE, parsedType2.modeOutTime)
     }
+
+    // ── LEA restricted-function availability (SC mf0.C23652c / d30.C15459f) ──
+
+    @Test
+    fun leaFunctionAvailability_retStatus_reasonForm_parsesReason() {
+        // [DATA_MDR][LEA_RET_STATUS 0x43][PAIRING_DEVICE_MANAGEMENT 0xF7][SWITCH_ON 0x02]
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0xF7.toByte(), 0x02)
+        ) as ParsedTandemResponse.LeaFunctionAvailability
+
+        assertEquals(SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION, parsed.restrictedFunction)
+        assertEquals(LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_SWITCH_ON, parsed.reason)
+        assertFalse(parsed.isNotification)
+    }
+
+    @Test
+    fun leaFunctionAvailability_ntfyStatus_reasonForm_flagsNotification() {
+        // [DATA_MDR][LEA_NTFY_STATUS 0x45][SOUND_AR 0xF8][UNAVAILABLE 0x01]
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x45, 0xF8.toByte(), 0x01)
+        ) as ParsedTandemResponse.LeaFunctionAvailability
+
+        assertEquals(SonyV2FunctionType.SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION, parsed.restrictedFunction)
+        assertEquals(LeaUnavailableReason.UNAVAILABLE, parsed.reason)
+        assertTrue(parsed.isNotification)
+    }
+
+    @Test
+    fun leaFunctionAvailability_quickAccess_mapsEnableDisableToReason() {
+        // QUICK_ACCESS carries EnableDisable (ENABLE=0x00 → PRIOR, SC d30.C15459f.m66582z).
+        val enabled = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0xFC.toByte(), 0x00)
+        ) as ParsedTandemResponse.LeaFunctionAvailability
+        assertEquals(SonyV2FunctionType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION, enabled.restrictedFunction)
+        assertEquals(LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR, enabled.reason)
+
+        val disabled = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0xFC.toByte(), 0x01)
+        ) as ParsedTandemResponse.LeaFunctionAvailability
+        assertEquals(LeaUnavailableReason.UNAVAILABLE, disabled.reason)
+    }
+
+    @Test
+    fun leaFunctionAvailability_outOfRangeReason_fallsThrough() {
+        // A reason byte of 0xFF is protocol garbage (SC's C23652c.b rejects it);
+        // the frame must not be consumed as an availability report.
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0xF7.toByte(), 0xFF.toByte())
+        )
+        assertFalse(parsed is ParsedTandemResponse.LeaFunctionAvailability)
+    }
+
+    @Test
+    fun leaFunctionAvailability_classicOnlySetting_stillParsesAsSettingAvailability() {
+        // The CLASSIC_ONLY (0x0C) EnableDisable form keeps its dedicated
+        // LeaSettingAvailability parse — it is not a restricted-function report.
+        val parsed = SonyTandemV2Table1Protocol.parse(
+            byteArrayOf(0x0E, 0x43, 0x0C, 0x00)
+        )
+        assertTrue(parsed is ParsedTandemResponse.LeaSettingAvailability)
+    }
 }
