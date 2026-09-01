@@ -1654,11 +1654,17 @@ class SonyHeadphoneRepository private constructor(
     ): Boolean {
         val storage = capabilityStorage ?: return false
         val profile = _state.value.connectedProfile ?: return false
-        val stored = listOf(TANDEM_TABLE_NUMBER_NO1, TANDEM_TABLE_NUMBER_NO2)
-            .flatMap { table ->
-                storage.readCapabilities(identifier, storeGroup, table).orEmpty()
-                    .map { payload -> rawForStoredPayload(table, payload) }
-            }
+        // SC `m112114g`: a restore requires the Table1 row to exist at all, and —
+        // for the V2 tableset — the Table2 row too (a completed V2 initializer
+        // writes both). V1 has no Table2 row. A missing row means the initializer
+        // never finished writing; re-probe rather than build from a partial store.
+        val storedTable1 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO1)
+        val storedTable2 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO2)
+        if (storedTable1 == null || (storeGroup == STORE_GROUP_V2 && storedTable2 == null)) {
+            return false
+        }
+        val stored = storedTable1.map { rawForStoredPayload(TANDEM_TABLE_NUMBER_NO1, it) } +
+            (storedTable2 ?: emptyList()).map { rawForStoredPayload(TANDEM_TABLE_NUMBER_NO2, it) }
         if (stored.isEmpty()) return false
         val parsedFrames = stored.mapNotNull { bytes ->
             runCatching { HeadphoneAdapterRegistry.parse(profile, bytes) }.getOrNull()
@@ -1733,10 +1739,18 @@ class SonyHeadphoneRepository private constructor(
      * Whether a reply is one of SC's PersistableCapability commands — the
      * capability grammar a tableset is built from, never live state. These are
      * the frames stored verbatim so a counter hit can rebuild without probing.
+     *
+     * SC's `InterfaceC24172c`/`InterfaceC24173d` also include RET_DEVICE_INFO
+     * (`wv.a.m112111c` → `m112117m` feeds model name / FW version / series-color
+     * into the builder from stored bytes), so [ParsedTandemResponse.DeviceInfo]
+     * is persisted and replayed the same way. RET_BLUETOOTH_DEVICE_INFO is in
+     * SC's set too, but our engine never issues that query, so there is nothing
+     * to capture.
      */
     private fun ParsedTandemResponse.isPersistableCapability(): Boolean = when (this) {
         is ParsedTandemResponse.SupportFunction,
         is ParsedTandemResponse.ConnectCapabilityInfo,
+        is ParsedTandemResponse.DeviceInfo,
         is ParsedTandemResponse.CapabilityInfo,
         is ParsedTandemResponse.NcAsmCapabilityInfo,
         is ParsedTandemResponse.EqEbbExtendedInfo,
@@ -3927,7 +3941,7 @@ class SonyHeadphoneRepository private constructor(
      * physical headset and is restored on the new identity instead of re-probed.
      *
      * Gating mirrors SC's registration: the 0x0D handler only exists for devices
-     * declaring `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD` (0x43,
+     * declaring `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD` (0x40,
      * `u70.C29444f`), the 0x0E observer only for devices declaring
      * `CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID` (0x44, `C14319c.mo61835c`).
      */
@@ -3972,8 +3986,13 @@ class SonyHeadphoneRepository private constructor(
                 mainHandler.post { client.disconnect() }
             }
 
-            LeaInquiredType.NOTIFY_DISCONNECTING_TANDEM ->
+            LeaInquiredType.NOTIFY_DISCONNECTING_TANDEM -> {
+                if (capabilities?.declaresTandemDisconnectingNotification != true) {
+                    appendLog("Ignoring 0x0F tandem disconnect notice: device declares no LEA-CTKD type")
+                    return
+                }
                 appendLog("Headset warns the Tandem link is going down")
+            }
 
             else -> Unit
         }

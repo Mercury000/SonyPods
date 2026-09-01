@@ -208,15 +208,30 @@ data class HeadphoneCapabilities(
     /** SC `mo58509L0()`: the device's support-function list contains a Table2
      *  multipoint FunctionType (PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT or the
      *  CLASS_OF_DEVICE variants).  Independent of the runtime GS-slot discovery
-     *  that sets [ConnectedHeadphoneProfile.multipointState].supported. */
+     *  that sets [ConnectedHeadphoneProfile.multipointState].supported.
+     *
+     *  ⚠ Boundary note: this was derived from reading `mo58509L0` as a raw
+     *  support-list membership test (0x30 || 0x32 || 0x33), but this device
+     *  (LinkBuds S) declares none of those and SC still shows its multipoint
+     *  card — so SC's gate most likely reads the *built* tableset state (GS /
+     *  peripheral capability results) rather than the raw list. On devices
+     *  where the two disagree this flag diverges from SC; on GS-driven devices
+     *  the [ConnectedHeadphoneProfile.multipointGsSlot] path carries the same
+     *  outcome. Re-verify `m58956p4`/`m58953o4` before relying on this flag
+     *  for a new model. */
     val supportsMultipointViaFunction: Boolean = false,
     /** SC `u70.C29444f` registers the 0x0D EXECUTE_TANDEM_TARGET_CHANGE handler
      *  only when the device declares `TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD`
-     *  (0x43). Without the declaration the notification has no defined meaning. */
+     *  (0x40 — this headset declares it and sends 0x0D). Without the declaration
+     *  the notification has no defined meaning. */
     val declaresTandemTargetChange: Boolean = false,
     /** SC `C14319c.mo61835c` registers the 0x0E CHANGE_TANDEM_CONNECTION_PROFILE_
      *  FOR_ANDROID observer only when the device declares 0x44. */
     val declaresChangeTandemConnectionProfile: Boolean = false,
+    /** SC registers the 0x0F NOTIFY_DISCONNECTING_TANDEM observer for devices
+     *  declaring any LEA-unicast-broadcast-with-CTKD FunctionType (TWS 0x40 /
+     *  HBS 0x41 / PAS 0x64 Table2). */
+    val declaresTandemDisconnectingNotification: Boolean = false,
 ) {
     /** SC `FunctionCantBeUsedWithLEAConnectionType.PAIRING_DEVICE_MANAGEMENT` → 多点连接 */
     val multipointLeaRestricted: Boolean

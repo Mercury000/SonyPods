@@ -304,6 +304,10 @@ object SonyCapabilityProbe {
         // that declare the corresponding FunctionType (u70.C29444f / C14319c).
         var declaresTandemTargetChange = false
         var declaresChangeTandemConnectionProfile = false
+        // SC registers the 0x0F NOTIFY_DISCONNECTING_TANDEM observer for devices
+        // declaring any of the LEA-unicast-broadcast-with-CTKD types (TWS 0x40 /
+        // HBS 0x41 / PAS 0x64 Table2 — C14319c.mo61835c).
+        var declaresTandemDisconnectingNotification = false
 
         for (function in functions) {
             if (function.isPowerOff(profile)) {
@@ -325,8 +329,13 @@ object SonyCapabilityProbe {
                 SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE,
                 SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE ->
                     supportsMultipointViaFunction = true
-                SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD ->
+                SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> {
                     declaresTandemTargetChange = true
+                    declaresTandemDisconnectingNotification = true
+                }
+                SonyV2FunctionType.HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                SonyV2FunctionType.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD ->
+                    declaresTandemDisconnectingNotification = true
                 SonyV2FunctionType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID ->
                     declaresChangeTandemConnectionProfile = true
                 else -> Unit
@@ -621,6 +630,8 @@ object SonyCapabilityProbe {
             declaresTandemTargetChange = declaresTandemTargetChange || fallback.declaresTandemTargetChange,
             declaresChangeTandemConnectionProfile =
                 declaresChangeTandemConnectionProfile || fallback.declaresChangeTandemConnectionProfile,
+            declaresTandemDisconnectingNotification =
+                declaresTandemDisconnectingNotification || fallback.declaresTandemDisconnectingNotification,
             lea = lea,
         )
     }
