@@ -151,11 +151,6 @@ private const val STORE_GROUP_V2 = 1
 private const val TANDEM_TABLE_NUMBER_NO1 = 12
 private const val TANDEM_TABLE_NUMBER_NO2 = 14
 
-/** Idle window after the last capability reply before the working set is written
- * to SQLite, so one connect costs one write per row (SC writes once, at the end
- * of its initializer). */
-private const val CAPABILITY_SAVE_DEBOUNCE_MS = 1_500L
-
 /** Headset-named Tandem migration: how long to wait before the first connect
  * attempt (SC connects straight after its own disconnect; the new link usually
  * forms well under a second, and a failed attempt now retries instead of
@@ -963,23 +958,6 @@ class SonyHeadphoneRepository private constructor(
     @Volatile
     private var capabilityCacheManager: CapabilityCacheManager? = null
 
-    /**
-     * Debounced flush of the capability working set (see [scheduleCapabilitySave]).
-     *
-     * Deliberately does NOT close the recording window: SC's initializer records
-     * every PersistableCapability reply it processes and stores once at the end,
-     * and our per-domain probes are fire-and-forget with multi-second gaps (SPP
-     * playback/gesture replies land ~2.5s after the support-function burst). A
-     * save timer firing inside such a gap used to flip `probing` off and tear the
-     * row down to the support-function blobs alone — the stored set then had no
-     * GS capability reply, and the multipoint slot could never be restored. The
-     * window stays open for the whole session; recording stops with the session
-     * itself at disconnect.
-     */
-    private val capabilitySaveRunnable = Runnable {
-        capabilityCacheManager?.saveAll()
-    }
-
     /** Hook-host fallback invoked only when the current model has no catalog image. */
     @Volatile
     private var modelCatalogFallbackRequester: ((String?, String?, Int?) -> Unit)? = null
@@ -1080,6 +1058,9 @@ class SonyHeadphoneRepository private constructor(
         }
         markInitialValuesReady(
             if (pendingInitialValueDomains.isEmpty()) {
+                // Every advertised domain answered: this is SC's "initializer returned"
+                // moment, and the only one that may write the capability row.
+                saveCapabilitiesOnExchangeComplete()
                 "channel settled after the initial burst"
             } else {
                 "timed out waiting for $pendingInitialValueDomains"
@@ -1674,23 +1655,16 @@ class SonyHeadphoneRepository private constructor(
     ): Boolean {
         val storage = capabilityStorage ?: return false
         val profile = _state.value.connectedProfile ?: return false
-        // Stricter than SC on purpose. SC's restore (`wv.a.m112114g`) only needs the
-        // Table1 row: its Table2 read returns `Collections.EMPTY_LIST` when the row is
-        // absent, never null, so the `== null` bail-out next to it is dead code. It can
-        // afford that because it stores once, at the end of the initializer
-        // (`C15170d.m65487h`), so a row on disk is always a complete exchange. Ours is a
-        // debounced incremental flush (see [capabilitySaveRunnable]) plus a flush at
-        // teardown, so a row can be persisted mid-probe — and a V2 hit missing its Table2
-        // blobs restores without the peripheral capability, which is exactly how the
-        // 2-device card went missing before. Require both rows for V2; V1 has no Table2 row.
+        // SC's rule, unchanged (`wv.a.m112114g`): the Table1 row must exist and carry
+        // something; the Table2 row is optional (its read returns an empty list when the
+        // row is absent, never null, so the `== null` bail-out beside it is dead code).
+        // Nothing here needs to second-guess how complete the row is — the row is only
+        // ever written by a finished exchange, see [saveCapabilitiesOnExchangeComplete].
         val storedTable1 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO1)
         val storedTable2 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO2)
-        if (storedTable1 == null || (storeGroup == STORE_GROUP_V2 && storedTable2 == null)) {
-            return false
-        }
+        if (storedTable1.isNullOrEmpty()) return false
         val stored = storedTable1.map { rawForStoredPayload(TANDEM_TABLE_NUMBER_NO1, it) } +
             (storedTable2 ?: emptyList()).map { rawForStoredPayload(TANDEM_TABLE_NUMBER_NO2, it) }
-        if (stored.isEmpty()) return false
         val parsedFrames = stored.mapNotNull { bytes ->
             runCatching { HeadphoneAdapterRegistry.parse(profile, bytes) }.getOrNull()
         }
@@ -1699,22 +1673,11 @@ class SonyHeadphoneRepository private constructor(
             .flatMap { it.functions }
             .distinctBy { it.table to it.code }
         if (supportFunctions.isEmpty()) return false
-        // A completed initializer always produced per-domain capability replies
-        // alongside the support-function lists; SC's one-pass save guarantees a
-        // stored row carries them. A row holding nothing but the support-function
-        // blobs is a torn write (the recording window closed mid-probe) — treat it
-        // as a miss so the full probe re-runs and rewrites the row complete.
+        // The support-function and capability-info replies have already done their work
+        // above; only the per-domain capability replies get replayed below.
         val capabilityFrames = parsedFrames.filterNot {
             it is ParsedTandemResponse.SupportFunction ||
                 it is ParsedTandemResponse.ConnectCapabilityInfo
-        }
-        if (capabilityFrames.isEmpty()) {
-            appendLog(
-                "Stored capabilities for $identifier contain no capability replies; " +
-                    "re-probing to rebuild the row",
-                writeLogcat = false,
-            )
-            return false
         }
 
         val restored = SonyCapabilityProbe.applyToProfile(
@@ -1792,16 +1755,17 @@ class SonyHeadphoneRepository private constructor(
     }
 
     /**
-     * Flush the working set to SQLite once the capability traffic has gone quiet.
+     * Persist the capability working set, once, because the exchange has completed.
      *
-     * SC writes the whole table in one pass at the end of its initializer
-     * (`m65487h`). Our per-domain probes are fire-and-forget, so the equivalent
-     * moment is a short idle window after the last capability reply; coalescing
-     * also keeps one connect to a single write per row.
+     * SC's initializer writes the whole table in one pass when it finishes
+     * (`C15170d.m65487h`), and never before — a run that dies mid-exchange leaves the
+     * stored row alone. This is that moment: the initial-value gate closes only when
+     * every domain the capability table advertised has answered, so the working set at
+     * that point is a whole exchange. Nothing writes on a timeout, an abort or a dropped
+     * link, so a partial exchange can never replace a complete row.
      */
-    private fun scheduleCapabilitySave() {
-        mainHandler.removeCallbacks(capabilitySaveRunnable)
-        mainHandler.postDelayed(capabilitySaveRunnable, CAPABILITY_SAVE_DEBOUNCE_MS)
+    private fun saveCapabilitiesOnExchangeComplete() {
+        capabilityCacheManager?.saveAll()
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -2962,12 +2926,10 @@ class SonyHeadphoneRepository private constructor(
             pendingQuickAccessFunctionCodes = null
             mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
             stopSafeListeningPoll()
-            // Flush whatever the session accumulated before dropping it: the link
-            // may have gone while the debounce window was still open. Then the
-            // initializer goes with the session, as SC's does when its Callable
-            // returns and unregisters from the dispatcher.
-            mainHandler.removeCallbacks(capabilitySaveRunnable)
-            capabilityCacheManager?.saveAll()
+            // The initializer goes with the session, as SC's does when its Callable
+            // returns and unregisters from the dispatcher. An exchange that did not
+            // finish writes nothing — the stored row keeps whatever a completed one
+            // last put there, exactly as SC leaves it.
             capabilityCacheManager?.clear()
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
             // SC's Tandem target migration ("Keep mActiveMdr instance"): when
@@ -3247,7 +3209,6 @@ class SonyHeadphoneRepository private constructor(
             counter,
             raw.drop(1).toByteArray(),
         )
-        scheduleCapabilitySave()
     }
 
     private fun applyParsed(parsed: ParsedTandemResponse, channel: TandemChannel) {

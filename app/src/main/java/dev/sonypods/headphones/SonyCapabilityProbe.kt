@@ -327,8 +327,19 @@ object SonyCapabilityProbe {
                     qualityLeaRestricted = true
                 SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT,
                 SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE,
-                SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE ->
+                SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE -> {
                     supportsMultipointViaFunction = true
+                    // The declaration is what establishes the peripheral domain, exactly as SC
+                    // does it: `u70.C29444f.m108134a` registers the PAIRING_DEVICE_MANAGEMENT
+                    // holder (`C31025a`) off these three FunctionTypes alone and picks its
+                    // PeripheralInquiredType from which one is present — the capability reply
+                    // only fills in the slot counts afterwards. Granting the feature here is
+                    // what lets the refresh burst issue PERIPHERAL_GET_CAPABILITY at all;
+                    // waiting for the reply to grant it left the query gated on its own answer,
+                    // so a headset that declared multipoint rendered empty "未连接" slots and
+                    // refused every write.
+                    features.add(HeadphoneFeature.MULTIPOINT)
+                }
                 SonyV2FunctionType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD -> {
                     declaresTandemTargetChange = true
                     declaresTandemDisconnectingNotification = true

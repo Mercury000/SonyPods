@@ -42,7 +42,16 @@ class CapabilityCacheManager(
         }
     }
 
-    /** Write every working-set group to SQLite in one pass. */
+    /**
+     * Write every working-set group to SQLite in one pass.
+     *
+     * Called once, when the exchange has completed — the same contract as Sound Connect's
+     * `C15170d.m65487h` (`saveIntoStorage`), which the initializer invokes after it has
+     * finished. Whatever reaches storage is therefore a whole exchange, which is what makes
+     * the whole-row REPLACE in [CapabilityStorage.writeRow] safe: there is no partial state to
+     * overwrite a complete one with. An exchange that never completes never writes, so the
+     * previous row survives untouched.
+     */
     fun saveAll() {
         groups.forEach { (key, group) ->
             storage.writeRow(key.identifier, key.storeGroup, key.tableNumber, group.counter, group.blobs)
