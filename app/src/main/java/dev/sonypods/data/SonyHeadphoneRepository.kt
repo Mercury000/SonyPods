@@ -2021,8 +2021,28 @@ class SonyHeadphoneRepository private constructor(
     }
 
     /** Toggle "同时连接2台设备" (V2 Table1 GS multipoint slot). */
+    /**
+     * The 2-device on/off switch, which is a General Setting and nothing else.
+     *
+     * Sound Connect keeps two unrelated mechanisms here, and so must we:
+     *  - `PeripheralInquiredType.PAIRING_DEVICE_MANAGEMENT_*` carries the device list —
+     *    connect, disconnect, unpair, playback-right, hand-over (`u70.C29444f` → `C31025a`);
+     *  - a `GsInquiredType` slot whose capability title is `MULTIPOINT_SETTING` carries this
+     *    switch (`u70.C29444f.m108135b` builds a plain GS sender per slot, with no reference to
+     *    the peripheral domain at all). `so.C28522r.mo24713c` picks between them: `mo58509L0()`
+     *    (peripheral declared) → the full card, else `mo58500J() != null` (a GS slot titled
+     *    MULTIPOINT_SETTING) → a card holding just this toggle.
+     *
+     * Gating this on [HeadphoneFeature.MULTIPOINT] conflated the two: that feature is only ever
+     * granted from a peripheral RET_CAPABILITY ([applyMultipointCapability]), which a GS-driven
+     * headset never sends — so the card rendered off the GS slot while every write was refused
+     * before a command was built.
+     */
     fun setMultipointEnabled(enabled: Boolean) {
-        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        if (!_state.value.deviceInfo.protocolReady) {
+            appendLog("Multipoint toggle unavailable: protocol not ready")
+            return
+        }
         val profile = ensureConnectedProfile()
         val address = _state.value.connectedDevice?.address
         val current = _state.value.multipointState
@@ -2031,14 +2051,19 @@ class SonyHeadphoneRepository private constructor(
             appendLog("Ignoring multipoint toggle while the previous request is pending")
             return
         }
-        val original = current.multipointEnabled ?: return
+        val original = current.multipointEnabled ?: run {
+            appendLog("Multipoint toggle unavailable: current value unknown")
+            return
+        }
         if (profile.multipointGsSlot == null || address.isNullOrBlank()) {
             appendLog("Cannot toggle 2-device multipoint: GS slot not discovered")
             return
         }
         val commands = HeadphoneAdapterRegistry.buildSetMultipointEnabledCommands(profile, enabled)
-        if (commands.isEmpty()) return
-
+        if (commands.isEmpty()) {
+            appendLog("Cannot toggle 2-device multipoint: profile produced no GS write")
+            return
+        }
         pendingMultipointToggle = PendingMultipointToggle(
             address = address,
             original = original,
@@ -2062,9 +2087,20 @@ class SonyHeadphoneRepository private constructor(
 
     /** Reply to the device's pending multipoint alert (7=reconnect, 6=LDAC disable):
      * ALERT_SET_PARAM [0x98, 0x00, msgType, action]. POSITIVE lets the device
-     * execute the requested change; NEGATIVE cancels it. Clears the pending state. */
+     * execute the requested change; NEGATIVE cancels it. Clears the pending state.
+     *
+     * The alert lives in the ALERT domain and serves both multipoint mechanisms — the
+     * GS toggle raises the reconnect confirmation just as the peripheral list does — so it
+     * cannot be gated on the peripheral feature alone (see [setMultipointEnabled]). */
     fun replyMultipointAlert(positive: Boolean) {
-        if (!_state.value.deviceInfo.protocolReady || !canWrite(HeadphoneFeature.MULTIPOINT)) return
+        if (!_state.value.deviceInfo.protocolReady) return
+        val profileForGate = _state.value.connectedProfile
+        val multipointAvailable = canWrite(HeadphoneFeature.MULTIPOINT) ||
+            profileForGate?.multipointGsSlot != null
+        if (!multipointAvailable) {
+            appendLog("Multipoint alert reply unavailable: neither peripheral nor GS multipoint")
+            return
+        }
         val messageType = _state.value.multipointState.pendingAlertMessageType ?: return
         val pendingToggle = pendingMultipointToggle
         val profile = ensureConnectedProfile()
