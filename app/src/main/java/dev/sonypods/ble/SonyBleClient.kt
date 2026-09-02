@@ -509,11 +509,22 @@ class SonyBleClient(
 
     /**
      * A headset-directed Tandem target migration (LEA_NTFY_PARAM 0x0E): connect
-     * the identity the headset itself named, over the transport it named. Sound
-     * Connect's `changeTandemConnectionProfile` (`C14356p0.m62041c0`) does the
-     * same — the named address is used verbatim, never folded onto the control
-     * identity, and SPP vs GATT comes from the ConnectionType, not from link
-     * heuristics.
+     * the identity the headset itself named, over the transport it named.
+     *
+     * The transport half mirrors Sound Connect exactly — `C12260d.b.mo52710a`
+     * maps the frame's ConnectionType straight onto `ConnectionMode.SPP` /
+     * `ConnectionMode.GATT`, with no link heuristic in the path.
+     *
+     * The address half is ours, not SC's. SC hands the named address to
+     * `changeTandemConnectionProfile` (`C14356p0.m62041c0`) which only logs it:
+     * the method arms a post-disconnect consumer and calls `m62052t0()`
+     * (`disconnectAllDevices`), and the consumer reconnects with the *device id
+     * the disconnect flow hands back* (`m61964R0` → `m62060y0`). So SC re-dials
+     * whatever accessory it was already on and merely changes the transport.
+     * That works for SC because it only ever holds the one target; our engine
+     * reaches a headset under either bonded identity, so the named address is
+     * the only thing that says which one Tandem is moving to. Dial it verbatim
+     * and skip the control-identity retarget [connect] would otherwise apply.
      */
     fun connectTandemTarget(address: String, connectionType: dev.sonypods.protocol.LeaConnectionType) {
         connect(

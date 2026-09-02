@@ -48,7 +48,12 @@ class CapabilityStorage(
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     }
 
-    /** The capability_counter row for a key, or -1 when absent (SC: `-1`). */
+    /** The capability_counter row for a key, or -1 when absent (SC: `-1`).
+     *
+     * Reads and writes are serialised the way SC's accessors are (all three of its
+     * `CapabilityStorageAndroid` methods are `synchronized`): the probe records off
+     * the transport thread while a restore may be reading. */
+    @Synchronized
     fun readCounter(identifier: String, storeGroup: Int, tableNumber: Int): Int {
         val db = helper.readableDatabase
         try {
@@ -68,6 +73,7 @@ class CapabilityStorage(
 
     /** Raw capability command payloads for a row. Each payload begins with the
      * command byte, exactly what SC's `C15171e.encodedPayload` contains. */
+    @Synchronized
     fun readCapabilities(identifier: String, storeGroup: Int, tableNumber: Int): List<ByteArray>? {
         val db = helper.readableDatabase
         try {
@@ -87,6 +93,7 @@ class CapabilityStorage(
     }
 
     /** Replace the whole row for a key (SC: `INSERT OR REPLACE`). */
+    @Synchronized
     fun writeRow(
         identifier: String,
         storeGroup: Int,

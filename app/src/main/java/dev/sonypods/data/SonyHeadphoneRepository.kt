@@ -1674,10 +1674,15 @@ class SonyHeadphoneRepository private constructor(
     ): Boolean {
         val storage = capabilityStorage ?: return false
         val profile = _state.value.connectedProfile ?: return false
-        // SC `m112114g`: a restore requires the Table1 row to exist at all, and —
-        // for the V2 tableset — the Table2 row too (a completed V2 initializer
-        // writes both). V1 has no Table2 row. A missing row means the initializer
-        // never finished writing; re-probe rather than build from a partial store.
+        // Stricter than SC on purpose. SC's restore (`wv.a.m112114g`) only needs the
+        // Table1 row: its Table2 read returns `Collections.EMPTY_LIST` when the row is
+        // absent, never null, so the `== null` bail-out next to it is dead code. It can
+        // afford that because it stores once, at the end of the initializer
+        // (`C15170d.m65487h`), so a row on disk is always a complete exchange. Ours is a
+        // debounced incremental flush (see [capabilitySaveRunnable]) plus a flush at
+        // teardown, so a row can be persisted mid-probe — and a V2 hit missing its Table2
+        // blobs restores without the peripheral capability, which is exactly how the
+        // 2-device card went missing before. Require both rows for V2; V1 has no Table2 row.
         val storedTable1 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO1)
         val storedTable2 = storage.readCapabilities(identifier, storeGroup, TANDEM_TABLE_NUMBER_NO2)
         if (storedTable1 == null || (storeGroup == STORE_GROUP_V2 && storedTable2 == null)) {
@@ -2022,7 +2027,9 @@ class SonyHeadphoneRepository private constructor(
      *    switch (`u70.C29444f.m108135b` builds a plain GS sender per slot, with no reference to
      *    the peripheral domain at all). `so.C28522r.mo24713c` picks between them: `mo58509L0()`
      *    (peripheral declared) → the full card, else `mo58500J() != null` (a GS slot titled
-     *    MULTIPOINT_SETTING) → a card holding just this toggle.
+     *    MULTIPOINT_SETTING) → `so.C28516l`, a title-plus-status row that opens the multipoint
+     *    device-settings page rather than an inline toggle. Either way the write goes through the
+     *    GS sender, so the peripheral capability is not part of the path.
      *
      * Gating this on [HeadphoneFeature.MULTIPOINT] conflated the two: that feature is only ever
      * granted from a peripheral RET_CAPABILITY ([applyMultipointCapability]), which a GS-driven
