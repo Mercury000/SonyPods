@@ -721,11 +721,19 @@ class LeAudioDevicePairer(
             }
             log("LE Audio aliases: ${SonyDeviceService.leAudioAliasSnapshot()}")
         }
-        // After bonding, ask LeAudioService to connect each bonded member so the
-        // headset actually switches to LC3 and the Classic control channel comes up.
-        bonded.forEach { leAddress ->
-            allowLeAudioProfile(leAddress)
-            connectLeAudio(leAddress, allowDiscoveryRetry = false)
+        // After bonding, permit LE Audio on every identity of this headset and ask LeAudioService
+        // to connect. The control identity is included even when its member step was reported as
+        // failed: that step only decides whether *we* derived LE keys through it, while the bond
+        // itself is intact and the system's per-device LE Audio switch reads THAT record. Leaving
+        // it at CONNECTION_POLICY_FORBIDDEN is what made a successful pairing come up on LDAC
+        // with the system switch off, until the user turned it on by hand.
+        val identities = buildSet {
+            addAll(bonded)
+            knownControlAddress?.let(::add)
+        }
+        identities.forEach { address ->
+            allowLeAudioProfile(address)
+            connectLeAudio(address, allowDiscoveryRetry = false)
         }
         val primary = bonded.firstOrNull()
         cleanUp()
@@ -747,6 +755,15 @@ class LeAudioDevicePairer(
     private fun connectLeAudio(address: String, allowDiscoveryRetry: Boolean = true) {
         val localAdapter = adapter ?: return
         val device = runCatching { localAdapter.getRemoteDevice(address) }.getOrNull() ?: return
+        // LeAudioService rejects the call outright with "Remote does not have LE_AUDIO UUID" until
+        // LE service discovery has put ASCS in the cache, and once it lands the stack connects the
+        // profile by itself (`connectEnabledProfile(LeAudioService)`). Calling before then only
+        // logs a failure and, with retry enabled, starts a discovery the stack is already doing.
+        if (!hasLeAudioUuid(device)) {
+            log("LE_AUDIO connect($address) skipped: LE_AUDIO UUID not cached yet")
+            if (allowDiscoveryRetry) discoverLeServicesThenRetry(device)
+            return
+        }
         val listener = object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                 val connected = runCatching {
@@ -824,6 +841,12 @@ class LeAudioDevicePairer(
         log("LE keys present for $address = $result")
         return result
     }
+
+    /** Whether ASCS has reached this device's cached UUIDs — LeAudioService's precondition. */
+    @SuppressLint("MissingPermission")
+    private fun hasLeAudioUuid(device: BluetoothDevice): Boolean = runCatching {
+        device.uuids.orEmpty().any { it.uuid == ASCS_UUID }
+    }.getOrDefault(false)
 
     /**
      * Removes the BR/EDR bond and pairs again so the headset derives LE keys across transports.

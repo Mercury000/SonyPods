@@ -1419,8 +1419,8 @@ object SonyEngineHost {
      * always written, so a bond that has gone away clears them instead of leaving the last reading
      * in place.
      *
-     * A headset can hold two records — one per identity — and the two need not agree. Permitted on
-     * either means the system may route LC3, so that is what the switch shows.
+     * A headset can hold two records — one per identity — and the two need not agree. The control
+     * record is the one that counts: the system's own switch is bound to it and so is routing.
      */
     private fun withLeAudioPolicy(base: SonyStateSnapshot): SonyStateSnapshot {
         val address = base.deviceAddress ?: return base
@@ -1428,14 +1428,21 @@ object SonyEngineHost {
         val readings = devices.map { it to rawLeAudioPolicy(it) }
         val system = leAudioSystemState(devices)
         logLeAudioPolicy(address, readings, system)
-        val known = readings.mapNotNull { it.second }
+        // The switch has to follow the control identity, not "any identity that is permitted".
+        // The system's own per-device switch is bound to the control record, and so is routing:
+        // a headset with the LE-only half permitted and the control half forbidden comes up on
+        // LDAC, and the old any-of reading showed that as ON and then sat on "waiting for LC3".
+        // Fall back to any reading only when the control record itself has none.
+        val controlReading = readings.firstOrNull { (device, _) ->
+            runCatching { device.address }.getOrNull()?.equals(address, ignoreCase = true) == true
+        }
+        val effective = controlReading?.second ?: readings.firstNotNullOfOrNull { it.second }
         val target = readings.firstOrNull { (_, policy) ->
             policy != null && policy > CONNECTION_POLICY_FORBIDDEN
         }?.first ?: readings.firstOrNull()?.first
         return base.copy(
             leAudioIdentityAddress = target?.let { runCatching { it.address }.getOrNull() },
-            leAudioPolicyAllowed = if (known.isEmpty()) null
-            else known.any { it > CONNECTION_POLICY_FORBIDDEN },
+            leAudioPolicyAllowed = effective?.let { it > CONNECTION_POLICY_FORBIDDEN },
             leAudioSystemConnected = system.connected,
             leAudioSystemActive = system.active,
         )
