@@ -772,20 +772,19 @@ class LeAudioDevicePairer(
     /**
      * Runs LE-transport service discovery so ASCS reaches the device's UUID cache, then asks
      * LeAudioService to connect once more.
+     *
+     * A GATT connect over LE is the only mechanism used here. It discovers services and, unlike
+     * `fetchUuidsWithSdp(TRANSPORT_LE)`, also brings the LE link up on an address that has only
+     * ever had a BR/EDR one. Running both — as this did until 2026-09-02 — left two GATT clients
+     * on one address, and the stack cannot survive that: the MTU exchange the stack
+     * auto-requests for the second client ends in `bta_gattc_op_cmpl` "Push callbacks to clients
+     * which are not notified before", which walks the first client's control block while it is
+     * still mid-discovery and jumps through a garbage pointer (SIGBUS in
+     * `bta_gattc_cfg_mtu_cmpl`, taking com.android.bluetooth down).
      */
     @SuppressLint("MissingPermission")
     private fun discoverLeServicesThenRetry(device: BluetoothDevice) {
         val address = device.address
-        val fetched = runCatching {
-            BluetoothDevice::class.java
-                .getMethod("fetchUuidsWithSdp", Int::class.javaPrimitiveType)
-                .invoke(device, BluetoothDevice.TRANSPORT_LE) as? Boolean
-        }
-        fetched.exceptionOrNull()?.let { log("fetchUuidsWithSdp(LE) unavailable for $address: $it") }
-        log("fetchUuidsWithSdp(LE) on $address = ${fetched.getOrNull()}")
-
-        // A GATT connect over LE discovers services even where the fetch API is unavailable,
-        // and it is what brings the LE link up on an address that only ever had a BR/EDR one.
         val client = SonyLeAudioGattClient(
             appContext,
             object : SonyLeAudioGattClient.Listener {
