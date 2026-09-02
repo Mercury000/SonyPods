@@ -171,6 +171,19 @@ class SonyBleClient(
     private var negotiatedMtu: Int = 23
     private var handshakeStep: HandshakeStep = HandshakeStep.Idle
     private var determineMtuNotificationEnabled = false
+    /**
+     * GATT clients whose `close()` is waiting for an in-flight MTU exchange to land.
+     *
+     * `close()` is what unregisters the client and lets the stack recycle its registration
+     * control block. Doing that while our own MTU request is still outstanding leaves the
+     * pending operation pointing at a freed rcb, and when the response arrives
+     * `bta_gattc_op_cmpl` walks "clients which are not notified before" and jumps through the
+     * dangling callback — four SIGBUS/BUS_ADRALN aborts of com.android.bluetooth in
+     * `bta_gattc_cfg_mtu_cmpl` came from exactly that window. `disconnect()` still runs
+     * immediately; only the unregister waits, so the link drops on time and the stale client
+     * merely lingers for one round trip.
+     */
+    private val gattAwaitingMtuSettle = mutableSetOf<BluetoothGatt>()
     private var unsupportedProbe: UnsupportedEndpointProbe? = null
     private var sppTransport: SonySppTransport? = null
     /** Invalidates an in-progress RFCOMM connect when this client is closed. */
@@ -265,13 +278,14 @@ class SonyBleClient(
                 toAcc = null
                 fromAcc = null
                 gattEndpoints.clear()
+                val mtuPending = handshakeStep == HandshakeStep.RequestMtu
                 handshakeStep = HandshakeStep.Idle
                 determineMtuNotificationEnabled = false
                 writableValueLength = null
                 optimalMtu = null
                 negotiatedMtu = 23
                 unsupportedProbe = null
-                gatt.close()
+                closeGattAfterMtuSettles(gatt, mtuPending)
                 this@SonyBleClient.gatt = null
                 listener.onConnectionStateChanged(false, connectedDevice)
             }
@@ -337,6 +351,9 @@ class SonyBleClient(
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            // Before the staleness check: a client held open only to let its MTU request land is
+            // by definition no longer the live one, and this reply is what releases it.
+            finishDeferredGattClose(gatt, "MTU settled")
             if (this@SonyBleClient.gatt !== gatt) {
                 log("Ignoring stale GATT MTU callback")
                 return
@@ -637,6 +654,7 @@ class SonyBleClient(
         toAcc = null
         fromAcc = null
         gattEndpoints.clear()
+        val mtuPending = handshakeStep == HandshakeStep.RequestMtu
         handshakeStep = HandshakeStep.Idle
         determineMtuNotificationEnabled = false
         writableValueLength = null
@@ -644,7 +662,7 @@ class SonyBleClient(
         negotiatedMtu = 23
         unsupportedProbe = null
         gatt?.disconnect()
-        gatt?.close()
+        gatt?.let { closeGattAfterMtuSettles(it, mtuPending) }
         gatt = null
         if (notify) {
             listener.onConnectionStateChanged(false, connectedDevice)
@@ -756,6 +774,15 @@ class SonyBleClient(
      */
     @SuppressLint("MissingPermission")
     private fun shouldUseSpp(device: DiscoveredSonyDevice, remote: BluetoothDevice): Boolean {
+        // A random Bluetooth address has no BR/EDR page target, so RFCOMM against one can only
+        // end in PAGE_TIMEOUT — and it still costs a full page timeout of connection churn on a
+        // stack that aborts when GATT clients come and go around it. The two most significant
+        // bits of the first octet identify the random subtypes (11 static, 01 resolvable
+        // private); a public address, which is what every classic identity has, is neither.
+        if (isRandomBluetoothAddress(runCatching { remote.address }.getOrNull())) {
+            log("${remote.address} is a random LE address; classic SPP is not reachable there")
+            return false
+        }
         if (isLeAudioConnected(remote)) {
             log("LE Audio is connected for ${remote.address}; using GATT for Tandem")
             return false
@@ -773,6 +800,37 @@ class SonyBleClient(
             device.source.startsWith("connected-a2dp") ||
             device.source.startsWith("connected-headset")
         return hasMdrSppUuid || classicCandidate || device.sonyAd?.androidLine?.contains("SPP") == true
+    }
+
+    /** Whether [address] is an LE random address (static or resolvable private). */
+    private fun isRandomBluetoothAddress(address: String?): Boolean {
+        val firstOctet = address?.substringBefore(':')?.toIntOrNull(16) ?: return false
+        return when (firstOctet shr 6) {
+            0b11, 0b01 -> true
+            else -> false
+        }
+    }
+
+    /**
+     * Unregister [target], but not before an MTU request we issued has been answered.
+     * See [gattAwaitingMtuSettle]; the wait is a posted callback, never a blocking one — this
+     * runs on com.android.bluetooth threads.
+     */
+    private fun closeGattAfterMtuSettles(target: BluetoothGatt, mtuPending: Boolean) {
+        if (!mtuPending) {
+            runCatching { target.close() }
+            return
+        }
+        log("Deferring GATT close until the outstanding MTU exchange settles")
+        gattAwaitingMtuSettle += target
+        timeoutHandler.postDelayed({ finishDeferredGattClose(target, "timeout") }, MTU_SETTLE_TIMEOUT_MS)
+    }
+
+    /** Idempotent: whichever of the reply or the timeout arrives first performs the close. */
+    private fun finishDeferredGattClose(target: BluetoothGatt, reason: String) {
+        if (!gattAwaitingMtuSettle.remove(target)) return
+        log("Closing deferred GATT client ($reason)")
+        runCatching { target.close() }
     }
 
     /**
@@ -1997,6 +2055,8 @@ class SonyBleClient(
         private const val SONY_CHUNK_CLASSIC_BLUETOOTH_HASH = 0x05
         private const val SPP_WRITABLE_VALUE_LENGTH = 1024
         private const val OPTIMAL_MTU_TIMEOUT_MS = 2_000L
+        /** Ceiling on how long a close waits for its MTU reply; observed replies land ≤1.4 s. */
+        private const val MTU_SETTLE_TIMEOUT_MS = 2_000L
         private const val DETERMINE_MTU_READY_TIMEOUT_MS = 10_000L
         private const val DISABLE_DETERMINE_MTU_TIMEOUT_MS = 5_000L
         private const val WRITABLE_VALUE_LENGTH_TIMEOUT_MS = 2_000L
