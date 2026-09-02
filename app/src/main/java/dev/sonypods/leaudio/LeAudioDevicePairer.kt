@@ -377,8 +377,38 @@ class LeAudioDevicePairer(
             excludeAddresses = excludeAddresses,
         ).toMutableList()
         addKnownControlMember()
+        putControlMemberFirst()
         log("${pending.size} coordinated-set member(s) to bond: ${pending.joinToString { it.address }}")
         bondNextMember()
+    }
+
+    /**
+     * Moves the headset's control identity to the front of [pending].
+     *
+     * Its re-pair is what actually produces LE keys, for the whole headset: the device answers
+     * a direct LE-transport bond by opening SMP over BR/EDR from its classic address instead
+     * (CTKD), which collides with the in-flight LE bond and drops it — observed as
+     * `smp_br_connect_callback: BDA=<classic> pairing_bda=<LE>` followed by `WAIT_AUTH_COMPLETE`
+     * and BOND_NONE, plus a system "pairing failed" toast. Doing the classic identity first
+     * performs that CTKD deliberately, and the LE members are then already keyed.
+     *
+     * Separate from [addKnownControlMember] because the control identity usually arrives from
+     * the scan itself (it announces LE Audio like any other set member), in which case that
+     * method returns early and never gets to order anything.
+     */
+    @SuppressLint("MissingPermission")
+    private fun putControlMemberFirst() {
+        val first = pending.firstOrNull() ?: return
+        SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
+        val control = pending.asSequence()
+            .mapNotNull { SonyDeviceService.resolveControlAddress(it.address) }
+            .firstOrNull { candidate -> pending.any { it.address.equals(candidate, ignoreCase = true) } }
+            ?: return
+        if (first.address.equals(control, ignoreCase = true)) return
+        val index = pending.indexOfFirst { it.address.equals(control, ignoreCase = true) }
+        if (index <= 0) return
+        log("bonding control identity $control first; its CTKD re-pair is what derives LE keys")
+        pending.add(0, pending.removeAt(index))
     }
 
     /**
@@ -386,8 +416,8 @@ class LeAudioDevicePairer(
      *
      * That earbud advertises only intermittently — scans routinely come back with just the
      * other one — but its address is already known from the bonded set, so waiting to see it
-     * announce is what kept its LE keys from ever being derived. It is appended last because
-     * it needs a re-pair rather than a fresh bond.
+     * announce is what kept its LE keys from ever being derived. [putControlMemberFirst] then
+     * orders it ahead of the LE-only members.
      */
     @SuppressLint("MissingPermission")
     private fun addKnownControlMember() {
@@ -416,6 +446,31 @@ class LeAudioDevicePairer(
         picked = next
         log("bonding set member ${describe(next)}")
         beginBond(next.address)
+    }
+
+    /**
+     * Whether this scan saw the headset advertising the way it does in pairing mode.
+     *
+     * Pairing mode is a property of the headset, not of one identity, so any collected
+     * announcement counts — and it has to be read from the scan rather than from the member
+     * being bonded, because the control identity is usually injected by
+     * [addKnownControlMember] with the other earbud's announcement copied onto it.
+     *
+     * The witnesses are the ones the successful run showed and the failing runs lacked:
+     * a discoverable flag, a Swift Pair payload, or an RSI (a set member only publishes its
+     * Resolvable Set Identifier while it is joinable).
+     */
+    private fun headsetIsInPairingMode(): Boolean {
+        val witness = collected.values.firstOrNull { candidate ->
+            val a = candidate.announcement
+            a.isDiscoverable || a.hasSwiftPair || !a.rsi.isNullOrEmpty()
+        }
+        if (witness == null) {
+            log("no collected announcement shows pairing mode (discoverable/SwiftPair/RSI)")
+            return false
+        }
+        log("headset is in pairing mode per ${describe(witness)}")
+        return true
     }
 
     private fun finishAllMembers() {
@@ -455,10 +510,26 @@ class LeAudioDevicePairer(
                 allowLeAudioProfile(address)
                 connectLeAudio(address)
                 onMemberBonded(address)
+            } else if (!headsetIsInPairingMode()) {
+                // Removing a live classic bond that cannot be re-established is worse than not
+                // switching: the headset only answers a fresh pairing while it advertises in
+                // pairing mode, so outside that window removeBond+createBond just times out
+                // and leaves the user with no classic pairing at all. Observed 11:13 / 11:32
+                // on 2026-09-02: BONDING for a full 30 s with no pairing request, bond gone.
+                log("set member $address needs a CTKD re-pair but the headset is not in " +
+                    "pairing mode; leaving its bond untouched")
+                fail(ModuleText.get(appContext, R.string.pairer_needs_pairing_mode))
             } else {
                 log("set member $address is bonded but has no LE keys; re-pairing for CTKD")
                 beginCtkdRepair(device)
             }
+            return
+        }
+
+        if (ctkdAlreadyProvidedKeys(address)) {
+            log("set member $address has no LE keys after the control identity's CTKD re-pair; " +
+                "a direct LE bond cannot derive them, skipping")
+            onMemberFailed(address, ModuleText.get(appContext, R.string.pairer_bond_rejected))
             return
         }
 
@@ -468,6 +539,21 @@ class LeAudioDevicePairer(
         handler.removeCallbacks(bondTimeout)
         handler.postDelayed(gattProvokeRunnable, GATT_PROVOKE_DELAY_MS)
         handler.postDelayed(bondTimeout, BOND_TIMEOUT_MS)
+    }
+
+    /**
+     * Whether a direct LE-transport bond on [address] can still work.
+     *
+     * It cannot once the headset's classic identity has been CTKD-paired in this run: the
+     * device hands out LE keys only through that cross-transport pairing, so a fresh LE bond
+     * gets answered with SMP over BR/EDR and dies in the collision — the attempt costs a
+     * system pairing dialog and a "pairing failed" toast and can never succeed. When CTKD has
+     * already run, a member that still shows no keys has nothing left to try.
+     */
+    private fun ctkdAlreadyProvidedKeys(address: String): Boolean {
+        val control = knownControlAddress ?: return false
+        if (control.equals(address, ignoreCase = true)) return false
+        return bonded.any { it.equals(control, ignoreCase = true) }
     }
 
     /**
@@ -550,8 +636,14 @@ class LeAudioDevicePairer(
 
         when (state) {
             BluetoothDevice.BOND_BONDED -> onMemberBonded(device.address)
+            // A bond that lands and is immediately revoked (BONDED -> NONE) is the headset
+            // refusing the LE-transport pairing after the fact. Treating only BONDING -> NONE
+            // as failure left this case to the 30 s bond timeout, with a pointless GATT
+            // provoke in between.
             BluetoothDevice.BOND_NONE ->
-                if (previous == BluetoothDevice.BOND_BONDING) {
+                if (previous == BluetoothDevice.BOND_BONDING ||
+                    previous == BluetoothDevice.BOND_BONDED
+                ) {
                     onMemberFailed(device.address, ModuleText.get(appContext, R.string.pairer_bond_rejected))
                 }
         }

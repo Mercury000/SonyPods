@@ -44,41 +44,34 @@ fun LeAudioPairingHelpDialog(
     OverlayDialog(
         title = if (targetEnabled) stringResource(R.string.lea_help_title_le) else stringResource(R.string.lea_help_title_classic),
         summary = if (targetEnabled) {
-            stringResource(R.string.lea_help_intro_le_1) +
-                stringResource(R.string.lea_help_intro_le_2) +
-                stringResource(R.string.lea_help_intro_le_3)
+            stringResource(R.string.lea_help_intro_le)
         } else {
             stringResource(R.string.lea_help_intro_classic)
         },
         show = show,
         onDismissRequest = onDismiss,
     ) {
+        // One line of content next to the summary: the summary already states what the LE
+        // identity is and that the module drives the rest, so the body only carries what it
+        // cannot — the concrete reset gesture, live progress, or the failure reason.
         Column(
             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (!targetEnabled) {
-                Text(stringResource(R.string.lea_step_open_bt))
-                Text(stringResource(R.string.lea_step_remove_device))
-                Text(stringResource(R.string.lea_step_repair))
-                Text(stringResource(R.string.lea_step_reconnect_classic))
+                Text(stringResource(R.string.lea_help_classic_steps))
             } else {
                 when {
-                    pairing -> {
-                        Text(stringResource(R.string.lea_help_now_reset))
-                        Text(stringResource(R.string.lea_reset_hint_case))
-                        Text(pairMessage.ifEmpty { stringResource(R.string.lea_searching) })
-                    }
-                    paired -> {
-                        Text(stringResource(R.string.lea_help_paired_identity, pairedAddress?.let { "（$it）" }.orEmpty()))
-                        Text(stringResource(R.string.lea_lc3_note))
-                    }
+                    pairing -> Text(pairMessage.ifEmpty { stringResource(R.string.lea_searching) })
+                    paired -> Text(
+                        stringResource(
+                            R.string.lea_help_paired,
+                            pairedAddress?.let { "（$it）" }.orEmpty(),
+                        )
+                    )
                     else -> {
                         if (failed && pairMessage.isNotEmpty()) Text(pairMessage)
-                        Text(stringResource(R.string.lea_le_identity_pairing_only))
-                        Text(stringResource(R.string.lea_step_pairing_mode))
-                        Text(stringResource(R.string.lea_help_step_reset_fmt, resetHint))
-                        Text(stringResource(R.string.lea_step_auto_pair))
+                        Text(resetHint)
                     }
                 }
             }
