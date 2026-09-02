@@ -11,6 +11,7 @@ import dev.sonypods.protocol.SonyTable
 import dev.sonypods.protocol.SonyV1FunctionType
 import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.SystemInquiredType
+import dev.sonypods.protocol.PeripheralInquiredTypeTable2
 import dev.sonypods.protocol.SonyTandemV2Table2Protocol
 
 /**
@@ -201,6 +202,26 @@ object SonyCapabilityProbe {
                     // capability probe, so no command is emitted here.
                     ProbeDomain.LEA -> Unit
 
+                    // PERIPHERAL_GET_CAPABILITY belongs to the exchange itself, not to a
+                    // later refresh: SC's initializer sends it from the declaration alone
+                    // (`wv.e$e.r0` → `lg0.b$b`, Command.PERI_GET_CAPABILITY) inside the same
+                    // sequence as every other domain. Having it ride the refresh burst is
+                    // what let it be gated on HeadphoneFeature.MULTIPOINT — a feature only
+                    // this very reply grants — so the request was never sent and the
+                    // multipoint page came up empty.
+                    ProbeDomain.PERIPHERAL -> {
+                        val inquired = function.v2Type()?.let { peripheralInquiredFor(it) }
+                        if (inquired != null) {
+                            add(
+                                HeadphoneCommand(
+                                    label = "GET PERIPHERAL capability ${inquired.name}",
+                                    bytes = SonyTandemV2Table2Protocol.buildGetPeripheralCapability(inquired),
+                                    channel = profile.channelFor(HeadphoneFeature.MULTIPOINT),
+                                )
+                            )
+                        }
+                    }
+
                     // The Safe Listening capability reply names the device's
                     // minimum poll interval (SC polls sound pressure at it); the
                     // inquired type itself comes from the FunctionType. The
@@ -352,6 +373,7 @@ object SonyCapabilityProbe {
                 else -> Unit
             }
             when (function.domain(profile)) {
+                ProbeDomain.PERIPHERAL -> Unit
                 ProbeDomain.NCASM -> if (function.isV1(profile)) {
                     noiseQueries.add(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM)
                     writableNoise.add(NcAsmInquiredType.V1_TABLE_SET1_NC_ASM)
@@ -703,8 +725,26 @@ object SonyCapabilityProbe {
     // ── FunctionType → domain & inquired-type mapping (SC §9.3–9.5) ──────────
 
     enum class ProbeDomain {
-        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, SAFE_LISTENING, GENERAL_SETTING, NONE,
+        NCASM, EQEBB, PLAY, BATTERY, SYSTEM, LEA, SAFE_LISTENING, GENERAL_SETTING, PERIPHERAL, NONE,
     }
+
+    /**
+     * FunctionType → PeripheralInquiredType, the one-to-one mapping SC's initializer uses
+     * (`wv.e$e` steps 73-74): `PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT` addresses
+     * `PeripheralInquiredType.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT` (0x00), and either
+     * `..._WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_BT` / `..._CLASSIC_LE` addresses
+     * `..._WITH_BLUETOOTH_CLASS_OF_DEVICE` (0x02). The declaration picks the type outright —
+     * SC never probes both and waits to see which answers.
+     */
+    private fun peripheralInquiredFor(type: SonyV2FunctionType): PeripheralInquiredTypeTable2? =
+        when (type) {
+            SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT ->
+                PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT
+            SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE,
+            SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE ->
+                PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE
+            else -> null
+        }
 
     private val V1_NC_ASM_TYPES = setOf(
         SonyV1FunctionType.NOISE_CANCELLING,
@@ -888,6 +928,11 @@ object SonyCapabilityProbe {
         SonyV2FunctionType.GENERAL_SETTING_2,
         SonyV2FunctionType.GENERAL_SETTING_3,
         SonyV2FunctionType.GENERAL_SETTING_4 -> ProbeDomain.GENERAL_SETTING
+
+        SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_CLASSIC_BT,
+        SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE,
+        SonyV2FunctionType.PAIRING_DEVICE_MANAGEMENT_WITH_BLUETOOTH_CLASS_OF_DEVICE_CLASSIC_LE ->
+            ProbeDomain.PERIPHERAL
 
         else -> ProbeDomain.NONE
     }

@@ -200,9 +200,8 @@ object SonyDeviceService {
             return
         }
         // Some stacks report every dual-mode bond as TYPE_DUAL and their SDP caches never
-        // carry the ASCS service, leaving both members unclassified. Within an unresolved
-        // same-name pair, the member whose UUID cache is empty while its twin exposes
-        // classic services is the LE Audio identity — a classic bond always has SDP records.
+        // carry the ASCS service, leaving both members unclassified. Resolve the direction
+        // from evidence that cannot be polluted, in descending order of certainty.
         sony.groupBy { it.namePairKey() }.values.asSequence()
             .map { members -> members.distinctBy { normalizeAddress(it.address) } }
             .filter { it.size == 2 }
@@ -210,17 +209,52 @@ object SonyDeviceService {
             .firstOrNull()
             ?.let { pair ->
                 val (a, b) = pair
+                // 1. A random address is an LE identity by definition — the two top bits of the
+                //    most significant byte are 11 (static) or 01 (resolvable private), which a
+                //    public BD_ADDR assigned from an OUI never is on these headsets. This is the
+                //    only discriminator that survives the LE Audio pairing flow, which puts ASCS
+                //    into the classic bond's UUID cache and makes every service-based test read
+                //    the control identity as LE.
+                val aRandom = hasRandomAddress(a)
+                val bRandom = hasRandomAddress(b)
                 when {
+                    aRandom && !bRandom -> linkLeAudioIdentity(a.address, b.address)
+                    bRandom && !aRandom -> linkLeAudioIdentity(b.address, a.address)
+                    // 2. Both addresses look alike: the member with no cached UUIDs is the LE
+                    //    identity, because a classic bond always ends up with SDP records.
                     !hasCachedUuids(a) && hasCachedUuids(b) ->
                         linkLeAudioIdentity(a.address, b.address)
                     !hasCachedUuids(b) && hasCachedUuids(a) ->
                         linkLeAudioIdentity(b.address, a.address)
-                    // Neither cache resolved: within an unambiguous same-name pair any
-                    // direction is safe — consumers use the alias map to find "the other
-                    // identity", not to decide which one is which transport.
-                    else -> linkLeAudioIdentity(a.address, b.address)
+                    // 3. Nothing resolved. Writing an arbitrary direction is what inverted the
+                    //    pair: `resolveControlAddress` and `isLeOnlyHoldingIdentity` both read
+                    //    the direction, so a guess sends Tandem to the LE identity, whose
+                    //    support-function list is LEA-only — no NC, no EQ, no playback — and the
+                    //    headset then answers with LEA_NTFY_PARAM 0x0D every few seconds. Leave
+                    //    the pair unlinked instead; an unlinked pair degrades to "no alias",
+                    //    which is merely incomplete rather than wrong.
+                    else -> Unit
                 }
             }
+    }
+
+    /**
+     * Whether [device] is bonded under a random Bluetooth address — the LE identity's kind.
+     *
+     * Core spec address types live in the two most significant bits of the first octet:
+     * `11` static random, `01` resolvable private, `00` non-resolvable private. Public
+     * addresses come out of an OUI and never carry those patterns for these headsets, so this
+     * separates the two bonds of one headset without consulting any service cache.
+     */
+    private fun hasRandomAddress(device: BluetoothDevice): Boolean {
+        val first = runCatching { device.address }.getOrNull()
+            ?.substringBefore(':')
+            ?.toIntOrNull(16)
+            ?: return false
+        return when (first shr 6) {
+            0b11, 0b01 -> true
+            else -> false
+        }
     }
 
     private fun BluetoothDevice.namePairKey(): String =

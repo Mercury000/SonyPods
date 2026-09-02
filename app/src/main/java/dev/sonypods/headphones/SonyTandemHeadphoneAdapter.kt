@@ -809,8 +809,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 PeripheralInquiredTypeTable2.PAIRING_DEVICE_MANAGEMENT_WITH_BT_CLASS_OF_DEVICE,
             )
         return types.flatMap { type ->
+            // The capability itself is not read here: SC's initializer owns it (`wv.e$e.r0`,
+            // steps 73-74 of the exchange) and the declaration alone decides the inquired
+            // type. The refresh only re-reads live state.
             listOf(
-                multipointCommand(profile, "GET multipoint capability $type", SonyTandemV2Table2Protocol.buildGetPeripheralCapability(type)),
                 multipointCommand(profile, "GET multipoint status $type", SonyTandemV2Table2Protocol.buildGetPeripheralStatus(type)),
                 multipointCommand(profile, "GET multipoint devices $type", SonyTandemV2Table2Protocol.buildGetPeripheralParam(type)),
             )

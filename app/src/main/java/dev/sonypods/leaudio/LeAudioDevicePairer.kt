@@ -422,15 +422,22 @@ class LeAudioDevicePairer(
     @SuppressLint("MissingPermission")
     private fun addKnownControlMember() {
         val target = pending.firstOrNull() ?: return
-        SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
-        val control = SonyDeviceService.resolveControlAddress(target.address)
+        // The caller-supplied exclude address is authoritative and must win: this flow puts
+        // ASCS into the classic bond's uuid cache, and a cached ASCS is exactly what makes the
+        // name-based classifier read the control identity as the LE one. Re-classifying here
+        // and overwriting [knownControlAddress] inverted the pair, and the inverted pair then
+        // stopped SonyBleClient from retargeting, so Tandem ran on the LE identity until the
+        // headset pushed 0x0D at it every few seconds.
+        val known = knownControlAddress
+        if (known == null) SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
+        val control = known ?: SonyDeviceService.resolveControlAddress(target.address)
         if (control == null || control.equals(target.address, ignoreCase = true)) return
         if (pending.any { it.address.equals(control, ignoreCase = true) }) return
         if (hasLeKeys(control)) {
             log("control identity $control already has LE keys; not re-pairing it")
             return
         }
-        knownControlAddress = control
+        if (known == null) knownControlAddress = control
         log("adding control identity $control as a set member; it has no LE keys yet")
         pending += target.copy(address = control)
     }
@@ -708,8 +715,11 @@ class LeAudioDevicePairer(
         runCatching {
             val control = knownControlAddress
             if (control != null) {
-                adapter?.bondedDevices.orEmpty().forEach { member ->
-                    SonyDeviceService.linkLeAudioIdentity(member.address, control)
+                // Only the members this flow actually bonded belong to this headset. Sweeping
+                // every bond on the phone linked unrelated devices in as LE identities of this
+                // one, and each bogus alias redirects a later resolve to the wrong transport.
+                bonded.forEach { member ->
+                    SonyDeviceService.linkLeAudioIdentity(member, control)
                 }
                 // Record identity pair to UnifiedDeviceIdentityService
                 bonded.forEach { leAddress ->

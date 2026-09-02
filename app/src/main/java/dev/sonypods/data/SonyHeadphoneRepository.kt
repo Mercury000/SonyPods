@@ -176,6 +176,16 @@ private const val QUICK_ACCESS_CONFIRM_TIMEOUT_MS = 2_000L
 private const val CAPABILITY_INFO_TIMEOUT_MS = 2_500L
 
 /**
+ * How long one capability step may go unanswered before the exchange is abandoned.
+ *
+ * SC needs no such value: its step blocks on a `CountDownLatch` and the transport's own failure
+ * raises `InterruptedException` / `IOException` out of the sequence. Our inbound path is a
+ * callback, so a step that is simply ignored by the headset has nothing to raise — this bounds
+ * it. Timing out throws exactly like SC's interrupt: the sequence ends and nothing is persisted.
+ */
+private const val CAPABILITY_STEP_TIMEOUT_MS = 3_000L
+
+/**
  * How long the initial-value gate waits with no further progress before releasing the
  * UI anyway. Re-armed on every reply the headset sends, so a slow burst that is still
  * being answered is never cut short — only silence ends the wait.
@@ -958,6 +968,12 @@ class SonyHeadphoneRepository private constructor(
     @Volatile
     private var capabilityCacheManager: CapabilityCacheManager? = null
 
+    /** SC's initializer, structurally: see [startCapabilityExchange]. */
+    private val capabilityInitializer = TandemCapabilityInitializer(
+        send = { command -> sendCommand(command) },
+        log = { message -> appendLog(message) },
+    )
+
     /** Hook-host fallback invoked only when the current model has no catalog image. */
     @Volatile
     private var modelCatalogFallbackRequester: ((String?, String?, Int?) -> Unit)? = null
@@ -1058,9 +1074,6 @@ class SonyHeadphoneRepository private constructor(
         }
         markInitialValuesReady(
             if (pendingInitialValueDomains.isEmpty()) {
-                // Every advertised domain answered: this is SC's "initializer returned"
-                // moment, and the only one that may write the capability row.
-                saveCapabilitiesOnExchangeComplete()
                 "channel settled after the initial burst"
             } else {
                 "timed out waiting for $pendingInitialValueDomains"
@@ -1668,8 +1681,8 @@ class SonyHeadphoneRepository private constructor(
         val parsedFrames = stored.mapNotNull { bytes ->
             runCatching { HeadphoneAdapterRegistry.parse(profile, bytes) }.getOrNull()
         }
-        val supportFunctions = parsedFrames
-            .filterIsInstance<ParsedTandemResponse.SupportFunction>()
+        val supportFunctionFrames = parsedFrames.filterIsInstance<ParsedTandemResponse.SupportFunction>()
+        val supportFunctions = supportFunctionFrames
             .flatMap { it.functions }
             .distinctBy { it.table to it.code }
         if (supportFunctions.isEmpty()) return false
@@ -1752,20 +1765,6 @@ class SonyHeadphoneRepository private constructor(
         is ParsedTandemResponse.SafeListeningCapability,
         is ParsedTandemResponse.LeaCapability -> true
         else -> false
-    }
-
-    /**
-     * Persist the capability working set, once, because the exchange has completed.
-     *
-     * SC's initializer writes the whole table in one pass when it finishes
-     * (`C15170d.m65487h`), and never before — a run that dies mid-exchange leaves the
-     * stored row alone. This is that moment: the initial-value gate closes only when
-     * every domain the capability table advertised has answered, so the working set at
-     * that point is a whole exchange. Nothing writes on a timeout, an abort or a dropped
-     * link, so a partial exchange can never replace a complete row.
-     */
-    private fun saveCapabilitiesOnExchangeComplete() {
-        capabilityCacheManager?.saveAll()
     }
 
     fun setNoiseControlMode(mode: NoiseControlMode) {
@@ -2930,6 +2929,7 @@ class SonyHeadphoneRepository private constructor(
             // returns and unregisters from the dispatcher. An exchange that did not
             // finish writes nothing — the stored row keeps whatever a completed one
             // last put there, exactly as SC leaves it.
+            capabilityInitializer.cancel()
             capabilityCacheManager?.clear()
             mainHandler.removeCallbacks(capabilityInfoTimeoutRunnable)
             // SC's Tandem target migration ("Keep mActiveMdr instance"): when
@@ -3189,6 +3189,9 @@ class SonyHeadphoneRepository private constructor(
         val parsed = HeadphoneAdapterRegistry.parse(profile, channel, raw)
         appendLog("RX [$channel] ${raw.hexString()} · ${parsed::class.simpleName}", kind = DebugLogKind.RX)
         recordCapabilityIfPersistable(parsed, raw)
+        // Release the exchange step waiting on this reply before the handlers run, the way SC's
+        // dispatcher lets the predicate count the latch down independently of the feature holders.
+        capabilityInitializer.offer(parsed)
         applyParsed(parsed, channel)
         // After the handler, so the value is already in the state when the gate opens.
         noteInitialValue(parsed)
@@ -4033,11 +4036,34 @@ class SonyHeadphoneRepository private constructor(
                     appendLog("Ignoring 0x0D tandem target change: device does not declare 0x43")
                     return
                 }
-                appendLog("Headset asks to move Tandem off the current target; closing it")
-                // No address named: promotion is left to whatever reconnects
-                // (SC `d30.C15456c`: "call Mdr.disconnectFromCurrentTandemTarget").
+                // SC `d30.C15456c` disconnects the current target so that its *holding*
+                // device is promoted to target (`C22925e.m89635e`). 0x0D names no address,
+                // so the promotion has to be derived: the other bonded identity of this
+                // headset. Recording it as the migration target is what makes the promotion
+                // happen — [SonyBleClient.connectTandemTarget] dials it verbatim, while an
+                // ordinary reconnect would fold straight back onto the control identity the
+                // headset just asked us to leave, and the headset would answer with another
+                // 0x0D. That loop is what kept the initial-value gate from ever opening.
+                val current = _state.value.connectedDevice?.address
+                val promoted = current?.let { address ->
+                    val control = UnifiedDeviceIdentityService.resolveControlAddress(address)
+                    if (control.equals(address, ignoreCase = true)) {
+                        UnifiedDeviceIdentityService.leAudioAddressFor(address)
+                    } else {
+                        control
+                    }
+                }?.takeIf { !it.equals(current, ignoreCase = true) }
+                appendLog(
+                    if (promoted != null) {
+                        "Headset asks to move Tandem off $current; promoting its holding " +
+                            "identity $promoted"
+                    } else {
+                        "Headset asks to move Tandem off the current target; closing it " +
+                            "(no second identity known, so promotion is left to the reconnect)"
+                    }
+                )
                 pendingTandemMigration = pendingTandemMigration
-                    ?: PendingTandemMigration(null, null)
+                    ?: PendingTandemMigration(promoted, null)
                 scheduleTandemMigrationTimeout()
                 mainHandler.post { client.disconnect() }
             }
@@ -4665,10 +4691,54 @@ class SonyHeadphoneRepository private constructor(
             )
         }
         if (!alreadyProbed) {
-            probeCommands.forEach(::sendCommand)
+            startCapabilityExchange(probeCommands)
         }
         appendLog("Capability table applied: ${functions.size} functions", writeLogcat = false)
         refreshBasics(initial = true)
+    }
+
+    /**
+     * Run the per-domain capability requests the way SC's initializer does: one at a time, each
+     * blocking until its own reply lands, the whole run inside a single try, and the row written
+     * only after that run returns.
+     *
+     * SC's `wv.e$e` sends every step through `P(msg, replyClass, predicate)` → `wv.e$c.f(...)`,
+     * which blocks on a `CountDownLatch`; the sequence sits between `:try_start_1e` and
+     * `:try_end_6b8`, and `capabilitystore.d.h()` (saveIntoStorage) is emitted *after* the four
+     * catches, so a step that never answers jumps to `:catch_6fc` ("Initialization interrupted")
+     * and the row is left exactly as it was. Firing the burst and letting the initial-value gate
+     * decide the exchange was done is what persisted short rows: that gate's wait set is derived
+     * from the capability table itself, so a table missing a domain never waited for it.
+     */
+    private fun startCapabilityExchange(commands: List<HeadphoneCommand>) {
+        if (commands.isEmpty()) return
+        capabilityInitializer.start(
+            name = "sonypods-capability-exchange",
+            sequence = {
+                commands.forEach { command ->
+                    capabilityInitializer.sendAndAwait(command, CAPABILITY_STEP_TIMEOUT_MS) { parsed ->
+                        capabilityReplyMatches(command.bytes, parsed)
+                    }
+                }
+            },
+            onComplete = { capabilityCacheManager?.saveAll() },
+        )
+    }
+
+    /**
+     * Whether [parsed] is the reply to the request [request] — SC's per-step predicate, expressed
+     * on the wire bytes we have instead of on a reply class. MDR pairs GET/RET as base+0/base+1
+     * within a dataType (0x60 GET_CAPABILITY ↔ 0x61 RET_CAPABILITY), and the inquired type rides
+     * in the next byte, so masking the low bit off the command byte matches a reply to its own
+     * request and to nothing else.
+     */
+    private fun capabilityReplyMatches(request: ByteArray, parsed: ParsedTandemResponse): Boolean {
+        val reply = parsed.raw
+        if (request.size < 2 || reply.size < 2) return false
+        if (reply[0] != request[0]) return false
+        if ((reply[1].toInt() and 0xFE) != (request[1].toInt() and 0xFE)) return false
+        val requestedInquiredType = request.getOrNull(2) ?: return true
+        return requestedInquiredType == reply.getOrNull(2)
     }
 
     private fun clearSupportFunctionProbeState() {
