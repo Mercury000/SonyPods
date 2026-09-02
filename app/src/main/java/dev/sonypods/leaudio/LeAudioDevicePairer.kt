@@ -206,38 +206,11 @@ class LeAudioDevicePairer(
      * resolves against this module's loader, which cannot see host classes and fails with
      * ClassNotFoundException — exactly what silently broke the CTKD re-pair once.
      */
-    private fun removeBondReflective(device: BluetoothDevice): Boolean {
-        val loader = appContext.classLoader
-        val viaAdapterService = runCatching {
-            val serviceClass = loader.loadClass("com.android.bluetooth.btservice.AdapterService")
-            val service = listOf("sAdapterService", "getAdapterService", "deprecatedGetAdapterService")
-                .mapNotNull { name ->
-                    runCatching {
-                        serviceClass.getDeclaredField(name).apply { isAccessible = true }.get(null)
-                    }.getOrElse {
-                        runCatching {
-                            serviceClass.getDeclaredMethod(name).apply { isAccessible = true }
-                                .invoke(null)
-                        }.getOrNull()
-                    }
-                }
-                .firstOrNull()
-            ?: error("AdapterService instance is not available")
-            serviceClass
-                .getMethod("removeBond", BluetoothDevice::class.java)
-                .invoke(service, device) as? Boolean
-        }
-        viaAdapterService.exceptionOrNull()?.let { log("AdapterService.removeBond failed: ${it.unwrap()}") }
-        if (viaAdapterService.getOrNull() == true) {
-            log("AdapterService.removeBond(${device.address}) = true")
-            return true
-        }
-
-        return runCatching {
+    private fun removeBondReflective(device: BluetoothDevice): Boolean =
+        runCatching {
             BluetoothDevice::class.java.getMethod("removeBond").invoke(device) as? Boolean
-        }.onFailure { log("BluetoothDevice.removeBond failed: ${it.unwrap()}") }
+        }.onFailure { log("removeBond failed: ${it.unwrap()}") }
             .getOrNull() ?: false
-    }
 
     /** InvocationTargetException hides the reason a reflective call was rejected. */
     private fun Throwable.unwrap(): String {

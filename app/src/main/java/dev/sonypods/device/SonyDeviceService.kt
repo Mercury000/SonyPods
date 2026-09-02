@@ -186,65 +186,26 @@ object SonyDeviceService {
     fun linkLeAudioIdentities(bonded: Collection<BluetoothDevice>) {
         val sony = bonded.filter(::isSony)
         if (sony.isEmpty()) return
-        val (leIdentities, controls) = sony.partition(::isLeAudioIdentity)
-        if (leIdentities.isNotEmpty() && controls.isNotEmpty()) {
-            leIdentities.forEach { le ->
-                val leName = runCatching { le.name }.getOrNull()
-                val match = controls.firstOrNull { control ->
-                    val controlName = runCatching { control.name }.getOrNull()
-                    leName != null && controlName != null &&
-                        controlName.equals(leName.removeLePrefix(), ignoreCase = true)
-                } ?: controls.singleOrNull()
-                match?.let { linkLeAudioIdentity(le.address, it.address) }
-            }
-            return
-        }
-        // Some stacks report every dual-mode bond as TYPE_DUAL and their SDP caches never
-        // carry the ASCS service, leaving both members unclassified. Resolve the direction
-        // from evidence that cannot be polluted, in descending order of certainty.
+        // One discriminator, because only one of them is trustworthy here: the Bluetooth
+        // address type. Core spec puts it in the two most significant bits of the first octet —
+        // `11` static random, `01` resolvable private, `00` non-resolvable private — so the
+        // headset's LE identity is a random address and its control identity is the public one
+        // out of Sony's OUI. Name matching cannot tell the two apart (both answer to the same
+        // name) and every service/UUID test reads the control identity as LE once the LE Audio
+        // pairing flow has put ASCS into its cache, which is exactly how the pair got inverted
+        // and Tandem ended up on the LE side.
         sony.groupBy { it.namePairKey() }.values.asSequence()
             .map { members -> members.distinctBy { normalizeAddress(it.address) } }
             .filter { it.size == 2 }
-            .filter { pair -> pair.any { !isClassicOnlyBond(it) } }
-            .firstOrNull()
-            ?.let { pair ->
-                val (a, b) = pair
-                // 1. A random address is an LE identity by definition — the two top bits of the
-                //    most significant byte are 11 (static) or 01 (resolvable private), which a
-                //    public BD_ADDR assigned from an OUI never is on these headsets. This is the
-                //    only discriminator that survives the LE Audio pairing flow, which puts ASCS
-                //    into the classic bond's UUID cache and makes every service-based test read
-                //    the control identity as LE.
-                val aRandom = hasRandomAddress(a)
-                val bRandom = hasRandomAddress(b)
-                when {
-                    aRandom && !bRandom -> linkLeAudioIdentity(a.address, b.address)
-                    bRandom && !aRandom -> linkLeAudioIdentity(b.address, a.address)
-                    // 2. Both addresses look alike: the member with no cached UUIDs is the LE
-                    //    identity, because a classic bond always ends up with SDP records.
-                    !hasCachedUuids(a) && hasCachedUuids(b) ->
-                        linkLeAudioIdentity(a.address, b.address)
-                    !hasCachedUuids(b) && hasCachedUuids(a) ->
-                        linkLeAudioIdentity(b.address, a.address)
-                    // 3. Nothing resolved. Writing an arbitrary direction is what inverted the
-                    //    pair: `resolveControlAddress` and `isLeOnlyHoldingIdentity` both read
-                    //    the direction, so a guess sends Tandem to the LE identity, whose
-                    //    support-function list is LEA-only — no NC, no EQ, no playback — and the
-                    //    headset then answers with LEA_NTFY_PARAM 0x0D every few seconds. Leave
-                    //    the pair unlinked instead; an unlinked pair degrades to "no alias",
-                    //    which is merely incomplete rather than wrong.
-                    else -> Unit
-                }
+            .forEach { pair ->
+                val le = pair.firstOrNull(::hasRandomAddress) ?: return@forEach
+                val control = pair.firstOrNull { !hasRandomAddress(it) } ?: return@forEach
+                linkLeAudioIdentity(le.address, control.address)
             }
     }
 
     /**
-     * Whether [device] is bonded under a random Bluetooth address — the LE identity's kind.
-     *
-     * Core spec address types live in the two most significant bits of the first octet:
-     * `11` static random, `01` resolvable private, `00` non-resolvable private. Public
-     * addresses come out of an OUI and never carry those patterns for these headsets, so this
-     * separates the two bonds of one headset without consulting any service cache.
+     * Whether [device] is bonded under a random Bluetooth address, i.e. is the LE identity.
      */
     private fun hasRandomAddress(device: BluetoothDevice): Boolean {
         val first = runCatching { device.address }.getOrNull()
@@ -252,7 +213,7 @@ object SonyDeviceService {
             ?.toIntOrNull(16)
             ?: return false
         return when (first shr 6) {
-            0b11, 0b01 -> true
+            0b11, 0b01, 0b00 -> true
             else -> false
         }
     }
