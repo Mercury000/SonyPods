@@ -221,13 +221,6 @@ object SonyDeviceService {
     private fun BluetoothDevice.namePairKey(): String =
         runCatching { name }.getOrNull()?.removeLePrefix()?.lowercase(Locale.ROOT).orEmpty()
 
-    private fun hasCachedUuids(device: BluetoothDevice): Boolean =
-        runCatching { device.uuids.orEmpty().isNotEmpty() }.getOrDefault(false)
-
-    private fun isClassicOnlyBond(device: BluetoothDevice): Boolean =
-        runCatching { device.type == 1 /* BluetoothDevice.DEVICE_TYPE_CLASSIC */ }
-            .getOrDefault(false)
-
     private fun String.removeLePrefix(): String =
         removePrefix("LE_").removePrefix("le_").removePrefix("LE-").removePrefix("le-")
 
