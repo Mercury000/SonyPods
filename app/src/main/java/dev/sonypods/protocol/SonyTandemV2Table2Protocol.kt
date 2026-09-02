@@ -96,9 +96,6 @@ object SonyTandemV2Table2Protocol {
     private const val LEA_RET_PARAM: Byte = 0x67
     private const val LEA_SET_PARAM: Byte = 0x68
     private const val LEA_NTFY_PARAM: Byte = 0x69
-    // SC `mdr.v2.EnableDisable` — ENABLE=0x00 (the LINK_AUTO_SWITCH availability
-    // form reports "unavailable by LE Audio prior" when enabled).
-    private const val LEA_ENABLE: Byte = 0x00
 
     // ── Party (0x70-0x7C) ───────────────────────────────────────────────────
 
@@ -575,23 +572,6 @@ object SonyTandemV2Table2Protocol {
                     table = SonyTable.NO_2,
                     raw = raw,
                 )
-                // LINK_AUTO_SWITCH availability: the EnableDisable form, mapped
-                // ENABLE→PRIOR exactly like SC `d30.C15462i.m66589z`.
-                LeaInquiredTypeTable2.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION.code.unsigned ->
-                    if (payload.size == 2) {
-                        ParsedTandemResponse.LeaFunctionAvailability(
-                            restrictedFunction = SonyV2FunctionType.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION,
-                            reason = if (payload[1] == LEA_ENABLE) {
-                                LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR
-                            } else {
-                                LeaUnavailableReason.UNAVAILABLE
-                            },
-                            isNotification = command == LEA_NTFY_STATUS,
-                            raw = raw,
-                        )
-                    } else {
-                        table2LeaGeneric(type, payload, raw)
-                    }
                 0x04 -> ParsedTandemResponse.LeaStatus(
                     type = null,
                     values = payload.unsignedList(),

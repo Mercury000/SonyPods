@@ -7,8 +7,6 @@ import dev.sonypods.protocol.DeviceInfoType
 import dev.sonypods.protocol.EqEbbInquiredType
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.LeaInquiredType
-import dev.sonypods.protocol.LeaInquiredTypeTable2
-import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -213,47 +211,6 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
             }
             if (profile.supports(HeadphoneFeature.LEA_STATUS)) {
                 addAll(buildRefreshLeaCommands(profile))
-            }
-            // Runtime availability of each declared LEA-restricted function — SC's
-            // `d30.C15459f`/`d30.C15462i` fire one LEA_GET_STATUS per declared
-            // restriction at init and then rely on NTFY pushes. The reply names why
-            // the function is unavailable, which the greyed cards turn into guidance
-            // copy; the greying gate itself stays declaration-driven, as in SC.
-            if (profile.capabilities.leaRestrictedFunctionTypes.isNotEmpty()) {
-                val table1Codec = codecFor(profile, HeadphoneFeature.DEVICE_INFO)
-                val table1Channel = runCatching {
-                    profile.channelFor(HeadphoneFeature.DEVICE_INFO)
-                }.getOrNull()
-                profile.capabilities.leaRestrictedFunctionTypes.forEach { function ->
-                    val inquired = SonyV2FunctionType.LEA_INQUIRED_FOR_RESTRICTION[function]
-                    if (inquired != null && table1Channel != null) {
-                        // Same LEA_GET_STATUS frame the history query uses; the
-                        // restriction's inquired type (0xF5..0xFF) carries it.
-                        table1Codec.buildGetLeaStatus(inquired)?.let { bytes ->
-                            add(
-                                HeadphoneCommand(
-                                    "GET LEA availability ${function.name}",
-                                    bytes,
-                                    table1Channel,
-                                )
-                            )
-                        }
-                    } else if (function == SonyV2FunctionType.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION &&
-                        table1Channel != null
-                    ) {
-                        // Table2 command; dataType routes it regardless of channel
-                        // (the probe sends the Table2 support-function the same way).
-                        add(
-                            HeadphoneCommand(
-                                "GET LEA availability ${function.name}",
-                                SonyTandemV2Table2Protocol.buildGetLeaStatus(
-                                    LeaInquiredTypeTable2.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION,
-                                ),
-                                table1Channel,
-                            )
-                        )
-                    }
-                }
             }
             if (profile.supports(HeadphoneFeature.UPSCALING)) {
                 addAll(buildRefreshUpscalingCommands(profile))

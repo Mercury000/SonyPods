@@ -995,9 +995,9 @@ object SonyTandemV2Table1Protocol {
             AUDIO_NTFY_STATUS -> parseConnectionQualityAvailability(
                 payload, raw, isUnsolicited = true,
             ) { it.size == 2 }
-            LEA_RET_STATUS, LEA_NTFY_STATUS -> parseLeaFunctionAvailability(
-                payload, raw, command == LEA_NTFY_STATUS,
-            ) ?: if (payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING) {
+            LEA_RET_STATUS, LEA_NTFY_STATUS -> if (
+                payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
+            ) {
                 parseLeaSettingAvailability(payload, raw, command == LEA_NTFY_STATUS)
             } else {
                 parseLeaStatus(payload, raw)
@@ -1737,43 +1737,6 @@ object SonyTandemV2Table1Protocol {
             )
         return ParsedTandemResponse.LeaSettingAvailability(available, isNotification, raw)
     }
-
-    /**
-     * LEA_RET/NTFY_STATUS carrying a restricted function's [dev.sonypods.protocol.LeaUnavailableReason]
-     * — exactly three bytes `[cmd][inquiredType][reason]` (SC `mf0.C23652c.m92493a`).
-     * Ten inquired types carry the reason byte directly; QUICK_ACCESS (0xFC)
-     * instead carries an EnableDisable, mapped ENABLE→PRIOR (`d30.C15459f.m66582z`).
-     */
-    private fun parseLeaFunctionAvailability(
-        payload: ByteArray,
-        raw: ByteArray,
-        isNotification: Boolean,
-    ): ParsedTandemResponse? {
-        if (payload.size != 2) return null
-        val restrictedFunction = RESTRICTION_INQUIRED_TO_FUNCTION[payload[0]] ?: return null
-        val reason = if (payload[0] == LeaInquiredType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION.code) {
-            when (payload[1]) {
-                LEA_ENABLE -> LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR
-                LEA_DISABLE -> LeaUnavailableReason.UNAVAILABLE
-                else -> return null
-            }
-        } else {
-            LeaUnavailableReason.fromCode(payload[1])
-                .takeIf { it != LeaUnavailableReason.OUT_OF_RANGE }
-                ?: return null
-        }
-        return ParsedTandemResponse.LeaFunctionAvailability(
-            restrictedFunction = restrictedFunction,
-            reason = reason,
-            isNotification = isNotification,
-            raw = raw,
-        )
-    }
-
-    /** Restriction wire code (Table1 LEAInquiredType, 0xF5..0xFF) → FunctionType.
-     * The pairing comes from SC's `FunctionCantBeUsedWithLEAConnectionType`. */
-    private val RESTRICTION_INQUIRED_TO_FUNCTION: Map<Byte, SonyV2FunctionType> =
-        SonyV2FunctionType.LEA_INQUIRED_FOR_RESTRICTION.entries.associate { (fn, inquired) -> inquired.code to fn }
 
     private fun Byte.toLeaStreamingStatus(): LeaStreamingStatus? =
         LeaStreamingStatus.entries.firstOrNull { it.code == this }

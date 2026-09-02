@@ -588,23 +588,4 @@ class SonyTandemTable2ProtocolTest {
         assertEquals(PartyInquiredTypeTable2.LIVE_KARAOKE, PartyInquiredTypeTable2.fromCode(0x05))
     }
 
-    @Test
-    fun leaFunctionAvailability_linkAutoSwitch_mapsEnableDisableToReason() {
-        // [DATA_MDR_NO2][LEA_RET_STATUS 0x63][LINK_AUTO_SWITCH 0xFE][ENABLE 0x00 → PRIOR]
-        // SC d30.C15462i.m66589z.
-        val parsed = SonyTandemV2Table2Protocol.parse(
-            byteArrayOf(0x0F, 0x63, 0xFE.toByte(), 0x00)
-        ) as ParsedTandemResponse.LeaFunctionAvailability
-
-        assertEquals(SonyV2FunctionType.LINK_AUTO_SWITCH_CANT_BE_USED_WITH_LEA_CONNECTION, parsed.restrictedFunction)
-        assertEquals(LeaUnavailableReason.UNAVAILABLE_BY_LE_AUDIO_PRIOR, parsed.reason)
-        assertEquals(false, parsed.isNotification)
-
-        val ntfy = SonyTandemV2Table2Protocol.parse(
-            byteArrayOf(0x0F, 0x65, 0xFE.toByte(), 0x01)
-        ) as ParsedTandemResponse.LeaFunctionAvailability
-        assertEquals(LeaUnavailableReason.UNAVAILABLE, ntfy.reason)
-        assertEquals(true, ntfy.isNotification)
-    }
-
 }

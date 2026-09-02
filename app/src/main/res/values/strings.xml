@@ -218,7 +218,6 @@
     <string name="dsee_extreme">DSEE Extreme</string>
     <string name="dsee_ultimate">DSEE Ultimate</string>
     <string name="feature_unavailable_over_le_audio">This feature is unavailable while connected via LE Audio</string>
-    <string name="feature_unavailable_le_audio_prior">Unavailable because the headset is set to [LE Audio priority]</string>
     <string name="dsee_hx_description">Restores the subtle sound frequencies often lost in compressed audio sources such as streaming or MP3, letting you enjoy sound quality comparable to hi-res audio.</string>
     <string name="dsee_ultimate_description">Uses AI technology to enhance compressed audio sources such as streaming or MP3, delivering clear and dynamic sound.</string>
     <string name="dsee_description">Restores the subtle sound frequencies often lost in compressed audio sources such as streaming or MP3, reproducing a wide and natural audio effect.</string>

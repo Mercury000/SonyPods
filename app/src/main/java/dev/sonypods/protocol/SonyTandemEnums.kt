@@ -259,45 +259,6 @@ enum class LeaInquiredType(val code: Byte) {
 
     /** The headset warns that the Tandem link is going down. Payload `[type]`. */
     NOTIFY_DISCONNECTING_TANDEM(0x0F),
-
-    // ── FunctionCantBeUsedWithLEAConnectionType wire codes (SC
-    // `mdr.v2.table1.lea.param.LEAInquiredType`): each LEA-restricted function is
-    // queried over LEA_GET/RET/NTFY_STATUS under its own inquired type, and the
-    // codes are independent of the FunctionType bytes (0xF5..0xFF, not 0x45..0x4F).
-    BGM_MODE_CANT_BE_USED_WITH_LEA_CONNECTION(0xF5.toByte()),
-    HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION(0xF6.toByte()),
-    PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION(0xF7.toByte()),
-    SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION(0xF8.toByte()),
-    AUTO_PLAY_CANT_BE_USED_WITH_LEA_CONNECTION(0xF9.toByte()),
-    GATT_CONNECTABLE_CANT_BE_USED_WITH_LEA_CONNECTION(0xFA.toByte()),
-    SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION(0xFB.toByte()),
-    QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION(0xFC.toByte()),
-    CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION(0xFD.toByte()),
-    VOICE_ASSISTANT_SETTINGS_CANT_BE_USED_WITH_LEA_CONNECTION(0xFE.toByte()),
-    VOICE_ASSISTANT_WAKE_WORD_CANT_BE_USED_WITH_LEA_CONNECTION(0xFF.toByte()),
-}
-
-/**
- * SC `mdr.v2.UnavailableReason` — why an LEA-restricted function is currently
- * unusable, as reported by the headset itself over LEA_RET/NTFY_STATUS. There is
- * no "available" value: the exchange only describes unavailability, and the UI
- * picks guidance copy from which reason it is (`mf0.C23652c`).
- */
-enum class LeaUnavailableReason(val code: Byte) {
-    /** The headset's LE-Audio-priority setting causes it — SC shows the
-     * "available only over classic Bluetooth" guidance. */
-    UNAVAILABLE_BY_LE_AUDIO_PRIOR(0x00),
-    /** Unavailable for a reason unrelated to LE Audio. */
-    UNAVAILABLE(0x01),
-    /** LE Audio is currently switched on — turning it off restores the function. */
-    UNAVAILABLE_BY_LE_AUDIO_SWITCH_ON(0x02),
-    OUT_OF_RANGE(0xFF.toByte()),
-    ;
-
-    companion object {
-        fun fromCode(code: Byte): LeaUnavailableReason =
-            entries.firstOrNull { it.code == code } ?: OUT_OF_RANGE
-    }
 }
 
 /** SC `mdr.v2.table1.lea.param.ConnectionType` — which transport Tandem moves to. */

@@ -287,38 +287,6 @@ enum class SonyV2FunctionType(val code: Byte, val table: SonyTable) {
 
         fun leaRestrictionFromCode(code: Int): SonyV2FunctionType? =
             LEA_RESTRICTION_TYPES.firstOrNull { (it.code.toInt() and 0xFF) == (code and 0xFF) }
-
-        /**
-         * SC `FunctionCantBeUsedWithLEAConnectionType`: each Table1 restriction
-         * pairs with its own LEAInquiredType — the wire code LEA_GET/RET/NTFY_STATUS
-         * addresses it under. The codes are 0xF5..0xFF, independent of the
-         * FunctionType bytes; LINK_AUTO_SWITCH is the Table2 odd one out (its
-         * inquired type lives in [LeaInquiredTypeTable2]).
-         */
-        val LEA_INQUIRED_FOR_RESTRICTION: Map<SonyV2FunctionType, LeaInquiredType> = mapOf(
-            BGM_MODE_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.BGM_MODE_CANT_BE_USED_WITH_LEA_CONNECTION,
-            HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.HEAD_TRACKER_CANT_BE_USED_WITH_LEA_CONNECTION,
-            PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.PAIRING_DEVICE_MANAGEMENT_CANT_BE_USED_WITH_LEA_CONNECTION,
-            SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.SOUND_AR_CANT_BE_USED_WITH_LEA_CONNECTION,
-            AUTO_PLAY_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.AUTO_PLAY_CANT_BE_USED_WITH_LEA_CONNECTION,
-            GATT_CONNECTABLE_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.GATT_CONNECTABLE_CANT_BE_USED_WITH_LEA_CONNECTION,
-            SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.SOUND_AR_OPTIMIZATION_CANT_BE_USED_WITH_LEA_CONNECTION,
-            QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.QUICK_ACCESS_CANT_BE_USED_WITH_LEA_CONNECTION,
-            CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.CONNECTION_MODE_CANT_BE_USED_WITH_LEA_CONNECTION,
-            VOICE_ASSISTANT_SETTINGS_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.VOICE_ASSISTANT_SETTINGS_CANT_BE_USED_WITH_LEA_CONNECTION,
-            VOICE_ASSISTANT_WAKE_WORD_CANT_BE_USED_WITH_LEA_CONNECTION to
-                LeaInquiredType.VOICE_ASSISTANT_WAKE_WORD_CANT_BE_USED_WITH_LEA_CONNECTION,
-        )
     }
 }
 

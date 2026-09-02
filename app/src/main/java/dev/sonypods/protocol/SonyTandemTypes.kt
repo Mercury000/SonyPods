@@ -270,24 +270,6 @@ sealed interface ParsedTandemResponse {
     ) : ParsedTandemResponse
 
     /**
-     * Headset-reported runtime availability of an LEA-restricted function
-     * (LEA_RET/NTFY_STATUS, SC `d30.C15459f` Table1 / `d30.C15462i` Table2). The
-     * headset answers why the function is unusable right now — the reason drives
-     * which guidance the UI shows ([LeaUnavailableReason]). There is no "available"
-     * value on the wire: absence of a report is the only available-ish state, so
-     * the greying gate itself stays declaration-driven (SC's `mo58685x1`).
-     *
-     * QUICK_ACCESS (Table1 0xFC) and LINK_AUTO_SWITCH (Table2 0xFE) carry an
-     * EnableDisable on the wire, mapped to PRIOR/UNAVAILABLE the way SC does.
-     */
-    data class LeaFunctionAvailability(
-        val restrictedFunction: SonyV2FunctionType,
-        val reason: LeaUnavailableReason,
-        val isNotification: Boolean,
-        override val raw: ByteArray,
-    ) : ParsedTandemResponse
-
-    /**
      * The headset's Tandem-target instructions (LEA_NTFY_PARAM, SC
      * `kf0.AbstractC21786g` family). A Sony headset with two bonded identities
      * decides itself which one carries Tandem and says so:

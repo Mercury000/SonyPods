@@ -57,8 +57,6 @@ import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.GestureNoiseControlMode
 import dev.sonypods.protocol.LeaConnectionType
 import dev.sonypods.protocol.LeaInquiredType
-import dev.sonypods.protocol.LeaUnavailableReason
-import dev.sonypods.protocol.SonyV2FunctionType
 import dev.sonypods.protocol.NcAsmInquiredType
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
 import dev.sonypods.protocol.NoiseControlMode
@@ -350,13 +348,6 @@ data class LeaState(
     val pairedHistory: String? = null,
     /** LE endpoint addresses returned by the Sony LEA capability query. */
     val leAudioAddresses: List<String> = emptyList(),
-    /**
-     * Headset-reported runtime availability of LEA-restricted functions
-     * (LEA_RET/NTFY_STATUS, SC `d30.C15459f`/`C15462i`). The reason picks the
-     * guidance copy on the greyed cards; absence of an entry is the only
-     * available-ish state, so the greying gate stays declaration-driven.
-     */
-    val unavailableReasons: Map<SonyV2FunctionType, LeaUnavailableReason> = emptyMap(),
     val raw: List<Int> = emptyList(),
 )
 
@@ -3281,7 +3272,6 @@ class SonyHeadphoneRepository private constructor(
                 )
             )
             is ParsedTandemResponse.LeaSettingAvailability -> applyLeaSettingAvailability(parsed)
-            is ParsedTandemResponse.LeaFunctionAvailability -> applyLeaFunctionAvailability(parsed)
             is ParsedTandemResponse.LeaParameterNotification -> applyLeaParameterNotification(parsed)
             is ParsedTandemResponse.LeaTandemTargetInstruction -> applyLeaTandemTargetInstruction(parsed)
             is ParsedTandemResponse.QuickAccess -> applyQuickAccess(parsed)
@@ -4102,26 +4092,6 @@ class SonyHeadphoneRepository private constructor(
         appendLog(
             "LE Audio setting availability=${response.available} notification=${response.isNotification}"
         )
-    }
-
-    /**
-     * LEA_RET/NTFY_STATUS for a restricted function (SC `d30.C15459f`/`C15462i`):
-     * the headset's own answer to "why is this unusable right now". Stored per
-     * restriction; the greyed cards read it back to pick guidance copy.
-     */
-    private fun applyLeaFunctionAvailability(response: ParsedTandemResponse.LeaFunctionAvailability) {
-        appendLog(
-            "LEA availability ${response.restrictedFunction.name}=${response.reason}" +
-                "${if (response.isNotification) " (ntfy)" else ""}"
-        )
-        _state.update {
-            it.copy(
-                leaState = it.leaState.copy(
-                    unavailableReasons = it.leaState.unavailableReasons +
-                        (response.restrictedFunction to response.reason),
-                )
-            )
-        }
     }
 
     private fun applyQuickAccess(response: ParsedTandemResponse.QuickAccess) {
