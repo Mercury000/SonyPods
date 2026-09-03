@@ -620,7 +620,6 @@ object SonyEngineHost {
             .orEmpty()
         val sony = connected.filter { HeadsetStateDispatcher.isSonyPod(it) }
         if (sony.isEmpty()) return null
-        SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
         sony.firstOrNull { candidate ->
             !UnifiedDeviceIdentityService.isLeAudioIdentity(candidate.address) &&
                 UnifiedDeviceIdentityService.resolveControlAddress(candidate.address)
@@ -1071,7 +1070,6 @@ object SonyEngineHost {
         if (now - lastLeIdentityRescanMs < LE_IDENTITY_RESCAN_MS) return null
         lastLeIdentityRescanMs = now
         val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter ?: return null
-        SonyDeviceService.linkLeAudioIdentities(adapter.bondedDevices.orEmpty())
         return leAudioAliasFor(controlAddress)
     }
 

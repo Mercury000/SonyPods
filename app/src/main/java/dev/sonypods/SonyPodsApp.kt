@@ -46,7 +46,7 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         LegacyConfigMigrator.migrateAppOnlyPrefsToUi(this)
         PodImagePrefs.attachStore(remotePrefs)
         ModelImageSync.onServiceBound(this)
-        UnifiedDeviceIdentityService.initialize(remotePrefs)
+        UnifiedDeviceIdentityService.initializeForEngine(null)
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
         PodImagePrefs.migrateImagesToRemote(service)

@@ -372,7 +372,6 @@ class LeAudioDevicePairer(
     @SuppressLint("MissingPermission")
     private fun putControlMemberFirst() {
         val first = pending.firstOrNull() ?: return
-        SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
         val control = pending.asSequence()
             .mapNotNull { SonyDeviceService.resolveControlAddress(it.address) }
             .firstOrNull { candidate -> pending.any { it.address.equals(candidate, ignoreCase = true) } }
@@ -402,7 +401,6 @@ class LeAudioDevicePairer(
         // stopped SonyBleClient from retargeting, so Tandem ran on the LE identity until the
         // headset pushed 0x0D at it every few seconds.
         val known = knownControlAddress
-        if (known == null) SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
         val control = known ?: SonyDeviceService.resolveControlAddress(target.address)
         if (control == null || control.equals(target.address, ignoreCase = true)) return
         if (pending.any { it.address.equals(control, ignoreCase = true) }) return
@@ -638,13 +636,6 @@ class LeAudioDevicePairer(
         allowLeAudioProfile(address)
         log("set member $address bonded (${bonded.size} so far)")
 
-        // Record identity during pairing (BluetoothDevice.type is reliable at this point)
-        val device = runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
-        if (device != null) {
-            UnifiedDeviceIdentityService.recordFromBluetoothDevice(device)
-            log("recorded identity for $address from pairing")
-        }
-
         bondNextMember()
     }
 
@@ -700,7 +691,6 @@ class LeAudioDevicePairer(
                 }
                 log("recorded identity pair: LE=$bonded, Control=$control")
             } else {
-                SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
             }
             log("LE Audio aliases: ${SonyDeviceService.leAudioAliasSnapshot()}")
         }

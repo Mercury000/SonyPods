@@ -24,9 +24,6 @@ import java.util.concurrent.ConcurrentHashMap
 object SonyDeviceService {
     private val knownAddresses = ConcurrentHashMap.newKeySet<String>()
 
-    /** LE Audio identity address -> the address that carries Tandem. */
-    private val leAudioAliases = ConcurrentHashMap<String, String>()
-
     /** Audio Stream Control Service: present on the LE Audio identity, absent on the other. */
     private val ASCS_SERVICE: UUID = UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
 
@@ -145,98 +142,42 @@ object SonyDeviceService {
      * Returns [address] unchanged when no LE Audio counterpart is known, so callers can use
      * this unconditionally.
      *
-     * Reads from local [leAudioAliases] first, then falls back to
-     * [UnifiedDeviceIdentityService] for persisted identity data.
+     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
      */
     fun resolveControlAddress(address: String?): String? {
         val normalized = normalizeAddress(address) ?: return address
-        // 1. Local in-memory alias map (fast path)
-        leAudioAliases[normalized]?.let { return it }
-        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
         return UnifiedDeviceIdentityService.resolveControlAddress(normalized)
     }
 
-    /** Records that [leAddress] is the LE Audio identity of the headset at [controlAddress]. */
+    /**
+     * Records that [leAddress] is the LE Audio identity of the headset at [controlAddress].
+     *
+     * The direction is stated by the caller — the pairing flow, which is the one moment both
+     * addresses are in hand. Nothing here re-derives it, and there is no second alias map to
+     * disagree with [UnifiedDeviceIdentityService].
+     */
     fun linkLeAudioIdentity(leAddress: String?, controlAddress: String?) {
         val le = normalizeAddress(leAddress) ?: return
         val control = normalizeAddress(controlAddress) ?: return
         if (le == control) return
-        // Inversion guard: a "control" that already maps elsewhere IS an LE identity, so this
-        // call has the pair swapped (observed when a snapshot's policy read listed the classic
-        // bond while its address field carried the LE one). Storing it would redirect every
-        // later resolve to the wrong transport.
-        if (leAudioAliases.containsKey(control)) return
-        // A stale inverse entry (some X claiming this LE side is a control) poisons every
-        // later resolve; drop it as part of writing the corrected pairing.
-        leAudioAliases.entries.removeIf { it.value == le }
-        leAudioAliases[le] = control
         rememberAddress(control)
-
-        // Record to UnifiedDeviceIdentityService for persistence
         UnifiedDeviceIdentityService.recordIdentityPair(le, control)
     }
 
-    /**
-     * Pairs up the two identities of every bonded Sony headset.
-     *
-     * Matching is by name, because that is what the headset advertises on both — and when
-     * exactly one control identity is bonded there is nothing to be ambiguous about, so an
-     * LE identity whose name was never resolved is still linked.
-     */
-    fun linkLeAudioIdentities(bonded: Collection<BluetoothDevice>) {
-        val sony = bonded.filter(::isSony)
-        if (sony.isEmpty()) return
-        // One discriminator, because only one of them is trustworthy here: the Bluetooth
-        // address type. Core spec puts it in the two most significant bits of the first octet —
-        // `11` static random, `01` resolvable private, `00` non-resolvable private — so the
-        // headset's LE identity is a random address and its control identity is the public one
-        // out of Sony's OUI. Name matching cannot tell the two apart (both answer to the same
-        // name) and every service/UUID test reads the control identity as LE once the LE Audio
-        // pairing flow has put ASCS into its cache, which is exactly how the pair got inverted
-        // and Tandem ended up on the LE side.
-        sony.groupBy { it.namePairKey() }.values.asSequence()
-            .map { members -> members.distinctBy { normalizeAddress(it.address) } }
-            .filter { it.size == 2 }
-            .forEach { pair ->
-                val le = pair.firstOrNull(::hasRandomAddress) ?: return@forEach
-                val control = pair.firstOrNull { !hasRandomAddress(it) } ?: return@forEach
-                linkLeAudioIdentity(le.address, control.address)
-            }
-    }
-
-    /**
-     * Whether [device] is bonded under a random Bluetooth address, i.e. is the LE identity.
-     */
-    private fun hasRandomAddress(device: BluetoothDevice): Boolean {
-        val first = runCatching { device.address }.getOrNull()
-            ?.substringBefore(':')
-            ?.toIntOrNull(16)
-            ?: return false
-        return when (first shr 6) {
-            0b11, 0b01, 0b00 -> true
-            else -> false
-        }
-    }
-
-    private fun BluetoothDevice.namePairKey(): String =
-        runCatching { name }.getOrNull()?.removeLePrefix()?.lowercase(Locale.ROOT).orEmpty()
-
-    private fun String.removeLePrefix(): String =
-        removePrefix("LE_").removePrefix("le_").removePrefix("LE-").removePrefix("le-")
 
     /**
      * Snapshot of all known LE Audio identity aliases.
      *
-     * Merges local [leAudioAliases] with [UnifiedDeviceIdentityService] persistent data.
+     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
      */
-    fun leAudioAliasSnapshot(): Map<String, String> {
-        val local = leAudioAliases.toMap()
-        val remote = UnifiedDeviceIdentityService.addressPairs()
-            .filter { it.first != it.second }
-            .associate { (le, control) -> le to control }
-        // Local aliases take precedence (they may have been updated more recently)
-        return remote + local
-    }
+    fun leAudioAliasSnapshot(): Map<String, String> =
+        UnifiedDeviceIdentityService.leToControlPairs()
+            .mapNotNull { entry ->
+                val le = entry.substringBefore('>')
+                val control = entry.substringAfter('>', "")
+                if (le.isBlank() || control.isBlank() || le == control) null else le to control
+            }
+            .toMap()
 
     /**
      * The LE Audio identity of the headset reachable at [controlAddress], if one is known.
@@ -245,31 +186,20 @@ object SonyDeviceService {
      * and the peer can only act on the identity it is itself bonded to, so a transfer that
      * was refused for one identity has to be retried against the other.
      *
-     * Reads from local [leAudioAliases] first, then falls back to
-     * [UnifiedDeviceIdentityService] for persisted identity data.
+     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
      */
     fun leAudioIdentityFor(controlAddress: String?): String? {
         val control = normalizeAddress(controlAddress) ?: return null
-        // 1. Local in-memory alias map (fast path)
-        leAudioAliases.entries.firstOrNull { it.value == control }?.key?.let { return it }
-        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
         return UnifiedDeviceIdentityService.leAudioAddressFor(control)
     }
 
     /**
      * Both bonded identities of one headset, given either of them.
      *
-     * Reads from local [leAudioAliases] first, then falls back to
-     * [UnifiedDeviceIdentityService] for persisted identity data.
+     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
      */
     fun identityAliasesOf(address: String?): List<String> {
         val normalized = normalizeAddress(address) ?: return emptyList()
-        // 1. Local in-memory alias map (fast path)
-        val control = leAudioAliases[normalized]
-        if (control != null) return listOf(control)
-        val leFromLocal = leAudioIdentityFor(normalized)
-        if (leFromLocal != null) return listOf(leFromLocal)
-        // 2. Persistent identity service (Remote Preferences + bt_config.conf)
         val pair = UnifiedDeviceIdentityService.identityPairFor(normalized) ?: return emptyList()
         return if (normalized == pair.first) listOf(pair.second) else listOf(pair.first)
     }

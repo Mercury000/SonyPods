@@ -491,7 +491,6 @@ object HeadsetStateDispatcher : HookContext() {
             ?.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
             ?: return device.address
         val bonded = adapter.bondedDevices.orEmpty()
-        SonyDeviceService.linkLeAudioIdentities(bonded)
         return SonyDeviceService.resolveControlAddress(device.address) ?: device.address
     }
 

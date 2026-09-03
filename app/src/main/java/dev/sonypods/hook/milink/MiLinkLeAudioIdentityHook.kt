@@ -248,7 +248,6 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
         lastAliasScan = now
         val bonded = bondedDevices()
         if (bonded.isEmpty()) return false
-        SonyDeviceService.linkLeAudioIdentities(bonded)
         return true
     }
 

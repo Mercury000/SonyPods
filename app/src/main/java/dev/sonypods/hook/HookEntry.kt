@@ -292,7 +292,7 @@ class HookEntry : XposedModule() {
         ConfigManager.attachStore(hook.prefs)
         // Pass the hook's context for foreground detection in the engine process
         val engineContext = runCatching { hook.javaClass.getMethod("getContext").invoke(hook) as? android.content.Context }.getOrNull()
-        UnifiedDeviceIdentityService.initializeForEngine(hook.prefs, engineContext)
+        UnifiedDeviceIdentityService.initializeForEngine(engineContext)
         hook.onHook()
         lifecycle("loadHook complete type=${hook.javaClass.name} scope=$packageName process=$processName")
     }

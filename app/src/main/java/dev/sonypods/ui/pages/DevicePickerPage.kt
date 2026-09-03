@@ -152,7 +152,6 @@ fun DevicePickerPage(
             // be controlled, so the LE identity is folded into its control counterpart.
             // UUID classification needs the stack's service cache to be warm; until it is,
             // the engine-seeded alias map answers instead.
-            SonyDeviceService.linkLeAudioIdentities(bonded)
             val aliases = SonyDeviceService.leAudioAliasSnapshot()
             val byAddress = bonded.associateBy { it.address.uppercase() }
             val paired = bonded

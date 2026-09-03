@@ -14,7 +14,7 @@ class UnifiedDeviceIdentityServiceTest {
     fun setUp() {
         // Reset the service state before each test
         UnifiedDeviceIdentityService.resetForTesting()
-        UnifiedDeviceIdentityService.initialize(null)
+        UnifiedDeviceIdentityService.initializeForEngine(null)
     }
 
     @Test

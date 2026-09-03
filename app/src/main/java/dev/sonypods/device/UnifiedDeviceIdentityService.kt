@@ -31,7 +31,7 @@ object UnifiedDeviceIdentityService {
     private const val TAG = "SonyPods-Engine"
 
     /** Remote Preferences key for device identities JSON. */
-    const val PREF_KEY_DEVICE_IDENTITIES = "device_identities"
+    private const val STORE_FILE = "sonypods_device_identities.txt"
 
     /** Local cache for engine-side storage (bluetooth process). */
     private val localCache = ConcurrentHashMap<String, DeviceIdentity>()
@@ -40,54 +40,27 @@ object UnifiedDeviceIdentityService {
     @Volatile
     private var remoteIdentities: Map<String, DeviceIdentity> = emptyMap()
 
-    /** Bound Remote Preferences store (writable only by module app). */
+    /**
+     * Where the classifier's own process persists what it resolved.
+     *
+     * Only the Bluetooth process can classify — pairing states the direction, and bt_config key
+     * material is readable nowhere else — so it is also the only process that has anything worth
+     * storing. It writes into its own data directory; every other process is handed the result
+     * through [dev.sonypods.bridge.SonyStateSnapshot.identityPairs] and never persists.
+     */
     @Volatile
-    private var remoteStore: SharedPreferences? = null
-
-    /** Context for foreground detection (bluetooth process only). */
-    @Volatile
-    private var context: Context? = null
-
-    /** Module app package name for foreground detection. */
-    private const val MODULE_PACKAGE = "com.mercury.sonypods"
-
-    /** Whether the module app is currently in foreground (can write to Remote Preferences). */
-    @Volatile
-    private var isModuleForeground: Boolean = false
+    private var store: java.io.File? = null
 
     // ---- Initialization ----
 
     /**
-     * Initialize the service with Remote Preferences store.
-     * Called by module app when LSPosed service binds.
+     * Bind the classifier's persistent store. Only the process that classifies passes a
+     * context; consumers call this with null and live off the snapshot.
      */
-    fun initialize(store: SharedPreferences?) {
-        remoteStore = store
-        loadFromRemotePreferences()
-        log("initialized with ${remoteIdentities.size} identities from remote prefs")
-    }
-
-    /**
-     * Initialize the service for engine-side (read-only) usage.
-     * Called by HookEntry when loading hooks.
-     */
-    fun initializeForEngine(store: SharedPreferences?, engineContext: Context? = null) {
-        remoteStore = store
-        context = engineContext
-        loadFromRemotePreferences()
-        log("engine initialized with ${remoteIdentities.size} identities from remote prefs")
-    }
-
-    /**
-     * Set whether the module app is in foreground.
-     * When true, engine-side cached identities can be synced to Remote Preferences.
-     */
-    fun setModuleForeground(foreground: Boolean) {
-        val wasForeground = isModuleForeground
-        isModuleForeground = foreground
-        if (foreground && !wasForeground) {
-            syncLocalCacheToRemote()
-        }
+    fun initializeForEngine(engineContext: Context? = null) {
+        store = engineContext?.let { java.io.File(it.filesDir, STORE_FILE) }
+        load()
+        log("initialized with ${remoteIdentities.size} identities")
     }
 
     // ---- Identity Query API ----
@@ -263,51 +236,6 @@ object UnifiedDeviceIdentityService {
     }
 
     /**
-     * Record identity from BluetoothDevice.type and UUID analysis.
-     * Used when BluetoothDevice is available but pairing info is uncertain.
-     */
-    @SuppressLint("MissingPermission")
-    fun recordFromBluetoothDevice(device: BluetoothDevice) {
-        val address = normalizeAddress(device.address) ?: return
-        val transport = runCatching { device.type }.getOrDefault(0)
-        val name = runCatching { device.name }.getOrNull()
-        val serviceUuids = runCatching { device.uuids.orEmpty().map { it.uuid } }
-            .getOrDefault(emptyList())
-
-        // Determine identity type from transport and UUIDs
-        val type = when (transport) {
-            2 -> IdentityType.LE
-            1 -> IdentityType.CLASSIC
-            3 -> {
-                // DUAL: need UUID analysis to determine if this is LE or Classic identity
-                if (isLeAudioIdentityFromUuids(serviceUuids)) IdentityType.LE
-                else if (isClassicIdentityFromUuids(serviceUuids)) IdentityType.CLASSIC
-                else IdentityType.DUAL
-            }
-            else -> {
-                // Unknown transport: rely on UUID analysis
-                if (isLeAudioIdentityFromUuids(serviceUuids)) IdentityType.LE
-                else if (isClassicIdentityFromUuids(serviceUuids)) IdentityType.CLASSIC
-                else IdentityType.UNKNOWN
-            }
-        }
-
-        if (type == IdentityType.UNKNOWN) {
-            log("cannot determine identity for $address (transport=$transport)")
-            return
-        }
-
-        val identity = DeviceIdentity(
-            address = address,
-            type = type,
-            name = name,
-            source = IdentitySource.BLUETOOTH_DEVICE,
-        )
-
-        recordIdentity(identity)
-    }
-
-    /**
      * Record identity from bt_config.conf analysis.
      * Used for pre-paired devices that weren't paired through the module.
      */
@@ -366,6 +294,16 @@ object UnifiedDeviceIdentityService {
     // ---- Internal Recording ----
 
     private fun recordIdentity(identity: DeviceIdentity) {
+        // PAIRING outranks BT_CONFIG. Pairing states the direction outright — it is the only
+        // moment the two identities are both in hand — while bt_config is read per address and
+        // cannot see the pairing. Letting the weaker source overwrite is what allowed a later
+        // pass to invert a pair the pairing flow had already recorded correctly.
+        val existing = localCache[identity.address] ?: remoteIdentities[identity.address]
+        if (existing != null && existing.source == IdentitySource.PAIRING &&
+            identity.source != IdentitySource.PAIRING
+        ) {
+            return
+        }
         // Update local cache
         localCache[identity.address] = identity
 
@@ -373,9 +311,7 @@ object UnifiedDeviceIdentityService {
         remoteIdentities = remoteIdentities + (identity.address to identity)
 
         // If module is in foreground, write to Remote Preferences immediately
-        if (isModuleForeground) {
-            writeToRemotePreferences()
-        }
+        persist()
 
         log("recorded identity: ${identity.address} -> ${identity.type} (source=${identity.source})")
     }
@@ -460,76 +396,28 @@ object UnifiedDeviceIdentityService {
         return serviceUuids.any { it in sonyServiceUuids }
     }
 
-    // ---- Remote Preferences I/O ----
+    // ---- Persistence (classifier process only) ----
 
-    private fun loadFromRemotePreferences() {
-        val store = remoteStore ?: return
-        val serialized = store.getString(PREF_KEY_DEVICE_IDENTITIES, null) ?: return
-
+    private fun load() {
+        val file = store ?: return
+        val serialized = runCatching { if (file.isFile) file.readText() else null }.getOrNull() ?: return
         val identities = mutableMapOf<String, DeviceIdentity>()
-        serialized.split("\n").forEach { line ->
+        serialized.lines().forEach { line ->
             if (line.isBlank()) return@forEach
-            DeviceIdentity.deserialize(line)?.let { identity ->
-                identities[identity.address] = identity
-            }
+            DeviceIdentity.deserialize(line)?.let { identities[it.address] = it }
         }
         remoteIdentities = identities
     }
 
-    private fun writeToRemotePreferences() {
-        val store = remoteStore ?: return
+    private fun persist() {
+        val file = store ?: return
         val serialized = buildString {
-            remoteIdentities.values.forEach { identity ->
-                appendLine(identity.serialize())
-            }
+            remoteIdentities.values.forEach { identity -> appendLine(identity.serialize()) }
         }
-        store.edit()
-            .putString(PREF_KEY_DEVICE_IDENTITIES, serialized)
-            .apply()
-        log("wrote ${remoteIdentities.size} identities to remote prefs")
+        runCatching { file.writeText(serialized) }
+            .onFailure { log("persist failed: ${it.javaClass.simpleName}") }
     }
 
-    /**
-     * Sync engine-side local cache to Remote Preferences.
-     * Called when module app comes to foreground.
-     */
-    private fun syncLocalCacheToRemote() {
-        if (localCache.isEmpty()) return
-
-        // Check if module app is in foreground before writing
-        val ctx = context
-        if (ctx != null) {
-            val isForeground = runCatching {
-                val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-                val uid = ctx.packageManager.getApplicationInfo(MODULE_PACKAGE, 0).uid
-                val state = android.app.ActivityManager::class.java
-                    .getMethod("getUidProcessState", Int::class.javaPrimitiveType)
-                    .invoke(am, uid) as Int
-                val topState = android.app.ActivityManager::class.java
-                    .getField("PROCESS_STATE_TOP")
-                    .getInt(null)
-                state == topState
-            }.getOrDefault(false)
-
-            if (!isForeground) {
-                log("module app not in foreground, skipping sync")
-                return
-            }
-        }
-
-        var synced = 0
-        localCache.forEach { (address, identity) ->
-            if (address !in remoteIdentities) {
-                remoteIdentities = remoteIdentities + (address to identity)
-                synced++
-            }
-        }
-
-        if (synced > 0) {
-            writeToRemotePreferences()
-            log("synced $synced identities from local cache to remote prefs")
-        }
-    }
 
     // ---- Snapshot API ----
 
@@ -542,6 +430,35 @@ object UnifiedDeviceIdentityService {
     /**
      * Get all known address pairs (LE ↔ Control).
      */
+    /**
+     * Every known pair as `LE>control`, for [dev.sonypods.bridge.SonyStateSnapshot].
+     *
+     * Only the Bluetooth process can classify (pairing flow, or bt_config key material), so
+     * this is how the answer reaches every other process.
+     */
+    fun leToControlPairs(): List<String> =
+        (remoteIdentities + localCache).values
+            .mapNotNull { identity ->
+                val paired = identity.pairedAddress ?: return@mapNotNull null
+                when (identity.type) {
+                    IdentityType.LE -> "${identity.address}>$paired"
+                    IdentityType.CLASSIC, IdentityType.DUAL -> "$paired>${identity.address}"
+                    else -> null
+                }
+            }
+            .distinct()
+
+    /** Adopt the pairs a snapshot carried. Recorded as PAIRING: the engine already classified. */
+    fun ingestPairs(pairs: List<String>) {
+        pairs.forEach { entry ->
+            val le = normalizeAddress(entry.substringBefore('>')) ?: return@forEach
+            val control = normalizeAddress(entry.substringAfter('>', "")) ?: return@forEach
+            if (le == control) return@forEach
+            if (getIdentity(le)?.pairedAddress == control) return@forEach
+            recordIdentityPair(le, control)
+        }
+    }
+
     fun addressPairs(): List<Pair<String, String>> {
         val seen = mutableSetOf<String>()
         val pairs = mutableListOf<Pair<String, String>>()
@@ -578,8 +495,6 @@ object UnifiedDeviceIdentityService {
     internal fun resetForTesting() {
         localCache.clear()
         remoteIdentities = emptyMap()
-        remoteStore = null
-        context = null
-        isModuleForeground = false
+        store = null
     }
 }

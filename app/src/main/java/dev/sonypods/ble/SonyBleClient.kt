@@ -1801,7 +1801,6 @@ class SonyBleClient(
         // under its control counterpart instead of as a device of its own, which would
         // otherwise be offered as a connection target that can never complete a session.
         if (SonyDeviceService.isLeAudioIdentity(device)) {
-            SonyDeviceService.linkLeAudioIdentities(adapter?.bondedDevices.orEmpty())
             val control = SonyDeviceService.resolveControlAddress(device.address)
             if (control == null || control.equals(device.address, ignoreCase = true)) {
                 log("Skipping LE Audio identity ${device.address}: no control identity bonded")

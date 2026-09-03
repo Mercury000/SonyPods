@@ -77,6 +77,18 @@ data class SonyStateSnapshot(
     /** SC `mo58509L0()`: the device's support-function list declares multipoint
      *  via Table2 FunctionType, independent of the runtime GS-slot discovery. */
     val supportsMultipointViaFunction: Boolean = false,
+    /**
+     * Every known `LE identity>control identity` pair, as the engine resolved it.
+     *
+     * The engine is the only process that can classify: identity direction comes from the
+     * pairing flow (which is the one moment both addresses are in hand) or from
+     * `/data/misc/bluedroid/bt_config.conf` key material, and only the Bluetooth process can
+     * read that file. Every other process takes the answer from here instead of re-deriving it
+     * from names, `BluetoothDevice.type` or a UUID cache — those disagree with each other and
+     * the UUID one flips outright once the LE Audio pairing flow puts ASCS into the control
+     * identity's cache.
+     */
+    val identityPairs: List<String> = emptyList(),
     val supportsNoiseControl: Boolean = false,
     val supportsEq: Boolean = false,
     val supportsPlaybackControl: Boolean = false,
@@ -289,6 +301,7 @@ data class SonyStateSnapshot(
         putBoolean(KEY_SUPPORTS_GESTURES, supportsGestureOperations)
         putBoolean(KEY_SUPPORTS_MULTIPOINT, supportsMultipoint)
         putBoolean(KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION, supportsMultipointViaFunction)
+        putStringArrayList(KEY_IDENTITY_PAIRS, ArrayList(identityPairs))
         putBoolean(KEY_SUPPORTS_NOISE_CONTROL, supportsNoiseControl)
         putBoolean(KEY_SUPPORTS_EQ, supportsEq)
         putBoolean(KEY_SUPPORTS_PLAYBACK, supportsPlaybackControl)
@@ -411,6 +424,7 @@ data class SonyStateSnapshot(
         private const val KEY_SUPPORTS_GESTURES = "supports_gesture_operations"
         private const val KEY_SUPPORTS_MULTIPOINT = "supports_multipoint"
         private const val KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION = "supports_multipoint_via_function"
+        private const val KEY_IDENTITY_PAIRS = "identity_pairs"
         private const val KEY_SUPPORTS_NOISE_CONTROL = "supports_noise_control"
         private const val KEY_SUPPORTS_EQ = "supports_eq"
         private const val KEY_SUPPORTS_PLAYBACK = "supports_playback"
@@ -518,9 +532,23 @@ data class SonyStateSnapshot(
         private const val KEY_SL_LEVEL = "sl_level"
         private const val KEY_SL_STATUS = "sl_status"
 
-        fun fromBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
-            connected = bundle.getBoolean(KEY_CONNECTED, false),
-            protocolReady = bundle.getBoolean(KEY_PROTOCOL_READY, false),
+        /**
+         * Decode a snapshot and adopt the identity pairs it carries.
+         *
+         * The engine is the only classifier; every consumer process learns the direction here
+         * rather than deriving it locally, which is what kept the two identities of one headset
+         * from being read in opposite directions in different processes.
+         */
+        fun fromBundle(bundle: Bundle): SonyStateSnapshot = decodeBundle(bundle).also { snapshot ->
+            if (snapshot.identityPairs.isNotEmpty()) {
+                runCatching {
+                    dev.sonypods.device.UnifiedDeviceIdentityService.ingestPairs(snapshot.identityPairs)
+                }
+            }
+        }
+
+        private fun decodeBundle(bundle: Bundle): SonyStateSnapshot = SonyStateSnapshot(
+            connected = bundle.getBoolean(KEY_CONNECTED, false),            protocolReady = bundle.getBoolean(KEY_PROTOCOL_READY, false),
             capabilitiesKnown = bundle.getBoolean(KEY_CAPABILITIES_KNOWN, false),
             initialValuesReady = bundle.getBoolean(KEY_INITIAL_VALUES_READY, false),
             essentialValuesReady = bundle.getBoolean(KEY_ESSENTIAL_VALUES_READY, false),
@@ -534,6 +562,7 @@ data class SonyStateSnapshot(
             supportsGestureOperations = bundle.getBoolean(KEY_SUPPORTS_GESTURES, false),
             supportsMultipoint = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT, false),
             supportsMultipointViaFunction = bundle.getBoolean(KEY_SUPPORTS_MULTIPOINT_VIA_FUNCTION, false),
+            identityPairs = bundle.getStringArrayList(KEY_IDENTITY_PAIRS)?.toList().orEmpty(),
             supportsNoiseControl = bundle.getBoolean(KEY_SUPPORTS_NOISE_CONTROL, false),
             supportsEq = bundle.getBoolean(KEY_SUPPORTS_EQ, false),
             supportsPlaybackControl = bundle.getBoolean(KEY_SUPPORTS_PLAYBACK, false),
@@ -675,6 +704,7 @@ data class SonyStateSnapshot(
                 supportsMultipoint = state.multipointState.supported,
                 supportsMultipointViaFunction = state.connectedProfile
                     ?.capabilities?.supportsMultipointViaFunction == true,
+                identityPairs = dev.sonypods.device.UnifiedDeviceIdentityService.leToControlPairs(),
                 supportsNoiseControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.NOISE_CONTROL) == true,
                 supportsEq = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.EQ) == true,
                 supportsPlaybackControl = state.connectedProfile?.supports(dev.sonypods.headphones.HeadphoneFeature.PLAYBACK_CONTROL) == true,
