@@ -68,6 +68,16 @@ class SonyLeAudioGattClient(
     private var disconnectTimeout: Runnable? = null
     private var gatt: BluetoothGatt? = null
     private var ready = false
+
+    /**
+     * Service UUIDs this session discovered, for feeding into the stack's own device record.
+     *
+     * `BluetoothDevice.getUuids()` reads `RemoteDevices.DeviceProperties`, which a GATT
+     * discovery never writes, so the list has to be carried out of here by hand.
+     */
+    @Volatile
+    var discoveredServices: List<UUID> = emptyList()
+        private set
     private var closed = false
 
     private val callback = object : BluetoothGattCallback() {
@@ -97,6 +107,7 @@ class SonyLeAudioGattClient(
                 return
             }
             ready = true
+            discoveredServices = gatt.services.map { it.uuid }
             val services = gatt.services.joinToString { SonyGatt.serviceLabel(it.uuid) }
             log("LE Audio GATT services ready: [$services]")
             listener.onReady()

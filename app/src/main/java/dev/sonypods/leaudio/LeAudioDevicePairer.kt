@@ -173,7 +173,12 @@ class LeAudioDevicePairer(
     }
 
     private fun closeLeDiscoveryClients() {
-        leDiscoveryClients.forEach { client -> runCatching { client.close() } }
+        // Never close a session whose discovery is still running: the stack auto-requests an MTU
+        // exchange for a fresh client, and its completion is dispatched through
+        // `bta_gattc_op_cmpl_during_discovery`. Freeing the CLCB first makes that callback walk
+        // freed memory and SIGBUS in `bta_gattc_cfg_mtu_cmpl`, taking com.android.bluetooth with
+        // it — which is what closing the pairing dialog mid-discovery did.
+        leDiscoveryClients.toList().forEach(::closeWhenSettled)
         leDiscoveryClients.clear()
     }
 
@@ -780,6 +785,14 @@ class LeAudioDevicePairer(
         val localAdapter = adapter ?: return onDone()
         val device = runCatching { localAdapter.getRemoteDevice(address) }.getOrNull()
             ?: return onDone()
+        // Mirrors LeAudioService.connect's own precondition (`arrayContains(getRemoteUuids(device),
+        // BluetoothUuid.LE_AUDIO)`); calling before it holds only logs "Remote does not have
+        // LE_AUDIO UUID" on the stack side. [publishLeUuids] is what makes it hold.
+        if (!hasLeAudioUuid(device)) {
+            log("LE_AUDIO connect($address) deferred: LE_AUDIO uuid not in the device record yet")
+            if (allowDiscoveryRetry) discoverLeServicesThenRetry(device) else onDone()
+            return
+        }
         val listener = object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                 val connected = runCatching {
@@ -804,6 +817,58 @@ class LeAudioDevicePairer(
             log("could not bind LE_AUDIO proxy for connect: $it")
             onDone()
         }
+    }
+
+    /**
+     * Hands the services a GATT discovery found to the stack's own device record.
+     *
+     * `LeAudioService.connect` refuses unless `AdapterService.getRemoteUuids(device)` contains
+     * `BluetoothUuid.LE_AUDIO`, and that resolves to
+     * `RemoteDevices.getDeviceProperties(device).getUuids()`, which returns
+     * `mUuidsBrEdr ∪ mUuidsLe`. A GATT discovery writes neither, and a BR/EDR-bonded address
+     * never gets ASCS through SDP — so the service set this flow just saw over the air has to be
+     * published by hand or the profile can never be connected for that member. `setUuidsLe` is
+     * the LE half of that union, so it adds ASCS without disturbing the BR/EDR list.
+     *
+     * Runs inside com.android.bluetooth, which is the only process where `mRemoteDevices` is
+     * reachable, and needs neither `fetchUuidsWithSdp` nor a second GATT client — the two things
+     * that together crashed the stack in `bta_gattc_cfg_mtu_cmpl`.
+     */
+    @SuppressLint("MissingPermission")
+    private fun publishLeUuids(device: BluetoothDevice, services: List<UUID>) {
+        if (services.isEmpty()) {
+            log("no LE services discovered for ${device.address}; nothing to publish")
+            return
+        }
+        runCatching {
+            val loader = appContext.classLoader
+            val remoteDevicesClass = loader.loadClass("com.android.bluetooth.btservice.RemoteDevices")
+            val adapterServiceClass = loader.loadClass("com.android.bluetooth.btservice.AdapterService")
+            val adapterService = listOf("sAdapterService", "getAdapterService", "deprecatedGetAdapterService")
+                .firstNotNullOfOrNull { name ->
+                    runCatching {
+                        adapterServiceClass.getDeclaredField(name).apply { isAccessible = true }.get(null)
+                    }.getOrElse {
+                        runCatching {
+                            adapterServiceClass.getDeclaredMethod(name).apply { isAccessible = true }
+                                .invoke(null)
+                        }.getOrNull()
+                    }
+                } ?: error("AdapterService instance is not available")
+            val remoteDevices = adapterServiceClass.getDeclaredField("mRemoteDevices")
+                .apply { isAccessible = true }
+                .get(adapterService) ?: error("mRemoteDevices is null")
+            val properties = remoteDevicesClass
+                .getMethod("getDeviceProperties", BluetoothDevice::class.java)
+                .apply { isAccessible = true }
+                .invoke(remoteDevices, device) ?: error("no DeviceProperties for ${device.address}")
+            val parcelUuids = services.map { ParcelUuid(it) }.toTypedArray()
+            properties.javaClass
+                .getMethod("setUuidsLe", Array<ParcelUuid>::class.java)
+                .apply { isAccessible = true }
+                .invoke(properties, parcelUuids)
+            log("published ${parcelUuids.size} LE service uuid(s) for ${device.address}")
+        }.onFailure { log("could not publish LE uuids for ${device.address}: ${it.unwrap()}") }
     }
 
     /**
@@ -839,14 +904,33 @@ class LeAudioDevicePairer(
             log("LE service discovery could not be started for $address")
         }
         handler.postDelayed({
-            runCatching { client.close() }
+            val discovered = client.discoveredServices
             leDiscoveryClients -= client
+            closeWhenSettled(client)
+            publishLeUuids(device, discovered)
             val uuids = runCatching {
                 device.uuids.orEmpty().joinToString { it.uuid.toString() }
             }.getOrDefault("<unavailable>")
             log("after LE discovery $address uuids=[$uuids]")
             connectLeAudio(address, allowDiscoveryRetry = false)
         }, LE_DISCOVERY_MS)
+    }
+
+    /**
+     * Closes a discovery session only once it has settled.
+     *
+     * A client that has not reported its services yet is still mid-discovery, and the MTU
+     * exchange the stack started for it will complete through
+     * `bta_gattc_op_cmpl_during_discovery`. Closing first frees the CLCB that callback then
+     * dereferences — `Fatal signal 7 (SIGBUS) … bta_gattc_cfg_mtu_cmpl`, observed every time the
+     * LE Audio pairing dialog was dismissed while a member was being discovered.
+     */
+    private fun closeWhenSettled(client: SonyLeAudioGattClient, attempt: Int = 0) {
+        if (client.discoveredServices.isNotEmpty() || attempt >= CLOSE_SETTLE_ATTEMPTS) {
+            runCatching { client.close() }
+            return
+        }
+        handler.postDelayed({ closeWhenSettled(client, attempt + 1) }, CLOSE_SETTLE_STEP_MS)
     }
 
     // ---- CTKD re-pair ----
@@ -861,6 +945,12 @@ class LeAudioDevicePairer(
         log("LE keys present for $address = $result")
         return result
     }
+
+    /** LeAudioService's precondition, read from the same place it reads it. */
+    @SuppressLint("MissingPermission")
+    private fun hasLeAudioUuid(device: BluetoothDevice): Boolean = runCatching {
+        device.uuids.orEmpty().any { it.uuid == ASCS_UUID }
+    }.getOrDefault(false)
 
     /**
      * Removes the BR/EDR bond and pairs again so the headset derives LE keys across transports.
@@ -1054,6 +1144,9 @@ class LeAudioDevicePairer(
     private companion object {
         val ASCS_UUID: UUID = UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
         const val SCAN_WINDOW_MS = 8_000L
+        /** Steps and cap for [closeWhenSettled]'s wait on a discovery that has not landed. */
+        const val CLOSE_SETTLE_STEP_MS = 500L
+        const val CLOSE_SETTLE_ATTEMPTS = 12
         /** Bounds the main thread's wait on the worker that clears a bond. */
         const val REMOVE_BOND_TIMEOUT_MS = 2_000L
         /** Long enough for the user to actually reset the headset after being told to. */
