@@ -206,11 +206,41 @@ class LeAudioDevicePairer(
      * resolves against this module's loader, which cannot see host classes and fails with
      * ClassNotFoundException — exactly what silently broke the CTKD re-pair once.
      */
-    private fun removeBondReflective(device: BluetoothDevice): Boolean =
+    /**
+     * `BluetoothDevice.removeBond()` refuses to run on the main thread ("Must NOT be called on
+     * main thread"), and this pairer drives everything from the main looper, so the call is
+     * handed to a short-lived worker and waited on. Without this the bond is never cleared, CTKD
+     * never derives LE keys, the re-pair times out and only one set member ends up paired.
+     */
+    private fun removeBondReflective(device: BluetoothDevice): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper()) return invokeRemoveBond(device)
+        var result = false
+        val worker = Thread({ result = invokeRemoveBond(device) }, "sonypods-remove-bond")
+        worker.start()
+        runCatching { worker.join(REMOVE_BOND_TIMEOUT_MS) }
+            .onFailure { log("removeBond join interrupted: ${it.unwrap()}") }
+        return result
+    }
+
+    private fun invokeRemoveBond(device: BluetoothDevice): Boolean =
         runCatching {
             BluetoothDevice::class.java.getMethod("removeBond").invoke(device) as? Boolean
         }.onFailure { log("removeBond failed: ${it.unwrap()}") }
             .getOrNull() ?: false
+
+    /**
+     * Whether [address] is a random Bluetooth address, i.e. the headset's LE identity.
+     *
+     * See [succeedAll]: this is the only discriminator that neither the caller's exclude list
+     * nor the ASCS-polluted service cache can get wrong.
+     */
+    private fun isRandomAddress(address: String?): Boolean {
+        val first = address?.substringBefore(':')?.toIntOrNull(16) ?: return false
+        return when (first shr 6) {
+            0b11, 0b01, 0b00 -> true
+            else -> false
+        }
+    }
 
     /** InvocationTargetException hides the reason a reflective call was rejected. */
     private fun Throwable.unwrap(): String {
@@ -670,27 +700,29 @@ class LeAudioDevicePairer(
     }
 
     private fun succeedAll(message: String) {
-        // Record which identities belong to this headset while they are all in hand: from
-        // here on the module must treat them as one device, not extra ones it cannot control.
-        // The classic member is known by construction — it is the address the caller told us
-        // to exclude — so link explicitly instead of re-classifying: the LE service discovery
-        // this flow just ran has put ASCS into the classic bond's uuid cache, and a cached
-        // ASCS is exactly what makes the classifier misread the control identity as LE.
+        // Record which identities belong to this headset while they are all in hand.
+        //
+        // The direction is decided here from the Bluetooth address type, not from the caller's
+        // exclude list and not from any service cache. The exclude list is the address the live
+        // Tandem session happens to sit on, and when that session is on the LE identity (which
+        // is exactly the state this flow runs in) it names the wrong side; `bonded` is no better,
+        // because a control identity re-paired for CTKD lands in it too. Core spec puts the type
+        // in the two most significant bits of the first octet — `11` static random, `01`
+        // resolvable private, `00` non-resolvable private — so the headset's LE identity is the
+        // random address and its control identity is the public one. Nothing else here survives
+        // the LE service discovery this flow just ran, which puts ASCS into the classic bond's
+        // uuid cache and makes every service-based test read the control identity as LE.
         runCatching {
-            val control = knownControlAddress
-            if (control != null) {
-                // Only the members this flow actually bonded belong to this headset. Sweeping
-                // every bond on the phone linked unrelated devices in as LE identities of this
-                // one, and each bogus alias redirects a later resolve to the wrong transport.
-                bonded.forEach { member ->
-                    SonyDeviceService.linkLeAudioIdentity(member, control)
+            val candidates = (bonded + listOfNotNull(knownControlAddress)).distinct()
+            val le = candidates.filter(::isRandomAddress)
+            val control = candidates.firstOrNull { !isRandomAddress(it) }
+            if (control != null && le.isNotEmpty()) {
+                le.forEach { leAddress ->
+                    SonyDeviceService.linkLeAudioIdentity(leAddress, control)
                 }
-                // Record identity pair to UnifiedDeviceIdentityService
-                bonded.forEach { leAddress ->
-                    UnifiedDeviceIdentityService.recordIdentityPair(leAddress, control)
-                }
-                log("recorded identity pair: LE=$bonded, Control=$control")
+                log("recorded identity pair: LE=$le, Control=$control")
             } else {
+                log("identity pair not recorded: LE=$le control=$control from $candidates")
             }
             log("LE Audio aliases: ${SonyDeviceService.leAudioAliasSnapshot()}")
         }
@@ -704,13 +736,26 @@ class LeAudioDevicePairer(
             addAll(bonded)
             knownControlAddress?.let(::add)
         }
+        // SUCCESS waits for those connects. Publishing it the moment the bonds existed let the
+        // UI open the detail page while LE service discovery and the LE_AUDIO connects were still
+        // running, so the page came up against a session that was still being rebuilt.
+        val primary = bonded.firstOrNull()
+        var outstanding = identities.size
+        val finish = {
+            if (--outstanding <= 0) {
+                cleanUp()
+                setStage(Stage.SUCCESS, message, primary)
+            }
+        }
+        if (identities.isEmpty()) {
+            cleanUp()
+            setStage(Stage.SUCCESS, message, primary)
+            return
+        }
         identities.forEach { address ->
             allowLeAudioProfile(address)
-            connectLeAudio(address, allowDiscoveryRetry = false)
+            connectLeAudio(address, allowDiscoveryRetry = false, onDone = finish)
         }
-        val primary = bonded.firstOrNull()
-        cleanUp()
-        setStage(Stage.SUCCESS, message, primary)
     }
 
     /**
@@ -719,24 +764,22 @@ class LeAudioDevicePairer(
      * Needed for the member that is already bonded over BR/EDR: nothing else starts its LE
      * Audio connection, and without it the group keeps one empty CIS and one silent ear.
      *
-     * The service refuses outright unless the device's cached UUIDs contain ASCS, and a
-     * BR/EDR-bonded address only ever had SDP run against it — the earbud announces ASCS over
-     * the air, but that never reaches the cache. So a refusal is answered with LE service
-     * discovery and one retry rather than treated as final.
+     * No pre-check on the device's cached UUIDs: `BluetoothDevice.getUuids()` reads the stack's
+     * SDP cache, which a BR/EDR-bonded address never gets ASCS into — this flow's own LE GATT
+     * discovery does see the full LE Audio service set, but that result does not land there. The
+     * check therefore refused every call for the classic member forever, so its CIS stayed empty
+     * and only one ear played. Whether the remote qualifies is LeAudioService's decision; if it
+     * declines, the failure is logged and one LE discovery retry follows.
      */
     @SuppressLint("MissingPermission")
-    private fun connectLeAudio(address: String, allowDiscoveryRetry: Boolean = true) {
-        val localAdapter = adapter ?: return
-        val device = runCatching { localAdapter.getRemoteDevice(address) }.getOrNull() ?: return
-        // LeAudioService rejects the call outright with "Remote does not have LE_AUDIO UUID" until
-        // LE service discovery has put ASCS in the cache, and once it lands the stack connects the
-        // profile by itself (`connectEnabledProfile(LeAudioService)`). Calling before then only
-        // logs a failure and, with retry enabled, starts a discovery the stack is already doing.
-        if (!hasLeAudioUuid(device)) {
-            log("LE_AUDIO connect($address) skipped: LE_AUDIO UUID not cached yet")
-            if (allowDiscoveryRetry) discoverLeServicesThenRetry(device)
-            return
-        }
+    private fun connectLeAudio(
+        address: String,
+        allowDiscoveryRetry: Boolean = true,
+        onDone: () -> Unit = {},
+    ) {
+        val localAdapter = adapter ?: return onDone()
+        val device = runCatching { localAdapter.getRemoteDevice(address) }.getOrNull()
+            ?: return onDone()
         val listener = object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                 val connected = runCatching {
@@ -750,13 +793,17 @@ class LeAudioDevicePairer(
                 if (connected.getOrNull() != true && allowDiscoveryRetry) {
                     discoverLeServicesThenRetry(device)
                 }
+                onDone()
             }
 
             override fun onServiceDisconnected(profile: Int) = Unit
         }
         runCatching {
             localAdapter.getProfileProxy(appContext, listener, BluetoothProfile.LE_AUDIO)
-        }.onFailure { log("could not bind LE_AUDIO proxy for connect: $it") }
+        }.onFailure {
+            log("could not bind LE_AUDIO proxy for connect: $it")
+            onDone()
+        }
     }
 
     /**
@@ -814,12 +861,6 @@ class LeAudioDevicePairer(
         log("LE keys present for $address = $result")
         return result
     }
-
-    /** Whether ASCS has reached this device's cached UUIDs — LeAudioService's precondition. */
-    @SuppressLint("MissingPermission")
-    private fun hasLeAudioUuid(device: BluetoothDevice): Boolean = runCatching {
-        device.uuids.orEmpty().any { it.uuid == ASCS_UUID }
-    }.getOrDefault(false)
 
     /**
      * Removes the BR/EDR bond and pairs again so the headset derives LE keys across transports.
@@ -1013,6 +1054,8 @@ class LeAudioDevicePairer(
     private companion object {
         val ASCS_UUID: UUID = UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
         const val SCAN_WINDOW_MS = 8_000L
+        /** Bounds the main thread's wait on the worker that clears a bond. */
+        const val REMOVE_BOND_TIMEOUT_MS = 2_000L
         /** Long enough for the user to actually reset the headset after being told to. */
         const val SCAN_DEADLINE_MS = 120_000L
         /** Keeps collecting set members this long after the first one is viable: the second

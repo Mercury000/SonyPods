@@ -46,11 +46,20 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         LegacyConfigMigrator.migrateAppOnlyPrefsToUi(this)
         PodImagePrefs.attachStore(remotePrefs)
         ModelImageSync.onServiceBound(this)
+        // No store and no bt_config here: this process cannot classify, it only consumes.
+        // The engine is the one that resolves LE/control direction and it ships the result in
+        // every state snapshot, so mirror those broadcasts and feed the pairs in.
         UnifiedDeviceIdentityService.initializeForEngine(null)
+        identityMirror.register(this)
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
         PodImagePrefs.migrateImagesToRemote(service)
         notifyListeners(service)
+    }
+
+    /** Engine -> app identity feed; see [UnifiedDeviceIdentityService.ingestPairs]. */
+    private val identityMirror = dev.sonypods.bridge.HookStateMirror { snapshot ->
+        UnifiedDeviceIdentityService.ingestPairs(snapshot.identityPairs)
     }
 
     override fun onServiceDied(service: XposedService) {

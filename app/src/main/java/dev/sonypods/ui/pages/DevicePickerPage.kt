@@ -150,12 +150,13 @@ fun DevicePickerPage(
             // A headset on LE Audio is bonded twice: once for LC3 audio and once for the
             // Tandem control channel. Listing both would offer the user an entry that cannot
             // be controlled, so the LE identity is folded into its control counterpart.
-            // UUID classification needs the stack's service cache to be warm; until it is,
-            // the engine-seeded alias map answers instead.
+            // The alias map is the only judge here: this process cannot classify (no bt_config,
+            // and `BluetoothDevice.type` reports DUAL for both bonds), so it folds strictly on
+            // what the engine resolved and shipped in the snapshot. Adding a local UUID guess
+            // on top is what listed the LE identity as its own device whenever the guess missed.
             val aliases = SonyDeviceService.leAudioAliasSnapshot()
             val byAddress = bonded.associateBy { it.address.uppercase() }
             val paired = bonded
-                .filterNot { SonyDeviceService.isLeAudioIdentity(it) }
                 .filterNot { device ->
                     aliases[device.address.uppercase()]
                         ?.let { control -> byAddress.containsKey(control.uppercase()) } == true
