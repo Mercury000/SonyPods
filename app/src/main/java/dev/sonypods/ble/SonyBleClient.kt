@@ -25,9 +25,11 @@ import android.os.Handler
 import android.os.Looper
 import dev.sonypods.hook.Log
 import androidx.core.content.ContextCompat
+import dev.sonypods.device.IdentityType
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.device.UnifiedDeviceIdentityService
 import dev.sonypods.headphones.TandemChannel
+import dev.sonypods.protocol.LeaConnectionType
 import dev.sonypods.protocol.SonyGatt
 import dev.sonypods.protocol.hexString
 import java.io.IOException
@@ -96,6 +98,28 @@ data class GattTandemEndpoint(
 internal data class SppSocketWithUuid(
     val socket: BluetoothSocket,
     val uuid: UUID,
+)
+
+/**
+ * The resolved answer to "which identity carries Tandem, and over which link".
+ *
+ * Both halves are decided together, once, from one source each. They used to be decided in three
+ * places that each re-asked overlapping questions about the same device: the identity retarget in
+ * [SonyBleClient.connect], an SPP-vs-GATT predicate, and an ACL-transport picker. Nothing made
+ * them agree, and when they disagreed nothing said so. A bonded WH-1000XM6 whose classic MAC
+ * begins 0x58 was read as a random LE address by the second, which handed it to the third, which
+ * answered TRANSPORT_AUTO, which let the stack open GATT on the classic bearer — where Sony
+ * publishes no HPC service. The headset stayed uncontrollable for as long as it was paired and it
+ * took a user's log to find out.
+ *
+ * [reason] is logged on every connect. A route that is wrong should be readable at the moment it
+ * is chosen, not inferred afterwards from which endpoint failed to turn up.
+ */
+private data class TandemRoute(
+    val target: DiscoveredSonyDevice,
+    val remote: BluetoothDevice,
+    val useSpp: Boolean,
+    val reason: String,
 )
 
 data class UnsupportedEndpointDiagnostics(
@@ -323,7 +347,7 @@ class SonyBleClient(
             if (gattEndpoints.isEmpty()) {
                 val labels = services.joinToString { SonyGatt.serviceLabel(it) }
                 val reason = unsupportedTandemEndpointReason(services)
-                log("No usable Tandem GATT endpoint. Available services=[$labels]")
+                log("No usable Tandem GATT endpoint on the LE bearer. Available services=[$labels]")
                 beginUnsupportedEndpointProbe(gatt, services, reason)
                 return
             }
@@ -556,48 +580,93 @@ class SonyBleClient(
         )
     }
 
-    fun connect(device: DiscoveredSonyDevice, tandemMigration: dev.sonypods.protocol.LeaConnectionType? = null) {
+    /**
+     * Resolves the one route, or null when the request names an address this adapter cannot reach.
+     *
+     * Five rules, ordered by authority; each states both the identity and the link, so the two can
+     * no longer contradict each other:
+     *
+     *  1. A headset-directed migration (LEA_NTFY_PARAM 0x0E) named the address and the
+     *     ConnectionType. Both verbatim, never second-guessed.
+     *  2. LE Audio is up. The coordinated set's LE Audio identity is the only half that services
+     *     the session; the control identity still accepts GATT and still publishes the HPC service
+     *     but never answers a frame, so every write dies in ACK retries.
+     *  3. The advertisement flags this LE endpoint as carrying GATT control.
+     *  4. The control identity holds a BR/EDR link key, so RFCOMM has a page target. This is
+     *     Sound Connect's own fallback for "LEA device but LE Audio not connected".
+     *  5. No link key anywhere. RFCOMM would only reach PAGE_TIMEOUT, so LE is the only link left.
+     *
+     * Rules 4 and 5 read the identity of the *resolved* control address rather than the requested
+     * one: a link key is what makes an address pageable, and it is that address which gets paged.
+     * The bit pattern of the address says nothing about this — a public classic MAC may carry any
+     * OUI, Sony's 58:18:62 included, so the top two bits that encode the LE random subtypes are
+     * equally at home in a BR/EDR-bonded identity.
+     */
+    @SuppressLint("MissingPermission")
+    private fun resolveTandemRoute(
+        device: DiscoveredSonyDevice,
+        tandemMigration: LeaConnectionType?,
+    ): TandemRoute? {
+        val requested = adapter?.getRemoteDevice(device.address) ?: return null
+        if (tandemMigration != null) {
+            return TandemRoute(
+                target = device,
+                remote = requested,
+                useSpp = tandemMigration == LeaConnectionType.SPP,
+                reason = "headset-directed migration named $tandemMigration",
+            )
+        }
+        if (isLeAudioConnected(requested)) {
+            val target = resolveLeAudioTarget(device)
+            return TandemRoute(
+                target = target,
+                remote = adapter?.getRemoteDevice(target.address) ?: return null,
+                useSpp = false,
+                reason = "LE Audio is up; its identity is the half that services the session",
+            )
+        }
+        if (device.sonyAd?.leGattControlFlag == true) {
+            return TandemRoute(
+                target = device,
+                remote = requested,
+                useSpp = false,
+                reason = "advertisement flags this endpoint as GATT control",
+            )
+        }
+        val target = resolveControlTarget(device)
+        val remote = adapter?.getRemoteDevice(target.address) ?: return null
+        val identity = UnifiedDeviceIdentityService.getIdentityType(target.address)
+        val pageable = identity == IdentityType.CLASSIC || identity == IdentityType.DUAL
+        return TandemRoute(
+            target = target,
+            remote = remote,
+            useSpp = pageable,
+            reason = if (pageable) {
+                "control identity holds a BR/EDR link key (identity=$identity)"
+            } else {
+                "identity=$identity holds no BR/EDR link key; RFCOMM has no page target"
+            },
+        )
+    }
+
+    fun connect(device: DiscoveredSonyDevice, tandemMigration: LeaConnectionType? = null) {
         if (!hasConnectPermission()) {
             listener.onBluetoothUnavailable("Bluetooth connect permission is missing")
             return
         }
         stopScan()
-        // Which identity of a dual-bonded headset actually serves Tandem depends on whether LE
-        // Audio is up.
-        //
-        // With LE Audio off, it is the control identity: the pure-LE half would otherwise carry a
-        // session of its own, announce its own identifier and overwrite the profile with an
-        // LEA-only support-function list, and writes aimed at it echoed correctly yet had no
-        // effect.
-        //
-        // With LE Audio up, it is the other way round — the coordinated set's LE Audio identity is
-        // the only one that services the session. The control identity still accepts the GATT
-        // connection and still publishes the HPC service, but never answers a frame, so every
-        // write dies in ACK retries ("remote endpoint did not ACK"). Retargeting onto it is what
-        // made a freshly paired headset unresponsive until the LE row was picked by hand.
-        //
-        // A headset-directed migration names its target explicitly and is never second-guessed.
-        val requested = adapter?.getRemoteDevice(device.address)
-        val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
-        val target = when {
-            tandemMigration != null || requested == null -> device
-            isLeAudioConnected(requested) -> resolveLeAudioTarget(device)
-            !control.equals(device.address, ignoreCase = true) -> resolveControlTarget(device)
-            else -> device
-        }
-        val remote = adapter?.getRemoteDevice(target.address)
-        if (remote == null) {
-            listener.onBluetoothUnavailable("Cannot resolve remote device ${target.address}")
+        val route = resolveTandemRoute(device, tandemMigration)
+        if (route == null) {
+            listener.onBluetoothUnavailable("Cannot resolve remote device ${device.address}")
             return
         }
-        // A migration forces the transport from the headset's ConnectionType; every
-        // other path keeps the SPP-vs-GATT heuristic.
-        val useSpp = when (tandemMigration) {
-            null -> shouldUseSpp(target, remote)
-            dev.sonypods.protocol.LeaConnectionType.SPP -> true
-            else -> false
-        }
-        if (useSpp) {
+        val target = route.target
+        val remote = route.remote
+        log(
+            "Tandem route: ${device.address} -> ${target.address} via " +
+                "${if (route.useSpp) "SPP" else "GATT/LE"} — ${route.reason}"
+        )
+        if (route.useSpp) {
             connectSpp(target, remote)
             return
         }
@@ -616,20 +685,25 @@ class SonyBleClient(
         )
         disconnect()
         connectedDevice = connectedDevice?.copy(address = remote.address)
-        val transport = preferredTransport(remote, target)
         log(
-            "Connecting to ${target.address} type=${remote.type} transport=${transportLabel(transport)} " +
-                "source=${target.source} sonyAd=${target.sonyAd?.summary.orEmpty()}"
+            "Connecting to ${target.address} type=${remote.type} source=${target.source} " +
+                "sonyAd=${target.sonyAd?.summary.orEmpty()}"
         )
+        // TRANSPORT_LE, never AUTO. Both identities of a dual-bonded headset report
+        // DEVICE_TYPE_DUAL, so AUTO can aim at the classic bearer — and Sony publishes no Tandem
+        // service there, so a GATT session that lands on it discovers nothing and every command
+        // afterwards answers "Tandem channel is not ready". Every route that reaches this point has
+        // already established that LE is the link it wants; AUTO would hand that decision back to
+        // the stack. Sound Connect hardcodes GattConnectionTransport.LE for the same reason.
         gatt = if (Build.VERSION.SDK_INT >= 37) {
             val settings = BluetoothGattConnectionSettings.Builder()
                 .setAutoConnectEnabled(false)
-                .setTransport(transport)
+                .setTransport(BluetoothDevice.TRANSPORT_LE)
                 .build()
             remote.connectGatt(settings, context.mainExecutor, gattCallback)
         } else {
             @Suppress("DEPRECATION")
-            remote.connectGatt(context, false, gattCallback, transport)
+            remote.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         }
     }
 
@@ -767,55 +841,6 @@ class SonyBleClient(
         }
         writeQueue.add(PendingTandemWrite(channel, bytes))
         drainWriteQueue()
-    }
-
-    /**
-     * Picks the transport the way Sound Connect does.
-     *
-     * Its decision table (`connectInternal`) keys off one thing — whether LE Audio is connected:
-     * with LE Audio up it uses GATT, and SPP is only the fallback for when it is not, logged
-     * there as "LEA device but LE Audio not connected. Falling back to SPP via Classic BD
-     * address." Getting this backwards is why the module went uncontrollable exactly when LC3
-     * started working: it kept opening RFCOMM on the classic address whose link the headset had
-     * just dropped in favour of the LE one.
-     */
-    @SuppressLint("MissingPermission")
-    private fun shouldUseSpp(device: DiscoveredSonyDevice, remote: BluetoothDevice): Boolean {
-        // A random Bluetooth address has no BR/EDR page target, so RFCOMM against one can only
-        // end in PAGE_TIMEOUT — and it still costs a full page timeout of connection churn on a
-        // stack that aborts when GATT clients come and go around it. The two most significant
-        // bits of the first octet identify the random subtypes (11 static, 01 resolvable
-        // private); a public address, which is what every classic identity has, is neither.
-        if (isRandomBluetoothAddress(runCatching { remote.address }.getOrNull())) {
-            log("${remote.address} is a random LE address; classic SPP is not reachable there")
-            return false
-        }
-        if (isLeAudioConnected(remote)) {
-            log("LE Audio is connected for ${remote.address}; using GATT for Tandem")
-            return false
-        }
-        if (device.sonyAd?.leGattControlFlag == true) return false
-        val hasMdrSppUuid = remote.uuids.orEmpty().any { it.uuid == MDR_SPP_MARKER_UUID }
-        // Use UnifiedDeviceIdentityService for identity classification instead of raw device.type
-        val address = runCatching { remote.address }.getOrNull()
-        val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
-            else dev.sonypods.device.IdentityType.UNKNOWN
-        val classicCandidate = identityType == dev.sonypods.device.IdentityType.CLASSIC ||
-            identityType == dev.sonypods.device.IdentityType.DUAL ||
-            remote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
-            remote.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
-            device.source.startsWith("connected-a2dp") ||
-            device.source.startsWith("connected-headset")
-        return hasMdrSppUuid || classicCandidate || device.sonyAd?.androidLine?.contains("SPP") == true
-    }
-
-    /** Whether [address] is an LE random address (static or resolvable private). */
-    private fun isRandomBluetoothAddress(address: String?): Boolean {
-        val firstOctet = address?.substringBefore(':')?.toIntOrNull(16) ?: return false
-        return when (firstOctet shr 6) {
-            0b11, 0b01 -> true
-            else -> false
-        }
     }
 
     /**
@@ -1354,55 +1379,6 @@ class SonyBleClient(
                     (it.properties and BluetoothGattCharacteristic.PROPERTY_READ) != 0
             }
 
-    private fun preferredTransport(device: BluetoothDevice, discovered: DiscoveredSonyDevice): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // With LE Audio up the link to use is the LE one, and TRANSPORT_AUTO is not good
-            // enough to say so: both of this headset's identities report DEVICE_TYPE_DUAL, so
-            // AUTO can aim at the classic link the headset has already dropped. Sound Connect
-            // hardcodes GattConnectionTransport.LE for the same reason.
-            if (isLeAudioConnected(device)) {
-                BluetoothDevice.TRANSPORT_LE
-            } else {
-                // Use UnifiedDeviceIdentityService for identity classification
-                val address = runCatching { device.address }.getOrNull()
-                val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
-                    else dev.sonypods.device.IdentityType.UNKNOWN
-                when (identityType) {
-                    dev.sonypods.device.IdentityType.LE -> BluetoothDevice.TRANSPORT_LE
-                    dev.sonypods.device.IdentityType.CLASSIC,
-                    dev.sonypods.device.IdentityType.DUAL -> BluetoothDevice.TRANSPORT_AUTO
-                    else -> when (device.type) {
-                        BluetoothDevice.DEVICE_TYPE_LE -> BluetoothDevice.TRANSPORT_LE
-                        BluetoothDevice.DEVICE_TYPE_CLASSIC,
-                        BluetoothDevice.DEVICE_TYPE_DUAL -> BluetoothDevice.TRANSPORT_AUTO
-                        else -> if (
-                            discovered.source == "ble-scan" ||
-                            discovered.sonyAd?.androidGattCapable == true ||
-                            discovered.sonyAd?.leGattControlFlag == true
-                        ) {
-                            BluetoothDevice.TRANSPORT_LE
-                        } else {
-                            BluetoothDevice.TRANSPORT_AUTO
-                        }
-                    }
-                }
-            }
-        } else {
-            0
-        }
-
-    private fun transportLabel(transport: Int): String =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            when (transport) {
-                BluetoothDevice.TRANSPORT_LE -> "LE"
-                BluetoothDevice.TRANSPORT_BREDR -> "BREDR"
-                BluetoothDevice.TRANSPORT_AUTO -> "AUTO"
-                else -> transport.toString()
-            }
-        } else {
-            "DEFAULT"
-        }
-
     private fun parseFriendlyName(value: ByteArray): String? {
         if (value.size < 3) return null
         return value.copyOfRange(2, value.size)
@@ -1845,10 +1821,10 @@ class SonyBleClient(
      */
     @SuppressLint("MissingPermission")
     private fun resolveControlTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val bonded = adapter?.bondedDevices.orEmpty()
         val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
         if (control.equals(device.address, ignoreCase = true)) return device
-        val remote = bonded.firstOrNull { it.address.equals(control, ignoreCase = true) }
+        val remote = adapter?.bondedDevices.orEmpty()
+            .firstOrNull { it.address.equals(control, ignoreCase = true) }
         log("Retargeting LE Audio identity ${device.address} to control identity $control")
         return device.copy(
             address = control,
@@ -2094,8 +2070,6 @@ class SonyBleClient(
         private const val WRITABLE_VALUE_LENGTH_TIMEOUT_MS = 2_000L
         private const val ENABLE_TANDEM_NOTIFICATION_TIMEOUT_MS = 5_000L
         private const val WRITE_COMPLETION_TIMEOUT_MS = 500L
-        private val MDR_SPP_MARKER_UUID: UUID =
-            UUID.fromString("443cce33-e85d-4b85-8d53-6e319ede53ae")
         /** Qualcomm's private LE Audio profile id (mirrors LeAudioProfileGateway). */
         private const val QUALCOMM_LE_AUDIO_PROFILE = 32
         /** Audio Stream Control Service, for adapter-level LE Audio identity checks. */
