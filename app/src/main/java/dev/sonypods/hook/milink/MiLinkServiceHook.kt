@@ -37,6 +37,9 @@ object MiLinkServiceHook : HookContext() {
      */
     private const val HEADPHONES_DEVICE_ID = "01013A04"
 
+    /** Runtime-owned per-device state object whose presence gates the Fusion ANC controls. */
+    private const val ANC_BATTERY_MODEL = "com.miui.headset.runtime.AncBatteryModel"
+
     /** headsetPropertyChangeListener update types observed in the MiUI headset runtime. */
     private const val UPDATE_TYPE_BATTERY = 4
     private const val UPDATE_TYPE_ANC = 8
@@ -56,6 +59,7 @@ object MiLinkServiceHook : HookContext() {
         get() = currentFormFactor == HeadphoneFormFactor.HEADSET.name
     internal var currentSpatialAudioMode = ConfigManager.SPATIAL_AUDIO_OFF
     internal var lastAncBatteryController: Any? = null
+    private var injectingAncBatteryModel = false
     internal var lastProfileContext: Any? = null
     private val spatialAudioHook = MiLinkSpatialAudioHook(this)
     private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
@@ -73,6 +77,7 @@ object MiLinkServiceHook : HookContext() {
         leAudioIdentityHook.hookIdentityUnification()
         deviceMetaGuardHook.hookDeviceMetaGuard()
         cardArtHook.hookCardArt()
+        ensureAncBatteryModelLifecycle()
     }
 
     override fun onBeforeReload() {
@@ -214,6 +219,127 @@ object MiLinkServiceHook : HookContext() {
         hookHeadsetInfoNoArgWhen("component4", { value -> !hasKnownBatteryLevels(value) }) { miLinkBatteryLevels() }
         hookHeadsetInfoNoArg("getSwitchState") { miLinkSwitchState() }
         hookHeadsetInfoNoArg("component8") { miLinkSwitchState() }
+    }
+
+    /**
+     * Keeps an AncBatteryModel present for the Sony pod so the Fusion ANC controls render.
+     *
+     * The runtime creates its AncBatteryModel only when its MMA (fd2d SPP) control link
+     * connects — a Sony never serves fd2d, so the model stays null and the ANC section
+     * disappears (battery/name/art come from other paths and keep working). We do not take
+     * the model over: it is built with the runtime's own class/constructor and left for the
+     * runtime to mutate; the value fields it reads (ancState via getAncState, battery via
+     * getBatteryLevelCache) are already the module's because the MX layer is spoofed. This
+     * hook only guarantees the "object exists" precondition and re-arms it whenever the
+     * runtime clears it (MMA-false passive disconnect, active-device churn), and once more
+     * right before the panel's own read paths so a render can never observe a null model.
+     *
+     * findRing/spatial are declared unsupported so no unbacked controls appear.
+     */
+    private fun ensureAncBatteryModelLifecycle() {
+        // Remember the controller singleton as soon as it is built (per process).
+        runCatching {
+            hookConstructorAfterAll(
+                findConstructorsByParamCount("com.miui.headset.runtime.AncBatteryController", 3),
+                logicalRole = "milink-anc-controller-cache",
+            ) { cacheAncBatteryController(instance) }
+        }.onFailure { Log.d(TAG, "hook AncBatteryController ctor skipped", it) }
+        // Active-device churn is the trigger that precedes every MMA attempt; reseed there.
+        runCatching {
+            hookAfter(findMethodByParamCount("com.miui.headset.runtime.AncBatteryController", "onActiveDeviceChange", 1)) {
+                cacheAncBatteryController(instance)
+                ensureAncBatteryModel()
+            }
+        }.onFailure { Log.d(TAG, "hook AncBatteryController.onActiveDeviceChange skipped", it) }
+        // THE clearing site: the controller's own MMA callback nulls ancBatteryModel on every
+        // MMA-false (~20s for a Sony, which never serves fd2d). It is declared on the Kotlin
+        // anonymous callback class, not on MxBluetoothManager — hooking the latter threw
+        // NoSuchMethodException and left this reseed unarmed. Re-arm inside the same call so
+        // no observable window exists.
+        runCatching {
+            hookAfter(
+                findMethod(
+                    "com.miui.headset.runtime.AncBatteryController\$mmaCallback\$1",
+                    "onConnectMmaStateChanged",
+                    BluetoothDevice::class.java,
+                    Boolean::class.javaPrimitiveType!!,
+                )
+            ) {
+                val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookAfter
+                if (!isSonyPod(device)) return@hookAfter
+                // The callback is the inner class; the controller is its outer instance.
+                cacheAncBatteryController(runCatching { getObjectField(instance, "this\$0") }.getOrNull())
+                ensureAncBatteryModel()
+            }
+        }.onFailure { Log.d(TAG, "hook AncBatteryController\$mmaCallback\$1.onConnectMmaStateChanged skipped", it) }
+        // Last line of defence: guarantee a model before the panel's read paths run, so a
+        // render is never gated on when the last reseed happened.
+        listOf("getHeadsetPropertyBlock", "getAncState").forEach { methodName ->
+            runCatching {
+                hookBefore(
+                    findMethod("com.miui.headset.runtime.AncBatteryController", methodName, BluetoothDevice::class.java),
+                    logicalRole = "milink-anc-model-preread:$methodName",
+                ) {
+                    val device = args.getOrNull(0) as? BluetoothDevice ?: return@hookBefore
+                    if (!isSonyPod(device)) return@hookBefore
+                    cacheAncBatteryController(instance)
+                    ensureAncBatteryModel(notify = false)
+                }
+            }.onFailure { Log.d(TAG, "pre-read AncBatteryModel guard on $methodName skipped", it) }
+        }
+    }
+
+    private fun cacheAncBatteryController(owner: Any?) {
+        if (owner != null) lastAncBatteryController = owner
+    }
+
+    /**
+     * [notify] is false on read paths: pushing a property change from inside a getter would
+     * re-enter the runtime while it is already answering one.
+     */
+    private fun ensureAncBatteryModel(notify: Boolean = true) {
+        if (injectingAncBatteryModel) return
+        val address = currentAddress ?: return
+        if (!isSonyAddress(address)) return
+        val controller = lastAncBatteryController ?: return
+        val device = runCatching {
+            context?.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
+        }.getOrNull() ?: return
+        val existing = runCatching { getObjectField(controller, "ancBatteryModel") }.getOrNull()
+        if (existing != null) {
+            val same = runCatching { callMethod(existing, "isSameAddress", device) as? Boolean }.getOrNull()
+            if (same == true) return
+        }
+        injectingAncBatteryModel = true
+        try {
+            val model = runCatching { newAncBatteryModel(device) }.getOrNull() ?: return
+            runCatching { setObjectField(controller, "ancBatteryModel", model) }
+                .onSuccess {
+                    Log.d(TAG, "injected AncBatteryModel for $address anc=${miLinkAncState()} overEar=$isOverEar notify=$notify")
+                    // Nudge the runtime to re-emit ANC changed so the Fusion card re-pulls and
+                    // renders the section now that a model exists.
+                    if (notify) pushStateToPanel()
+                }
+                .onFailure { Log.d(TAG, "inject AncBatteryModel failed", it) }
+        } finally {
+            injectingAncBatteryModel = false
+        }
+    }
+
+    /** Build with the runtime's own class/constructor; battery follows the module's slot scheme. */
+    private fun newAncBatteryModel(device: BluetoothDevice): Any? {
+        val clazz = findClass(ANC_BATTERY_MODEL)
+        val ctor = clazz.getDeclaredConstructor(
+            BluetoothDevice::class.java,
+            Int::class.javaPrimitiveType,
+            List::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+        )
+        ctor.isAccessible = true
+        val battery = java.util.ArrayList(miLinkBatteryLevels())
+        return ctor.newInstance(device, miLinkAncState(), battery, -1, 0, 0)
     }
 
     internal fun hookBluetoothDeviceResult(className: String, methodName: String, result: () -> Any) {
@@ -369,6 +495,7 @@ object MiLinkServiceHook : HookContext() {
         saveState(context)
         Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         pushStateToPanel()
+        ensureAncBatteryModel()
     }
 
     /**
