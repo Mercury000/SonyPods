@@ -76,6 +76,16 @@ fun DevicePickerPage(
      * disconnect button for a session that is still coming up.
      */
     controlChannelReady: Boolean = true,
+    /**
+     * The engine's LE→control identity pairs, as carried by the state snapshot.
+     *
+     * Passed in rather than read from [SonyDeviceService] inside the fold: the fold is cached, and
+     * the pairs arrive strictly after the bond events that would otherwise invalidate that cache.
+     * The pairing flow records the pair only once the whole coordinated set is bonded — after the
+     * last ACTION_BOND_STATE_CHANGED — so a fold keyed on bond events alone recomputed for the
+     * last time while the map was still empty and left both identities listed forever.
+     */
+    identityPairs: List<String> = emptyList(),
     showConnectError: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     bottomContentPadding: Dp = 16.dp,
@@ -142,7 +152,7 @@ fun DevicePickerPage(
     val btManager = context.getSystemService(BluetoothManager::class.java)
     val adapter = btManager?.adapter
     val bluetoothEnabled = adapter?.isEnabled == true
-    val foldResult = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken) {
+    val foldResult = remember(hasPermission, bluetoothEnabled, bluetoothRefreshToken, identityPairs) {
         if (!bluetoothEnabled) {
             Pair(emptyList(), emptyMap())
         } else {

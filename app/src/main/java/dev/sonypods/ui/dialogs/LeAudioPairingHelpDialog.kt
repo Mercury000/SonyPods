@@ -21,14 +21,19 @@ fun LeAudioPairingHelpDialog(
     show: Boolean,
     targetEnabled: Boolean,
     formFactor: String? = null,
+    /** The bonded LE Audio identity the stack reports, or null when the phone holds none. */
+    identityAddress: String? = null,
     pairStage: String = STAGE_IDLE,
+    /** Whether the pairer is working, per the snapshot; it knows every busy stage. */
+    pairing: Boolean = false,
     pairMessage: String = "",
-    pairedAddress: String? = null,
     onPair: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
-    val pairing = pairStage == STAGE_SCANNING || pairStage == STAGE_PAIRING
-    val paired = pairStage == STAGE_SUCCESS
+    // Whether the phone is paired is the stack's answer, never the pairer's: a run that ended in
+    // SUCCESS says nothing about the bond still being there, and a bond dropped in system settings
+    // is invisible from inside a finished run. This is the same identity the switch row keys on.
+    val paired = identityAddress != null
     val failed = pairStage == STAGE_FAILED
 
     // The gesture differs by form factor, and over-ear models have no charging case at all.
@@ -63,12 +68,11 @@ fun LeAudioPairingHelpDialog(
             } else {
                 when {
                     pairing -> Text(pairMessage.ifEmpty { stringResource(R.string.lea_searching) })
-                    paired -> Text(
-                        stringResource(
-                            R.string.lea_help_paired,
-                            pairedAddress?.let { "（$it）" }.orEmpty(),
-                        )
-                    )
+                    // Never the run's message here: a finished run reports nothing on success, so
+                    // anything still in it is a failure reason from an earlier attempt — which this
+                    // line would contradict.
+                    identityAddress != null ->
+                        Text(stringResource(R.string.lea_help_paired, "（$identityAddress）"))
                     else -> {
                         if (failed && pairMessage.isNotEmpty()) Text(pairMessage)
                         Text(resetHint)
@@ -106,9 +110,6 @@ fun LeAudioPairingHelpDialog(
 }
 
 private const val STAGE_IDLE = "IDLE"
-private const val STAGE_SCANNING = "SCANNING"
-private const val STAGE_PAIRING = "PAIRING"
-private const val STAGE_SUCCESS = "SUCCESS"
 private const val STAGE_FAILED = "FAILED"
 
 /** [dev.sonypods.headphones.HeadphoneFormFactor] names, as carried by the state snapshot. */

@@ -606,8 +606,7 @@ private fun LowPowerAudioToggleRow(
     val enabled = uiState.leaStatus == "ENABLE"
     val usingLc3 = uiState.usingLeAudio
     if (!enabled || uiState.leAudioSwitchPending) return
-    val pairing = uiState.leAudioDevicePairStage == "SCANNING" ||
-        uiState.leAudioDevicePairStage == "PAIRING"
+    val pairing = uiState.leAudioDevicePairing
     val policy = uiState.leAudioPolicyAllowed
     // Nothing bonded for the permission to apply to, so there is nothing to toggle yet.
     val needsPairing = uiState.leAudioIdentityAddress == null
@@ -615,11 +614,14 @@ private fun LowPowerAudioToggleRow(
         title = stringResource(R.string.card_le_audio_toggle_title),
         summary = when {
             pairing -> uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pairing) }
-            uiState.leAudioDevicePairStage == "FAILED" ->
-                uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pair_failed_retry) }
             policy == true && usingLc3 -> stringResource(R.string.lea_on_lc3)
             policy == true -> stringResource(R.string.lea_on_waiting_lc3)
             policy == false -> stringResource(R.string.lea_off_fallback)
+            // Only here, below the live readings: a finished run's own verdict is stale the moment
+            // the bond changes behind the module's back, and letting it speak first is what left
+            // this row reporting a failure while the stack held a permitted identity all along.
+            needsPairing && uiState.leAudioDevicePairStage == "FAILED" ->
+                uiState.leAudioDevicePairMessage.ifEmpty { stringResource(R.string.lea_pair_failed_retry) }
             needsPairing -> stringResource(R.string.lea_needs_reset)
             else -> stringResource(R.string.lea_state_unknown)
         },

@@ -159,9 +159,19 @@ data class SonyStateSnapshot(
     val leAudioPendingInquiredType: Int? = null,
     val leAudioPendingItemCodes: List<Int> = emptyList(),
     val leAudioSwitchPending: Boolean = false,
-    /** [dev.sonypods.leaudio.LeAudioDevicePairer.Stage] name for the phone-side bond. */
+    /** [dev.sonypods.leaudio.LeAudioBond.Stage] name for the phone-side bond. */
     val leAudioDevicePairStage: String = "IDLE",
+    /**
+     * What the last run has to report beyond its stage: progress while it works, the reason it
+     * failed, or the set being one earbud short. Empty when it has nothing to add.
+     */
     val leAudioDevicePairMessage: String = "",
+    /**
+     * The identity the last run bonded — a hint for finding the bond again, not a claim that it
+     * still exists. Whether the phone holds an LE Audio identity is [leAudioIdentityAddress], read
+     * from the stack; this only tells the bluetooth process which address to look at when no
+     * session names the headset, which is the state the pairing flow always ends in.
+     */
     val leAudioDevicePairedAddress: String? = null,
     /**
      * The bonded identity the system's LE Audio permission applies to, or null when the phone
@@ -173,7 +183,8 @@ data class SonyStateSnapshot(
      *
      * Filled in by the bluetooth-process host from the current bonds, not from a pairing session:
      * the module app is restarted far more often than a bond changes, so the pairing stage above
-     * says nothing about whether an identity exists right now.
+     * says nothing about whether an identity exists right now. This is the only source for that
+     * question — every surface that shows "paired" reads it here, so none of them can disagree.
      */
     val leAudioIdentityAddress: String? = null,
     /**
@@ -244,6 +255,16 @@ data class SonyStateSnapshot(
     /** Aggregated level fed to the system bluetooth stack and the Xiaomi surfaces. */
     val systemBatteryLevel: Int?
         get() = listOfNotNull(batterySingle, batteryLeft, batteryRight).minOrNull()
+
+    /**
+     * Whether the phone-side bond is still being worked on.
+     *
+     * Stated as "not one of the resting stages" so that a stage added to
+     * [dev.sonypods.leaudio.LeAudioBond.Stage] counts as busy without every UI that shows
+     * progress having to learn its name.
+     */
+    val leAudioDevicePairing: Boolean
+        get() = leAudioDevicePairStage !in RESTING_PAIR_STAGES
 
     /**
      * True when audio for this headset really is being carried over LE Audio right now.
@@ -408,6 +429,14 @@ data class SonyStateSnapshot(
 
     companion object {
         const val EXTRA_SNAPSHOT = "sony_state"
+
+        /**
+         * [dev.sonypods.leaudio.LeAudioBond.Stage] names that mean nothing is in flight.
+         *
+         * Listing the resting stages rather than the busy ones keeps [leAudioDevicePairing] correct
+         * when a stage is added: a new step is work, and work is the default.
+         */
+        private val RESTING_PAIR_STAGES = setOf("IDLE", "SUCCESS", "FAILED")
 
         private const val KEY_CONNECTED = "connected"
         private const val KEY_PROTOCOL_READY = "protocol_ready"

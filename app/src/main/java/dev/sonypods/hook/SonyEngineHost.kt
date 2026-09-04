@@ -78,6 +78,9 @@ object SonyEngineHost {
     private const val REFRESH_REPAIR_INTERVAL_MS = 60_000L
     private const val RECONCILE_INTERVAL_MS = 15_000L
     private const val CONNECT_COOLDOWN_MS = 10_000L
+
+    /** How long a deferred LE Audio permission keeps retrying before it gives up. */
+    private const val POLICY_ENABLE_WAIT_MS = 30_000L
     private const val CONNECT_IN_FLIGHT_TIMEOUT_MS = 15_000L
     /**
      * `BluetoothProfile.CONNECTION_POLICY_*`, which are `@SystemApi` and so absent from the
@@ -85,8 +88,6 @@ object SonyEngineHost {
      */
     private const val CONNECTION_POLICY_ALLOWED = 100
     private const val CONNECTION_POLICY_FORBIDDEN = 0
-    /** How often a missing LE Audio identity is looked for in the bond list. */
-    private const val LE_IDENTITY_RESCAN_MS = 5_000L
     /** `LeAudioService.LE_AUDIO_GROUP_ID_INVALID`: what `getActiveGroupId` answers with no route. */
     private const val LE_AUDIO_GROUP_ID_INVALID = -1
     /** HyperOS's own wait between forbidding LE Audio and restoring the classic profiles. */
@@ -115,6 +116,16 @@ object SonyEngineHost {
     @Volatile
     private var repository: SonyHeadphoneRepository? = null
 
+    /** Holds the reflective CSIS reader used by [refreshIdentityGroups]. */
+    private var identityStack: dev.sonypods.leaudio.LeAudioStack? = null
+
+    /** Last groups [refreshIdentityGroups] logged, so an unchanged answer stays quiet. */
+    private var lastIdentityGroups: Map<Int, List<String>> = emptyMap()
+
+    /** Address whose LE Audio permission is waiting for its record to become LE Audio capable. */
+    private var pendingPolicyEnableAddress: String? = null
+    private var pendingPolicyEnableUntilMs = 0L
+
     @Volatile
     private var cloudFallback: HookCloudModelFallback? = null
 
@@ -123,9 +134,6 @@ object SonyEngineHost {
 
     @Volatile
     private var adapterService: Any? = null
-
-    /** Throttle for the bond enumeration behind [leAudioIdentityAddress]. */
-    private var lastLeIdentityRescanMs = 0L
 
     /** Last logged LE Audio policy reading, so the per-emission read logs only on change. */
     private var lastLeAudioPolicyLog: String? = null
@@ -246,6 +254,13 @@ object SonyEngineHost {
         if (scope.coroutineContext[Job]?.isActive != true) scope = newGenerationScope()
         val ctx = context.applicationContext ?: context
         appContext = ctx
+        // The identity service persists and reads bt_config from here, and both need a context this
+        // process can actually write with. It used to be handed one reflected out of HookContext by
+        // a `getMethod("getContext")` that has never existed — the NoSuchMethodException was
+        // swallowed, so `store` stayed null and persistence, the bt_config scan and therefore the
+        // CSIS group pairing were all silently dead.
+        runCatching { UnifiedDeviceIdentityService.initializeForEngine(ctx) }
+            .onFailure { Log.w(TAG, "identity service init failed", it) }
         started = true
 
         // The engine cannot read module-app SharedPreferences or private files. The
@@ -501,6 +516,7 @@ object SonyEngineHost {
         val context = appContext ?: return
         val base = lastSnapshot ?: return
         val updated = withSystemFacts(base)
+        retargetTandemForLeAudio(updated, reason)
         if (updated == base) return
         lastSnapshot = updated
         cloudFallback?.onState(updated)
@@ -510,6 +526,31 @@ object SonyEngineHost {
             "LE Audio state republished reason=$reason connected=${updated.leAudioSystemConnected} " +
                 "active=${updated.leAudioSystemActive}"
         )
+    }
+
+    /**
+     * Moves a live Tandem session onto the LE Audio identity once LE Audio comes up.
+     *
+     * The session is established off an A2DP state change, which lands before the LE Audio profile
+     * connects — so it starts on the control identity, and that identity stops answering Tandem the
+     * moment the headset is serving the LE Audio one instead: writes go out, the HPC service is
+     * there, and nothing is ever ACKed. Nothing else re-dials, because as far as the reconnect path
+     * is concerned the session is up.
+     *
+     * Terminates on its own: once the session sits on the LE identity, that address resolves to
+     * itself here and the check is a no-op.
+     */
+    @SuppressLint("MissingPermission")
+    private fun retargetTandemForLeAudio(snapshot: SonyStateSnapshot, reason: String) {
+        if (snapshot.leAudioSystemConnected != true) return
+        val repo = repository ?: return
+        val session = repo.state.value.connectedDevice?.address ?: return
+        val leAddress = SonyDeviceService.leAudioIdentityFor(session) ?: return
+        if (leAddress.equals(session, ignoreCase = true)) return
+        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        val remote = runCatching { adapter.getRemoteDevice(leAddress) }.getOrNull() ?: return
+        Log.d(TAG, "LE Audio up; moving Tandem session $session -> $leAddress reason=$reason")
+        connectDevice(remote, force = true)
     }
 
     @SuppressLint("MissingPermission")
@@ -526,6 +567,17 @@ object SonyEngineHost {
         val migrationTarget = repo.pendingTandemMigrationTarget()
         if (migrationTarget != null && !migrationTarget.equals(address, ignoreCase = true)) {
             Log.d(TAG, "connect deferred: headset-directed Tandem migration to $migrationTarget in flight")
+            return
+        }
+        // The LE Audio pairing flow owns both identities of the headset it is bonding, and a page to
+        // either one takes the controller away from its SMP exchange. Measured on 2026-09-04: the LE
+        // bond's own ACL event reached HeadsetStateDispatcher, reconcileConnection called this with
+        // force=true for the control identity, the SPP page followed, and the pairing died with
+        // SMP_CONN_TOUT 70 ms later — the system's PIN dialog and a lost bond. `force` does not
+        // override this: the caller cannot know a pairing is in flight, only the repository can.
+        val pairingTargets = repo.leAudioPairingTargets()
+        if (address.uppercase() in pairingTargets) {
+            Log.d(TAG, "connect deferred: LE Audio pairing in flight for $address")
             return
         }
         val current = repo.state.value
@@ -1035,17 +1087,41 @@ object SonyEngineHost {
      * itself, which is what lets the switch show the true position for a headset that was switched
      * over from Sound Connect. The LE-only identity is still included, for the models whose
      * control identity carries no ASCS of its own.
+     *
+     * [pairedIdentity] is the address the pairing flow bonded, and the only hint available while
+     * there is no session: that flow ends with the headset reset and reconnecting. It is a hint and
+     * not an answer — [leAudioApplies] below is what decides, so a bond removed behind the module's
+     * back drops out here instead of being reported as still paired.
      */
     @SuppressLint("MissingPermission")
-    private fun leAudioPolicyDevices(controlAddress: String): List<BluetoothDevice> {
+    private fun leAudioPolicyDevices(
+        controlAddress: String?,
+        pairedIdentity: String? = null,
+    ): List<BluetoothDevice> {
         val context = appContext ?: return emptyList()
-        val addresses = buildList {
-            add(controlAddress)
-            leAudioIdentityAddress(controlAddress)
-                ?.takeIf { !it.equals(controlAddress, ignoreCase = true) }
-                ?.let { add(it) }
+        val addresses = LinkedHashSet<String>()
+        if (controlAddress != null) {
+            addresses += controlAddress.uppercase()
+            SonyDeviceService.leAudioIdentityFor(controlAddress)?.let { addresses += it.uppercase() }
+        }
+        if (pairedIdentity != null && belongsToHeadset(pairedIdentity, controlAddress)) {
+            addresses += pairedIdentity.uppercase()
         }
         return addresses.mapNotNull { remoteDevice(context, it) }.filter { leAudioApplies(it) }
+    }
+
+    /**
+     * Whether [identity] is an identity of the headset at [controlAddress].
+     *
+     * True for anything while no session names a headset — the pairing flow's own address is then
+     * the only thing there is to go on. With a session the two have to agree, or an LE bond an
+     * earlier flow left on a *different* headset would be published as this one's identity.
+     */
+    private fun belongsToHeadset(identity: String, controlAddress: String?): Boolean {
+        if (controlAddress == null) return true
+        if (identity.equals(controlAddress, ignoreCase = true)) return true
+        return SonyDeviceService.resolveControlAddress(identity)
+            ?.equals(controlAddress, ignoreCase = true) == true
     }
 
     /** Bonded and advertising ASCS: the stack's own test for "the LE Audio profile applies here". */
@@ -1054,30 +1130,6 @@ object SonyEngineHost {
         device.bondState == BluetoothDevice.BOND_BONDED &&
             device.uuids.orEmpty().any { it.uuid == ASCS_SERVICE_UUID }
     }.getOrDefault(false)
-
-    /**
-     * The headset's separate LE-only bond, when the phone holds one.
-     *
-     * A hit in the alias map answers this without touching the stack. Only a miss enumerates the
-     * bonds to rebuild the map, and at most every [LE_IDENTITY_RESCAN_MS], because this sits on
-     * the path of every state emission while the map is populated for free by the BLE client, the
-     * dispatcher, and the pairer.
-     */
-    @SuppressLint("MissingPermission")
-    private fun leAudioIdentityAddress(controlAddress: String): String? {
-        leAudioAliasFor(controlAddress)?.let { return it }
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastLeIdentityRescanMs < LE_IDENTITY_RESCAN_MS) return null
-        lastLeIdentityRescanMs = now
-        val adapter = appContext?.getSystemService(BluetoothManager::class.java)?.adapter ?: return null
-        return leAudioAliasFor(controlAddress)
-    }
-
-    /** The alias map is keyed LE -> control, so the control address is looked up by value. */
-    private fun leAudioAliasFor(controlAddress: String): String? =
-        SonyDeviceService.leAudioAliasSnapshot()
-            .entries.firstOrNull { it.value.equals(controlAddress, ignoreCase = true) }
-            ?.key
 
     /**
      * The stored LE Audio connection policy of [device], or null when the read itself failed.
@@ -1373,10 +1425,64 @@ object SonyEngineHost {
      * Audio permission and its LDAC switch, both of which live in the profile services rather than
      * in the headset.
      */
-    private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot =
-        withControlIdentity(withLdac(withLeAudioPolicy(base)).let { snapshot ->
+    private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot {
+        refreshIdentityGroups()
+        retryPendingLeAudioPermission()
+        return withControlIdentity(withLdac(withLeAudioPolicy(base)).let { snapshot ->
             snapshot.copy(phoneSupportsLeAudio = phoneSupportsLeAudio())
         })
+    }
+
+    /**
+     * Re-attempts a permission write that was deferred because the identity's record was not yet
+     * LE Audio capable. Every publish is a chance; the deadline bounds it so a headset whose SDP
+     * never lands does not leave a request pending forever.
+     */
+    private fun retryPendingLeAudioPermission() {
+        val address = pendingPolicyEnableAddress ?: return
+        if (SystemClock.elapsedRealtime() > pendingPolicyEnableUntilMs) {
+            pendingPolicyEnableAddress = null
+            Log.w(TAG, "LE Audio permission for $address gave up: record never became LE Audio capable")
+            return
+        }
+        setLeAudioPolicy(allowed = true, requestedAddress = address)
+    }
+
+    /**
+     * Relates bonded identities by CSIS group id, which is the only authoritative answer to "these
+     * two addresses are one headset" — and the only one Sound Connect itself uses.
+     *
+     * Runs here because every publish is also the moment the answer reaches the other processes:
+     * [SonyStateSnapshot] carries the result as `identityPairs`, and no consumer derives it locally.
+     * Cheap by construction — the reflective group read only happens for bonds the LE Audio profile
+     * applies to, and [dev.sonypods.device.UnifiedDeviceIdentityService] ignores a repeat answer.
+     */
+    @SuppressLint("MissingPermission")
+    private fun refreshIdentityGroups() {
+        val context = appContext ?: return
+        val stack = identityStack ?: dev.sonypods.leaudio.LeAudioStack(context) { Log.d(TAG, it) }
+            .also { identityStack = it }
+        val bonded = runCatching {
+            context.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
+        }.getOrNull().orEmpty()
+        val groups = HashMap<Int, MutableList<String>>()
+        bonded.forEach { device ->
+            if (!leAudioApplies(device)) return@forEach
+            val group = stack.groupId(device) ?: return@forEach
+            val address = runCatching { device.address }.getOrNull() ?: return@forEach
+            groups.getOrPut(group) { mutableListOf() }.add(address)
+        }
+        val pairs = groups.filterValues { it.size >= 2 }
+        // Every publish runs this; only a change is worth a line, or the log fills with the same
+        // group several times a second.
+        if (pairs != lastIdentityGroups) {
+            lastIdentityGroups = pairs
+            pairs.forEach { (group, members) -> Log.d(TAG, "CSIS group $group holds $members") }
+        }
+        pairs.values.forEach { members ->
+            runCatching { UnifiedDeviceIdentityService.recordGroup(members) }
+        }
+    }
 
     /**
      * Publishes the control (classic) identity as the device address.
@@ -1419,10 +1525,21 @@ object SonyEngineHost {
      *
      * A headset can hold two records — one per identity — and the two need not agree. The control
      * record is the one that counts: the system's own switch is bound to it and so is routing.
+     *
+     * Answered without a live session too. The pairing flow's last act is to reset the headset, so
+     * "does the phone hold an LE Audio identity for it" has to be answerable while nothing is
+     * connected — that question has exactly one source, and this is it.
      */
     private fun withLeAudioPolicy(base: SonyStateSnapshot): SonyStateSnapshot {
-        val address = base.deviceAddress ?: return base
-        val devices = leAudioPolicyDevices(address)
+        // Not `base.deviceAddress` alone. The pairing flow's last act leaves the headset bonded but
+        // unconnected, and a null address made leAudioPolicyDevices come back empty — which
+        // published a frame with all four of these nulled and then a frame with them back, i.e. the
+        // switch and the loading state flickering. The link tracker keeps the address across a
+        // disconnect, which is exactly the anchor this needs.
+        val address = base.deviceAddress
+            ?: linkTracker.currentAddress
+            ?: lastConnectedAddress
+        val devices = leAudioPolicyDevices(address, base.leAudioDevicePairedAddress)
         val readings = devices.map { it to rawLeAudioPolicy(it) }
         val system = leAudioSystemState(devices)
         logLeAudioPolicy(address, readings, system)
@@ -1448,14 +1565,15 @@ object SonyEngineHost {
 
     /** One line per change in what the stack reports, so a wrong switch position is diagnosable. */
     private fun logLeAudioPolicy(
-        control: String,
+        control: String?,
         readings: List<Pair<BluetoothDevice, Int?>>,
         system: LeAudioSystemState,
     ) {
         val line = readings.joinToString(",") { (device, policy) ->
             "${runCatching { device.address }.getOrNull()}=$policy"
         }.ifEmpty { "no le audio capable bond" }
-        val summary = "$control -> $line connected=${system.connected} active=${system.active}"
+        val summary = "${control ?: "no session"} -> $line " +
+            "connected=${system.connected} active=${system.active}"
         if (summary == lastLeAudioPolicyLog) return
         lastLeAudioPolicyLog = summary
         Log.d(TAG, "LE Audio policy $summary")
@@ -1647,11 +1765,29 @@ object SonyEngineHost {
      * repository state changes to carry it out — without pushing the re-read the switch would
      * spring back to its old position.
      */
-    private fun setLeAudioPolicy(allowed: Boolean) {
+    private fun setLeAudioPolicy(allowed: Boolean, requestedAddress: String? = null) {
         val context = appContext ?: return
         val base = lastSnapshot ?: return
-        val address = base.deviceAddress ?: return
-        val devices = leAudioPolicyDevices(address)
+        // The caller's address wins over the live session. The pairing flow's own call arrives while
+        // the headset is still unconnected — it was just reset and re-bonded — so `deviceAddress` is
+        // null there and the write used to bail before doing anything or logging anything.
+        val address = requestedAddress ?: base.deviceAddress ?: return
+        val devices = leAudioPolicyDevices(address, base.leAudioDevicePairedAddress)
+        // The control identity is the one the system's switch is bound to and the one routing
+        // follows, so writing the permission before its record carries ASCS leaves the LE half
+        // permitted and the control half forbidden — a headset that comes up on LDAC with the switch
+        // reading ON and stuck on "waiting for LC3". Measured on 2026-09-04 17:02: CSIS had bonded
+        // the sibling 8 ms earlier and its SDP had not run, so the group held the LE identity alone.
+        // Retried per publish rather than delayed: SDP completion is an event, not a duration.
+        if (allowed && devices.none { runCatching { it.address }.getOrNull().equals(address, true) }) {
+            if (pendingPolicyEnableAddress == null) {
+                pendingPolicyEnableUntilMs = SystemClock.elapsedRealtime() + POLICY_ENABLE_WAIT_MS
+            }
+            pendingPolicyEnableAddress = address
+            Log.d(TAG, "LE Audio permission for $address deferred: its record is not LE Audio capable yet")
+            return
+        }
+        pendingPolicyEnableAddress = null
         if (devices.isEmpty()) {
             Log.w(TAG, "no LE Audio capable bond for $address; policy write skipped")
             return
@@ -2000,7 +2136,10 @@ object SonyEngineHost {
             SonyBridge.CMD_LE_AUDIO_DEVICE_UNPAIR ->
                 repo.unpairLeAudioDevice(intent.getStringExtra(SonyBridge.EXTRA_STRING))
             SonyBridge.CMD_SET_LE_AUDIO_POLICY ->
-                setLeAudioPolicy(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
+                setLeAudioPolicy(
+                    intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false),
+                    intent.getStringExtra(SonyBridge.EXTRA_STRING),
+                )
             SonyBridge.CMD_SET_LDAC_ENABLED ->
                 setLdacEnabled(intent.getBooleanExtra(SonyBridge.EXTRA_BOOL, false))
             SonyBridge.CMD_SET_FIXED_SOURCE ->

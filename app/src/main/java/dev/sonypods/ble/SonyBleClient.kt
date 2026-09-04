@@ -562,21 +562,28 @@ class SonyBleClient(
             return
         }
         stopScan()
-        // Tandem always runs on the control identity of a dual-mode headset. The
-        // previous "LE Audio is up, keep the requested address" branch is what let the
-        // pure-LE half carry a session of its own, announce its own identifier, report
-        // its own capability counter and overwrite the profile with an LEA-only
-        // support-function list. It also contradicted its own recorded evidence: writes
-        // echoed correctly on the pure-LE session yet had no effect, while the same
-        // write applied when aimed at the dual address. Retarget whenever a control
-        // alias exists; a device with no alias resolves to itself and is left alone.
-        // Exception: a headset-directed migration names its target explicitly.
+        // Which identity of a dual-bonded headset actually serves Tandem depends on whether LE
+        // Audio is up.
+        //
+        // With LE Audio off, it is the control identity: the pure-LE half would otherwise carry a
+        // session of its own, announce its own identifier and overwrite the profile with an
+        // LEA-only support-function list, and writes aimed at it echoed correctly yet had no
+        // effect.
+        //
+        // With LE Audio up, it is the other way round — the coordinated set's LE Audio identity is
+        // the only one that services the session. The control identity still accepts the GATT
+        // connection and still publishes the HPC service, but never answers a frame, so every
+        // write dies in ACK retries ("remote endpoint did not ACK"). Retargeting onto it is what
+        // made a freshly paired headset unresponsive until the LE row was picked by hand.
+        //
+        // A headset-directed migration names its target explicitly and is never second-guessed.
         val requested = adapter?.getRemoteDevice(device.address)
         val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
-        val target = if (tandemMigration == null && requested != null && !control.equals(device.address, ignoreCase = true)) {
-            resolveControlTarget(device)
-        } else {
-            device
+        val target = when {
+            tandemMigration != null || requested == null -> device
+            isLeAudioConnected(requested) -> resolveLeAudioTarget(device)
+            !control.equals(device.address, ignoreCase = true) -> resolveControlTarget(device)
+            else -> device
         }
         val remote = adapter?.getRemoteDevice(target.address)
         if (remote == null) {
@@ -1849,6 +1856,32 @@ class SonyBleClient(
             bluetoothType = remote?.type ?: device.bluetoothType,
             advertisedServices = remote?.uuids?.map { it.uuid.toString() }.orEmpty(),
             isLikelyControlEndpoint = true,
+        )
+    }
+
+    /**
+     * The headset's LE Audio identity, for when that is the half serving Tandem.
+     *
+     * Falls back to [device] whenever the pair is unknown or its LE half is not bonded: connecting
+     * the requested address is recoverable, targeting an address this run cannot account for is not.
+     */
+    @SuppressLint("MissingPermission")
+    private fun resolveLeAudioTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
+        val leAddress = UnifiedDeviceIdentityService.leAudioAddressFor(device.address)
+            ?: return device
+        if (leAddress.equals(device.address, ignoreCase = true)) return device
+        val remote = adapter?.bondedDevices.orEmpty()
+            .firstOrNull { it.address.equals(leAddress, ignoreCase = true) }
+        if (remote == null) {
+            log("LE Audio identity $leAddress is not bonded; staying on ${device.address}")
+            return device
+        }
+        log("LE Audio is up; retargeting ${device.address} to LE Audio identity $leAddress")
+        return device.copy(
+            address = leAddress,
+            name = safeDeviceName(remote) ?: device.name,
+            bluetoothType = remote.type,
+            advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),
         )
     }
 

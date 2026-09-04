@@ -276,9 +276,17 @@ object SonyBridge {
     /**
      * Flips the system's per-device LE Audio permission on the bonded LE identity, which is
      * what HyperOS surfaces as "低功耗音频". The bond is left alone either way.
+     *
+     * [address] anchors the write to one headset's control identity. Without it the engine falls
+     * back to whatever is connected — and the pairing flow's own call lands while the headset is
+     * still unconnected (it was just reset and re-bonded), where that fallback is null and the
+     * write silently does nothing.
      */
-    fun setLeAudioPolicyAllowed(context: Context, allowed: Boolean) =
-        sendCommand(context, CMD_SET_LE_AUDIO_POLICY) { putExtra(EXTRA_BOOL, allowed) }
+    fun setLeAudioPolicyAllowed(context: Context, allowed: Boolean, address: String? = null) =
+        sendCommand(context, CMD_SET_LE_AUDIO_POLICY) {
+            putExtra(EXTRA_BOOL, allowed)
+            if (address != null) putExtra(EXTRA_STRING, address)
+        }
 
     /**
      * Flips this device's LDAC the way the system's own codec switch does: the stored per-device

@@ -1579,9 +1579,10 @@ fun MainUI(
             show = sonyState.leAudioPending && sonyState.leAudioPendingInquiredType == null,
             targetEnabled = sonyState.leAudioPendingTargetEnabled,
             formFactor = sonyState.formFactor,
+            identityAddress = sonyState.leAudioIdentityAddress,
             pairStage = sonyState.leAudioDevicePairStage,
+            pairing = sonyState.leAudioDevicePairing,
             pairMessage = sonyState.leAudioDevicePairMessage,
-            pairedAddress = sonyState.leAudioDevicePairedAddress,
             onPair = { sonyActions.onLeAudioDevicePair() },
             onDismiss = { sonyActions.onLeAudioAlertReply(true) },
         )

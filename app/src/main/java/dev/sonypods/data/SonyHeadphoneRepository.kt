@@ -38,13 +38,14 @@ import dev.sonypods.headphones.SonyCapabilityProbe
 import dev.sonypods.headphones.SonyTandemHeadphoneAdapter
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.leaudio.LeAudioSwitchCoordinator
-import dev.sonypods.leaudio.LeAudioDevicePairer
+import dev.sonypods.leaudio.LeAudioBond
 import dev.sonypods.leaudio.LeAudioProfileGateway
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheManager
 import dev.sonypods.config.CapabilityStorage
 import dev.sonypods.device.UnifiedDeviceIdentityService
 import dev.sonypods.device.IdentityType
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.ConnectionQualityMode
 import dev.sonypods.protocol.DeviceInfoType
@@ -370,11 +371,25 @@ data class LeAudioPendingAlert(
 
 /** Progress of bonding the headset's LE-only identity on the phone side. */
 data class LeAudioDevicePairState(
-    val stage: LeAudioDevicePairer.Stage = LeAudioDevicePairer.Stage.IDLE,
+    val stage: LeAudioBond.Stage = LeAudioBond.Stage.IDLE,
     val message: String = "",
     /** The LE identity this module bonded, so disabling LE Audio can remove it again. */
     val bondedAddress: String? = null,
-)
+) {
+    /**
+     * Back to resting, keeping the bonded address.
+     *
+     * A stage and its failure text describe one run. Carrying them forward is what showed a stale
+     * "bonding was rejected" the next time the guide opened, before anything had started. The
+     * address is a durable hint about this headset rather than a record of the run, so it stays.
+     */
+    fun resting(): LeAudioDevicePairState =
+        if (stage == LeAudioBond.Stage.IDLE && message.isEmpty()) {
+            this
+        } else {
+            copy(stage = LeAudioBond.Stage.IDLE, message = "")
+        }
+}
 
 internal fun LeaState.withConnectionStatus(response: ParsedTandemResponse.LeaStatus): LeaState =
     copy(
@@ -732,6 +747,7 @@ class SonyHeadphoneRepository private constructor(
 
             override fun onPairingGuideRequired(enabled: Boolean, pairedHistory: String?) {
                 appendLog("LE Audio pairing guide required enabled=$enabled pairedHistory=${pairedHistory.orEmpty()}")
+                capturePairingSeed()
                 _state.update {
                     it.copy(
                         leAudioSwitchPending = false,
@@ -747,7 +763,7 @@ class SonyHeadphoneRepository private constructor(
                     // module-created LE identity has served its purpose either way.
                     disableUnpairPending = false
                     appendLog("dropping the module-created LE Audio bond")
-                    leAudioDevicePairer.cancel()
+                    leAudioBond.cancel()
                     unpairLeAudioDevice()
                 }
                 _state.update { current ->
@@ -780,11 +796,11 @@ class SonyHeadphoneRepository private constructor(
 
         },
     )
-    private val leAudioDevicePairer = LeAudioDevicePairer(
+    private val leAudioBond = LeAudioBond(
         appContext,
-        object : LeAudioDevicePairer.Listener {
+        object : LeAudioBond.Listener {
             override fun onStageChanged(
-                stage: LeAudioDevicePairer.Stage,
+                stage: LeAudioBond.Stage,
                 message: String,
                 bondedAddress: String?,
             ) {
@@ -793,8 +809,10 @@ class SonyHeadphoneRepository private constructor(
                         leAudioDevicePairState = LeAudioDevicePairState(
                             stage = stage,
                             message = message,
-                            // Keep the address the pairer bonded so a later disable can
-                            // remove it; a failure must not erase an earlier success.
+                            // Which address the run bonded, so a later disable can remove it and so
+                            // the bluetooth process can answer "is there an LE identity" with no
+                            // session to resolve from. A hint only: whether that bond still exists
+                            // is read from the stack, never from this having been written.
                             bondedAddress = bondedAddress
                                 ?: current.leAudioDevicePairState.bondedAddress,
                         ),
@@ -808,6 +826,18 @@ class SonyHeadphoneRepository private constructor(
         },
     )
     private var disableUnpairPending = false
+    /** Headset the LE Audio pairing flow targets, captured by [capturePairingSeed]. */
+    private var pairingSeedAddress: String? = null
+    private var pairingSeedName: String? = null
+    /**
+     * The last LE endpoint addresses the headset reported, kept outside [_state] on purpose.
+     *
+     * [LeaState] is cleared on disconnect, and the pairing flow runs after the guide has told the
+     * user to reset the headset — so the live copy is always empty by the time it is needed. Only
+     * devices declaring supported-function 0x64 ever report any, so this is usually empty and the
+     * advertisement decides; when it is not empty it outranks everything.
+     */
+    private var pairingSeedLeAddresses: List<String> = emptyList()
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
     // whole playback block; 50ms debounce coalesces notification bursts.
     private val playbackMetadataRefetchRunnable = Runnable {
@@ -1028,6 +1058,16 @@ class SonyHeadphoneRepository private constructor(
     fun pendingTandemMigrationTarget(): String? = pendingTandemMigration?.targetAddress
 
     /**
+     * The addresses the LE Audio pairing flow is working on, or empty when nothing is in flight.
+     *
+     * Nothing else in the module may connect to them while it runs: an SPP page to the control
+     * identity in the middle of the LE pairing takes the controller and kills it. See
+     * [LeAudioBond.involvedAddresses].
+     */
+    fun leAudioPairingTargets(): Set<String> =
+        if (leAudioBond.isRunning()) leAudioBond.involvedAddresses() else emptySet()
+
+    /**
      * Safety valve: a migration that never lands (the new link never comes up,
      * the connect fails) must not block ordinary connects forever.
      */
@@ -1169,7 +1209,7 @@ class SonyHeadphoneRepository private constructor(
     /** Releases all Bluetooth and Handler resources owned by this generation. */
     fun close() {
         leAudioCoordinator.cancel()
-        leAudioDevicePairer.cancel()
+        leAudioBond.cancel()
         leAudioProfileGateway.close()
         clearSupportFunctionProbeState()
         clearInitialValueGate()
@@ -1245,6 +1285,47 @@ class SonyHeadphoneRepository private constructor(
      */
     /** Wall clock of the last full refresh burst; see [fullRefreshAgeMs]. */
     private var lastFullRefreshAtMs = 0L
+
+    /**
+     * Rebuilds the capability tableset from the control identity's stored row.
+     *
+     * A session parked on the holding identity cannot probe — that identity answers with the
+     * LEA-only support-function list — and [probeCapabilities] runs once per Tandem channel, so
+     * there is no later attempt either. Left at that, `capabilitiesKnown` never becomes true: the
+     * phase stays CONNECTING and every control surface is dead. Observed twice on 2026-09-04, once
+     * right after a successful LE bond (the headset brings its GATT link up on the LE identity) and
+     * once the moment the LE Audio switch moved the session there on purpose.
+     *
+     * The tableset is not missing, only elsewhere. Sound Connect keys its capability store by
+     * identifier for exactly this reason, and the control identity's row was written by its own
+     * session. Rebuilding from that row is the same funnel a counter hit uses
+     * ([applyConnectCapabilityInfo]), so nothing here is a new code path — only a new reason to
+     * enter it.
+     *
+     * Moving the session instead does not work: dialing the control identity while the holding
+     * identity owns the link fails every attempt and the retries turn into a reconnect storm.
+     */
+    private fun restoreControlIdentityCapabilities(holdingAddress: String): Boolean {
+        val control = UnifiedDeviceIdentityService.resolveControlAddress(holdingAddress)
+        if (control.equals(holdingAddress, ignoreCase = true)) return false
+        val profile = runCatching { ensureConnectedProfile() }.getOrNull() ?: return false
+        val storeGroup = storeGroupFor(profile)
+        val session = CapabilityProbeSession(deviceAddress = holdingAddress, storeGroup = storeGroup)
+        session.identifier = control
+        capabilitySession = session
+        val restored = restoreCapabilitiesFromStorage(session, control, storeGroup)
+        appendLog(
+            if (restored) {
+                "Rebuilt the capability tableset from control identity $control " +
+                    "(storeGroup=$storeGroup)"
+            } else {
+                "No stored capability tableset for control identity $control; control stays " +
+                    "unavailable until that identity runs its own session"
+            }
+        )
+        if (!restored) capabilitySession = null
+        return restored
+    }
 
     fun refreshBasics(initial: Boolean = false) {
         lastFullRefreshAtMs = SystemClock.elapsedRealtime()
@@ -1490,6 +1571,7 @@ class SonyHeadphoneRepository private constructor(
                     "Skipping capability probe for LE holding identity $connectedAddress; " +
                         "control identity owns the tableset"
                 )
+                restoreControlIdentityCapabilities(connectedAddress)
                 refreshBasics(initial = true)
                 return
             }
@@ -2238,7 +2320,7 @@ class SonyHeadphoneRepository private constructor(
                 if (disableUnpairPending) {
                     disableUnpairPending = false
                     appendLog("LE Audio disable was not confirmed; dropping the LE bond anyway")
-                    leAudioDevicePairer.cancel()
+                    leAudioBond.cancel()
                     unpairLeAudioDevice()
                 }
             }, DISABLE_UNPAIR_FALLBACK_MS)
@@ -2254,7 +2336,13 @@ class SonyHeadphoneRepository private constructor(
             // so never manufacture a 0x98 reply for it.
             appendLog("LE Audio pairing guide ${if (positive) "confirmed" else "cancelled"}")
             if (!positive) leAudioCoordinator.cancel()
-            _state.update { it.copy(leAudioPendingAlert = null, leAudioSwitchPending = leAudioCoordinator.isRunning()) }
+            _state.update {
+                it.copy(
+                    leAudioPendingAlert = null,
+                    leAudioSwitchPending = leAudioCoordinator.isRunning(),
+                    leAudioDevicePairState = it.leAudioDevicePairState.restingUnlessRunning(),
+                )
+            }
             if (positive) {
                 mainHandler.post {
                     if (_state.value.deviceInfo.protocolReady && client.availableChannels().isNotEmpty()) {
@@ -2296,6 +2384,7 @@ class SonyHeadphoneRepository private constructor(
             it.copy(
                 leAudioPendingAlert = null,
                 leAudioSwitchPending = leAudioCoordinator.isRunning(),
+                leAudioDevicePairState = it.leAudioDevicePairState.restingUnlessRunning(),
             )
         }
     }
@@ -2330,37 +2419,87 @@ class SonyHeadphoneRepository private constructor(
     fun showLeAudioPairingGuide() {
         if (_state.value.leAudioPendingAlert != null) return
         appendLog("LE Audio pairing guide requested from device detail")
-        _state.update { it.copy(leAudioPendingAlert = LeAudioPendingAlert(targetEnabled = true)) }
+        capturePairingSeed()
+        _state.update {
+            it.copy(
+                leAudioPendingAlert = LeAudioPendingAlert(targetEnabled = true),
+                leAudioDevicePairState = it.leAudioDevicePairState.resting(),
+            )
+        }
     }
 
     /**
-     * Bonds the headset's LE-only identity: the phone-side half of the LE Audio hand-over.
+     * Bonds the headset's LE Audio identity: the phone-side half of the LE Audio hand-over.
      *
-     * Sony exposes that identity as a separate, non-discoverable LE advertiser. Classic
-     * discovery — all the system pairing screen runs — never surfaces it, so without this
-     * the phone keeps its BR/EDR-only bond and stays on A2DP no matter what the headset
-     * was told to do.
+     * The seed is read rather than live state because the guide's own instruction (reset the headset
+     * into pairing mode) ends the session that produced it, and [LeaState] is cleared on disconnect.
      */
     fun startLeAudioDevicePairing() {
-        val current = _state.value
-        leAudioDevicePairer.start(
-            targetName = current.connectedDevice?.name,
-            reportedLeAddresses = current.leaState.leAudioAddresses,
-            excludeAddresses = listOfNotNull(current.connectedDevice?.address),
+        val current = _state.value.connectedDevice
+        val address = current?.address ?: pairingSeedAddress
+        _state.update { it.copy(leAudioDevicePairState = it.leAudioDevicePairState.resting()) }
+        leAudioBond.start(
+            reportedLeAddresses = pairingSeedLeAddresses,
+            targetName = current?.name ?: pairingSeedName,
+            // The session address is not necessarily the classic identity: a re-run finds the Tandem
+            // session already migrated to the LE identity, and dropping *that* bond would leave the
+            // classic one in place. resolveControlAddress answers the address unchanged when nothing
+            // is mapped yet, i.e. on the first run.
+            controlAddress = address?.let { SonyDeviceService.resolveControlAddress(it) },
         )
     }
 
-    /** Drops the LE identity bonded by [startLeAudioDevicePairing]. */
+    /**
+     * Remembers what the pairing flow needs, while the headset is still connected.
+     *
+     * Captured when the guide is raised rather than when pairing starts, because the guide's own
+     * instruction — reset the headset into pairing mode — is what ends the session. The LE endpoint
+     * query is re-issued here so the addresses are as fresh as the session allows; its answer lands
+     * asynchronously in [applyLeaCapability], which keeps [pairingSeedLeAddresses] up to date.
+     */
+    private fun capturePairingSeed() {
+        val device = _state.value.connectedDevice ?: return
+        pairingSeedAddress = device.address
+        pairingSeedName = device.name
+        appendLog("LE Audio pairing target captured: ${device.address}")
+        runCatching {
+            HeadphoneAdapterRegistry
+                .buildRefreshLeaPairedHistoryCommands(ensureConnectedProfile())
+                .forEach(::sendCommand)
+        }.onFailure { appendLog("LE endpoint address query could not be sent: ${it.message}") }
+    }
+
+    /**
+     * Drops the LE identity bonded by [startLeAudioDevicePairing].
+     *
+     * The identity service answers which address that is, because it outlives this process — the
+     * pairer's own record of the run does not, and a disable after a restart used to find nothing
+     * to remove and leave the LE bond behind.
+     */
     fun unpairLeAudioDevice(address: String? = null) {
-        val target = address ?: _state.value.leAudioDevicePairState.bondedAddress
+        val control = SonyDeviceService.resolveControlAddress(
+            _state.value.connectedDevice?.address ?: pairingSeedAddress,
+        )
+        val target = address
+            ?: SonyDeviceService.leAudioIdentityFor(control)
+            ?: _state.value.leAudioDevicePairState.bondedAddress
         if (target == null) {
             appendLog("no module-created LE Audio bond to remove")
             return
         }
-        if (leAudioDevicePairer.unpair(target)) {
+        if (leAudioBond.unpair(target)) {
             _state.update { it.copy(leAudioDevicePairState = LeAudioDevicePairState()) }
         }
     }
+
+    /**
+     * Clears a finished run's stage and message so they cannot greet the next one.
+     *
+     * A live run is left alone: the guide's own instruction disconnects the headset and dismissing
+     * the dialog does not abort the bonding, so both of those arrive while a stage is still real.
+     */
+    private fun LeAudioDevicePairState.restingUnlessRunning(): LeAudioDevicePairState =
+        if (leAudioBond.isRunning()) this else resting()
 
     fun setEqPreset(preset: EqPresetId) {
         if (!_state.value.deviceInfo.protocolReady) {
@@ -3087,6 +3226,14 @@ class SonyHeadphoneRepository private constructor(
                 noiseControlState = if (connected) it.noiseControlState else NoiseControlState(),
                 eqState = if (connected) it.eqState else EqState(),
                 leaState = if (connected) it.leaState else LeaState(),
+                // A failure reason belongs to the run that produced it. A live run is untouched:
+                // the guide tells the user to reset the headset, so a disconnect arrives in the
+                // middle of every successful pairing.
+                leAudioDevicePairState = when {
+                    leAudioBond.isRunning() -> it.leAudioDevicePairState
+                    sameDevice -> it.leAudioDevicePairState.resting()
+                    else -> LeAudioDevicePairState()
+                },
                 quickAccessState = if (connected) it.quickAccessState else QuickAccessState(),
                 gestureOperationsState = if (connected) it.gestureOperationsState else GestureOperationsState(),
                 multipointState = when {
@@ -3935,6 +4082,10 @@ class SonyHeadphoneRepository private constructor(
             )
         )
         if (response.addresses.isEmpty()) return
+        // Kept outside _state as well: this is the pairing flow's only criterion and it has to
+        // survive the disconnect the guide causes. See [pairingSeedLeAddresses].
+        pairingSeedLeAddresses = response.addresses
+        appendLog("LE endpoint addresses reported: ${response.addresses}")
         _state.update { state ->
             state.copy(leaState = state.leaState.copy(leAudioAddresses = response.addresses))
         }
@@ -4023,6 +4174,18 @@ class SonyHeadphoneRepository private constructor(
                     "Headset moves Tandem to $address over ${response.connectionType}; " +
                         "closing current target for migration"
                 )
+                // The headset just named its other identity. Recorded so the 0x0D path — which
+                // carries no address and has to derive the promotion target — has something to
+                // find, and so the device list can fold the two. CSIS group id supersedes this
+                // whenever the stack can answer; the direction is settled the same way either way.
+                _state.value.connectedDevice?.address?.let { current ->
+                    runCatching {
+                        UnifiedDeviceIdentityService.recordGroup(
+                            members = listOf(current, address),
+                            source = dev.sonypods.device.IdentitySource.PAIRING,
+                        )
+                    }
+                }
                 pendingTandemMigration = PendingTandemMigration(address, response.connectionType)
                 scheduleTandemMigrationTimeout()
                 // SC `C14356p0.m62041c0` (changeTandemConnectionProfile): disconnect

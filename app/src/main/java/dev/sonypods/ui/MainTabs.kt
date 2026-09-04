@@ -447,6 +447,7 @@ private fun EarphonesTabShell(
                         controlChannelReady = sonyState.protocolReady &&
                             sonyState.capabilitiesKnown &&
                             sonyState.initialValuesReady,
+                        identityPairs = sonyState.identityPairs,
                         showConnectError = showConnectErrorDialog,
                         contentPadding = pagePadding,
                         bottomContentPadding = pageBottomContentPadding,

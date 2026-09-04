@@ -1,9 +1,7 @@
 package dev.sonypods.device
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -11,20 +9,25 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Unified device identity service for LE/Classic judgment.
  *
- * This service provides a single source of truth for determining whether a Bluetooth device
- * address represents an LE Audio identity, a Classic identity, or both.
+ * This service provides a single source of truth for determining whether a Bluetooth address
+ * represents an LE Audio identity, a Classic identity, or both — and, crucially, which two
+ * addresses are the same headset.
  *
  * ## Priority
- * 1. Remote Preferences (module-written during pairing)
- * 2. bt_config.conf analysis (fallback for pre-paired devices)
+ * 1. Module-managed pairing ([recordIdentityPair]) — states the direction outright
+ * 2. bt_config.conf ([scanBtConfig]) — for headsets that were paired without the module
  *
- * ## Data Flow
- * - **Pairing time**: `BluetoothDevice.type` is reliable → write to Remote Preferences
- * - **Pre-paired devices**: bt_config.conf analysis → engine-side cache → sync to Remote Preferences when module foreground
+ * The second source is read as one whole-file pass, not per address. Classification of a single
+ * section cannot produce a pair, and a pair is what every consumer actually needs: the device list
+ * folds the LE identity into its control counterpart, Tandem targets the control address, and the
+ * LE Audio policy is written on the LE address found from the control one. Reading one section at a
+ * time is why a headset paired outside the module appeared twice and could not be controlled.
  *
  * ## Architecture
- * - Remote Preferences: writable only by module app (foreground), readable by all processes
- * - Engine-side cache: local storage in bluetooth process, synced to Remote Preferences
+ * - Only the Bluetooth process can classify (bt_config key material is readable nowhere else), so
+ *   only it passes a context to [initializeForEngine] and only it persists.
+ * - Every other process is handed the result through
+ *   [dev.sonypods.bridge.SonyStateSnapshot.identityPairs] and adopts it with [ingestPairs].
  */
 @SuppressLint("MissingPermission")
 object UnifiedDeviceIdentityService {
@@ -33,12 +36,28 @@ object UnifiedDeviceIdentityService {
     /** Remote Preferences key for device identities JSON. */
     private const val STORE_FILE = "sonypods_device_identities.txt"
 
+    private const val BT_CONFIG_PATH = "/data/misc/bluedroid/bt_config.conf"
+
     /** Local cache for engine-side storage (bluetooth process). */
     private val localCache = ConcurrentHashMap<String, DeviceIdentity>()
 
     /** In-memory cache loaded from Remote Preferences. */
     @Volatile
     private var remoteIdentities: Map<String, DeviceIdentity> = emptyMap()
+
+    /**
+     * `lastModified` of the bt_config.conf that produced the current cache.
+     *
+     * A lookup that misses has to be able to trigger a rescan — a headset can be bonded after
+     * startup — but rescanning per miss would line-scan the file on every hook callback. The stamp
+     * makes a rescan happen exactly when the stack has rewritten its bond store.
+     */
+    @Volatile
+    private var scannedStamp = 0L
+
+    /** What bt_config's key material says per address, unfiltered by source precedence. */
+    @Volatile
+    private var btConfigTypes: Map<String, IdentityType> = emptyMap()
 
     /**
      * Where the classifier's own process persists what it resolved.
@@ -60,6 +79,7 @@ object UnifiedDeviceIdentityService {
     fun initializeForEngine(engineContext: Context? = null) {
         store = engineContext?.let { java.io.File(it.filesDir, STORE_FILE) }
         load()
+        scanBtConfig()
         log("initialized with ${remoteIdentities.size} identities")
     }
 
@@ -69,44 +89,24 @@ object UnifiedDeviceIdentityService {
      * Get the identity type for a given address.
      * Returns [IdentityType.UNKNOWN] if no information is available.
      */
-    fun getIdentityType(address: String): IdentityType {
-        val normalized = normalizeAddress(address) ?: return IdentityType.UNKNOWN
-
-        // 1. Check Remote Preferences
-        remoteIdentities[normalized]?.let { return it.type }
-
-        // 2. Check engine-side cache
-        localCache[normalized]?.let { return it.type }
-
-        // 3. Fallback: analyze bt_config.conf
-        analyzeBtConfig(normalized)?.let { identity ->
-            localCache[normalized] = identity
-            return identity.type
-        }
-
-        return IdentityType.UNKNOWN
-    }
+    fun getIdentityType(address: String): IdentityType =
+        getIdentity(address)?.type ?: IdentityType.UNKNOWN
 
     /**
      * Get the full identity for a given address.
+     *
+     * A miss triggers a bt_config rescan, which is a no-op unless the stack has rewritten its bond
+     * store since the last one — a headset bonded after startup is picked up that way.
      */
     fun getIdentity(address: String): DeviceIdentity? {
         val normalized = normalizeAddress(address) ?: return null
-
-        // 1. Check Remote Preferences
-        remoteIdentities[normalized]?.let { return it }
-
-        // 2. Check engine-side cache
-        localCache[normalized]?.let { return it }
-
-        // 3. Fallback: analyze bt_config.conf
-        analyzeBtConfig(normalized)?.let { identity ->
-            localCache[normalized] = identity
-            return identity
-        }
-
-        return null
+        cached(normalized)?.let { return it }
+        scanBtConfig()
+        return cached(normalized)
     }
+
+    private fun cached(normalized: String): DeviceIdentity? =
+        remoteIdentities[normalized] ?: localCache[normalized]
 
     /**
      * Check if an address is the LE Audio identity.
@@ -116,17 +116,12 @@ object UnifiedDeviceIdentityService {
 
     /**
      * Check if an address is the Classic identity.
+     *
+     * False for [IdentityType.DUAL]: a control identity that also holds LE keys — every Sony TWS
+     * control address does, because CTKD writes them there — is not "classic only".
      */
     fun isClassicIdentity(address: String): Boolean =
         getIdentityType(address) == IdentityType.CLASSIC
-
-    /**
-     * Check if an address belongs to a dual-mode device.
-     */
-    fun isDualModeDevice(address: String): Boolean {
-        val identity = getIdentity(address) ?: return false
-        return identity.pairedAddress != null
-    }
 
     /**
      * Resolve the control address for a given address.
@@ -160,109 +155,7 @@ object UnifiedDeviceIdentityService {
         return le to control
     }
 
-    /**
-     * Whether the stack holds LE keys for [address].
-     *
-     * Reads directly from bt_config.conf (bluetooth process only).
-     * This is used by LeAudioDevicePairer for CTKD re-pair decisions.
-     */
-    fun hasLeKeys(address: String): Boolean {
-        val normalized = normalizeAddress(address) ?: return true
-        return try {
-            val configPath = "/data/misc/bluedroid/bt_config.conf"
-            val file = java.io.File(configPath)
-            if (!file.exists()) return true
-
-            var hasLeKeys = false
-            var inSection = false
-
-            file.useLines { lines ->
-                for (line in lines) {
-                    val trimmed = line.trim()
-                    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-                        inSection = trimmed.equals("[${normalized.trim()}]", ignoreCase = true)
-                        continue
-                    }
-                    if (inSection && trimmed.startsWith("LE_KEY_")) {
-                        hasLeKeys = true
-                        break
-                    }
-                }
-            }
-
-            hasLeKeys
-        } catch (e: Exception) {
-            // Unknown reads as "present" so an unreadable key store never triggers a
-            // destructive re-pair; the worst case is the same rejection the user already sees.
-            true
-        }
-    }
-
     // ---- Identity Recording API ----
-
-    /**
-     * Record identity from BluetoothDevice.type during pairing.
-     * This is the most reliable source and writes directly to Remote Preferences.
-     */
-    @SuppressLint("MissingPermission")
-    fun recordFromPairing(device: BluetoothDevice, pairedDevice: BluetoothDevice? = null) {
-        val address = normalizeAddress(device.address) ?: return
-        val transport = runCatching { device.type }.getOrDefault(0)
-        val name = runCatching { device.name }.getOrNull()
-
-        val type = when (transport) {
-            2 -> IdentityType.LE           // DEVICE_TYPE_LE
-            1 -> IdentityType.CLASSIC      // DEVICE_TYPE_CLASSIC
-            3 -> IdentityType.DUAL         // DEVICE_TYPE_DUAL
-            else -> IdentityType.UNKNOWN
-        }
-
-        if (type == IdentityType.UNKNOWN) {
-            log("unknown transport type for $address: $transport")
-            return
-        }
-
-        val pairedAddress = pairedDevice?.let { normalizeAddress(it.address) }
-
-        val identity = DeviceIdentity(
-            address = address,
-            type = type,
-            pairedAddress = pairedAddress,
-            name = name,
-            source = IdentitySource.PAIRING,
-        )
-
-        recordIdentity(identity)
-    }
-
-    /**
-     * Record identity from bt_config.conf analysis.
-     * Used for pre-paired devices that weren't paired through the module.
-     */
-    fun recordFromBtConfig(address: String, hasLeKeys: Boolean, hasClassicKey: Boolean, name: String? = null) {
-        val normalized = normalizeAddress(address) ?: return
-
-        val type = when {
-            hasLeKeys && hasClassicKey -> IdentityType.DUAL
-            hasLeKeys -> IdentityType.LE
-            hasClassicKey -> IdentityType.CLASSIC
-            else -> IdentityType.UNKNOWN
-        }
-
-        if (type == IdentityType.UNKNOWN) {
-            log("bt_config analysis inconclusive for $address (leKeys=$hasLeKeys, classicKey=$hasClassicKey)")
-            return
-        }
-
-        val identity = DeviceIdentity(
-            address = normalized,
-            type = type,
-            name = name,
-            source = IdentitySource.BT_CONFIG,
-        )
-
-        recordIdentity(identity)
-    }
 
     /**
      * Record identity pairing (LE address ↔ Control address mapping).
@@ -294,107 +187,191 @@ object UnifiedDeviceIdentityService {
     // ---- Internal Recording ----
 
     private fun recordIdentity(identity: DeviceIdentity) {
-        // PAIRING outranks BT_CONFIG. Pairing states the direction outright — it is the only
-        // moment the two identities are both in hand — while bt_config is read per address and
-        // cannot see the pairing. Letting the weaker source overwrite is what allowed a later
-        // pass to invert a pair the pairing flow had already recorded correctly.
-        val existing = localCache[identity.address] ?: remoteIdentities[identity.address]
-        if (existing != null && existing.source == IdentitySource.PAIRING &&
-            identity.source != IdentitySource.PAIRING
-        ) {
-            return
-        }
-        // Update local cache
-        localCache[identity.address] = identity
-
-        // Update in-memory cache
-        remoteIdentities = remoteIdentities + (identity.address to identity)
-
-        // If module is in foreground, write to Remote Preferences immediately
-        persist()
-
-        log("recorded identity: ${identity.address} -> ${identity.type} (source=${identity.source})")
+        if (mergeIdentity(identity)) persist()
     }
 
-    // ---- bt_config.conf Analysis ----
+    private fun recordIdentities(identities: Collection<DeviceIdentity>) {
+        var changed = false
+        identities.forEach { if (mergeIdentity(it)) changed = true }
+        if (changed) persist()
+    }
+
+    /** Merges one identity into both caches. Returns whether anything changed. */
+    private fun mergeIdentity(identity: DeviceIdentity): Boolean {
+        val existing = cached(identity.address)
+        // A weaker source never overwrites a stronger one. CSIS group id is the stack's own answer
+        // and outranks everything; module-managed pairing states the direction outright; bt_config
+        // can only classify one address at a time and never relates two.
+        if (existing != null && rank(existing.source) < rank(identity.source)) return false
+        if (existing == identity) return false
+        localCache[identity.address] = identity
+        remoteIdentities = remoteIdentities + (identity.address to identity)
+        log("recorded identity: ${identity.address} -> ${identity.type} " +
+            "paired=${identity.pairedAddress.orEmpty()} (source=${identity.source})")
+        return true
+    }
+
+    private fun rank(source: IdentitySource): Int = when (source) {
+        IdentitySource.CSIS_GROUP -> 0
+        IdentitySource.PAIRING -> 1
+        else -> 2
+    }
+
+    // ---- CSIS group: the authoritative pairing source ----
 
     /**
-     * Analyze bt_config.conf for identity information.
-     * This is the fallback for pre-paired devices.
+     * Records that [members] are one coordinated set, i.e. one headset.
+     *
+     * The group says *which addresses belong together*; it does not say which of them is the LE
+     * Audio identity. That comes from the key material: only the control identity holds a `LinkKey`,
+     * because only it is reachable over BR/EDR. A group whose direction the keys cannot settle is
+     * left alone rather than recorded backwards.
+     *
+     * Direction is read from [btConfigTypes] rather than from the merged record on purpose. The
+     * merged record is precedence-filtered, so a stale pairing entry could otherwise stop the group
+     * — the authoritative source — from correcting it.
      */
-    private fun analyzeBtConfig(address: String): DeviceIdentity? {
-        val configPath = "/data/misc/bluedroid/bt_config.conf"
-        return try {
-            val file = java.io.File(configPath)
-            if (!file.exists()) return null
-
-            var hasLeKeys = false
-            var hasClassicKey = false
-            var deviceName: String? = null
-            var inSection = false
-
-            file.useLines { lines ->
-                for (line in lines) {
-                    val trimmed = line.trim()
-                    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-                        inSection = trimmed.equals("[${address.trim()}]", ignoreCase = true)
-                        continue
-                    }
-                    if (inSection) {
-                        when {
-                            trimmed.startsWith("LE_KEY_") -> hasLeKeys = true
-                            trimmed.startsWith("LinkKey") -> hasClassicKey = true
-                            trimmed.startsWith("Name = ") -> {
-                                deviceName = trimmed.removePrefix("Name = ").trim()
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!hasLeKeys && !hasClassicKey) return null
-
-            val type = when {
-                hasLeKeys && hasClassicKey -> IdentityType.DUAL
-                hasLeKeys -> IdentityType.LE
-                hasClassicKey -> IdentityType.CLASSIC
-                else -> return null
-            }
-
-            DeviceIdentity(
-                address = address,
-                type = type,
-                name = deviceName,
-                source = IdentitySource.BT_CONFIG,
-            )
-        } catch (e: Exception) {
-            log("failed to analyze bt_config.conf for $address: ${e.message}")
-            null
+    fun recordGroup(
+        members: Collection<String>,
+        source: IdentitySource = IdentitySource.CSIS_GROUP,
+    ) {
+        val addresses = members.mapNotNull { normalizeAddress(it) }.distinct()
+        if (addresses.size < 2) return
+        val control = addresses.filter { keyType(it) != null && keyType(it) != IdentityType.LE }
+        val le = addresses.filter { keyType(it) == IdentityType.LE }
+        if (control.size != 1 || le.isEmpty()) {
+            log("group $addresses: key material does not settle the direction; not paired")
+            return
         }
+        val controlAddress = control.single()
+        recordIdentities(
+            le.map { leAddress ->
+                DeviceIdentity(
+                    address = leAddress,
+                    type = IdentityType.LE,
+                    pairedAddress = controlAddress,
+                    name = cached(leAddress)?.name,
+                    source = source,
+                )
+            } + DeviceIdentity(
+                address = controlAddress,
+                type = keyType(controlAddress) ?: IdentityType.CLASSIC,
+                pairedAddress = le.first(),
+                name = cached(controlAddress)?.name,
+                source = source,
+            )
+        )
     }
 
-    // ---- UUID Analysis Helpers ----
+    /** What the bond record's key material says this address is, independent of any pairing entry. */
+    private fun keyType(address: String): IdentityType? = btConfigTypes[address]
 
-    private val ASCS_SERVICE = java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+    // ---- bt_config.conf analysis ----
 
-    private val sonyServiceUuids: Set<java.util.UUID> = setOf(
-        java.util.UUID.fromString("00001108-0000-1000-8000-00805F9B34FB"), // IAP
-        java.util.UUID.fromString("0000110B-0000-1000-8000-00805F9B34FB"), // A2DP
-        java.util.UUID.fromString("0000110E-0000-1000-8000-00805F9B34FB"), // AVRCP
-        java.util.UUID.fromString("0000111E-0000-1000-8000-00805F9B34FB"), // HFP
-        java.util.UUID.fromString("443cce33-e85d-4b85-8d53-6e319ede53ae"), // Sony Tandem
-        java.util.UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"), // Sony private
+    /**
+     * One `[MAC]` section of bt_config.conf, reduced to what identity classification needs.
+     */
+    internal data class BtConfigSection(
+        val address: String,
+        val hasLinkKey: Boolean,
+        val hasLeKeys: Boolean,
+        val name: String?,
     )
 
-    private fun isLeAudioIdentityFromUuids(serviceUuids: List<java.util.UUID>): Boolean {
-        if (serviceUuids.isEmpty()) return false
-        return ASCS_SERVICE in serviceUuids && serviceUuids.none { it in sonyServiceUuids }
+    /**
+     * Reads every bonded record and records what it says, including which two addresses are one
+     * headset. A no-op outside the classifier process, and outside a bt_config that changed since
+     * the last pass.
+     */
+    private fun scanBtConfig() {
+        if (store == null) return
+        val file = java.io.File(BT_CONFIG_PATH)
+        val stamp = runCatching { if (file.isFile) file.lastModified() else 0L }.getOrDefault(0L)
+        if (stamp == 0L || stamp == scannedStamp) return
+        val sections = runCatching { parseBtConfig(file) }.getOrElse {
+            log("bt_config read failed: ${it.javaClass.simpleName}")
+            return
+        }
+        // Stamped even on an empty read: a file with no bonded record is a complete answer, and
+        // re-reading it on every lookup miss would line-scan it from every hook callback.
+        scannedStamp = stamp
+        log("bt_config scan: ${sections.size} section(s)")
+        ingestSections(sections)
     }
 
-    private fun isClassicIdentityFromUuids(serviceUuids: List<java.util.UUID>): Boolean {
-        if (serviceUuids.isEmpty()) return false
-        return serviceUuids.any { it in sonyServiceUuids }
+    /** Classifies [sections] and merges the result, subject to the source priority. */
+    internal fun ingestSections(sections: List<BtConfigSection>) {
+        val identities = classifySections(sections)
+        // Kept separately from the merged cache: this is what the *keys* say, and [recordGroup]
+        // needs that answer unfiltered by whatever a pairing entry claimed earlier.
+        btConfigTypes = btConfigTypes + identities.associate { it.address to it.type }
+        recordIdentities(identities)
     }
+
+    private fun parseBtConfig(file: java.io.File): List<BtConfigSection> {
+        val sections = mutableListOf<BtConfigSection>()
+        var address: String? = null
+        var hasLinkKey = false
+        var hasLeKeys = false
+        var name: String? = null
+
+        fun flush() {
+            val current = address ?: return
+            if (hasLinkKey || hasLeKeys) {
+                sections += BtConfigSection(current, hasLinkKey, hasLeKeys, name)
+            }
+        }
+
+        file.useLines { lines ->
+            for (line in lines) {
+                val trimmed = line.trim()
+                if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                    flush()
+                    address = normalizeAddress(trimmed.removeSurrounding("[", "]"))
+                    hasLinkKey = false
+                    hasLeKeys = false
+                    name = null
+                    continue
+                }
+                if (address == null) continue
+                when {
+                    trimmed.startsWith("LE_KEY_") -> hasLeKeys = true
+                    trimmed.startsWith("LinkKey") -> hasLinkKey = true
+                    trimmed.startsWith("Name") && '=' in trimmed ->
+                        name = trimmed.substringAfter('=').trim().takeIf { it.isNotEmpty() }
+                }
+            }
+        }
+        flush()
+        return sections
+    }
+
+    /**
+     * Classifies one bond record at a time. It does **not** pair two addresses.
+     *
+     * A `LinkKey` is what makes a record reachable over BR/EDR, so a record holding one is the
+     * control identity — the only one that can carry Tandem. A record with LE keys and no `LinkKey`
+     * is an LE-only identity. On a Sony TWS headset the control record holds LE keys as well (CTKD
+     * writes them there, and the second earbud's LE identity *is* the classic address), which is why
+     * it classifies as [IdentityType.DUAL] rather than CLASSIC.
+     *
+     * Relating the two halves is [recordGroup]'s job. Matching them by name — which this used to do
+     * — is not something Sony's own app ever does, and two bonded units of the same model make it
+     * wrong in the one case where being wrong costs the user their pairing.
+     */
+    internal fun classifySections(sections: List<BtConfigSection>): List<DeviceIdentity> =
+        sections.map { section ->
+            DeviceIdentity(
+                address = section.address,
+                type = when {
+                    section.hasLinkKey && section.hasLeKeys -> IdentityType.DUAL
+                    section.hasLinkKey -> IdentityType.CLASSIC
+                    else -> IdentityType.LE
+                },
+                name = section.name,
+                source = IdentitySource.BT_CONFIG,
+            )
+        }
 
     // ---- Persistence (classifier process only) ----
 
@@ -422,19 +399,11 @@ object UnifiedDeviceIdentityService {
     // ---- Snapshot API ----
 
     /**
-     * Get a snapshot of all known identities.
-     */
-    fun identitySnapshot(): Map<String, DeviceIdentity> =
-        remoteIdentities + localCache
-
-    /**
-     * Get all known address pairs (LE ↔ Control).
-     */
-    /**
      * Every known pair as `LE>control`, for [dev.sonypods.bridge.SonyStateSnapshot].
      *
-     * Only the Bluetooth process can classify (pairing flow, or bt_config key material), so
-     * this is how the answer reaches every other process.
+     * Only the Bluetooth process can classify (pairing flow, or bt_config key material), so this is
+     * how the answer reaches every other process — including the device list, which folds the LE
+     * identity into its control counterpart on nothing else.
      */
     fun leToControlPairs(): List<String> =
         (remoteIdentities + localCache).values
@@ -459,23 +428,6 @@ object UnifiedDeviceIdentityService {
         }
     }
 
-    fun addressPairs(): List<Pair<String, String>> {
-        val seen = mutableSetOf<String>()
-        val pairs = mutableListOf<Pair<String, String>>()
-
-        (remoteIdentities + localCache).values.forEach { identity ->
-            if (identity.pairedAddress != null) {
-                val key = listOf(identity.address, identity.pairedAddress).sorted().joinToString("|")
-                if (key !in seen) {
-                    seen.add(key)
-                    pairs.add(identity.address to identity.pairedAddress)
-                }
-            }
-        }
-
-        return pairs
-    }
-
     // ---- Utility ----
 
     private fun normalizeAddress(address: String?): String? {
@@ -495,6 +447,8 @@ object UnifiedDeviceIdentityService {
     internal fun resetForTesting() {
         localCache.clear()
         remoteIdentities = emptyMap()
+        btConfigTypes = emptyMap()
         store = null
+        scannedStamp = 0L
     }
 }
