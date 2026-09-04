@@ -1,11 +1,16 @@
 package dev.sonypods.hook.milink
 
+import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.widget.ImageView
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.hook.Log
 import dev.sonypods.utils.PodImageLoader
+import java.util.Collections
+import java.util.WeakHashMap
 
 /**
  * Replaces the generic third-party headset art on the device-interconnect "big card" with
@@ -22,12 +27,18 @@ import dev.sonypods.utils.PodImageLoader
  *    BluetoothCardView bind method, so the id set is never used for list rows or icons;
  *  - the target pod is the latest EarphonePref this process recognises as Sony.
  *
- * Every gate failing simply keeps the stock art.
+ * In addition, guards against asynchronous or re-binding overwrites (`setImageDrawable`)
+ * by tracking identified headset art Views in memory and intercepting subsequent writes.
  */
 internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
 
     private var installed = false
     private var artResourceIds: Set<Int> = emptySet()
+    private val artViews = Collections.newSetFromMap(WeakHashMap<ImageView, Boolean>())
+    @Volatile
+    private var isApplyingArt = false
+    @Volatile
+    private var cachedBoxBitmap: Pair<String, Bitmap>? = null
 
     fun hookCardArt() {
         runCatching { install() }
@@ -48,10 +59,27 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
         ) {
             val view = instance as? ImageView ?: return@hookAfter
             val resId = args.getOrNull(0) as? Int ?: return@hookAfter
-            replaceCardArtIfSony(view, resId)
+            if (resId in artResourceIds || isArtView(view)) {
+                artViews.add(view)
+                replaceCardArtIfSony(view)
+            }
+        }
+        hook.hookBefore(
+            hook.findMethod("android.widget.ImageView", "setImageDrawable", Drawable::class.java),
+            logicalRole = "milink-card-art-drawable",
+        ) {
+            if (isApplyingArt) return@hookBefore
+            val view = instance as? ImageView ?: return@hookBefore
+            if (!isArtView(view)) return@hookBefore
+            val address = targetSonyAddress() ?: return@hookBefore
+            this.result = null
+            applyCardArt(view, address)
+            Log.d(MiLinkServiceHook.TAG, "milink card art guarded setImageDrawable with catalog image address=$address")
         }
         Log.d(MiLinkServiceHook.TAG, "milink card art hook installed art=${artResourceIds.size}")
     }
+
+    private fun isArtView(view: ImageView): Boolean = artViews.contains(view)
 
     private fun resolveArtResourceIds(): Set<Int> {
         val names = listOf(
@@ -80,22 +108,41 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
         return out
     }
 
-    private fun replaceCardArtIfSony(view: ImageView, resId: Int) {
-        if (resId !in artResourceIds) return
-        val address = targetSonyAddress() ?: return
-        val fileName = PodImagePrefs.remoteImageFileName(address, PodImageResource.BOX)
-        val reader = PodImageLoader.remoteImageReader ?: return
+    private fun getOrLoadBoxBitmap(address: String): Bitmap? {
+        val resolved = SonyDeviceService.resolveControlAddress(address) ?: address
+        val cached = cachedBoxBitmap
+        if (cached != null && cached.first == resolved && !cached.second.isRecycled) {
+            return cached.second
+        }
+        val fileName = PodImagePrefs.remoteImageFileName(resolved, PodImageResource.BOX)
+        val reader = PodImageLoader.remoteImageReader ?: return null
         val bitmap = runCatching { reader(fileName) }.getOrNull()
+        if (bitmap != null) {
+            cachedBoxBitmap = resolved to bitmap
+        }
+        return bitmap
+    }
+
+    private fun replaceCardArtIfSony(view: ImageView) {
+        val address = targetSonyAddress() ?: return
+        applyCardArt(view, address)
+    }
+
+    private fun applyCardArt(view: ImageView, address: String) {
+        val bitmap = getOrLoadBoxBitmap(address)
         if (bitmap == null) {
             Log.d(MiLinkServiceHook.TAG, "milink card art: no catalog box image for $address, stock kept")
             return
         }
         val ctx = runCatching { view.context }.getOrNull() ?: return
-        runCatching {
+        isApplyingArt = true
+        try {
             view.setImageDrawable(BitmapDrawable(ctx.resources, bitmap))
             Log.d(MiLinkServiceHook.TAG, "milink card art replaced generic headset art with catalog image address=$address")
-        }.onFailure {
-            Log.d(MiLinkServiceHook.TAG, "milink card art setImageDrawable failed", it)
+        } catch (t: Throwable) {
+            Log.d(MiLinkServiceHook.TAG, "milink card art setImageDrawable failed", t)
+        } finally {
+            isApplyingArt = false
         }
     }
 
@@ -107,11 +154,15 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
      */
     private fun targetSonyAddress(): String? {
         val current = hook.currentAddress
-        if (!current.isNullOrBlank() && hook.isSonyAddress(current)) return current
-        return PodImagePrefs.load(hook.prefs)
-            .filter { hook.isSonyAddress(it.address) }
-            .maxByOrNull { it.lastConnectedAt }
-            ?.address
+        val candidate = if (!current.isNullOrBlank() && hook.isSonyAddress(current)) {
+            current
+        } else {
+            PodImagePrefs.load(hook.prefs)
+                .filter { hook.isSonyAddress(it.address) }
+                .maxByOrNull { it.lastConnectedAt }
+                ?.address
+        } ?: return null
+        return SonyDeviceService.resolveControlAddress(candidate) ?: candidate
     }
 
     private companion object {
