@@ -158,12 +158,6 @@ private const val TANDEM_TABLE_NUMBER_NO2 = 14
  * waiting out a fixed timer). */
 private const val TANDEM_MIGRATION_FIRST_DELAY_MS = 600L
 
-/** Backoff between retry attempts after a failed migration connect. */
-private const val TANDEM_MIGRATION_RETRY_DELAY_MS = 900L
-
-/** Retry budget for a headset-named migration connect. */
-private const val TANDEM_MIGRATION_MAX_ATTEMPTS = 8
-
 /** How long a pending migration may stay unresolved before ordinary
  * connection management resumes. */
 private const val TANDEM_MIGRATION_TIMEOUT_MS = 15_000L
@@ -1045,14 +1039,8 @@ class SonyHeadphoneRepository private constructor(
 
     private var pendingTandemMigration: PendingTandemMigration? = null
 
-    /** A migration connect attempt has been issued and not yet answered by a
-     * transport-up event — a disconnect arriving in this state is a failed
-     * attempt and re-arms the retry. */
-    private var tandemMigrationConnectOutstanding = false
-
-    /** Failed migration connect attempts so far (bounded by
-     * [TANDEM_MIGRATION_MAX_ATTEMPTS]); reset on transport-up. */
-    private var tandemMigrationAttempts = 0
+    /** Whether this migration has already dialled its target. One instruction, one dial. */
+    private var tandemMigrationConnectIssued = false
 
     /** Address a headset-directed migration is moving Tandem to, if one is in flight. */
     fun pendingTandemMigrationTarget(): String? = pendingTandemMigration?.targetAddress
@@ -1075,8 +1063,7 @@ class SonyHeadphoneRepository private constructor(
         if (pendingTandemMigration != null) {
             appendLog("Tandem migration timed out; clearing pending state")
             pendingTandemMigration = null
-            tandemMigrationConnectOutstanding = false
-            tandemMigrationAttempts = 0
+            tandemMigrationConnectIssued = false
         }
     }
 
@@ -1222,8 +1209,7 @@ class SonyHeadphoneRepository private constructor(
         // value here; otherwise protocolReady remains true while availableChannels()
         // is empty and the next generation will never reconnect.
         pendingTandemMigration = null
-        tandemMigrationConnectOutstanding = false
-        tandemMigrationAttempts = 0
+        tandemMigrationConnectIssued = false
         cachedTandemTargetSession = null
         onConnectionStateChanged(connected = false, device = null)
         pendingPlaybackStatus = null
@@ -3054,10 +3040,17 @@ class SonyHeadphoneRepository private constructor(
 
     override fun onConnectionStateChanged(connected: Boolean, device: DiscoveredSonyDevice?) {
         if (connected) {
-            // The transport answered a migration connect (or any connect) —
-            // later teardowns are ordinary disconnects, not failed attempts.
-            tandemMigrationConnectOutstanding = false
-            tandemMigrationAttempts = 0
+            // A session exists, so the migration instruction is satisfied and must be retired.
+            // Leaving it pending is what made every later disconnect re-dial the target, and each
+            // dial tore down the session that had just been established — a 400 ms loop that also
+            // starved the capability probe. Which identity the session landed on is the target
+            // selection's business, not a standing reconnect order's.
+            if (pendingTandemMigration != null) {
+                appendLog("Tandem session established; migration instruction retired")
+                pendingTandemMigration = null
+                mainHandler.removeCallbacks(tandemMigrationTimeoutRunnable)
+            }
+            tandemMigrationConnectIssued = false
         }
         if (!connected) {
             clearPendingPlaybackTransition()
@@ -3092,43 +3085,30 @@ class SonyHeadphoneRepository private constructor(
             // A 0x0E migration names the identity Tandem moves to. SC's
             // `changeTandemConnectionProfile` connects that address (with the
             // headset's ConnectionType) once its own disconnect completes — its
-            // holding link is already up, so the connect is instant. Ours dials,
-            // and the new link may not be formed yet at 0x0E time, so retry:
-            // an early attempt that fails re-arms through this same handler
-            // (migrationConnectOutstanding), bounded by attempt count and the
-            // pending-migration timeout.
+            // SC `changeTandemConnectionProfile` connects the named address once its own
+            // disconnect completes — its holding link is already up, so the connect is instant.
+            // Ours dials, so the connect is issued from here once, on the disconnect the
+            // instruction caused. It is not re-issued: the instruction is satisfied by a session
+            // existing at all (see onConnectionStateChanged) and bounded by the migration timeout
+            // when no session ever appears. Re-arming it per disconnect is what turned a landed
+            // migration into a 400 ms reconnect loop — each dial tore down the session the previous
+            // dial had just established, and the attempt bound never fired because a transport-up
+            // reset the counter.
             pendingTandemMigration?.let { migration ->
                 val targetAddress = migration.targetAddress ?: return@let
                 val connectionType = migration.connectionType ?: LeaConnectionType.BLE_GATT
-                if (tandemMigrationConnectOutstanding) {
-                    // The attempt we initiated failed (transport torn down again).
-                    tandemMigrationAttempts++
-                    if (tandemMigrationAttempts >= TANDEM_MIGRATION_MAX_ATTEMPTS) {
-                        appendLog(
-                            "Tandem migration to $targetAddress failed after " +
-                                "$tandemMigrationAttempts attempts; giving up"
-                        )
-                        pendingTandemMigration = null
-                        tandemMigrationConnectOutstanding = false
-                        return@let
-                    }
-                }
+                if (tandemMigrationConnectIssued) return@let
+                tandemMigrationConnectIssued = true
                 appendLog(
                     "Tandem migration: connecting to headset-named target " +
-                        "$targetAddress over $connectionType " +
-                        "(attempt ${tandemMigrationAttempts + 1})"
+                        "$targetAddress over $connectionType"
                 )
                 mainHandler.postDelayed(
                     {
                         if (pendingTandemMigration?.targetAddress != targetAddress) return@postDelayed
                         client.connectTandemTarget(targetAddress, connectionType)
-                        // connectTandemTarget tears the previous GATT down
-                        // synchronously — that disconnect event is not a failure.
-                        // Only a teardown arriving AFTER this point counts.
-                        tandemMigrationConnectOutstanding = true
                     },
-                    if (tandemMigrationConnectOutstanding) TANDEM_MIGRATION_RETRY_DELAY_MS
-                    else TANDEM_MIGRATION_FIRST_DELAY_MS,
+                    TANDEM_MIGRATION_FIRST_DELAY_MS,
                 )
             }
             clearInitialValueGate()
