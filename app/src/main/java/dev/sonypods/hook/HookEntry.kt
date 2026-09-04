@@ -180,6 +180,7 @@ class HookEntry : XposedModule() {
             "com.android.bluetooth" -> {
                 loadHook(HeadsetStateDispatcher, classLoader, scope, active)
                 loadHook(LeAudioAllowListHook, classLoader, scope, active)
+                loadHook(RandomLePairingRequestHook, classLoader, scope, active)
                 loadHook(BluetoothUpstreamHeadsetHook(), classLoader, scope, active)
             }
             "com.android.settings" -> {

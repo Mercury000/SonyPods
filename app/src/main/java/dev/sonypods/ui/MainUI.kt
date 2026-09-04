@@ -241,6 +241,7 @@ fun MainUI(
     val suppressPopupInGameOrLandscape = remember { mutableStateOf(appConfig.suppressPopupInGameOrLandscape) }
     val moreClickAction = remember { mutableStateOf(LegacyConfigMigrator.readMoreClickAction(context)) }
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
+    val ignoreRandomLePairingRequests = remember { mutableStateOf(appConfig.ignoreRandomLePairingRequests) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
     val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
@@ -653,6 +654,7 @@ fun MainUI(
         popupDenylist.value = c.popupDenylist
         suppressPopupInGameOrLandscape.value = c.suppressPopupInGameOrLandscape
         fusionMoreClickAction.value = c.fusionMoreClickAction
+        ignoreRandomLePairingRequests.value = c.ignoreRandomLePairingRequests
         logLevel.value = c.logLevel
         fakeDeviceId.value = c.fakeDeviceId
         islandMode.value = c.superIslandMode
@@ -1516,6 +1518,11 @@ fun MainUI(
                 onFusionMoreClickActionChange = {
                     fusionMoreClickAction.value = it
                     ConfigManager.updateFusionMoreClickAction(it)
+                },
+                ignoreRandomLePairingRequests = ignoreRandomLePairingRequests,
+                onIgnoreRandomLePairingRequestsChange = {
+                    ignoreRandomLePairingRequests.value = it
+                    ConfigManager.updateIgnoreRandomLePairingRequests(it)
                 },
                 onOpenTandemDebug = { openScreen(Screen.TandemDebug) },
                 fakeDeviceId = fakeDeviceId,

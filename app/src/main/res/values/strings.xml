@@ -85,6 +85,9 @@
     <string name="settings_section_notification">Notifications</string>
     <string name="settings_section_popup">Popup</string>
     <string name="settings_section_click">Click behavior</string>
+    <string name="settings_section_bluetooth">Bluetooth</string>
+    <string name="ignore_random_le_pairing">Ignore invalid LE pairing requests</string>
+    <string name="ignore_random_le_pairing_summary">Block third-party apps from connecting to LE_XXX; they may no longer recognize Sony headphones</string>
     <string name="language">Language</string>
     <string name="language_summary">Switch the app display language</string>
     <string name="language_system">Follow System</string>

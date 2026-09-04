@@ -134,6 +134,12 @@ data class AppConfig(
      * setParamOn (SC on). [ConfigManager.SC_SL_MODE_UNKNOWN] when root is missing.
      */
     val scSafeListeningMode: Int = ConfigManager.SC_SL_MODE_UNKNOWN,
+    /**
+     * Drop the pairing requests the headset raises on its rotating LE identity beacon —
+     * see [dev.sonypods.hook.RandomLePairingRequestHook]. Off by default because it
+     * swallows a system pairing prompt.
+     */
+    val ignoreRandomLePairingRequests: Boolean = false,
     val visibility: VisibilityConfig = VisibilityConfig(),
 )
 
@@ -338,6 +344,8 @@ object ConfigManager {
 
     fun visibility(): VisibilityConfig = current().visibility
 
+    fun ignoreRandomLePairingRequests(): Boolean = current().ignoreRandomLePairingRequests
+
     fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
 
     fun updateFakeDeviceId(fakeDeviceId: String) = save { it.copy(fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId()) }
@@ -381,6 +389,9 @@ object ConfigManager {
     fun updateAncCycleModes(modes: Set<String>) = save { it.copy(ancCycleModes = modes.normalizedAncCycleModes()) }
 
     fun updateVisibility(visibility: VisibilityConfig) = save { it.copy(visibility = visibility) }
+
+    fun updateIgnoreRandomLePairingRequests(enabled: Boolean) =
+        save { it.copy(ignoreRandomLePairingRequests = enabled) }
 
     fun updateScSafeListeningMode(mode: Int) = save {
         it.copy(scSafeListeningMode = mode.coerceIn(SC_SL_MODE_UNKNOWN, SC_SL_MODE_ON))
@@ -531,6 +542,12 @@ object ConfigManager {
             }
             if (oldConfig.startupTab != newConfig.startupTab) {
                 add("startupTab=${oldConfig.startupTab}->${newConfig.startupTab}")
+            }
+            if (oldConfig.ignoreRandomLePairingRequests != newConfig.ignoreRandomLePairingRequests) {
+                add(
+                    "ignoreRandomLePairingRequests=${oldConfig.ignoreRandomLePairingRequests}" +
+                        "->${newConfig.ignoreRandomLePairingRequests}",
+                )
             }
             if (oldConfig.visibility != newConfig.visibility) {
                 add("visibility")

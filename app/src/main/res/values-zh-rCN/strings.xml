@@ -86,6 +86,9 @@
     <string name="settings_section_notification">通知</string>
     <string name="settings_section_popup">弹窗</string>
     <string name="settings_section_click">点击行为</string>
+    <string name="settings_section_bluetooth">蓝牙</string>
+    <string name="ignore_random_le_pairing">忽略无效的 LE 配对请求</string>
+    <string name="ignore_random_le_pairing_summary">屏蔽三方应用对 LE_XXX 的连接请求，可能影响其识别索尼耳机</string>
     <string name="language">语言</string>
     <string name="language_summary">切换应用显示语言</string>
     <string name="language_system">跟随系统</string>
