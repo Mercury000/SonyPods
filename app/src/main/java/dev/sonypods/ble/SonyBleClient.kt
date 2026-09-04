@@ -110,15 +110,36 @@ internal data class SppSocketWithUuid(
  * begins 0x58 was read as a random LE address by the second, which handed it to the third, which
  * answered TRANSPORT_AUTO, which let the stack open GATT on the classic bearer — where Sony
  * publishes no HPC service. The headset stayed uncontrollable for as long as it was paired and it
- * took a user's log to find out.
- *
  * [reason] is logged on every connect. A route that is wrong should be readable at the moment it
  * is chosen, not inferred afterwards from which endpoint failed to turn up.
+ */
+
+/**
+ * Connection transport mode mirroring Sony Sound Connect (SC):
+ * - SPP: Classic Bluetooth RFCOMM socket.
+ * - GATT: Bluetooth Low Energy GATT client.
+ */
+internal enum class TandemConnectionMode {
+    GATT,
+    SPP,
+}
+
+/**
+ * The resolved answer to "which identity carries Tandem, and over which link".
+ *
+ * Modeled directly after Sound Connect (SC C14356p0.m61992j0):
+ * - If LE Audio is actively connected: Target the LE Audio identity and use GATT.
+ * - If LE Audio is not active (or classic pairing): Target the control identity and use SPP
+ *   if an SPP service record is present, falling back to GATT if RFCOMM fails.
+ * - If directed by headset migration (LEA_NTFY_PARAM 0x0E): Use the exact mode and address
+ *   instructed by the accessory.
  */
 private data class TandemRoute(
     val target: DiscoveredSonyDevice,
     val remote: BluetoothDevice,
-    val useSpp: Boolean,
+    val mode: TandemConnectionMode,
+    /** The advertised Sony SPP service record to bind, or null when this route is GATT. */
+    val sppRecord: UUID?,
     val reason: String,
 )
 
@@ -583,24 +604,14 @@ class SonyBleClient(
     /**
      * Resolves the one route, or null when the request names an address this adapter cannot reach.
      *
-     * Five rules, ordered by authority; each states both the identity and the link, so the two can
-     * no longer contradict each other:
-     *
-     *  1. A headset-directed migration (LEA_NTFY_PARAM 0x0E) named the address and the
-     *     ConnectionType. Both verbatim, never second-guessed.
-     *  2. LE Audio is up. The coordinated set's LE Audio identity is the only half that services
-     *     the session; the control identity still accepts GATT and still publishes the HPC service
-     *     but never answers a frame, so every write dies in ACK retries.
-     *  3. The advertisement flags this LE endpoint as carrying GATT control.
-     *  4. The control identity holds a BR/EDR link key, so RFCOMM has a page target. This is
-     *     Sound Connect's own fallback for "LEA device but LE Audio not connected".
-     *  5. No link key anywhere. RFCOMM would only reach PAGE_TIMEOUT, so LE is the only link left.
-     *
-     * Rules 4 and 5 read the identity of the *resolved* control address rather than the requested
-     * one: a link key is what makes an address pageable, and it is that address which gets paged.
-     * The bit pattern of the address says nothing about this — a public classic MAC may carry any
-     * OUI, Sony's 58:18:62 included, so the top two bits that encode the LE random subtypes are
-     * equally at home in a BR/EDR-bonded identity.
+     * Exactly mirrors Sony Sound Connect (C14356p0.m61992j0 & C12260d):
+     * 1. If this is a headset-directed migration (LEA_NTFY_PARAM 0x0E):
+     *    Adhere directly to the ConnectionType (SPP or GATT) and target address requested by the accessory.
+     * 2. If LE Audio profile is actively connected:
+     *    Target the LE Audio identity and connect via GATT.
+     * 3. If LE Audio is not active (classic audio / non-LEA mode):
+     *    Target the control identity. If the target exposes a Sony Tandem SPP service record,
+     *    choose SPP; otherwise choose GATT.
      */
     @SuppressLint("MissingPermission")
     private fun resolveTandemRoute(
@@ -608,45 +619,67 @@ class SonyBleClient(
         tandemMigration: LeaConnectionType?,
     ): TandemRoute? {
         val requested = adapter?.getRemoteDevice(device.address) ?: return null
-        if (tandemMigration != null) {
-            return TandemRoute(
-                target = device,
-                remote = requested,
-                useSpp = tandemMigration == LeaConnectionType.SPP,
-                reason = "headset-directed migration named $tandemMigration",
-            )
+        val leAudioActive = isLeAudioConnected(requested)
+
+        val (target, identity, selectedMode) = when {
+            tandemMigration != null -> {
+                val mode = when (tandemMigration) {
+                    LeaConnectionType.SPP -> TandemConnectionMode.SPP
+                    LeaConnectionType.BLE_GATT -> TandemConnectionMode.GATT
+                    else -> TandemConnectionMode.GATT
+                }
+                Triple(device, "headset-directed migration", mode)
+            }
+            leAudioActive -> {
+                Triple(resolveLeAudioTarget(device), "LE Audio identity", TandemConnectionMode.GATT)
+            }
+            else -> {
+                // Non-LE Audio: target control identity and prefer SPP if supported
+                val controlTarget = resolveControlTarget(device)
+                val controlRemote = if (controlTarget.address.equals(device.address, ignoreCase = true)) {
+                    requested
+                } else {
+                    adapter?.getRemoteDevice(controlTarget.address)
+                }
+                val spp = controlRemote?.let(::advertisedSppRecord)
+                val mode = if (spp != null) TandemConnectionMode.SPP else TandemConnectionMode.GATT
+                Triple(controlTarget, "control identity", mode)
+            }
         }
-        if (isLeAudioConnected(requested)) {
-            val target = resolveLeAudioTarget(device)
-            return TandemRoute(
-                target = target,
-                remote = adapter?.getRemoteDevice(target.address) ?: return null,
-                useSpp = false,
-                reason = "LE Audio is up; its identity is the half that services the session",
-            )
+
+        val remote = if (target.address.equals(device.address, ignoreCase = true)) {
+            requested
+        } else {
+            adapter?.getRemoteDevice(target.address) ?: return null
         }
-        if (device.sonyAd?.leGattControlFlag == true) {
-            return TandemRoute(
-                target = device,
-                remote = requested,
-                useSpp = false,
-                reason = "advertisement flags this endpoint as GATT control",
-            )
+        val sppRecord = advertisedSppRecord(remote)
+
+        val reason = when {
+            tandemMigration != null -> "$identity requested $selectedMode"
+            leAudioActive -> "$identity active; selected GATT"
+            sppRecord != null -> "$identity advertises Sony SPP record $sppRecord"
+            else -> "$identity advertises no Sony SPP record; selected GATT"
         }
-        val target = resolveControlTarget(device)
-        val remote = adapter?.getRemoteDevice(target.address) ?: return null
-        val identity = UnifiedDeviceIdentityService.getIdentityType(target.address)
-        val pageable = identity == IdentityType.CLASSIC || identity == IdentityType.DUAL
+
         return TandemRoute(
             target = target,
             remote = remote,
-            useSpp = pageable,
-            reason = if (pageable) {
-                "control identity holds a BR/EDR link key (identity=$identity)"
-            } else {
-                "identity=$identity holds no BR/EDR link key; RFCOMM has no page target"
-            },
+            mode = selectedMode,
+            sppRecord = sppRecord,
+            reason = reason,
         )
+    }
+
+    /**
+     * The Sony Tandem SPP service record this device advertises, or null when it advertises none.
+     *
+     * Read from the device's own SDP, cached by the stack at bonding. Checks official TableSet 1
+     * and TableSet 2 UUIDs as well as endian-reversed UUID variants (SC C5731a).
+     */
+    @SuppressLint("MissingPermission")
+    private fun advertisedSppRecord(remote: BluetoothDevice): UUID? {
+        val advertised = runCatching { remote.uuids }.getOrNull().orEmpty().map { it.uuid }.toSet()
+        return OFFICIAL_SPP_UUIDS.firstOrNull { it in advertised }
     }
 
     fun connect(device: DiscoveredSonyDevice, tandemMigration: LeaConnectionType? = null) {
@@ -664,12 +697,27 @@ class SonyBleClient(
         val remote = route.remote
         log(
             "Tandem route: ${device.address} -> ${target.address} via " +
-                "${if (route.useSpp) "SPP" else "GATT/LE"} — ${route.reason}"
+                "${route.mode} — ${route.reason}"
         )
-        if (route.useSpp) {
-            connectSpp(target, remote)
-            return
+
+        if (route.mode == TandemConnectionMode.SPP) {
+            val sppRecord = route.sppRecord ?: advertisedSppRecord(remote)
+            if (sppRecord != null) {
+                connectSpp(target, remote, sppRecord)
+                return
+            }
+            log("Route indicated SPP but no advertised SPP record found; falling back to GATT")
         }
+
+        connectGatt(target, remote)
+    }
+
+    /**
+     * Connects to [target] via BLE GATT using TRANSPORT_LE.
+     * Shared by normal GATT routing and SPP failure fallback (SC C14356p0.m61976X0).
+     */
+    @SuppressLint("MissingPermission")
+    private fun connectGatt(target: DiscoveredSonyDevice, remote: BluetoothDevice) {
         connectedDevice = target.copy(
             name = if (target.name == "Unknown BLE device") {
                 safeDeviceName(remote) ?: "Sony audio device"
@@ -686,7 +734,7 @@ class SonyBleClient(
         disconnect()
         connectedDevice = connectedDevice?.copy(address = remote.address)
         log(
-            "Connecting to ${target.address} type=${remote.type} source=${target.source} " +
+            "Connecting GATT to ${target.address} type=${remote.type} source=${target.source} " +
                 "sonyAd=${target.sonyAd?.summary.orEmpty()}"
         )
         // TRANSPORT_LE, never AUTO. Both identities of a dual-bonded headset report
@@ -942,31 +990,36 @@ class SonyBleClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectSpp(selected: DiscoveredSonyDevice, selectedRemote: BluetoothDevice) {
-        val classicRemote = resolveSppRemoteDevice(selected, selectedRemote)
-        if (classicRemote == null) {
-            listener.onBluetoothUnavailable("No paired classic Sony SPP device matches ${selected.name}")
-            return
-        }
+    private fun connectSpp(
+        selected: DiscoveredSonyDevice,
+        selectedRemote: BluetoothDevice,
+        sppRecord: UUID,
+    ) {
+        // No second identity decision here, and no second look at what the device advertises. Both
+        // were settled by [resolveTandemRoute]: this is reached only because [advertisedSppRecord]
+        // found [sppRecord] on exactly this device. What used to stand here re-derived the classic
+        // half from the bt_config identity type, `DEVICE_TYPE_*` and, failing those, by matching the
+        // bonded devices' names against the requested one — two bonded units of the same model make
+        // that last step pick the wrong headset, and none of the three says whether the device it
+        // lands on speaks SPP at all.
         connectedDevice = selected.copy(
-            name = safeDeviceName(classicRemote) ?: selected.name.removePrefix("LE_"),
-            address = classicRemote.address,
+            name = safeDeviceName(selectedRemote) ?: selected.name.removePrefix("LE_"),
+            address = selectedRemote.address,
             source = "${selected.source}/spp",
-            bluetoothType = classicRemote.type,
+            bluetoothType = selectedRemote.type,
             isLikelyControlEndpoint = true,
         )
         disconnect()
-        connectedDevice = connectedDevice?.copy(address = classicRemote.address)
+        connectedDevice = connectedDevice?.copy(address = selectedRemote.address)
         val generation = sppConnectGeneration.get()
         val connectThread = Thread {
             try {
                 adapter?.cancelDiscovery()
                 log(
-                    "Connecting SPP to ${classicRemote.address} name=${safeDeviceName(classicRemote).orEmpty()} " +
-                        "uuids=${classicRemote.uuids?.joinToString { it.uuid.toString() }.orEmpty()}"
+                    "Connecting SPP to ${selectedRemote.address} record=$sppRecord " +
+                        "name=${safeDeviceName(selectedRemote).orEmpty()}"
                 )
-                val spp = createSppSocket(classicRemote)
-                val socket = spp.socket
+                val socket = selectedRemote.createRfcommSocketToServiceRecord(sppRecord)
                 if (sppConnectThread !== Thread.currentThread()) {
                     runCatching { socket.close() }
                     return@Thread
@@ -978,11 +1031,6 @@ class SonyBleClient(
                 }
                 socket.connect()
                 pendingSppSocket = null
-                if (sppConnectGeneration.get() != generation) {
-                    runCatching { socket.close() }
-                    return@Thread
-                }
-                val sppUuid = spp.uuid
                 if (sppConnectGeneration.get() != generation) {
                     runCatching { socket.close() }
                     return@Thread
@@ -1028,14 +1076,21 @@ class SonyBleClient(
                         mtu = SPP_WRITABLE_VALUE_LENGTH,
                         transport = "SPP",
                         channels = setOf(TandemChannel.SPP_MDR),
-                        sppUuid = sppUuid,
+                        sppUuid = sppRecord,
                     )
                 )
             } catch (e: IOException) {
-                log("SPP connection failed: ${e.message}")
+                log("SPP connection failed: ${e.message}; falling back to GATT (SC parity)")
                 val current = sppConnectGeneration.get() == generation
-                closeSpp(notify = current)
-                if (current) listener.onBluetoothUnavailable("SPP connection failed: ${e.message}")
+                closeSpp(notify = false)
+                if (current) {
+                    timeoutHandler.post {
+                        if (sppConnectGeneration.get() == generation) {
+                            log("Executing GATT fallback for ${selected.address} (remote=${selectedRemote.address})")
+                            connectGatt(selected, selectedRemote)
+                        }
+                    }
+                }
             } catch (e: SecurityException) {
                 log("SPP permission failure: ${e.message}")
                 val current = sppConnectGeneration.get() == generation
@@ -1046,10 +1101,16 @@ class SonyBleClient(
                 // system process' default handler and takes the whole Bluetooth stack down.
                 Thread.interrupted()
                 runCatching {
-                    log("SPP connect aborted: ${t.javaClass.simpleName}: ${t.message}")
+                    log("SPP connect aborted: ${t.javaClass.simpleName}: ${t.message}; falling back to GATT")
                     val current = sppConnectGeneration.get() == generation
-                    closeSpp(notify = current)
-                    if (current) listener.onBluetoothUnavailable("SPP connection failed: ${t.message}")
+                    closeSpp(notify = false)
+                    if (current) {
+                        timeoutHandler.post {
+                            if (sppConnectGeneration.get() == generation) {
+                                connectGatt(selected, selectedRemote)
+                            }
+                        }
+                    }
                 }
             } finally {
                 if (sppConnectThread === Thread.currentThread()) {
@@ -1063,40 +1124,17 @@ class SonyBleClient(
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun resolveSppRemoteDevice(
-        selected: DiscoveredSonyDevice,
-        selectedRemote: BluetoothDevice,
-    ): BluetoothDevice? {
-        // Check if already a classic/dual identity using UnifiedDeviceIdentityService
-        val address = runCatching { selectedRemote.address }.getOrNull()
-        val identityType = if (address != null) UnifiedDeviceIdentityService.getIdentityType(address)
-            else dev.sonypods.device.IdentityType.UNKNOWN
-        if (identityType == dev.sonypods.device.IdentityType.CLASSIC ||
-            identityType == dev.sonypods.device.IdentityType.DUAL ||
-            selectedRemote.type == BluetoothDevice.DEVICE_TYPE_CLASSIC ||
-            selectedRemote.type == BluetoothDevice.DEVICE_TYPE_DUAL
-        ) {
-            return selectedRemote
-        }
-        val targetName = selected.name.removePrefix("LE_")
-        return adapter?.bondedDevices.orEmpty()
-            .firstOrNull { device ->
-                val name = safeDeviceName(device).orEmpty()
-                val deviceIdentityType = runCatching { device.address }.getOrNull()?.let {
-                    UnifiedDeviceIdentityService.getIdentityType(it)
-                } ?: dev.sonypods.device.IdentityType.UNKNOWN
-                deviceIdentityType != dev.sonypods.device.IdentityType.LE &&
-                    device.type != BluetoothDevice.DEVICE_TYPE_LE &&
-                    (name.equals(targetName, ignoreCase = true) || SonyDeviceService.isSony(device))
-            }
-    }
-
-    @SuppressLint("MissingPermission")
+    /**
+     * Opens the RFCOMM socket on the record the device advertises.
+     *
+     * Only advertised records are tried. Blindly attempting the other generation's UUID as well
+     * used to be the fallback here, which meant a device that advertises nothing bindable still got
+     * two connect attempts — and reaching this function at all now means [advertisedSppRecord]
+     * found a record, so there is nothing left for a fallback to do.
+     */
     private fun createSppSocket(device: BluetoothDevice): SppSocketWithUuid {
         val advertised = device.uuids.orEmpty().map { it.uuid }.toSet()
-        val candidates = OFFICIAL_SPP_UUIDS.filter { it in advertised } +
-            OFFICIAL_SPP_UUIDS.filter { it !in advertised }
+        val candidates = OFFICIAL_SPP_UUIDS.filter { it in advertised }
         var lastError: IOException? = null
         for (uuid in candidates.distinct()) {
             try {
@@ -1107,7 +1145,7 @@ class SonyBleClient(
                 log("SPP create socket failed uuid=$uuid error=${e.message}")
             }
         }
-        throw lastError ?: IOException("No SPP UUID could create a socket")
+        throw lastError ?: IOException("No advertised Sony SPP record could create a socket")
     }
 
     private fun closeSpp(notify: Boolean) {
@@ -2074,9 +2112,21 @@ class SonyBleClient(
         private const val QUALCOMM_LE_AUDIO_PROFILE = 32
         /** Audio Stream Control Service, for adapter-level LE Audio identity checks. */
         private const val ASCS_SERVICE_STRING = "0000184e-0000-1000-8000-00805f9b34fb"
+        /**
+         * Official Sony SPP UUIDs (TableSet 2 and TableSet 1).
+         * Mirrors Sound Connect C18016i and C5731a, including byte-reversed UUIDs
+         * to handle Android Bluetooth stack endianness quirks.
+         */
+        val SPP_UUID_TABLE_SET_2_NORMAL: UUID = UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2")
+        val SPP_UUID_TABLE_SET_2_REVERSED: UUID = UUID.fromString("e2b63c39-7db1-3fb0-a84b-9ad4267b6c95")
+        val SPP_UUID_TABLE_SET_1_NORMAL: UUID = UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba")
+        val SPP_UUID_TABLE_SET_1_REVERSED: UUID = UUID.fromString("ba69e0f5-16e3-2db3-ad46-68503e20cc96")
+
         private val OFFICIAL_SPP_UUIDS = listOf(
-            UUID.fromString("956c7b26-d49a-4ba8-b03f-b17d393cb6e2"),
-            UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
+            SPP_UUID_TABLE_SET_2_NORMAL,
+            SPP_UUID_TABLE_SET_1_NORMAL,
+            SPP_UUID_TABLE_SET_2_REVERSED,
+            SPP_UUID_TABLE_SET_1_REVERSED,
         )
         private val CLIENT_CHARACTERISTIC_CONFIG: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

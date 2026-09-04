@@ -156,12 +156,15 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         channels.isEmpty() -> null
         TandemChannel.SPP_MDR in channels ->
             when (sppUuid) {
-                // SC: SPP UUID 96cc203e… is TABLE_SET_1 (V1), 956c7b26… is TABLE_SET_2 (V2).
+                // SC: SPP UUID 96cc203e… (or reversed ba69e0f5…) is TABLE_SET_1 (V1), 956c7b26… (or reversed e2b63c39…) is TABLE_SET_2 (V2).
                 null -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
-                else -> if (sppUuid.toString().startsWith("96cc203e")) {
-                    HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
-                } else {
-                    HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+                else -> {
+                    val str = sppUuid.toString().lowercase()
+                    if (str.startsWith("96cc203e") || str.startsWith("ba69e0f5")) {
+                        HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
+                    } else {
+                        HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
+                    }
                 }
             }
         TandemChannel.GATT_V2_HPC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
