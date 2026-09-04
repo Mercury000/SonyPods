@@ -61,6 +61,7 @@ object MiLinkServiceHook : HookContext() {
     private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
     private val leAudioIdentityHook = MiLinkLeAudioIdentityHook(this)
     private val deviceMetaGuardHook = MiLinkDeviceMetaGuardHook(this)
+    private val cardArtHook = MiLinkCardArtHook(this)
 
     override fun onHook() {
         hookContextEntry()
@@ -71,6 +72,7 @@ object MiLinkServiceHook : HookContext() {
         remoteProtocolHook.hookRemoteProtocol()
         leAudioIdentityHook.hookIdentityUnification()
         deviceMetaGuardHook.hookDeviceMetaGuard()
+        cardArtHook.hookCardArt()
     }
 
     override fun onBeforeReload() {
