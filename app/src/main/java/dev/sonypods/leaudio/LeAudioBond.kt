@@ -93,6 +93,9 @@ class LeAudioBond(
     /** Addresses this run saw bonded, in order; the first is the identity it dialled. */
     private val bonded = LinkedHashSet<String>()
 
+    /** Whether the stack has begun bonding the sibling, so its BOND_NONE means it dropped it. */
+    private var siblingStarted = false
+
     private var passes: List<ScanPass> = emptyList()
     private var passIndex = 0
     private var scanDeadlineAt = 0L
@@ -164,6 +167,7 @@ class LeAudioBond(
         candidates.clear()
         candidateDevices.clear()
         bonded.clear()
+        siblingStarted = false
         val localAdapter = adapter
         if (localAdapter == null || !runCatching { localAdapter.isEnabled }.getOrDefault(false)) {
             fail(ModuleText.get(appContext, R.string.pairer_bluetooth_off))
@@ -432,20 +436,36 @@ class LeAudioBond(
             return
         }
         // The stack bonds the sibling itself once CSIS reports it, and on a Sony TWS headset that
-        // sibling is the classic identity this run freed. Its BONDED is what completes the set.
+        // sibling is the classic identity this run freed. Its BONDED is what completes the set —
+        // and its BOND_NONE after it started is what ends the wait, rather than sitting out the
+        // deadline. Measured on 2026-09-04 22:30: the sibling reached BONDED and was revoked 1.35 s
+        // later, and with only the BONDED case handled the run waited a further 26 s for nothing.
         if (stage == Stage.JOINING) {
-            if (address == controlAddress && state == BluetoothDevice.BOND_BONDED) {
-                bonded += address
-                handler.removeCallbacks(joinDeadline)
-                log("the stack bonded the sibling $address; set complete")
-                finish(complete = true)
+            if (address != controlAddress) {
+                // The headset can revoke the bond this run just made while the set is still
+                // forming. Reporting a set then would publish an identity the stack no longer holds.
+                if (address == addressOf(target) && state == BluetoothDevice.BOND_NONE) {
+                    handler.removeCallbacks(joinDeadline)
+                    fail(ModuleText.get(appContext, R.string.pairer_bond_rejected))
+                }
                 return
             }
-            // The headset can revoke the bond this run just made while the set is still forming.
-            // Reporting a set at that point would publish an identity the stack no longer holds.
-            if (address == addressOf(target) && state == BluetoothDevice.BOND_NONE) {
-                handler.removeCallbacks(joinDeadline)
-                fail(ModuleText.get(appContext, R.string.pairer_bond_rejected))
+            when (state) {
+                BluetoothDevice.BOND_BONDING -> siblingStarted = true
+                BluetoothDevice.BOND_BONDED -> {
+                    bonded += address
+                    handler.removeCallbacks(joinDeadline)
+                    log("the stack bonded the sibling $address; set complete")
+                    finish(complete = true)
+                }
+                // Only once it had actually started: this run cleared the classic bond moments
+                // ago, and that removal's own BOND_NONE must not be read as the sibling failing.
+                BluetoothDevice.BOND_NONE ->
+                    if (siblingStarted || previous == BluetoothDevice.BOND_BONDED) {
+                        handler.removeCallbacks(joinDeadline)
+                        log("the stack dropped the sibling $address after ${bondStateName(previous)}")
+                        finish(complete = false)
+                    }
             }
             return
         }
@@ -547,6 +567,7 @@ class LeAudioBond(
         target = null
         targets = emptySet()
         targetName = null
+        siblingStarted = false
         controlAddress = null
         candidates.clear()
         candidateDevices.clear()
