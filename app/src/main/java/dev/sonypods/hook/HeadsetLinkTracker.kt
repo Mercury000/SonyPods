@@ -51,13 +51,38 @@ internal class HeadsetLinkTracker {
     val currentAddress: String? get() = synchronized(this) { address }
     val currentPhase: Phase get() = synchronized(this) { phase }
 
-    private fun matches(candidate: String?): Boolean =
-        candidate != null && address?.equals(candidate, ignoreCase = true) == true
+    /**
+     * Whether [candidate] is the headset this episode is about.
+     *
+     * Folded through [dev.sonypods.device.HeadsetRegistry] rather than compared raw: one headset
+     * answers on two addresses, and the session legitimately moves between them — LE Audio teardown
+     * hands control back to the classic identity for a moment, and a Tandem target change moves it
+     * on purpose. Compared raw, that move reads as *a different headset took over*, which resets the
+     * episode to CONNECTING and makes [isNewPhysicalConnection] true — so the island floats and the
+     * connect popup fires in the middle of a disconnect. Observed 2026-09-05: session on
+     * `80:99:E7:D8:60:09`, teardown opens one on `C5:93:15:6B:E6:34`, island pops.
+     */
+    private fun matches(candidate: String?): Boolean {
+        val current = address ?: return false
+        if (candidate == null) return false
+        if (current.equals(candidate, ignoreCase = true)) return true
+        val currentControl = runCatching {
+            dev.sonypods.device.HeadsetRegistry.controlAddressFor(current)
+        }.getOrNull() ?: return false
+        val candidateControl = runCatching {
+            dev.sonypods.device.HeadsetRegistry.controlAddressFor(candidate)
+        }.getOrNull() ?: return false
+        return currentControl.equals(candidateControl, ignoreCase = true)
+    }
 
     /** A2DP / LE Audio state machine reports CONNECTED for this headset. */
     fun onLinkConnected(candidate: String) {
         synchronized(this) {
             if (matches(candidate)) {
+                // Follow the identity the link is actually on: the episode is the same headset, but
+                // the address the stack reports moves between its two identities, and the live one is
+                // what onTransportDown has to probe for liveness.
+                address = candidate
                 if (phase == Phase.DISCONNECTED) {
                     // Same headset physically back: a new connection episode.
                     phase = Phase.CONNECTING

@@ -325,6 +325,7 @@ object SonyCapabilityProbe {
         // that declare the corresponding FunctionType (u70.C29444f / C14319c).
         var declaresTandemTargetChange = false
         var declaresChangeTandemConnectionProfile = false
+        var declaresIdentityResolvingKey = false
         // SC registers the 0x0F NOTIFY_DISCONNECTING_TANDEM observer for devices
         // declaring any of the LEA-unicast-broadcast-with-CTKD types (TWS 0x40 /
         // HBS 0x41 / PAS 0x64 Table2 — C14319c.mo61835c).
@@ -370,6 +371,8 @@ object SonyCapabilityProbe {
                     declaresTandemDisconnectingNotification = true
                 SonyV2FunctionType.CHANGE_TANDEM_CONNECTION_PROFILE_FOR_ANDROID ->
                     declaresChangeTandemConnectionProfile = true
+                SonyV2FunctionType.GET_IDENTITY_RESOLVING_KEY ->
+                    declaresIdentityResolvingKey = true
                 else -> Unit
             }
             when (function.domain(profile)) {
@@ -665,6 +668,8 @@ object SonyCapabilityProbe {
                 declaresChangeTandemConnectionProfile || fallback.declaresChangeTandemConnectionProfile,
             declaresTandemDisconnectingNotification =
                 declaresTandemDisconnectingNotification || fallback.declaresTandemDisconnectingNotification,
+            declaresIdentityResolvingKey =
+                declaresIdentityResolvingKey || fallback.declaresIdentityResolvingKey,
             lea = lea,
         )
     }

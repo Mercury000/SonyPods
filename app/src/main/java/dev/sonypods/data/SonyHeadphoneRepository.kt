@@ -43,8 +43,8 @@ import dev.sonypods.leaudio.LeAudioProfileGateway
 import dev.sonypods.media.MediaPlaybackController
 import dev.sonypods.config.CapabilityCacheManager
 import dev.sonypods.config.CapabilityStorage
-import dev.sonypods.device.UnifiedDeviceIdentityService
-import dev.sonypods.device.IdentityType
+import dev.sonypods.device.HeadsetRegistry
+import dev.sonypods.device.PairingService
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.protocol.AmbientSoundMode
 import dev.sonypods.protocol.ConnectionQualityMode
@@ -843,6 +843,25 @@ class SonyHeadphoneRepository private constructor(
      * advertisement decides; when it is not empty it outranks everything.
      */
     private var pairingSeedLeAddresses: List<String> = emptyList()
+
+    /**
+     * Identity Resolving Keys the headset has handed over, for recognising an LE bond the stack
+     * stored under a resolvable private address. Empty is the normal case and only costs the second
+     * matching rung; see [dev.sonypods.device.RpaResolver].
+     */
+    private var identityResolvingKeys: List<ByteArray> = emptyList()
+
+    /**
+     * Every address the last `LEA_RET_CAPABILITY` reply named, kept as it was sent.
+     *
+     * A key that arrives after the addresses cannot help the resolve that already ran, so the raw
+     * reply is held and re-resolved on [applyLeaIdentityResolvingKey]. Ordering makes that the
+     * exception — the request burst asks for the key first — but nothing guarantees reply order.
+     */
+    private var lastReportedAddresses: List<String> = emptyList()
+
+    /** Last transport the headset reported as carrying audio; see [rememberPairingService]. */
+    private var lastStreamingService: PairingService? = null
     // Official behaviour: a v1 metadata NTFY carries no content, so re-GET the
     // whole playback block; 50ms debounce coalesces notification bursts.
     private val playbackMetadataRefetchRunnable = Runnable {
@@ -1185,12 +1204,14 @@ class SonyHeadphoneRepository private constructor(
         client.connect(device)
     }
 
-    fun connect(address: String, name: String = "Sony audio device") {
-        appendLog("Debug connect requested: $name ($address)")
+    fun connect(address: String, name: String? = null) {
+        val label = name?.takeIf { it.isNotBlank() }
+            ?: SonyDeviceService.defaultDeviceName(appContext)
+        appendLog("Debug connect requested: $label ($address)")
         _state.update { it.copy(endpointDiagnostic = null, table2Diagnostic = null, permissionIssue = null) }
         client.connect(
             DiscoveredSonyDevice(
-                name = name,
+                name = label,
                 address = address,
                 rssi = 0,
                 source = "debug-adb",
@@ -1303,7 +1324,7 @@ class SonyHeadphoneRepository private constructor(
      * identity owns the link fails every attempt and the retries turn into a reconnect storm.
      */
     private fun restoreControlIdentityCapabilities(holdingAddress: String): Boolean {
-        val control = UnifiedDeviceIdentityService.resolveControlAddress(holdingAddress)
+        val control = HeadsetRegistry.sessionTargetFor(holdingAddress)
         if (control.equals(holdingAddress, ignoreCase = true)) return false
         val profile = runCatching { ensureConnectedProfile() }.getOrNull() ?: return false
         val storeGroup = storeGroupFor(profile)
@@ -1444,6 +1465,8 @@ class SonyHeadphoneRepository private constructor(
         is ParsedTandemResponse.PlaybackMetadataField -> HeadphoneFeature.PLAYBACK_CONTROL
         is ParsedTandemResponse.LeaStatus,
         is ParsedTandemResponse.LeaPairedHistoryStatus,
+        is ParsedTandemResponse.LeaIdentity,
+        is ParsedTandemResponse.LeaIdentityResolvingKey,
         is ParsedTandemResponse.LeaSettingAvailability,
         is ParsedTandemResponse.LeaParameterNotification -> HeadphoneFeature.LEA_STATUS
         is ParsedTandemResponse.QuickAccess,
@@ -1510,9 +1533,9 @@ class SonyHeadphoneRepository private constructor(
         val cached = cachedTandemTargetSession
         if (cached != null && connectedAddress != null) {
             val cachedControl = cached.deviceAddress?.let {
-                UnifiedDeviceIdentityService.resolveControlAddress(it)
+                HeadsetRegistry.sessionTargetFor(it)
             }
-            val newControl = UnifiedDeviceIdentityService.resolveControlAddress(connectedAddress)
+            val newControl = HeadsetRegistry.sessionTargetFor(connectedAddress)
             if (cachedControl.equals(newControl, ignoreCase = true)) {
                 appendLog(
                     "Restoring cached capability session for tandem target migration: " +
@@ -1668,6 +1691,7 @@ class SonyHeadphoneRepository private constructor(
         val identifier = response.identifier.takeIf { it.isNotBlank() }
         session.identifier = identifier
         session.capabilityCounter = response.capabilityCounter
+        rememberIdentityFromCapabilityInfo(identifier)
         val storeGroup = session.storeGroup
         val storedCounter = identifier
             ?.let { capabilityStorage?.readCounter(it, storeGroup, TANDEM_TABLE_NUMBER_NO1) }
@@ -1692,6 +1716,46 @@ class SonyHeadphoneRepository private constructor(
         runProbeFromSupportFunction(ensureConnectedProfile())
     }
 
+    /**
+     * Register the headset from `CONNECT_RET_CAPABILITY_INFO`, which names it on frame three of
+     * every session.
+     *
+     * This is SC's actual unique-id source: `C32170h.m115675v` reads `InterfaceC13908c.mo58573b()`,
+     * which prefers the LEA capability's Device Unique Id but falls back to the capability info's
+     * own identifier — and on this headset the two are the same string.
+     *
+     * Registering here rather than waiting for `LEA_RET_CAPABILITY` matters for one specific reason:
+     * the headset can send `EXECUTE_TANDEM_TARGET_CHANGE` (0x0D) before the LEA capability has been
+     * asked for, and that handler has to name the other identity to promote. With an empty registry
+     * it promotes nothing, the reconnect lands on the same identity, the headset sends 0x0D again —
+     * and the session never lives long enough to ask for anything. Measured on 2026-09-05: six 0x0D
+     * frames in one log window, each one killing the session mid-probe.
+     *
+     * The session address is recorded as an LE identity of [identifier] when the two differ: over LE
+     * Audio the link sits on the LE bond while the capability info still reports the classic address.
+     */
+    private fun rememberIdentityFromCapabilityInfo(identifier: String?) {
+        val uniqueId = identifier ?: return
+        val sessionAddress = _state.value.connectedDevice?.address
+        val reportedLe = sessionAddress
+            ?.takeIf { !it.equals(uniqueId, ignoreCase = true) }
+            ?.let { listOf(it) }
+            .orEmpty()
+        runCatching {
+            HeadsetRegistry.remember(
+                uniqueId = uniqueId,
+                name = _state.value.deviceInfo.modelName?.takeIf { it.isNotBlank() }
+                    ?: _state.value.connectedDevice?.name,
+                reportedLeAddresses = reportedLe,
+                bondedAddresses = bondedAddresses(),
+                identityResolvingKeys = identityResolvingKeys,
+                service = lastStreamingService,
+            )
+        }.onFailure {
+            appendLog("Recording headset from capability info failed: ${it.javaClass.simpleName}")
+        }
+    }
+
     /** SC's `store_group`: 0 for the V1 command tableset, 1 for V2. Fixed when the
      * session's initializer is created, never re-read off a global that a
      * reconnect may already have moved. */
@@ -1704,23 +1768,16 @@ class SonyHeadphoneRepository private constructor(
 
     /**
      * Whether [address] is the pure-LE half of a dual-mode headset — Sound
-     * Connect's "holding" identity. The control identity (whose
-     * [UnifiedDeviceIdentityService.resolveControlAddress] resolves to itself)
-     * is the Tandem target and owns the capability tableset; the LE half holds
-     * the link but must never run the initializer, or it would overwrite the
-     * tableset with its LEA-only support-function list.
+     * Connect's "holding" identity. The control identity (the registry record's
+     * own address) is the Tandem target and owns the capability tableset; the LE
+     * half holds the link but must never run the initializer, or it would
+     * overwrite the tableset with its LEA-only support-function list.
+     *
+     * A headset the registry has never identified answers false: with nothing to
+     * say otherwise, the address in hand is the target.
      */
-    private fun isLeOnlyHoldingIdentity(address: String): Boolean {
-        val type = UnifiedDeviceIdentityService.getIdentityType(address)
-        if (type != IdentityType.LE) return false
-        // A dual-mode headset bonds one control identity and one pure-LE identity.
-        // The control identity resolves to itself and is the Tandem target; the LE
-        // half resolves to the control address (≠ itself), making it holding.
-        // A genuinely LE-only device has no control alias — it resolves to itself —
-        // so it is not holding; it is the target.
-        val control = UnifiedDeviceIdentityService.resolveControlAddress(address)
-        return !control.equals(address, ignoreCase = true)
-    }
+    private fun isLeOnlyHoldingIdentity(address: String): Boolean =
+        HeadsetRegistry.recordFor(address)?.isLeIdentity(address) == true
 
     /** SC's `command_table_number`, taken from the frame's dataType. */
     private fun tableNumberFor(raw: ByteArray): Int =
@@ -3068,6 +3125,11 @@ class SonyHeadphoneRepository private constructor(
             pendingQuickAccessFunctionCodes = null
             mainHandler.removeCallbacks(quickAccessConfirmTimeoutRunnable)
             stopSafeListeningPoll()
+            // Both are facts about the headset this session was talking to, and the next session may
+            // be a different one. The registry keeps what they produced; these are only the working
+            // copies used while resolving.
+            identityResolvingKeys = emptyList()
+            lastReportedAddresses = emptyList()
             // The initializer goes with the session, as SC's does when its Callable
             // returns and unregisters from the dispatcher. An exchange that did not
             // finish writes nothing — the stored row keeps whatever a completed one
@@ -3084,7 +3146,7 @@ class SonyHeadphoneRepository private constructor(
                 session.supportFunctionsByTable.isNotEmpty()
             ) {
                 val controlAddress = _state.value.connectedDevice?.address?.let {
-                    UnifiedDeviceIdentityService.resolveControlAddress(it)
+                    HeadsetRegistry.sessionTargetFor(it)
                 }
                 appendLog(
                     "Caching capability session for target migration: " +
@@ -3161,8 +3223,8 @@ class SonyHeadphoneRepository private constructor(
             val sameDevice = it.connectedDevice?.address.equals(device?.address, ignoreCase = true) ||
                 it.connectedDevice?.address?.let { addr ->
                     device?.address?.let { other ->
-                        UnifiedDeviceIdentityService.resolveControlAddress(addr)
-                            .equals(UnifiedDeviceIdentityService.resolveControlAddress(other), ignoreCase = true)
+                        HeadsetRegistry.sessionTargetFor(addr)
+                            .equals(HeadsetRegistry.sessionTargetFor(other), ignoreCase = true)
                     }
                 } == true
             val profile = if (connected && device != null) {
@@ -3373,6 +3435,8 @@ class SonyHeadphoneRepository private constructor(
             is ParsedTandemResponse.LeaStatus -> applyLeaStatus(parsed)
             is ParsedTandemResponse.LeaPairedHistoryStatus -> applyLeaPairedHistory(parsed)
             is ParsedTandemResponse.LeaCapability -> applyLeaCapability(parsed)
+            is ParsedTandemResponse.LeaIdentity -> applyLeaIdentity(parsed)
+            is ParsedTandemResponse.LeaIdentityResolvingKey -> applyLeaIdentityResolvingKey(parsed)
             is ParsedTandemResponse.LeaConnectionMode -> appendLog(
                 "LEA Table2 connection mode type=0x%02X mode=%s result=%s".format(
                     parsed.inquiredTypeCode,
@@ -4060,8 +4124,103 @@ class SonyHeadphoneRepository private constructor(
         appendLog("LEA status ${response.type} enabled=${response.enabled} streamingL=${response.streamingStatusL} streamingR=${response.streamingStatusR}")
         val next = _state.value.leaState.withConnectionStatus(response)
         _state.update { it.copy(leaState = next) }
+        rememberPairingService(next.streamingStatusL, next.streamingStatusR)
         leAudioCoordinator.onHeadsetStreaming(next.streamingStatusL, next.streamingStatusR)
     }
+
+    /**
+     * Records which transport the headset says is carrying audio.
+     *
+     * SC `bt.C5960f`: for a TWS either earbud reporting `VIA_LE_AUDIO_UNICAST` makes the session
+     * LEA, anything else is CLASSIC. This is the whole of SC's LE/Classic judgment — it never looks
+     * at a bond, a UUID or `BluetoothDevice.type`.
+     */
+    private fun rememberPairingService(left: String?, right: String?) {
+        val unicast = dev.sonypods.protocol.LeaStreamingStatus.VIA_LE_AUDIO_UNICAST.name
+        val service = if (left == unicast || right == unicast) {
+            PairingService.LEA
+        } else {
+            PairingService.CLASSIC
+        }
+        // Held as well as applied: the status can land before the identity reply that creates the
+        // record, and then there is nothing to update yet. [applyLeaIdentity] reads it back so the
+        // first record does not sit on the CLASSIC default until the next poll.
+        lastStreamingService = service
+        val address = _state.value.connectedDevice?.address ?: return
+        runCatching { HeadsetRegistry.updateService(address, service) }
+    }
+
+    /**
+     * The headset naming its own identities (Table1 `LEA_RET_CAPABILITY`).
+     *
+     * This is the moment the registry learns which address is the control one and which are LE, and
+     * it is the only source that needs no privileged read. The reported LE addresses are matched
+     * against the OS bonded set — exactly, or through [dev.sonypods.device.RpaResolver] when the
+     * bond is stored under a resolvable private address.
+     */
+    private fun applyLeaIdentity(response: ParsedTandemResponse.LeaIdentity) {
+        appendLog(
+            "LEA identity ${response.type} unique=${response.uniqueId} le=${response.leAddresses}"
+        )
+        // Same field the Table2 (PAS) path fills: the pairing flow's only criterion.
+        if (response.leAddresses.isNotEmpty()) {
+            pairingSeedLeAddresses = response.leAddresses
+            _state.update { state ->
+                state.copy(leaState = state.leaState.copy(leAudioAddresses = response.leAddresses))
+            }
+        }
+        // Every address the reply named, the unique id included, is merged into whichever record
+        // already owns one of them. The reply does not decide direction: see
+        // [HeadsetRegistry.rememberReportedAddresses] for why its "Device Unique Id" cannot be read
+        // as the classic address.
+        val reported = listOf(response.uniqueId) + response.leAddresses
+        runCatching {
+            HeadsetRegistry.rememberReportedAddresses(
+                addresses = reported,
+                name = _state.value.deviceInfo.modelName?.takeIf { it.isNotBlank() }
+                    ?: _state.value.connectedDevice?.name,
+                bondedAddresses = bondedAddresses(),
+                identityResolvingKeys = identityResolvingKeys,
+                service = lastStreamingService,
+                supportsLeClassic = true,
+            )
+        }.onFailure { appendLog("Recording headset identity failed: ${it.javaClass.simpleName}") }
+        lastReportedAddresses = reported
+    }
+
+    /** The headset's IRK, kept only to recognise an LE bond stored under a private address. */
+    private fun applyLeaIdentityResolvingKey(
+        response: ParsedTandemResponse.LeaIdentityResolvingKey,
+    ) {
+        if (response.key.all { it == 0.toByte() }) {
+            appendLog("LEA IRK is all zero; ignoring")
+            return
+        }
+        if (identityResolvingKeys.any { it.contentEquals(response.key) }) return
+        identityResolvingKeys = identityResolvingKeys + response.key
+        appendLog("LEA IRK received (${response.key.size} bytes)")
+        // A key that landed after the addresses cannot have been used yet; redo that resolve rather
+        // than wait for the next poll to report the same identity again.
+        val reported = lastReportedAddresses
+        if (reported.isEmpty()) return
+        appendLog("Re-resolving reported addresses $reported with the new IRK")
+        runCatching {
+            HeadsetRegistry.rememberReportedAddresses(
+                addresses = reported,
+                bondedAddresses = bondedAddresses(),
+                identityResolvingKeys = identityResolvingKeys,
+            )
+        }.onFailure { appendLog("Re-resolving headset identity failed: ${it.javaClass.simpleName}") }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun bondedAddresses(): List<String> = runCatching {
+        appContext.getSystemService(android.bluetooth.BluetoothManager::class.java)
+            ?.adapter
+            ?.bondedDevices
+            .orEmpty()
+            .mapNotNull { runCatching { it.address }.getOrNull() }
+    }.getOrDefault(emptyList())
 
     private fun applyLeaCapability(response: ParsedTandemResponse.LeaCapability) {
         appendLog(
@@ -4098,6 +4257,20 @@ class SonyHeadphoneRepository private constructor(
             )
         }
         _state.update { it.copy(leaState = next) }
+        // SC's `is_both_classic_le_history_exist`: the headset saying it holds both a classic and an
+        // LE bond with this phone. Kept on the record because it is the only signal that a second
+        // identity should exist at all when the capability reply has not landed yet.
+        _state.value.connectedDevice?.address?.let { address ->
+            runCatching {
+                HeadsetRegistry.recordFor(address)?.let { record ->
+                    HeadsetRegistry.remember(
+                        uniqueId = record.uniqueId,
+                        bothPairedHistory =
+                            response.pairedHistory == dev.sonypods.protocol.LeaPairedHistory.BOTH_CLASSIC_BT_BLE,
+                    )
+                }
+            }
+        }
         leAudioCoordinator.onPairedHistory(next.pairedHistory)
     }
 
@@ -4165,16 +4338,20 @@ class SonyHeadphoneRepository private constructor(
                     "Headset moves Tandem to $address over ${response.connectionType}; " +
                         "closing current target for migration"
                 )
-                // The headset just named its other identity. Recorded so the 0x0D path — which
-                // carries no address and has to derive the promotion target — has something to
-                // find, and so the device list can fold the two. CSIS group id supersedes this
-                // whenever the stack can answer; the direction is settled the same way either way.
+                // The headset just named its other identity, and the ConnectionType says which of
+                // the two it is: SPP can only reach the classic identity, BLE_GATT only the LE one.
+                // Recorded so the 0x0D path — which carries no address and has to derive the
+                // promotion target — has something to find. The LEA_RET_CAPABILITY reply supersedes
+                // this whenever the headset answers it; the direction is the same either way.
                 _state.value.connectedDevice?.address?.let { current ->
                     runCatching {
-                        UnifiedDeviceIdentityService.recordGroup(
-                            members = listOf(current, address),
-                            source = dev.sonypods.device.IdentitySource.PAIRING,
-                        )
+                        when (response.connectionType) {
+                            LeaConnectionType.BLE_GATT ->
+                                HeadsetRegistry.rememberLeAddress(address, current)
+                            LeaConnectionType.SPP ->
+                                HeadsetRegistry.rememberLeAddress(current, address)
+                            else -> null
+                        }
                     }
                 }
                 pendingTandemMigration = PendingTandemMigration(address, response.connectionType)
@@ -4200,21 +4377,27 @@ class SonyHeadphoneRepository private constructor(
                 // 0x0D. That loop is what kept the initial-value gate from ever opening.
                 val current = _state.value.connectedDevice?.address
                 val promoted = current?.let { address ->
-                    val control = UnifiedDeviceIdentityService.resolveControlAddress(address)
+                    val control = HeadsetRegistry.sessionTargetFor(address)
                     if (control.equals(address, ignoreCase = true)) {
-                        UnifiedDeviceIdentityService.leAudioAddressFor(address)
+                        HeadsetRegistry.leAddressesFor(address).firstOrNull()
                     } else {
                         control
                     }
                 }?.takeIf { !it.equals(current, ignoreCase = true) }
+                if (promoted == null) {
+                    // Closing the session without a promotion target is not a no-op, it is a loop:
+                    // the reconnect lands on the same identity, the headset asks again, and the
+                    // capability exchange never gets far enough to learn the other identity. SC never
+                    // reaches this state — its holding link is already up — so the faithful thing to
+                    // do here is to leave the session alone until something names the pair.
+                    appendLog(
+                        "Headset asks to move Tandem off $current, but no second identity is known " +
+                            "yet; keeping the session rather than restarting it onto the same address"
+                    )
+                    return
+                }
                 appendLog(
-                    if (promoted != null) {
-                        "Headset asks to move Tandem off $current; promoting its holding " +
-                            "identity $promoted"
-                    } else {
-                        "Headset asks to move Tandem off the current target; closing it " +
-                            "(no second identity known, so promotion is left to the reconnect)"
-                    }
+                    "Headset asks to move Tandem off $current; promoting its holding identity $promoted"
                 )
                 pendingTandemMigration = pendingTandemMigration
                     ?: PendingTandemMigration(promoted, null)

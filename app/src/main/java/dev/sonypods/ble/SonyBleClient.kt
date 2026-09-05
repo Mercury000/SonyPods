@@ -25,9 +25,8 @@ import android.os.Handler
 import android.os.Looper
 import dev.sonypods.hook.Log
 import androidx.core.content.ContextCompat
-import dev.sonypods.device.IdentityType
+import dev.sonypods.device.HeadsetRegistry
 import dev.sonypods.device.SonyDeviceService
-import dev.sonypods.device.UnifiedDeviceIdentityService
 import dev.sonypods.headphones.TandemChannel
 import dev.sonypods.protocol.LeaConnectionType
 import dev.sonypods.protocol.SonyGatt
@@ -640,7 +639,7 @@ class SonyBleClient(
     fun connect(address: String) {
         connect(
             DiscoveredSonyDevice(
-                name = "Sony audio device",
+                name = SonyDeviceService.defaultDeviceName(context),
                 address = address,
                 rssi = 0,
                 source = "manual-connect",
@@ -670,7 +669,7 @@ class SonyBleClient(
     fun connectTandemTarget(address: String, connectionType: dev.sonypods.protocol.LeaConnectionType) {
         connect(
             DiscoveredSonyDevice(
-                name = "Sony audio device",
+                name = SonyDeviceService.defaultDeviceName(context),
                 address = address,
                 rssi = 0,
                 source = "tandem-migration",
@@ -826,7 +825,7 @@ class SonyBleClient(
     private fun connectGatt(target: DiscoveredSonyDevice, remote: BluetoothDevice) {
         connectedDevice = target.copy(
             name = if (target.name == "Unknown BLE device") {
-                safeDeviceName(remote) ?: "Sony audio device"
+                safeDeviceName(remote) ?: SonyDeviceService.defaultDeviceName(context)
             } else {
                 target.name
             },
@@ -1054,9 +1053,7 @@ class SonyBleClient(
         val address = runCatching { remote.address }.getOrNull() ?: return false
         val candidates = buildSet {
             add(address.uppercase())
-            val identity = UnifiedDeviceIdentityService.getIdentity(address)
-            identity?.pairedAddress?.let { add(it.uppercase()) }
-            UnifiedDeviceIdentityService.resolveControlAddress(address).let { add(it.uppercase()) }
+            HeadsetRegistry.recordFor(address)?.addresses?.forEach { add(it) }
         }
         val connected = leAudioConnectedAddresses()
         val result = candidates.any { it in connected }
@@ -2093,16 +2090,16 @@ class SonyBleClient(
 
         listener.onDeviceFound(
             DiscoveredSonyDevice(
-                name = name ?: "Sony audio device",
+                name = name ?: SonyDeviceService.defaultDeviceName(context),
                 address = device.address,
                 rssi = rssi,
                 source = source,
                 bluetoothType = device.type,
                 advertisedServices = device.uuids?.map { it.uuid.toString() }.orEmpty(),
                 isLikelyControlEndpoint = runCatching {
-                    val idType = UnifiedDeviceIdentityService.getIdentityType(device.address)
-                    idType == dev.sonypods.device.IdentityType.CLASSIC ||
-                        idType == dev.sonypods.device.IdentityType.DUAL
+                    // The registry's own address is the control one by construction; anything it
+                    // does not know yet falls back to the transport/name hints.
+                    HeadsetRegistry.recordFor(device.address)?.isLeIdentity(device.address) == false
                 }.getOrDefault(false) ||
                     device.type == BluetoothDevice.DEVICE_TYPE_LE ||
                     device.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
@@ -2119,7 +2116,7 @@ class SonyBleClient(
      */
     @SuppressLint("MissingPermission")
     private fun resolveControlTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val control = UnifiedDeviceIdentityService.resolveControlAddress(device.address)
+        val control = HeadsetRegistry.sessionTargetFor(device.address)
         if (control.equals(device.address, ignoreCase = true)) return device
         val remote = adapter?.bondedDevices.orEmpty()
             .firstOrNull { it.address.equals(control, ignoreCase = true) }
@@ -2136,23 +2133,28 @@ class SonyBleClient(
     /**
      * The headset's LE Audio identity, for when that is the half serving Tandem.
      *
-     * Falls back to [device] whenever the pair is unknown or its LE half is not bonded: connecting
-     * the requested address is recoverable, targeting an address this run cannot account for is not.
+     * A TWS reports a left and a right LE identity and the stack need not be bonded to both, so the
+     * first bonded one wins — SC `C14356p0.m61937C0`, a plain first-match of the reported group
+     * against the bonded set. Falls back to [device] when the headset is unknown or none of its LE
+     * identities is bonded: connecting the requested address is recoverable, targeting an address
+     * this run cannot account for is not.
      */
     @SuppressLint("MissingPermission")
     private fun resolveLeAudioTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val leAddress = UnifiedDeviceIdentityService.leAudioAddressFor(device.address)
-            ?: return device
-        if (leAddress.equals(device.address, ignoreCase = true)) return device
-        val remote = adapter?.bondedDevices.orEmpty()
-            .firstOrNull { it.address.equals(leAddress, ignoreCase = true) }
+        val leAddresses = HeadsetRegistry.leAddressesFor(device.address)
+            .filterNot { it.equals(device.address, ignoreCase = true) }
+        if (leAddresses.isEmpty()) return device
+        val bonded = adapter?.bondedDevices.orEmpty()
+        val remote = leAddresses.firstNotNullOfOrNull { le ->
+            bonded.firstOrNull { it.address.equals(le, ignoreCase = true) }
+        }
         if (remote == null) {
-            log("LE Audio identity $leAddress is not bonded; staying on ${device.address}")
+            log("no LE Audio identity of $leAddresses is bonded; staying on ${device.address}")
             return device
         }
-        log("LE Audio is up; retargeting ${device.address} to LE Audio identity $leAddress")
+        log("LE Audio is up; retargeting ${device.address} to LE Audio identity ${remote.address}")
         return device.copy(
-            address = leAddress,
+            address = remote.address.uppercase(),
             name = safeDeviceName(remote) ?: device.name,
             bluetoothType = remote.type,
             advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),

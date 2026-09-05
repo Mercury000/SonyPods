@@ -99,7 +99,6 @@ object SonyBridge {
     const val CMD_PLAYBACK_PLAY_PAUSE = "playback_play_pause"
     const val CMD_PLAYBACK_NEXT = "playback_next"
     const val CMD_SET_PLAYBACK_VOLUME = "set_playback_volume"
-    const val CMD_CONNECT = "connect"
     const val CMD_DISCONNECT = "disconnect"
     const val CMD_OFFICIAL_APP_ACQUIRE = "official_app_acquire"
     const val CMD_OFFICIAL_APP_RELEASE = "official_app_release"
@@ -303,12 +302,6 @@ object SonyBridge {
 
     fun setPlaybackVolume(context: Context, volume: Int) =
         sendCommand(context, CMD_SET_PLAYBACK_VOLUME) { putExtra(EXTRA_INT, volume) }
-
-    fun connect(context: Context, address: String, name: String) =
-        sendCommand(context, CMD_CONNECT) {
-            putExtra(EXTRA_STRING, address)
-            putExtra("device_name", name)
-        }
 
     fun acquireOfficialAppLease(context: Context, leaseId: String, token: IBinder): Boolean =
         sendOfficialAppLease(context, CMD_OFFICIAL_APP_ACQUIRE, leaseId, token)

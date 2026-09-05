@@ -20,7 +20,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.data.SonyHeadphoneRepository
 import dev.sonypods.device.SonyDeviceService
-import dev.sonypods.device.UnifiedDeviceIdentityService
+import dev.sonypods.device.HeadsetRegistry
 import dev.sonypods.config.CapabilityStorage
 import dev.sonypods.protocol.EqPresetId
 import dev.sonypods.protocol.NoiseAdaptiveSensitivity
@@ -115,12 +115,6 @@ object SonyEngineHost {
 
     @Volatile
     private var repository: SonyHeadphoneRepository? = null
-
-    /** Holds the reflective CSIS reader used by [refreshIdentityGroups]. */
-    private var identityStack: dev.sonypods.leaudio.LeAudioStack? = null
-
-    /** Last groups [refreshIdentityGroups] logged, so an unchanged answer stays quiet. */
-    private var lastIdentityGroups: Map<Int, List<String>> = emptyMap()
 
     /** Address whose LE Audio permission is waiting for its record to become LE Audio capable. */
     private var pendingPolicyEnableAddress: String? = null
@@ -259,7 +253,7 @@ object SonyEngineHost {
         // a `getMethod("getContext")` that has never existed — the NoSuchMethodException was
         // swallowed, so `store` stayed null and persistence, the bt_config scan and therefore the
         // CSIS group pairing were all silently dead.
-        runCatching { UnifiedDeviceIdentityService.initializeForEngine(ctx) }
+        runCatching { HeadsetRegistry.initializeForEngine(ctx) }
             .onFailure { Log.w(TAG, "identity service init failed", it) }
         started = true
 
@@ -596,7 +590,8 @@ object SonyEngineHost {
         if (!force && now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
         lastConnectAttemptMs = now
         connectInFlightAddress = address
-        val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
+        val name = runCatching { device.name }.getOrNull()
+            ?: SonyDeviceService.defaultDeviceName(appContext)
         Log.d(TAG, "connecting Tandem session to $name ($address)")
         runCatching { repo.connect(address, name) }
             .onFailure {
@@ -657,11 +652,20 @@ object SonyEngineHost {
      * the A2DP lookup above finds nothing while the headset is still connected — over the
      * LE ACL. The Tandem session then rides that same ACL.
      *
-     * The returned device must be the identity that carries Tandem: SonyBleClient.connect
+     * A bare GATT link is *not* enough to justify a session. The LE identity keeps a GATT/ACL link
+     * alive for a long time after audio is gone — our own previous control link is one of them — so
+     * accepting any GATT-connected Sony device means reconcile re-dials forever once the user
+     * disconnects, each dial briefly opening a session that then dies. Observed 2026-09-05: endless
+     * `reconciling: … is connected but has no Tandem session` with audio disconnected, which is also
+     * what kept the headset page spinning. Sound Connect has the same gate — `C14332g.m61875b`
+     * answers a device only when A2DP or LE Audio is actually connected, and `C14326e.m61860c` logs
+     * *"autoPickup: no connected device found"* otherwise.
+     *
+     * The returned device must also be the identity that carries Tandem: SonyBleClient.connect
      * deliberately keeps the requested address when it is LE-Audio-connected (mirroring
      * Sound Connect's pairing-record identifier), so handing it the pure-LE identity would
      * open a session that can never carry control. Prefer a connected non-LE identity,
-     * fold an LE-only one through the bonded alias table, and skip when unresolvable.
+     * fold an LE-only one through the registry, and skip when unresolvable.
      */
     private fun gattConnectedSonyDevice(): BluetoothDevice? {
         val context = appContext ?: return null
@@ -672,14 +676,17 @@ object SonyEngineHost {
             .orEmpty()
         val sony = connected.filter { HeadsetStateDispatcher.isSonyPod(it) }
         if (sony.isEmpty()) return null
-        sony.firstOrNull { candidate ->
-            !UnifiedDeviceIdentityService.isLeAudioIdentity(candidate.address) &&
-                UnifiedDeviceIdentityService.resolveControlAddress(candidate.address)
-                    .equals(candidate.address, ignoreCase = true)
+        val carryingAudio = sony.filter { isLeAudioStillConnected(it) }
+        if (carryingAudio.isEmpty()) {
+            Log.d(TAG, "reconcile skip: ${sony.size} Sony GATT link(s) but LE Audio carries none of them")
+            return null
+        }
+        carryingAudio.firstOrNull { candidate ->
+            HeadsetRegistry.recordFor(candidate.address)?.isLeIdentity(candidate.address) != true
         }?.let { return it }
-        val leIdentity = sony.first()
-        val control = UnifiedDeviceIdentityService.resolveControlAddress(leIdentity.address)
-            .takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
+        val leIdentity = carryingAudio.first()
+        val control = HeadsetRegistry.controlAddressFor(leIdentity.address)
+            ?.takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
             ?: run {
                 Log.d(TAG, "reconcile skip: only LE identity ${leIdentity.address} connected and no control alias")
                 return null
@@ -1426,7 +1433,7 @@ object SonyEngineHost {
      * in the headset.
      */
     private fun withSystemFacts(base: SonyStateSnapshot): SonyStateSnapshot {
-        refreshIdentityGroups()
+        pruneForgottenHeadsets()
         retryPendingLeAudioPermission()
         return withControlIdentity(withLdac(withLeAudioPolicy(base)).let { snapshot ->
             snapshot.copy(phoneSupportsLeAudio = phoneSupportsLeAudio())
@@ -1449,39 +1456,20 @@ object SonyEngineHost {
     }
 
     /**
-     * Relates bonded identities by CSIS group id, which is the only authoritative answer to "these
-     * two addresses are one headset" — and the only one Sound Connect itself uses.
+     * Drops registry records whose headset is no longer bonded under any of its identities.
      *
-     * Runs here because every publish is also the moment the answer reaches the other processes:
-     * [SonyStateSnapshot] carries the result as `identityPairs`, and no consumer derives it locally.
-     * Cheap by construction — the reflective group read only happens for bonds the LE Audio profile
-     * applies to, and [dev.sonypods.device.UnifiedDeviceIdentityService] ignores a repeat answer.
+     * SC `C14356p0.m62048o1` (*maintainRegisteredDevicesWithOsBondedDevices*). Unpairing in system
+     * settings is the only thing that makes a record stale; a disconnect never does. Runs on publish
+     * because that is also the moment the answer reaches every other process —
+     * [SonyStateSnapshot] carries the records and no consumer derives them locally.
      */
     @SuppressLint("MissingPermission")
-    private fun refreshIdentityGroups() {
+    private fun pruneForgottenHeadsets() {
         val context = appContext ?: return
-        val stack = identityStack ?: dev.sonypods.leaudio.LeAudioStack(context) { Log.d(TAG, it) }
-            .also { identityStack = it }
         val bonded = runCatching {
             context.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
-        }.getOrNull().orEmpty()
-        val groups = HashMap<Int, MutableList<String>>()
-        bonded.forEach { device ->
-            if (!leAudioApplies(device)) return@forEach
-            val group = stack.groupId(device) ?: return@forEach
-            val address = runCatching { device.address }.getOrNull() ?: return@forEach
-            groups.getOrPut(group) { mutableListOf() }.add(address)
-        }
-        val pairs = groups.filterValues { it.size >= 2 }
-        // Every publish runs this; only a change is worth a line, or the log fills with the same
-        // group several times a second.
-        if (pairs != lastIdentityGroups) {
-            lastIdentityGroups = pairs
-            pairs.forEach { (group, members) -> Log.d(TAG, "CSIS group $group holds $members") }
-        }
-        pairs.values.forEach { members ->
-            runCatching { UnifiedDeviceIdentityService.recordGroup(members) }
-        }
+        }.getOrNull().orEmpty().mapNotNull { runCatching { it.address }.getOrNull() }
+        HeadsetRegistry.prune(bonded)
     }
 
     /**
@@ -2152,12 +2140,6 @@ object SonyEngineHost {
             SonyBridge.CMD_PLAYBACK_NEXT -> repo.playbackNext()
             SonyBridge.CMD_SET_PLAYBACK_VOLUME ->
                 repo.setPlaybackVolume(intent.getIntExtra(SonyBridge.EXTRA_INT, -1))
-
-            SonyBridge.CMD_CONNECT -> {
-                val address = intent.getStringExtra(SonyBridge.EXTRA_STRING) ?: return
-                val name = intent.getStringExtra("device_name") ?: "Sony audio device"
-                repo.connect(address, name)
-            }
 
             SonyBridge.CMD_DISCONNECT -> {
                 val address = knownSonyAddress()

@@ -97,6 +97,9 @@ object SonyTandemV2Table2Protocol {
     private const val LEA_SET_PARAM: Byte = 0x68
     private const val LEA_NTFY_PARAM: Byte = 0x69
 
+    /** Identity Resolving Key length, per the Core spec. */
+    private const val IRK_LENGTH = 16
+
     // ── Party (0x70-0x7C) ───────────────────────────────────────────────────
 
     private const val PARTY_GET_CAPABILITY: Byte = 0x70
@@ -594,7 +597,19 @@ object SonyTandemV2Table2Protocol {
                 table = SonyTable.NO_2,
                 raw = raw,
             )
-            command == LEA_RET_PARAM && typeCode == 0x03 -> table2LeaGeneric(type, payload, raw)
+            // Type 0x03 is the Identity Resolving Key (SC V2GetIdentityResolvingKeyRepository,
+            // parsed by qb0.C26493v: sixteen bytes right after the inquired type).
+            command == LEA_RET_PARAM && typeCode == 0x03 ->
+                payload.drop(1).take(IRK_LENGTH).toByteArray()
+                    .takeIf { it.size == IRK_LENGTH }
+                    ?.let {
+                        ParsedTandemResponse.LeaIdentityResolvingKey(
+                            key = it,
+                            table = SonyTable.NO_2,
+                            raw = raw,
+                        )
+                    }
+                    ?: table2LeaGeneric(type, payload, raw)
             command == LEA_RET_PARAM && typeCode == 0x04 -> ParsedTandemResponse.LeaPairedHistoryStatus(
                 type = null,
                 values = payload.unsignedList(),

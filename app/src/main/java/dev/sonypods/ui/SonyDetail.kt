@@ -87,8 +87,3 @@ fun SonyStateSnapshot.noiseAdaptiveSensitivityValue(): NoiseAdaptiveSensitivity 
     noiseAdaptiveSensitivity
         ?.let { name -> NoiseAdaptiveSensitivity.entries.firstOrNull { it.name == name } }
         ?: NoiseAdaptiveSensitivity.STANDARD
-
-/** Name-only UI variant of the shared Sony identity service. */
-fun isLikelySonyAudioDevice(name: String?): Boolean {
-    return SonyDeviceService.isSonyName(name)
-}

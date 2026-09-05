@@ -1,6 +1,5 @@
 package dev.sonypods.ui
 
-import android.bluetooth.BluetoothDevice
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,7 +30,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import io.github.libxposed.service.XposedService
 import com.mercury.sonypods.R
@@ -45,7 +43,6 @@ import dev.sonypods.ui.dialogs.RestartScope
 import dev.sonypods.ui.dialogs.RestartScopeDialog
 import dev.sonypods.ui.pages.AboutPage
 import dev.sonypods.ui.pages.AboutTabPage
-import dev.sonypods.ui.pages.DevicePickerPage
 import dev.sonypods.ui.pages.HomePage
 import dev.sonypods.ui.pages.SettingsPage
 import dev.sonypods.ui.components.AppIcons
@@ -81,15 +78,14 @@ internal fun MainTabsScaffold(
     bondedDeviceCount: Int,
     onBluetoothStatusClick: () -> Unit,
     onPairedBluetoothClick: () -> Unit,
-    displayTitle: String,
-    sonyState: SonyStateSnapshot,
-    connectedDeviceAddress: String,
-    connectingDeviceAddress: String?,
-    showConnectErrorDialog: Boolean,
-    onDeviceSelected: (BluetoothDevice) -> Unit,
-    onConnectedDeviceClick: () -> Unit,
-    onDeviceDisconnect: (BluetoothDevice) -> Unit,
-    onDismissConnectError: () -> Unit,
+    /**
+     * The earphone tab's whole content.
+     *
+     * Supplied by the caller rather than built here: with no device list left, this tab is either
+     * the live headset's control page or the "no headset" notice, and both need state that lives in
+     * [MainUI] (actions, visibility, per-device image prefs).
+     */
+    earphoneTab: @Composable (bottomContentPadding: Dp) -> Unit,
     desktopIconHidden: MutableState<Boolean>,
     onDesktopIconHiddenChange: (Boolean) -> Unit,
     logLevel: MutableState<Int>,
@@ -204,20 +200,7 @@ internal fun MainTabsScaffold(
                             onShowRestartScopeDialog = onShowRestartScopeDialog,
                         )
 
-                        MainTab.Earphones -> EarphonesTabShell(
-                            displayTitle = displayTitle,
-                            sonyState = sonyState,
-                            connectedDeviceAddress = connectedDeviceAddress,
-                            connectingDeviceAddress = connectingDeviceAddress,
-                            showConnectErrorDialog = showConnectErrorDialog,
-                            pageBottomContentPadding = pageBottomPadding,
-                            backgroundColor = backgroundColor,
-                            blurTopBar = blurTopBar.value,
-                            onDeviceSelected = onDeviceSelected,
-                            onConnectedDeviceClick = onConnectedDeviceClick,
-                            onDeviceDisconnect = onDeviceDisconnect,
-                            onDismissConnectError = onDismissConnectError,
-                        )
+                        MainTab.Earphones -> earphoneTab(pageBottomPadding)
 
                         MainTab.Settings -> SettingsTabPage(
                             pageBottomContentPadding = pageBottomPadding,
@@ -393,72 +376,6 @@ private fun ModuleTabPage(
                         onPairedBluetoothClick = onPairedBluetoothClick,
                         contentPadding = pagePadding,
                         bottomContentPadding = pageBottomContentPadding,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EarphonesTabShell(
-    displayTitle: String,
-    sonyState: SonyStateSnapshot,
-    connectedDeviceAddress: String,
-    connectingDeviceAddress: String?,
-    showConnectErrorDialog: Boolean,
-    pageBottomContentPadding: Dp,
-    backgroundColor: Color,
-    blurTopBar: Boolean,
-    onDeviceSelected: (BluetoothDevice) -> Unit,
-    onConnectedDeviceClick: () -> Unit,
-    onDeviceDisconnect: (BluetoothDevice) -> Unit,
-    onDismissConnectError: () -> Unit,
-) {
-    val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-    val pageTitle = stringResource(R.string.device)
-    BarBlurHost(
-        bottomBarBlurEnabled = false,
-        topBarBlurEnabled = blurTopBar,
-    ) {
-        Scaffold(
-            topBar = {
-                BlurredBar(topGradient = true) {
-                    TopAppBar(
-                        title = pageTitle,
-                        largeTitle = pageTitle,
-                        color = Color.Transparent,
-                        scrollBehavior = scrollBehavior,
-                    )
-                }
-            },
-        ) { pagePadding ->
-            BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(backgroundColor),
-                ) {
-                    DevicePickerPage(
-                        isConnected = sonyState.connected,
-                        connectedDeviceName = displayTitle,
-                        connectedDeviceAddress = connectedDeviceAddress,
-                        connectingDeviceAddress = connectingDeviceAddress,
-                        // Connected is only the transport. The row stays in its connecting state until the
-                        // control channel has answered, the device's capability table is in and the values
-                        // behind the controls have come back — the same three facts the detail page waits
-                        // on, so the spinner ends exactly when the page becomes operable.
-                        controlChannelReady = sonyState.protocolReady &&
-                            sonyState.capabilitiesKnown &&
-                            sonyState.initialValuesReady,
-                        identityPairs = sonyState.identityPairs,
-                        showConnectError = showConnectErrorDialog,
-                        contentPadding = pagePadding,
-                        bottomContentPadding = pageBottomContentPadding,
-                        onDeviceSelected = onDeviceSelected,
-                        onConnectedDeviceClick = onConnectedDeviceClick,
-                        onDeviceDisconnect = onDeviceDisconnect,
-                        onDismissConnectError = onDismissConnectError,
                     )
                 }
             }

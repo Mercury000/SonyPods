@@ -7,7 +7,7 @@ import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.bridge.ModelImageSync
-import dev.sonypods.device.UnifiedDeviceIdentityService
+import dev.sonypods.device.HeadsetRegistry
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArraySet
@@ -46,10 +46,10 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         LegacyConfigMigrator.migrateAppOnlyPrefsToUi(this)
         PodImagePrefs.attachStore(remotePrefs)
         ModelImageSync.onServiceBound(this)
-        // No store and no bt_config here: this process cannot classify, it only consumes.
-        // The engine is the one that resolves LE/control direction and it ships the result in
-        // every state snapshot, so mirror those broadcasts and feed the pairs in.
-        UnifiedDeviceIdentityService.initializeForEngine(null)
+        // No store here: this process holds no Tandem session, so it can learn nothing itself.
+        // The engine identifies a headset from its own replies and ships the records in every
+        // state snapshot, so mirror those broadcasts and feed the records in.
+        HeadsetRegistry.initializeForEngine(null)
         identityMirror.register(this)
         // Migrate model images saved before the Remote Files path was introduced so
         // hooked system surfaces can continue to read the automatic catalog image.
@@ -57,9 +57,9 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         notifyListeners(service)
     }
 
-    /** Engine -> app identity feed; see [UnifiedDeviceIdentityService.ingestPairs]. */
+    /** Engine -> app identity feed; see [HeadsetRegistry.ingest]. */
     private val identityMirror = dev.sonypods.bridge.HookStateMirror { snapshot ->
-        UnifiedDeviceIdentityService.ingestPairs(snapshot.identityPairs)
+        HeadsetRegistry.ingest(snapshot.headsetRecords)
     }
 
     override fun onServiceDied(service: XposedService) {

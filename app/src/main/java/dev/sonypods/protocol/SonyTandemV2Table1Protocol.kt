@@ -139,6 +139,8 @@ object SonyTandemV2Table1Protocol {
     // AlertActionType / AlertAction: NEGATIVE=0, POSITIVE=1.
     private const val ALERT_ACTION_NEGATIVE: Byte = 0x00
     private const val ALERT_ACTION_POSITIVE: Byte = 0x01
+    private const val LEA_GET_CAPABILITY: Byte = 0x40
+    private const val LEA_RET_CAPABILITY: Byte = 0x41
     private const val LEA_GET_STATUS: Byte = 0x42
     private const val LEA_RET_STATUS: Byte = 0x43
     private const val LEA_NTFY_STATUS: Byte = 0x45
@@ -995,6 +997,7 @@ object SonyTandemV2Table1Protocol {
             AUDIO_NTFY_STATUS -> parseConnectionQualityAvailability(
                 payload, raw, isUnsolicited = true,
             ) { it.size == 2 }
+            LEA_RET_CAPABILITY -> parseLeaIdentity(payload, raw)
             LEA_RET_STATUS, LEA_NTFY_STATUS -> if (
                 payload.firstOrNull() == LEA_CLASSIC_ONLY_LE_CLASSIC_SETTING
             ) {
@@ -1573,8 +1576,53 @@ object SonyTandemV2Table1Protocol {
     private fun unknownPlayParam(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
         ParsedTandemResponse.Unknown(DATA_MDR.unsigned, PLAY_RET_PARAM.unsigned, payload, raw)
 
-    private fun parseLeaStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
+    /**
+     * `LEA_RET_CAPABILITY` for the LE/Classic device kinds: 17-byte ASCII addresses from offset 1,
+     * the first being the classic BD address (SC's *Device Unique Id*) and the rest the LE ones.
+     *
+     * SC gates the whole reply on every field parsing as a BD address (`C15210a`, which accepts
+     * either case) and rejects the frame otherwise; the same all-or-nothing rule applies here, so a
+     * short or malformed reply reads as Unknown rather than as a headset with no LE identity.
+     */
+    private fun parseLeaIdentity(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {
         val typeCode = payload.firstOrNull()
+        val type = LeaInquiredType.entries.firstOrNull { it.code == typeCode }
+        if (type == null || type !in LEA_IDENTITY_TYPES) return unknownLea(payload, raw)
+        val fields = payload.drop(1).chunked(LEA_ADDRESS_LENGTH)
+            .filter { it.size == LEA_ADDRESS_LENGTH }
+            .map { String(it.toByteArray(), Charsets.US_ASCII) }
+        if (fields.size < 2 || fields.any { !BLUETOOTH_ADDRESS_TEXT.matches(it) }) {
+            return unknownLea(payload, raw)
+        }
+        return ParsedTandemResponse.LeaIdentity(
+            type = type,
+            uniqueId = fields.first().uppercase(),
+            leAddresses = fields.drop(1).map { it.uppercase() }.distinct(),
+            inquiredTypeCode = typeCode?.unsigned,
+            table = SonyTable.NO_1,
+            raw = raw,
+        )
+    }
+
+    private fun unknownLea(payload: ByteArray, raw: ByteArray): ParsedTandemResponse =
+        ParsedTandemResponse.Unknown(DATA_MDR.unsigned, LEA_RET_CAPABILITY.unsigned, payload, raw)
+
+    /** `LEA_GET_CAPABILITY`: [type]. Only the LE/Classic device kinds answer with addresses. */
+    fun buildGetLeaCapability(type: LeaInquiredType): ByteArray =
+        SonyTandemFrame.message(LEA_GET_CAPABILITY, byteArrayOf(type.code))
+
+    private const val LEA_ADDRESS_LENGTH = 17
+
+    private val LEA_IDENTITY_TYPES = setOf(
+        LeaInquiredType.TWS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+        LeaInquiredType.HBS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+        LeaInquiredType.TWS_SUPPORTS_LEA_UNI_LEA_BROAD,
+    )
+
+    private val BLUETOOTH_ADDRESS_TEXT =
+        Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+
+    private fun parseLeaStatus(payload: ByteArray, raw: ByteArray): ParsedTandemResponse {        val typeCode = payload.firstOrNull()
         val type = LeaInquiredType.entries.firstOrNull { it.code == typeCode }
         val values = payload.unsignedList()
         val enabled = payload.getOrNull(1)?.let { code ->

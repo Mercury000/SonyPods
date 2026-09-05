@@ -87,7 +87,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
 
     private fun neutralProfile(deviceName: String): ConnectedHeadphoneProfile =
         ProfileTemplate(
-            modelName = deviceName.removePrefix("LE_").takeIf { it.isNotBlank() } ?: "Sony audio device",
+            // Left blank rather than filled with a placeholder: the display layer is what knows
+            // how to name an unidentified headset, and a placeholder written into the profile ends up
+            // persisted as the headset's name and shown after the real one was already known.
+            modelName = deviceName.removePrefix("LE_"),
             series = null,
             capabilities = HeadphoneCapabilities(
                 features = setOf(
@@ -1043,16 +1046,57 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
         val type = LeaInquiredType.entries.firstOrNull {
             it.code.toInt().and(0xFF) == lea.historyInquiredTypeCode
         } ?: return emptyList()
-        return codec.buildGetLeaPairedHistory(type)?.let { bytes ->
-            listOf(
+        // Identity and IRK are not re-fetched here: buildRefreshLeaCommands already asked for both
+        // when the session came up, and this path only runs afterwards.
+        return listOfNotNull(
+            codec.buildGetLeaIdentity(type)?.let { bytes ->
+                command(
+                    profile,
+                    HeadphoneFeature.LEA_STATUS,
+                    "GET LEA endpoint addresses $type",
+                    bytes,
+                ).copy(channel = lea.historyChannel)
+            },
+            codec.buildGetLeaPairedHistory(type)?.let { bytes ->
                 command(
                     profile,
                     HeadphoneFeature.LEA_STATUS,
                     "GET LEA paired history $type",
                     bytes,
                 ).copy(channel = lea.historyChannel)
-            )
-        }.orEmpty()
+            },
+        )
+    }
+
+    /**
+     * `LEA_GET_PARAM` type 0x03 — the headset's Identity Resolving Key — when it declares
+     * `GET_IDENTITY_RESOLVING_KEY` (SC `C14319c.mo61835c`'s own gate).
+     *
+     * Always a Table2 command, whatever table the device's LE/Classic capability bit lives in: one
+     * session carries both tables, distinguished by the frame's dataType. Prefers a real MC endpoint
+     * when the session exposes one; otherwise any channel is fine, because
+     * [dev.sonypods.ble.SonyBleClient.sendToChannel] funnels onto the single live pipe exactly as
+     * Sound Connect does.
+     */
+    private fun buildIdentityResolvingKeyCommands(
+        profile: ConnectedHeadphoneProfile,
+    ): List<HeadphoneCommand> {
+        if (!profile.capabilities.declaresIdentityResolvingKey) return emptyList()
+        val channel = profile.featureBindings.values
+            .firstOrNull { it.channel == TandemChannel.GATT_V2_MC }
+            ?.channel
+            ?: profile.capabilities.lea?.historyChannel
+            ?: profile.defaultResponseChannel()
+        return listOf(
+            command(
+                profile,
+                HeadphoneFeature.LEA_STATUS,
+                "GET LEA identity resolving key",
+                SonyTandemV2Table2Protocol.buildGetLeaParam(
+                    dev.sonypods.protocol.LeaInquiredTypeTable2.GET_IDENTITY_RESOLVING_KEY,
+                ),
+            ).copy(channel = channel),
+        )
     }
 
     override fun buildRefreshPlaybackCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
@@ -1098,7 +1142,11 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     private fun buildRefreshLeaCommands(profile: ConnectedHeadphoneProfile): List<HeadphoneCommand> {
         val lea = profile.capabilities.lea ?: return emptyList()
         val historyCommands = if (lea.kind == LeaDeviceKind.PAS_CTKD) {
-            listOf(
+            buildIdentityResolvingKeyCommands(profile) + listOf(
+                command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA endpoint addresses PAS",
+                    SonyTandemV2Table2Protocol.buildGetLeaCapability(
+                        dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
+                    )).copy(channel = lea.historyChannel),
                 command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA status PAS",
                     SonyTandemV2Table2Protocol.buildGetLeaStatus(
                         dev.sonypods.protocol.LeaInquiredTypeTable2.PAS_SUPPORTS_A2DP_LEA_UNI_LEA_BROAD_WITH_CTKD,
@@ -1113,7 +1161,14 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                 it.code.toInt().and(0xFF) == lea.historyInquiredTypeCode
             } ?: return emptyList()
             val codec = codecFor(profile, HeadphoneFeature.LEA_STATUS)
-            listOf(
+            // The identity capability rides the ordinary refresh, not just the pairing flow: it is
+            // what names the headset's classic address, and the 0x0D target-change handler needs
+            // that before it can promote the other identity.
+            buildIdentityResolvingKeyCommands(profile) + listOf(
+                codec.buildGetLeaIdentity(type)?.let {
+                    command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA endpoint addresses $type", it)
+                        .copy(channel = lea.historyChannel)
+                },
                 codec.buildGetLeaStatus(type)?.let {
                     command(profile, HeadphoneFeature.LEA_STATUS, "GET LEA status $type", it)
                         .copy(channel = lea.historyChannel)

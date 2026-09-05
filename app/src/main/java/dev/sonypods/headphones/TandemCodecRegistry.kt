@@ -99,6 +99,12 @@ interface TandemCodec {
     fun buildSetPlaybackVolume(volume: Int, volumeType: PlayInquiredType): ByteArray? = null
     fun buildGetLeaStatus(type: LeaInquiredType): ByteArray? = null
     fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray? = null
+
+    /**
+     * `LEA_GET_CAPABILITY`: asks the headset to name its own identities (classic BD address plus its
+     * LE ones). Only the V2 Table1 LE/Classic device kinds answer it.
+     */
+    fun buildGetLeaIdentity(type: LeaInquiredType): ByteArray? = null
     fun buildGetLeAudioSettingAvailability(): ByteArray? = null
     fun buildGetLeAudioSetting(): ByteArray? = null
     fun buildSetLeAudioEnabled(
@@ -560,6 +566,9 @@ object SonyTandemV2Table1Codec : TandemCodec {
 
     override fun buildGetLeaPairedHistory(type: LeaInquiredType): ByteArray =
         SonyTandemV2Table1Protocol.buildGetLeaPairedHistory(type)
+
+    override fun buildGetLeaIdentity(type: LeaInquiredType): ByteArray =
+        SonyTandemV2Table1Protocol.buildGetLeaCapability(type)
 
     override fun buildGetLeAudioSettingAvailability(): ByteArray =
         SonyTandemV2Table1Protocol.buildGetLeAudioSettingAvailability()

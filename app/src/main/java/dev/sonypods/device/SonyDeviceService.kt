@@ -2,7 +2,10 @@ package dev.sonypods.device
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
+import android.content.Context
+import com.mercury.sonypods.R
 import dev.sonypods.protocol.SonyGatt
+import dev.sonypods.utils.ModuleText
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -99,27 +102,20 @@ object SonyDeviceService {
     /**
      * Whether this is the headset's LE Audio identity rather than the one carrying Tandem.
      *
-     * A Sony headset with LE Audio enabled bonds as two separate addresses: the classic one
-     * exposes Sony's private services and is the only way to reach Tandem, while the LE one
-     * exposes nothing but the LE Audio service set and carries the LC3 audio. Both answer to
-     * the same name, so name matching alone cannot tell them apart — the presence of a Sony
-     * private service can.
+     * Answered from [HeadsetRegistry]: the headset itself named both identities over Tandem
+     * (`LEA_RET_CAPABILITY`), so an address is the LE one exactly when it appears in the record's
+     * reported LE list and is not the record's own classic address.
      *
-     * Uses [UnifiedDeviceIdentityService] as the primary source (from Remote Preferences),
-     * falling back to [BluetoothDevice.type] and UUID analysis if not available.
+     * Falls back to [BluetoothDevice.type] and UUID analysis only for a headset no session has ever
+     * identified — before the first connection the registry cannot know it, by construction.
      */
     fun isLeAudioIdentity(device: BluetoothDevice?): Boolean {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull() ?: return false
 
-        // Primary: Check UnifiedDeviceIdentityService (Remote Preferences + bt_config.conf)
-        val unifiedType = UnifiedDeviceIdentityService.getIdentityType(address)
-        if (unifiedType != IdentityType.UNKNOWN) {
-            return unifiedType == IdentityType.LE
-        }
+        HeadsetRegistry.recordFor(address)?.let { return it.isLeIdentity(address) }
 
-        // Fallback: Transport type is carried by the bond record itself and needs no discovery,
-        // so a freshly started process can classify before any GATT cache exists.
+        // Fallback: transport type is carried by the bond record itself and needs no discovery.
         // TYPE_DUAL(3) serves both transports and must not be called an LE-only identity.
         val transport = runCatching { device.type }.getOrDefault(DEVICE_TYPE_UNKNOWN)
         if (transport == DEVICE_TYPE_LE) return true
@@ -137,75 +133,75 @@ object SonyDeviceService {
     }
 
     /**
-     * The address to talk to for control, given either of the headset's two identities.
+     * The address to talk to for control, given any identity of the headset.
      *
-     * Returns [address] unchanged when no LE Audio counterpart is known, so callers can use
-     * this unconditionally.
-     *
-     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
+     * Returns [address] unchanged when the headset is unknown, so callers can use this
+     * unconditionally. This is SC `C14289i.m61741x`'s reverse lookup: find the record owning the
+     * address, dial the record's own address.
      */
     fun resolveControlAddress(address: String?): String? {
         val normalized = normalizeAddress(address) ?: return address
-        return UnifiedDeviceIdentityService.resolveControlAddress(normalized)
+        return HeadsetRegistry.controlAddressFor(normalized) ?: normalized
     }
 
     /**
-     * Records that [leAddress] is the LE Audio identity of the headset at [controlAddress].
+     * Records that [leAddress] is an LE Audio identity of the headset at [controlAddress].
      *
-     * The direction is stated by the caller — the pairing flow, which is the one moment both
-     * addresses are in hand. Nothing here re-derives it, and there is no second alias map to
-     * disagree with [UnifiedDeviceIdentityService].
+     * The direction is stated by the caller — the module's own pairing flow, which is the one moment
+     * both addresses are in hand and no Tandem session exists yet to ask.
      */
     fun linkLeAudioIdentity(leAddress: String?, controlAddress: String?) {
         val le = normalizeAddress(leAddress) ?: return
         val control = normalizeAddress(controlAddress) ?: return
         if (le == control) return
         rememberAddress(control)
-        UnifiedDeviceIdentityService.recordIdentityPair(le, control)
+        HeadsetRegistry.rememberLeAddress(le, control)
     }
 
-
-    /**
-     * Snapshot of all known LE Audio identity aliases.
-     *
-     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
-     */
+    /** Snapshot of all known LE→control identity aliases. */
     fun leAudioAliasSnapshot(): Map<String, String> =
-        UnifiedDeviceIdentityService.leToControlPairs()
-            .mapNotNull { entry ->
-                val le = entry.substringBefore('>')
-                val control = entry.substringAfter('>', "")
-                if (le.isBlank() || control.isBlank() || le == control) null else le to control
-            }
+        HeadsetRegistry.all()
+            .flatMap { record -> record.leAddresses.map { it to record.uniqueId } }
             .toMap()
 
     /**
-     * The LE Audio identity of the headset reachable at [controlAddress], if one is known.
+     * An LE Audio identity of the headset reachable at [controlAddress], if one is known.
      *
-     * The inverse of [resolveControlAddress]. MiLink circulate hands a peer a single address
-     * and the peer can only act on the identity it is itself bonded to, so a transfer that
-     * was refused for one identity has to be retried against the other.
-     *
-     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
+     * The inverse of [resolveControlAddress]. MiLink circulate hands a peer a single address and the
+     * peer can only act on the identity it is itself bonded to, so a transfer that was refused for
+     * one identity has to be retried against the other.
      */
     fun leAudioIdentityFor(controlAddress: String?): String? {
         val control = normalizeAddress(controlAddress) ?: return null
-        return UnifiedDeviceIdentityService.leAudioAddressFor(control)
+        return HeadsetRegistry.leAddressesFor(control).firstOrNull()
     }
 
-    /**
-     * Both bonded identities of one headset, given either of them.
-     *
-     * Answered by [UnifiedDeviceIdentityService] — the single identity service.
-     */
+    /** Every other bonded identity of one headset, given any of them. */
     fun identityAliasesOf(address: String?): List<String> {
         val normalized = normalizeAddress(address) ?: return emptyList()
-        val pair = UnifiedDeviceIdentityService.identityPairFor(normalized) ?: return emptyList()
-        return if (normalized == pair.first) listOf(pair.second) else listOf(pair.first)
+        val record = HeadsetRegistry.recordFor(normalized) ?: return emptyList()
+        return record.addresses.filterNot { it == normalized }
     }
 
     fun rememberAddress(address: String?) {
         normalizeAddress(address)?.let(knownAddresses::add)
+    }
+
+    /**
+     * The name to show for a Sony headset whose real one is not known yet.
+     *
+     * A session reports its model name only once `DEVICE_INFO` answers, and until then something has
+     * to fill the notification, the island and the page title. Resolved through [ModuleText] because
+     * most callers run inside a hooked system process, where the module's own resources are only
+     * reachable through a package context.
+     *
+     * The literal is the last resort for the one case [ModuleText] cannot serve — it answers an empty
+     * string when the package context or the resource lookup fails — and is deliberately the only
+     * hard-coded copy of it left.
+     */
+    fun defaultDeviceName(context: Context?): String {
+        val fromResources = context?.let { ModuleText.get(it, R.string.unknown_sony_device) }
+        return fromResources?.takeIf { it.isNotBlank() } ?: "Sony headphones"
     }
 
     fun knownAddressSnapshot(): Set<String> = knownAddresses.toSet()

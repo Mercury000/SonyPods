@@ -270,6 +270,47 @@ sealed interface ParsedTandemResponse {
     ) : ParsedTandemResponse
 
     /**
+     * The headset naming its own identities: Table1 `LEA_RET_CAPABILITY` (0x41) for the
+     * LE/Classic device kinds (SC `kf0.C21806t` / `C21804r` / `C21807u`).
+     *
+     * Three (TWS) or two (HBS/PAS) 17-byte ASCII address strings. The first is SC's *Device Unique
+     * Id*, which is the headset's classic BD address and the address SC dials for SPP; the rest are
+     * its LE identities, left then right for a TWS.
+     *
+     * This is the only source of the LE↔Classic relation that does not need a privileged read: no
+     * `bt_config.conf`, no CSIS group, no `BluetoothDevice.type`.
+     */
+    data class LeaIdentity(
+        val type: LeaInquiredType?,
+        val uniqueId: String,
+        val leAddresses: List<String>,
+        val inquiredTypeCode: Int? = null,
+        val table: SonyTable = SonyTable.NO_1,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse
+
+    /**
+     * The headset's Identity Resolving Key: Table2 `LEA_RET_PARAM` (0x67) inquired type 0x03
+     * (SC `V2GetIdentityResolvingKeyRepository` → `qb0.C26493v`, sixteen bytes at offset 2).
+     *
+     * Needed only to recognise an LE bond the stack stored under a resolvable private address; see
+     * [dev.sonypods.device.RpaResolver].
+     */
+    data class LeaIdentityResolvingKey(
+        val key: ByteArray,
+        val table: SonyTable = SonyTable.NO_2,
+        override val raw: ByteArray,
+    ) : ParsedTandemResponse {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                (other is LeaIdentityResolvingKey && key.contentEquals(other.key) &&
+                    table == other.table && raw.contentEquals(other.raw))
+
+        override fun hashCode(): Int =
+            31 * (31 * key.contentHashCode() + table.hashCode()) + raw.contentHashCode()
+    }
+
+    /**
      * The headset's Tandem-target instructions (LEA_NTFY_PARAM, SC
      * `kf0.AbstractC21786g` family). A Sony headset with two bonded identities
      * decides itself which one carries Tandem and says so:

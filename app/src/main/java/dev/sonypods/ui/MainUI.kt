@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -86,6 +87,7 @@ import dev.sonypods.ui.pages.GestureOperationsPage
 import dev.sonypods.ui.pages.MoreSettingsPage
 import dev.sonypods.ui.pages.MultipointSettingsPage
 import dev.sonypods.ui.pages.PodDetailPage
+import dev.sonypods.ui.pages.earphonePageReadiness
 import dev.sonypods.ui.pages.ReferencesPage
 import dev.sonypods.ui.pages.TandemDebugPage
 import dev.sonypods.ui.pages.ThemeSettingsPage
@@ -103,6 +105,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -118,8 +121,6 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
-private const val CONNECT_TIMEOUT_MS = 25_000L
-
 sealed interface Screen {
     data object Main : Screen
     data object References : Screen
@@ -127,8 +128,6 @@ sealed interface Screen {
     data object TandemDebug : Screen
     data object Visibility : Screen
 
-    /** The earphone detail flow, layered above [Main]. */
-    data object EarphoneDetail : Screen
     data object EarphoneMoreSettings : Screen
     data object EarphoneGestureOperations : Screen
     data object EarphoneMultipointSettings : Screen
@@ -206,19 +205,7 @@ fun MainUI(
     var xposedService by remember { mutableStateOf(SonyPodsApp.xposedService) }
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
-    var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
-    // Keep the navigation intent separate from the transport handshake. The
-    // engine reports connected before capability probing and the connection-time
-    // value burst finish, so clearing the connection marker at that point must
-    // not lose the request to open the detail page once the session is operable.
-    var pendingAutoOpenAddress by remember { mutableStateOf<String?>(null) }
-    // Scope restart puts the UI on the picker, while Bluetooth normally
-    // restores the previous Sony connection without a row click. Keep that
-    // reconnect navigation intent separately from the address-based click
-    // intent.
-    var autoOpenAfterScopeRestart by remember { mutableStateOf(false) }
     var pendingExternalDetailAddress by remember { mutableStateOf<String?>(null) }
-    var showConnectErrorDialog by remember { mutableStateOf(false) }
     var lastBluetoothServiceAliveMs by remember { mutableStateOf(0L) }
     var bluetoothServiceResponsive by remember { mutableStateOf(false) }
     var hasRequestedStartupConnection by remember { mutableStateOf(false) }
@@ -266,7 +253,8 @@ fun MainUI(
     // cannot be tapped.
     val canShowDetailPage = sonyConnected && sonyState.capabilitiesKnown && sonyState.initialValuesReady
     // The layered stack above the root — the reference's architecture: pushing adds a
-    // layer; the device picker is the Earphones tab with no earphone layer pushed.
+    // layer. The headset's own page is the Earphones tab itself, so an empty stack means
+    // that page; only its sub-pages are layers.
     var layers by remember { mutableStateOf<List<Screen>>(emptyList()) }
     val motion = remember { List(MAX_LAYERS) { IslandLayerMotion() } }
     // A popped level keeps rendering its last screen so its exit animation can play —
@@ -288,7 +276,6 @@ fun MainUI(
 
     val earphoneScreens = remember {
         setOf(
-            Screen.EarphoneDetail,
             Screen.EarphoneMoreSettings,
             Screen.EarphoneGestureOperations,
             Screen.EarphoneMultipointSettings,
@@ -298,27 +285,32 @@ fun MainUI(
     val earphoneDetailOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
     // 声压卡片实际可见 = 它所在的页(详情页/更多设置页,取决于显隐配置)是栈顶、
     // 未被上层覆盖。仅这时才轮询。
-    val slCardPage = when (visibility.value.safeListening) {
-        CardLocation.DETAIL -> Screen.EarphoneDetail
-        CardLocation.MORE -> Screen.EarphoneMoreSettings
-        CardLocation.HIDDEN -> null
+    //
+    // 详情页现在是耳机 Tab 本身而不是一层,所以"在栈顶"等价于层栈为空且选中耳机 Tab。
+    // 这里必须补上 canShowDetailPage:以前详情页只在会话探完(自动进入的门槛)才被压栈,
+    // 层栈判断顺带把"还在探能力"这段窗口排除掉了;换成 Tab 之后层栈一直是空的,少了这一条
+    // 就会在初始值突发还没跑完时开始发 0x5A/0x5B,和连接突发抢同一条串行 ACK 管道——
+    // 而初始值就绪本身是靠"没有未完成写"判定的。
+    val slCardOnTop = canShowDetailPage && when (visibility.value.safeListening) {
+        CardLocation.DETAIL -> layers.isEmpty() && selectedTab == MainTab.Earphones
+        CardLocation.MORE -> layers.lastOrNull() == Screen.EarphoneMoreSettings
+        CardLocation.HIDDEN -> false
     }
-    val slCardOnTop = slCardPage != null && layers.lastOrNull() == slCardPage
 
-    // Set while the user is deliberately on the device picker, so the auto-open effect
-    // below does not drag them back into the detail page.
-    var pickerRequested by remember { mutableStateOf(false) }
-
-    fun popToEarphonePicker() {
-        pickerRequested = true
+    /**
+     * Close every sub-page stacked over the earphone tab.
+     *
+     * There is no device list to fall back to any more: the earphone tab *is* the headset's control
+     * page when a session is live and the "no headset" notice when it is not, so the deepest the
+     * flow can be popped is the tab itself.
+     */
+    fun popToEarphoneTab() {
         layers = emptyList()
     }
 
-    fun openEarphoneDetail() {
-        pickerRequested = false
-        if (layers.firstOrNull() != Screen.EarphoneDetail) {
-            layers = listOf(Screen.EarphoneDetail)
-        }
+    fun focusEarphoneTab() {
+        selectedTab = MainTab.Earphones
+        layers = emptyList()
     }
 
     fun openScreen(screen: Screen) {
@@ -420,16 +412,13 @@ fun MainUI(
     }
 
     // The fusion device center can enter the module while the existing MainActivity
-    // task is already alive. Keep this request separate from the normal device-picker
-    // flow and consume it only after the requested Sony session has finished probing.
+    // task is already alive. It asks for one specific headset, so hold the request until
+    // that session has finished probing rather than showing whatever is live now.
     LaunchedEffect(openEarphoneDetailAddress.value) {
         val target = openEarphoneDetailAddress.value?.trim()?.takeIf { it.isNotEmpty() }
         if (target != null) {
             pendingExternalDetailAddress = target
-            pendingAutoOpenAddress = null
-            autoOpenAfterScopeRestart = false
-            selectedTab = MainTab.Earphones
-            popToEarphonePicker()
+            focusEarphoneTab()
         }
     }
 
@@ -442,30 +431,17 @@ fun MainUI(
     ) {
         val pending = pendingExternalDetailAddress ?: return@LaunchedEffect
         if (!canShowDetailPage || !connectedDeviceAddress.equals(pending, ignoreCase = true)) return@LaunchedEffect
-        selectedTab = MainTab.Earphones
-        openEarphoneDetail()
+        focusEarphoneTab()
         pendingExternalDetailAddress = null
         onExternalDetailRequestConsumed()
     }
 
-    // Connection lost while the earphone flow is open: the detail page is gated on a
-    // live, fully-probed session, so drop the flow back to the device picker.
-    // This is a forced move, NOT a user choice to stay on the picker, so it must not
-    // set [pickerRequested] — once the control connection is established again the
-    // auto-open rule below re-enters the detail page.
+    // The session died while a sub-page of the earphone tab was open. Those pages are gated
+    // on a live, fully-probed session, so close them; the tab underneath stays and switches
+    // itself to the not-ready presentation.
     LaunchedEffect(canShowDetailPage) {
         if (!canShowDetailPage && earphoneDetailOpen) {
             layers = emptyList()
-        }
-    }
-
-    // A live, fully-probed session opens its detail page on its own — the picker is only
-    // shown while the user asked for it (or nothing is connected).
-    LaunchedEffect(canShowDetailPage, pickerRequested, pendingExternalDetailAddress) {
-        if (canShowDetailPage && !pickerRequested && pendingExternalDetailAddress == null &&
-            layers.isEmpty()
-        ) {
-            openEarphoneDetail()
         }
     }
 
@@ -500,9 +476,8 @@ fun MainUI(
     }
 
     // Connection established: record the device so the automatic model image can be
-    // associated with its Bluetooth address. Navigation waits for the capability table
-    // and for the connection-time values, because the detail page is gated on
-    // both — entering earlier would show untappable defaults.
+    // associated with its Bluetooth address. No navigation happens here any more — the
+    // earphone tab renders the live session wherever the user already is.
     LaunchedEffect(
         sonyConnected,
         connectedDeviceAddress,
@@ -510,18 +485,6 @@ fun MainUI(
         sonyState.initialValuesReady,
     ) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
-            // The selected Bluetooth address can be represented by different
-            // GATT/SPP endpoint callbacks during one session. The pending marker
-            // is therefore intentionally treated as a connection-session intent,
-            // not compared byte-for-byte with the address in the latest snapshot.
-            val shouldAutoOpen = pendingAutoOpenAddress != null ||
-                autoOpenAfterScopeRestart
-
-            // The transport is connected even while the capability probe is in
-            // flight; stop showing the row-level spinner but retain the separate
-            // pendingAutoOpenAddress navigation intent.
-            connectingDeviceAddress = null
-            showConnectErrorDialog = false
             // The state broadcast can arrive before the app has adopted the
             // framework-backed metadata store. Writing here in that window would
             // buffer a new record without autoImageUrl and overwrite the existing
@@ -533,38 +496,8 @@ fun MainUI(
                     name = displayTitle,
                 )
             }
-
-            if (canShowDetailPage && shouldAutoOpen) {
-                selectedTab = MainTab.Earphones
-                hasAppliedDefaultTab = true
-                openEarphoneDetail()
-                pendingAutoOpenAddress = null
-                autoOpenAfterScopeRestart = false
-            }
             Log.d("SonyPods-App", "Sony device connected: $displayTitle ($connectedDeviceAddress)")
         }
-    }
-
-    // Connect timeout -> error dialog.
-    LaunchedEffect(connectingDeviceAddress) {
-        val address = connectingDeviceAddress ?: return@LaunchedEffect
-        delay(CONNECT_TIMEOUT_MS)
-        if (connectingDeviceAddress == address && !sonyConnected) {
-            connectingDeviceAddress = null
-            pendingAutoOpenAddress = null
-            autoOpenAfterScopeRestart = false
-            showConnectErrorDialog = true
-            popToEarphonePicker()
-            SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
-        }
-    }
-
-    // If the Bluetooth scope does not restore its connection, do not let the
-    // restart intent affect a later unrelated connection.
-    LaunchedEffect(autoOpenAfterScopeRestart) {
-        if (!autoOpenAfterScopeRestart) return@LaunchedEffect
-        delay(60_000L)
-        autoOpenAfterScopeRestart = false
     }
 
     val broadcastReceiver = remember {
@@ -691,63 +624,13 @@ fun MainUI(
     }
 
     fun clearPodConnectionState() {
-        connectingDeviceAddress = null
-        pendingAutoOpenAddress = null
-        autoOpenAfterScopeRestart = true
-        showConnectErrorDialog = false
-        popToEarphonePicker()
+        popToEarphoneTab()
         selectedTab = MainTab.Earphones
     }
 
     fun clearExternalDetailRequest() {
         pendingExternalDetailAddress = null
         onExternalDetailRequestConsumed()
-    }
-
-    fun onDeviceSelected(device: BluetoothDevice) {
-        clearExternalDetailRequest()
-        connectingDeviceAddress = device.address
-        pendingAutoOpenAddress = device.address
-        autoOpenAfterScopeRestart = false
-        showConnectErrorDialog = false
-        popToEarphonePicker()
-        selectedTab = MainTab.Earphones
-        val name = runCatching { device.name }.getOrNull() ?: "Sony audio device"
-        SonyBridge.connect(context, device.address, name)
-    }
-
-    fun onDeviceDisconnect(device: BluetoothDevice) {
-        if (device.address == connectingDeviceAddress) {
-            connectingDeviceAddress = null
-        }
-        if (device.address.equals(pendingAutoOpenAddress, ignoreCase = true)) {
-            pendingAutoOpenAddress = null
-        }
-        autoOpenAfterScopeRestart = false
-        if (device.address.equals(connectedDeviceAddress, ignoreCase = true) || connectedDeviceAddress.isBlank()) {
-            SonyBridge.sendCommand(context, SonyBridge.CMD_DISCONNECT)
-        }
-    }
-
-    fun onConnectedDeviceClick() {
-        if (!sonyConnected) return
-        clearExternalDetailRequest()
-        autoOpenAfterScopeRestart = false
-        connectingDeviceAddress = null
-        if (canShowDetailPage) {
-            pendingAutoOpenAddress = null
-            openEarphoneDetail()
-        } else {
-            pendingAutoOpenAddress = connectedDeviceAddress
-        }
-        selectedTab = MainTab.Earphones
-    }
-
-    fun backToDevicePicker() {
-        clearExternalDetailRequest()
-        pendingAutoOpenAddress = null
-        autoOpenAfterScopeRestart = false
-        popToEarphonePicker()
     }
 
     fun openBluetoothSettings() {
@@ -759,12 +642,9 @@ fun MainUI(
         }
     }
 
-    fun openDevicePicker() {
+    fun showEarphoneTab() {
         clearExternalDetailRequest()
-        pendingAutoOpenAddress = null
-        autoOpenAfterScopeRestart = false
-        popToEarphonePicker()
-        selectedTab = MainTab.Earphones
+        focusEarphoneTab()
     }
 
     @SuppressLint("MissingPermission")
@@ -1069,115 +949,6 @@ fun MainUI(
                 }
             }
             }
-            Screen.EarphoneDetail -> {
-            val detailScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
-            val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-            val detailTitle = displayTitle.ifEmpty { stringResource(R.string.pod_info) }
-            // Own the list state here so returning from a sub-page restores the scroll
-            // position; a new detail session/device still starts from the top.
-            val detailListState = remember(connectedDeviceAddress) { LazyListState() }
-            // The hero image belongs to the device, not the connection. The snapshot
-            // drops the address the moment the link drops, and resolving by an empty
-            // address would swap the user's own headset picture for the generic
-            // placeholder mid-view — so resolve against the last known address instead.
-            var lastKnownImageAddress by remember { mutableStateOf(connectedDeviceAddress) }
-            if (connectedDeviceAddress.isNotBlank()) {
-                lastKnownImageAddress = connectedDeviceAddress
-            }
-            val imageLookupAddress = connectedDeviceAddress.ifBlank { lastKnownImageAddress }
-            val currentEarphonePref = earphonePrefs.value.firstOrNull {
-                it.address.equals(imageLookupAddress, ignoreCase = true)
-            }
-            var showPowerOffDialog by remember { mutableStateOf(false) }
-            BarBlurHost(
-                bottomBarBlurEnabled = false,
-                topBarBlurEnabled = blurTopBar.value,
-            ) {
-                Scaffold(
-                    topBar = {
-                        BlurredBar(topGradient = true) {
-                            val navigationIcon: @Composable () -> Unit = {
-                                IconButton(onClick = { backToDevicePicker() }) {
-                                    Icon(imageVector = MiuixIcons.Back, contentDescription = stringResource(R.string.cd_back))
-                                }
-                            }
-                            val actions: @Composable RowScope.() -> Unit = {
-                                if (sonyState.supportsPowerOff) {
-                                    IconButton(onClick = { showPowerOffDialog = true }) {
-                                        Icon(
-                                            imageVector = AppIcons.Power,
-                                            modifier = Modifier.size(23.dp),
-                                            contentDescription = stringResource(R.string.power_off),
-                                        )
-                                    }
-                                }
-                                IconButton(onClick = { openSystemHeadsetSettings() }) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Settings,
-                                        contentDescription = stringResource(R.string.click_action_system_settings),
-                                    )
-                                }
-                            }
-                            if (isLandscape) {
-                                SmallTopAppBar(
-                                    title = detailTitle,
-                                    color = Color.Transparent,
-                                    scrollBehavior = detailScrollBehavior,
-                                    navigationIcon = navigationIcon,
-                                    actions = actions,
-                                )
-                            } else {
-                                TopAppBar(
-                                    title = detailTitle,
-                                    largeTitle = detailTitle,
-                                    color = Color.Transparent,
-                                    scrollBehavior = detailScrollBehavior,
-                                    navigationIcon = navigationIcon,
-                                    actions = actions,
-                                )
-                            }
-                        }
-                    },
-                ) { padding ->
-                    BarBackdropContent(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(backgroundColor),
-                        ) {
-                            PodDetailPage(
-                                modifier = Modifier
-                                    .overScrollVertical()
-                                    .nestedScroll(detailScrollBehavior.nestedScrollConnection),
-                                contentPadding = padding,
-                                bottomContentPadding = pageBottomContentPadding,
-                                podName = detailTitle,
-                                uiState = sonyState,
-                                actions = sonyActions.copy(
-                                    onOpenMoreSettings = { openScreen(Screen.EarphoneMoreSettings) },
-                                    onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
-                                    onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
-                                    onOpenEqDetail = { openScreen(Screen.EarphoneEqDetail) },
-                                ),
-                                visibility = visibility.value,
-                                listState = detailListState,
-                                boxImagePath = currentEarphonePref?.boxImagePath,
-                                boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
-                            )
-                            PowerOffDialog(
-                                show = showPowerOffDialog,
-                                deviceName = displayTitle,
-                                onDismissRequest = { showPowerOffDialog = false },
-                                onConfirm = {
-                                    showPowerOffDialog = false
-                                    sonyActions.onPowerOff()
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-            }
             Screen.EarphoneMoreSettings -> {
             val moreScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
             BarBlurHost(
@@ -1428,16 +1199,182 @@ fun MainUI(
                 bluetoothEnabled = bluetoothState.enabled,
                 bondedDeviceCount = bluetoothState.bondedCount,
                 onBluetoothStatusClick = { openBluetoothSettings() },
-                onPairedBluetoothClick = { openDevicePicker() },
-                displayTitle = displayTitle,
-                sonyState = sonyState,
-                connectedDeviceAddress = connectedDeviceAddress,
-                connectingDeviceAddress = connectingDeviceAddress,
-                showConnectErrorDialog = showConnectErrorDialog,
-                onDeviceSelected = { onDeviceSelected(it) },
-                onConnectedDeviceClick = { onConnectedDeviceClick() },
-                onDeviceDisconnect = { onDeviceDisconnect(it) },
-                onDismissConnectError = { showConnectErrorDialog = false },
+                onPairedBluetoothClick = { showEarphoneTab() },
+                earphoneTab = { earphoneBottomPadding ->
+                    val detailScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+                    val isLandscape =
+                        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    // The headset is the page's subject, so its identity outlives the link — and
+                    // outlives the process. `remember` alone only survives while this composition
+                    // does, which is why a fresh launch with nothing connected showed the generic
+                    // placeholder: the fallback has to come from the persisted per-device record.
+                    // PodImagePrefs.upsertConnected stamps `lastConnectedAt` on every connect, so the
+                    // newest of those is the headset the user last used.
+                    val lastUsedPref = remember(earphonePrefs.value) {
+                        earphonePrefs.value.maxByOrNull { it.lastConnectedAt }
+                    }
+                    var lastKnownTitle by remember { mutableStateOf("") }
+                    // Only an operable session may set or supply the title. A half-probed one reports
+                    // the neutral placeholder until DEVICE_INFO answers, and a teardown opens exactly
+                    // such a session for a moment — following it flashed "Sony headphones" over the
+                    // real name, and worse, latched it as the remembered one.
+                    if (canShowDetailPage && displayTitle.isNotEmpty()) lastKnownTitle = displayTitle
+                    val detailTitle = displayTitle
+                        .takeIf { canShowDetailPage }
+                        .orEmpty()
+                        .ifEmpty { lastKnownTitle }
+                        .ifEmpty { lastUsedPref?.name.orEmpty() }
+                        .ifEmpty { stringResource(R.string.pod_info) }
+                    var lastKnownImageAddress by remember { mutableStateOf(connectedDeviceAddress) }
+                    if (connectedDeviceAddress.isNotBlank()) {
+                        lastKnownImageAddress = connectedDeviceAddress
+                    }
+                    // Own the list state here so returning from a sub-page restores the scroll
+                    // position; a new headset still starts from the top.
+                    val detailListState = remember(lastKnownImageAddress) { LazyListState() }
+                    val imageLookupAddress = connectedDeviceAddress
+                        .ifBlank { lastKnownImageAddress }
+                        .ifBlank { lastUsedPref?.address.orEmpty() }
+                    val currentEarphonePref = earphonePrefs.value.firstOrNull {
+                        it.address.equals(imageLookupAddress, ignoreCase = true)
+                    }
+                    var showPowerOffDialog by remember { mutableStateOf(false) }
+                    // What the page renders. While the control channel is unusable it is frozen on
+                    // the last operable snapshot, because a teardown does not go straight to empty:
+                    // the stack battery lands a single level before Tandem's L/R and case arrive, and
+                    // a Tandem-only loss can even open a short recovery session on the other identity
+                    // (`phase=RECOVERING` in the engine log). Following those repaints the layout two
+                    // or three times on the way down — default → single battery → three battery — for
+                    // a page the user cannot touch anyway. Greyed means "this is what the headset last
+                    // told us", so hold that.
+                    var lastReadyState by remember { mutableStateOf(sonyState) }
+                    if (canShowDetailPage) lastReadyState = sonyState
+                    val pageState = if (canShowDetailPage) sonyState else lastReadyState
+                    // Losing readiness also freezes the scroll: the page swallows pointer events, so
+                    // whatever position and collapse fraction it was left at can no longer be undone
+                    // by the user. miuix collapses the large title into a centred small one as you
+                    // scroll, and being stuck there while the page cannot scroll reads as a glitch.
+                    LaunchedEffect(canShowDetailPage) {
+                        if (!canShowDetailPage) {
+                            detailScrollBehavior.state.heightOffset = 0f
+                            detailScrollBehavior.state.contentOffset = 0f
+                            runCatching { detailListState.scrollToItem(0) }
+                        }
+                    }
+                    BarBlurHost(
+                        bottomBarBlurEnabled = false,
+                        topBarBlurEnabled = blurTopBar.value,
+                    ) {
+                        Scaffold(
+                            topBar = {
+                                BlurredBar(topGradient = true) {
+                                    val title = detailTitle
+                                    val actions: @Composable RowScope.() -> Unit = {
+                                        if (canShowDetailPage && sonyState.supportsPowerOff) {
+                                            IconButton(onClick = { showPowerOffDialog = true }) {
+                                                Icon(
+                                                    imageVector = AppIcons.Power,
+                                                    modifier = Modifier.size(23.dp),
+                                                    contentDescription = stringResource(R.string.power_off),
+                                                )
+                                            }
+                                        }
+                                        // With nothing connected there is no per-device page to open,
+                                        // so the same button goes to the Bluetooth list instead — the
+                                        // one place the user can do something about it.
+                                        IconButton(
+                                            onClick = {
+                                                if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
+                                                    openSystemHeadsetSettings()
+                                                } else {
+                                                    openBluetoothSettings()
+                                                }
+                                            },
+                                        ) {
+                                            Icon(
+                                                imageVector = MiuixIcons.Settings,
+                                                contentDescription = stringResource(R.string.click_action_system_settings),
+                                            )
+                                        }
+                                    }
+                                    if (isLandscape) {
+                                        SmallTopAppBar(
+                                            title = title,
+                                            color = Color.Transparent,
+                                            scrollBehavior = detailScrollBehavior,
+                                            actions = actions,
+                                        )
+                                    } else {
+                                        TopAppBar(
+                                            title = title,
+                                            largeTitle = title,
+                                            color = Color.Transparent,
+                                            scrollBehavior = detailScrollBehavior,
+                                            actions = actions,
+                                        )
+                                    }
+                                }
+                            },
+                        ) { padding ->
+                            BarBackdropContent(modifier = Modifier.fillMaxSize()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(backgroundColor),
+                                ) {
+                                    // Always the headset page, never a separate empty state: with
+                                    // nothing connected it renders the last headset's name and image
+                                    // over empty battery/control blocks, which is the same shape as
+                                    // the first moments of a session. One layout, greyed or not.
+                                    PodDetailPage(
+                                        modifier = Modifier
+                                            .overScrollVertical()
+                                            .nestedScroll(detailScrollBehavior.nestedScrollConnection)
+                                            .earphonePageReadiness(canShowDetailPage),
+                                        contentPadding = padding,
+                                        bottomContentPadding = earphoneBottomPadding,
+                                        podName = detailTitle,
+                                        uiState = pageState,
+                                        actions = sonyActions.copy(
+                                            onOpenMoreSettings = { openScreen(Screen.EarphoneMoreSettings) },
+                                            onOpenGestureOperations = { openScreen(Screen.EarphoneGestureOperations) },
+                                            onOpenMultipointSettings = { openScreen(Screen.EarphoneMultipointSettings) },
+                                            onOpenEqDetail = { openScreen(Screen.EarphoneEqDetail) },
+                                        ),
+                                        visibility = visibility.value,
+                                        listState = detailListState,
+                                        boxImagePath = currentEarphonePref?.boxImagePath,
+                                        boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
+                                    )
+                                    // Only when there is nothing to show yet — a first-ever connect,
+                                    // or a cold start. Once the page holds a real state, a session
+                                    // coming back is a recovery: the greyed content already says
+                                    // "not controllable right now", and spinning on top of it turns
+                                    // every LE Audio teardown (which briefly opens a session on the
+                                    // other identity) into a fake reconnect animation.
+                                    if (sonyConnected && !canShowDetailPage && !pageState.capabilitiesKnown) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopCenter)
+                                                .padding(top = padding.calculateTopPadding() + 8.dp),
+                                        ) {
+                                            InfiniteProgressIndicator()
+                                        }
+                                    }
+                                    PowerOffDialog(
+                                        show = showPowerOffDialog,
+                                        deviceName = detailTitle,
+                                        onDismissRequest = { showPowerOffDialog = false },
+                                        onConfirm = {
+                                            showPowerOffDialog = false
+                                            sonyActions.onPowerOff()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
                 desktopIconHidden = desktopIconHidden,
                 onDesktopIconHiddenChange = {
                     desktopIconHidden.value = it

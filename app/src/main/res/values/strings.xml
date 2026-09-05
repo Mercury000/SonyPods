@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">SonyPods</string>
     <string name="app_description">为 HyperOS 设备提供系统级 Sony 耳机控制</string>
+    <string name="unknown_sony_device">Sony headphones</string>
     <string name="pod_info">Pod Info</string>
     <string name="about_tab">About</string>
     <string name="settings">Settings</string>
@@ -42,8 +43,6 @@
     <string name="batt_left_pod">Left</string>
     <string name="batt_right_pod">Right</string>
     <string name="device">Device</string>
-    <string name="no_paired_devices">No paired devices found</string>
-    <string name="bluetooth_disabled">Please enable Bluetooth</string>
     <string name="unknown_device">Unknown Device</string>
     <string name="connect">Connect</string>
     <string name="cancel">Cancel</string>

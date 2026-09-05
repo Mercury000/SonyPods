@@ -225,6 +225,13 @@ data class HeadphoneCapabilities(
      *  declaring any LEA-unicast-broadcast-with-CTKD FunctionType (TWS 0x40 /
      *  HBS 0x41 / PAS 0x64 Table2). */
     val declaresTandemDisconnectingNotification: Boolean = false,
+    /**
+     * SC `C14319c.mo61835c` registers `V2GetIdentityResolvingKeyRepository` only when the device
+     * declares `GET_IDENTITY_RESOLVING_KEY` (0x63, Table2). Without it SC's LE-address matching
+     * degrades to exact comparison against the bonded set (`C12272j.m52768g` answers an empty key
+     * array), so the same gate decides whether we ask at all.
+     */
+    val declaresIdentityResolvingKey: Boolean = false,
 ) {
     /** SC `FunctionCantBeUsedWithLEAConnectionType.PAIRING_DEVICE_MANAGEMENT` → 多点连接 */
     val multipointLeaRestricted: Boolean
