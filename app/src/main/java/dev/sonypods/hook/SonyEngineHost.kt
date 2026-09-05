@@ -2367,6 +2367,18 @@ object SonyEngineHost {
         snapshot: SonyStateSnapshot,
         islandFirstFloat: Boolean? = null,
     ) {
+        // The module's own LE Audio pairing run tears the headset's bonds down and builds them back
+        // up. Every step of that produces profile transitions, so the surfaces would be cancelled on
+        // the way down and re-announced on the way up — the user reconfiguring one headset sees two
+        // battery islands, the second one arriving before the app page has even finished loading,
+        // because the island's gate (capabilities plus essential values) opens earlier than the page's
+        // (the whole connection-time burst). Nothing about this is a connection event, so hold what is
+        // on screen until the run ends.
+        val pairingTargets = runCatching { repository?.leAudioPairingTargets() }.getOrNull().orEmpty()
+        if (pairingTargets.isNotEmpty()) {
+            Log.d(TAG, "surface render held: LE Audio pairing in flight for $pairingTargets")
+            return
+        }
         val address = snapshot.deviceAddress
         if (address == null || !snapshot.connected) {
             val previous = linkTracker.currentAddress ?: lastRenderedAddress ?: lastConnectedAddress
