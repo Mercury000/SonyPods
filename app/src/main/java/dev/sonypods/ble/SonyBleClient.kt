@@ -275,17 +275,23 @@ class SonyBleClient(
     @Volatile private var leAudioProxy: BluetoothProfile? = null
     @Volatile private var leAudioProxyBinding = false
 
+    /**
+     * Both callbacks arrive on the Bluetooth process main looper, so the proxy is stored before
+     * anything else runs and the log cannot escape: a throw here is not our crash, it is
+     * com.android.bluetooth's. Logging first is also how a received proxy went unstored — the
+     * listener threw on the way in and [leAudioProxy] stayed null, i.e. "no LE Audio session".
+     */
     private val leAudioServiceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-            log("LE Audio profile proxy connected (profile=$profile)")
             leAudioProxy = proxy
             leAudioProxyBinding = false
+            runCatching { log("LE Audio profile proxy connected (profile=$profile)") }
         }
 
         override fun onServiceDisconnected(profile: Int) {
-            log("LE Audio profile proxy disconnected (profile=$profile)")
             leAudioProxy = null
             leAudioProxyBinding = false
+            runCatching { log("LE Audio profile proxy disconnected (profile=$profile)") }
         }
     }
 
