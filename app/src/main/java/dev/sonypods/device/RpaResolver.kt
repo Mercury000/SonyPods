@@ -72,7 +72,15 @@ object RpaResolver {
         if (!isResolvablePrivate(bytes)) return false
         val hash = bytes.copyOfRange(3, 6)
         val prand = bytes.copyOfRange(0, 3)
-        return identityResolvingKeys.any { irk -> ah(irk, prand)?.contentEquals(hash) == true }
+        // Both byte orders are tried because the key's is not established. `ah()` is specified over a
+        // big-endian key, but SMP transmits an IRK least-significant-octet first and Android stores it
+        // that way, and nothing in the Tandem spec says which order the headset forwards. Guessing
+        // wrong makes the whole rung silently dead — `isResolvable` would simply never match, with no
+        // log line to show it — while trying both costs one extra AES block per candidate.
+        return identityResolvingKeys.any { irk ->
+            ah(irk, prand)?.contentEquals(hash) == true ||
+                ah(irk.reversedArray(), prand)?.contentEquals(hash) == true
+        }
     }
 
     /** `ah(k, r)` from the Core spec: low 3 bytes of `AES-128-ECB(k, 0…0 ‖ r)`. */

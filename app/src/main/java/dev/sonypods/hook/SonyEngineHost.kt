@@ -220,6 +220,9 @@ object SonyEngineHost {
     @Volatile
     private var a2dpProxy: BluetoothProfile? = null
 
+    /** Lazily bound; only [sharesLeAudioGroup] uses it. */
+    private var groupStack: dev.sonypods.leaudio.LeAudioStack? = null
+
     @Synchronized
     fun start(
         context: Context,
@@ -681,9 +684,12 @@ object SonyEngineHost {
             Log.d(TAG, "reconcile skip: ${sony.size} Sony GATT link(s) but LE Audio carries none of them")
             return null
         }
-        carryingAudio.firstOrNull { candidate ->
-            HeadsetRegistry.recordFor(candidate.address)?.isLeIdentity(candidate.address) != true
-        }?.let { return it }
+        // SonyDeviceService, not the registry directly: for a headset no session has ever named, the
+        // registry cannot answer and `null?.isLeIdentity(...) != true` would accept the pure-LE
+        // identity — "a session that can never carry control", per this function's own doc. The facade
+        // keeps the BluetoothDevice.type and UUID fallbacks for exactly that case.
+        carryingAudio.firstOrNull { candidate -> !SonyDeviceService.isLeAudioIdentity(candidate) }
+            ?.let { return it }
         val leIdentity = carryingAudio.first()
         val control = HeadsetRegistry.controlAddressFor(leIdentity.address)
             ?.takeIf { !it.equals(leIdentity.address, ignoreCase = true) }
@@ -1001,9 +1007,7 @@ object SonyEngineHost {
         val related = buildSet {
             add(address.uppercase())
             SonyDeviceService.resolveControlAddress(address)?.let { add(it.uppercase()) }
-            SonyDeviceService.leAudioAliasSnapshot().forEach { (le, control) ->
-                if (control.equals(address, ignoreCase = true)) add(le.uppercase())
-            }
+            HeadsetRegistry.siblingAddressesOf(address).forEach { add(it) }
         }
         if (session.uppercase() !in related) {
             Log.d(TAG, "device-level disconnect for $address does not match session $session")
@@ -1040,6 +1044,31 @@ object SonyEngineHost {
      * list where the proxy answers, otherwise the adapter-wide profile state gates the
      * ACL+ASCS probe.
      */
+    /**
+     * Whether any of [leAudioAddresses] is in the same coordinated set as [device].
+     *
+     * `CsipSetCoordinatorService.getGroupId` is a post-bond fact the profile answers directly, so it
+     * works for a headset this module has never held a session with — which is what makes it the right
+     * fallback when the registry is still empty.
+     */
+    @SuppressLint("MissingPermission")
+    private fun sharesLeAudioGroup(
+        device: BluetoothDevice,
+        leAudioAddresses: Set<String>,
+    ): Boolean {
+        if (leAudioAddresses.isEmpty()) return false
+        val context = appContext ?: return false
+        val stack = groupStack ?: dev.sonypods.leaudio.LeAudioStack(context) { Log.d(TAG, it) }
+            .also { groupStack = it }
+        val group = runCatching { stack.groupId(device) }.getOrNull() ?: return false
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return false
+        return leAudioAddresses.any { candidate ->
+            val remote = runCatching { adapter.getRemoteDevice(candidate) }.getOrNull()
+                ?: return@any false
+            runCatching { stack.groupId(remote) }.getOrNull() == group
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun isLeAudioStillConnected(device: BluetoothDevice): Boolean {
         val manager = appContext?.getSystemService(BluetoothManager::class.java) ?: return false
@@ -1063,7 +1092,14 @@ object SonyEngineHost {
                 .forEach { remote -> remote.address?.uppercase()?.let(leAudioAddresses::add) }
         }
         if (profileListUsable) {
-            return related.any { it in leAudioAddresses }
+            if (related.any { it in leAudioAddresses }) return true
+            // The registry cannot relate two identities of a headset no Tandem session has ever
+            // named, and on the first LC3 handover that is exactly the state: A2DP drops for the
+            // classic address while the LE one is what the profile holds. Reading that as "LE Audio
+            // is gone" tears the session down at the moment LC3 starts working. The coordinated set
+            // is the stack's own answer to the same question and needs no session — SC relates
+            // identities by nothing else.
+            return sharesLeAudioGroup(device, leAudioAddresses)
         }
         val adapterState = runCatching {
             adapter.getProfileConnectionState(BluetoothProfile.LE_AUDIO)

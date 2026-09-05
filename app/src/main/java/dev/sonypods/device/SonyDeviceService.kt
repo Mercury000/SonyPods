@@ -106,14 +106,17 @@ object SonyDeviceService {
      * (`LEA_RET_CAPABILITY`), so an address is the LE one exactly when it appears in the record's
      * reported LE list and is not the record's own classic address.
      *
-     * Falls back to [BluetoothDevice.type] and UUID analysis only for a headset no session has ever
-     * identified — before the first connection the registry cannot know it, by construction.
+     * Falls back to [BluetoothDevice.type] and UUID analysis whenever the registry cannot answer —
+     * either the headset has never had a session, or it has one but nothing has proved which of its
+     * addresses is the classic one. Both are ordinary states, and "unproved" is not "no".
      */
     fun isLeAudioIdentity(device: BluetoothDevice?): Boolean {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull() ?: return false
 
-        HeadsetRegistry.recordFor(address)?.let { return it.isLeIdentity(address) }
+        HeadsetRegistry.recordFor(address)
+            ?.takeIf { it.controlAddress != null }
+            ?.let { return it.isLeIdentity(address) }
 
         // Fallback: transport type is carried by the bond record itself and needs no discovery.
         // TYPE_DUAL(3) serves both transports and must not be called an LE-only identity.
@@ -155,13 +158,17 @@ object SonyDeviceService {
         val control = normalizeAddress(controlAddress) ?: return
         if (le == control) return
         rememberAddress(control)
-        HeadsetRegistry.rememberLeAddress(le, control)
+        HeadsetRegistry.rememberPair(le, control)
     }
 
     /** Snapshot of all known LE→control identity aliases. */
     fun leAudioAliasSnapshot(): Map<String, String> =
         HeadsetRegistry.all()
-            .flatMap { record -> record.leAddresses.map { it to record.uniqueId } }
+            .mapNotNull { record ->
+                val control = record.controlAddress ?: return@mapNotNull null
+                record.addresses.filterNot { it == control }.map { it to control }
+            }
+            .flatten()
             .toMap()
 
     /**
@@ -173,15 +180,12 @@ object SonyDeviceService {
      */
     fun leAudioIdentityFor(controlAddress: String?): String? {
         val control = normalizeAddress(controlAddress) ?: return null
-        return HeadsetRegistry.leAddressesFor(control).firstOrNull()
+        return HeadsetRegistry.leAddressFor(control)
     }
 
     /** Every other bonded identity of one headset, given any of them. */
-    fun identityAliasesOf(address: String?): List<String> {
-        val normalized = normalizeAddress(address) ?: return emptyList()
-        val record = HeadsetRegistry.recordFor(normalized) ?: return emptyList()
-        return record.addresses.filterNot { it == normalized }
-    }
+    fun identityAliasesOf(address: String?): List<String> =
+        HeadsetRegistry.siblingAddressesOf(address)
 
     fun rememberAddress(address: String?) {
         normalizeAddress(address)?.let(knownAddresses::add)

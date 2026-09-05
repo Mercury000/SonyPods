@@ -282,7 +282,18 @@ fun MainUI(
             Screen.EarphoneEqDetail,
         )
     }
-    val earphoneDetailOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
+    /**
+     * Whether the earphone flow is what the user is looking at.
+     *
+     * The headset page is the earphone tab itself, and its sub-pages are layers over it, so the flow
+     * is on screen whenever that tab is selected — a stacked sub-page covers the tab but is still the
+     * same flow. `layers.first() in earphoneScreens` used to express this while the detail page was a
+     * layer; after it became the tab that expression answered true only for the sub-pages, which is
+     * how the playback-metadata refresh stopped firing for the one page that shows playback.
+     */
+    val earphoneFlowOnScreen = selectedTab == MainTab.Earphones
+    /** A sub-page of the earphone flow is stacked over the tab. */
+    val earphoneSubPageOpen = layers.isNotEmpty() && layers.first() in earphoneScreens
     // 声压卡片实际可见 = 它所在的页(详情页/更多设置页,取决于显隐配置)是栈顶、
     // 未被上层覆盖。仅这时才轮询。
     //
@@ -440,7 +451,7 @@ fun MainUI(
     // on a live, fully-probed session, so close them; the tab underneath stays and switches
     // itself to the not-ready presentation.
     LaunchedEffect(canShowDetailPage) {
-        if (!canShowDetailPage && earphoneDetailOpen) {
+        if (!canShowDetailPage && earphoneSubPageOpen) {
             layers = emptyList()
         }
     }
@@ -462,8 +473,8 @@ fun MainUI(
     // reliably produce an invalidation NTFY, so nothing would re-ask. That gap
     // has a visible symptom — ask again only when that symptom is present.
     // Otherwise opening the page is a read of the mirrored state: no commands.
-    LaunchedEffect(earphoneDetailOpen, connectedDeviceAddress) {
-        if (!earphoneDetailOpen || connectedDeviceAddress.isBlank()) return@LaunchedEffect
+    LaunchedEffect(earphoneFlowOnScreen, connectedDeviceAddress) {
+        if (!earphoneFlowOnScreen || connectedDeviceAddress.isBlank()) return@LaunchedEffect
         if (!sonyState.supportsPlaybackControl) return@LaunchedEffect
         val metadataEmpty = sonyState.playbackTrack.isNullOrBlank() &&
             sonyState.playbackArtist.isNullOrBlank() &&

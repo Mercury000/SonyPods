@@ -17,6 +17,7 @@ import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.device.HeadsetRegistry
 import dev.sonypods.device.SonyDeviceService
 
 /**
@@ -261,8 +262,21 @@ object HeadsetStateDispatcher : HookContext() {
         // So fold identities first and only answer for the control identity — mirroring
         // SonyBleClient's resolveControlTarget.
         val controlAddress = resolveControlAddress(serviceInstance, device)
-        val fromControlIdentity =
-            controlAddress == null || controlAddress.equals(device.address, ignoreCase = true)
+        // Not `controlAddress == null || ...`. The registry cannot answer for a headset no Tandem
+        // session has ever named, and reading "unknown" as "this *is* the control identity" is the
+        // dangerous direction: it skips the coordinated-set guard below, so one earbud going back in
+        // its case tears down a session that is still streaming. Unknown therefore falls back to the
+        // group, which the LE Audio profile answers directly.
+        val proven = controlAddress != null &&
+            HeadsetRegistry.recordFor(device.address)?.controlAddress != null
+        val fromControlIdentity = if (proven) {
+            controlAddress?.equals(device.address, ignoreCase = true) == true
+        } else {
+            val group = leAudioGroupAddresses(serviceInstance, device)
+            // A lone device is its own set: nothing else can own the session, so its transition is
+            // the session's. A member of a larger set is not assumed to be the owner.
+            group == null || group.size <= 1
+        }
         when (currState) {
             BluetoothProfile.STATE_CONNECTED -> {
                 if (!fromControlIdentity) {
@@ -272,16 +286,19 @@ object HeadsetStateDispatcher : HookContext() {
                     // answers this directly: a device reaches notifyConnectionStateChanged only
                     // if it holds a LeAudioDeviceDescriptor, and getGroupDevices lists exactly
                     // the descriptors in that group.
+                    // Non-null by construction here: fromControlIdentity is false only when the
+                    // fold produced a different address, which requires one.
+                    val foldedControl = controlAddress ?: return
                     val group = leAudioGroupAddresses(serviceInstance, device)
-                    if (group == null || controlAddress.uppercase() in group) {
+                    if (group == null || foldedControl.uppercase() in group) {
                         Log.d(
                             "SonyPods-Engine",
-                            "Deferring ${device.address}; control identity $controlAddress " +
+                            "Deferring ${device.address}; control identity $foldedControl " +
                                 "will announce separately",
                         )
                         return
                     }
-                    val control = remoteControlDevice(serviceInstance, controlAddress) ?: return
+                    val control = remoteControlDevice(serviceInstance, foldedControl) ?: return
                     Log.d(
                         "SonyPods-Engine",
                         "Control identity $controlAddress is outside the LE Audio group " +

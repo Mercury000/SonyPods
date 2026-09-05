@@ -163,6 +163,14 @@ internal class HeadsetLinkTracker {
     fun forceRecovery(candidate: String) {
         synchronized(this) {
             if (!matches(candidate) && address != null) return
+            // A departed headset stays departed. matches() folds sibling identities, so a caller
+            // holding the raw session address of a headset that already reached DISCONNECTED would
+            // otherwise reopen its episode as RECOVERING — and renderXiaomiSurfaces then takes the
+            // PRESERVE branch, keeping the notification and island of a headset that is gone.
+            if (phase == Phase.DISCONNECTED && address != null) {
+                log("forced recovery ignored: episode already disconnected address=$address")
+                return
+            }
             address = candidate
             if (phase != Phase.ACTIVE) {
                 log("forced recovery → RECOVERING address=$candidate")

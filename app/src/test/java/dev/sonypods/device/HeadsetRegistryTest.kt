@@ -14,169 +14,205 @@ class HeadsetRegistryTest {
         HeadsetRegistry.resetForTesting()
     }
 
-    private val control = "AA:BB:CC:DD:EE:01"
-    private val leLeft = "AA:BB:CC:DD:EE:02"
+    private val key = "LinkBuds-S-identifier"
+    private val classic = "C5:93:15:6B:E6:34"
+    private val leLeft = "80:99:E7:D8:60:09"
     private val leRight = "AA:BB:CC:DD:EE:03"
-    private val bonded = listOf(control, leLeft, leRight)
+    private val bonded = listOf(classic, leLeft, leRight)
 
     @Test
-    fun `an unknown address has no record`() {
-        assertNull(HeadsetRegistry.recordFor(control))
-        assertNull(HeadsetRegistry.controlAddressFor(control))
-        assertEquals(emptyList<String>(), HeadsetRegistry.leAddressesFor(control))
-        // sessionTargetFor passes through so callers never need a null check.
-        assertEquals(control, HeadsetRegistry.sessionTargetFor(control))
+    fun `an unknown address has no record and resolves to itself`() {
+        assertNull(HeadsetRegistry.recordFor(classic))
+        // Never a different address on a guess: callers treat the answer as dialable.
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(classic))
+        assertEquals(classic, HeadsetRegistry.sessionTargetFor(classic))
+        assertNull(HeadsetRegistry.leAddressFor(classic))
+        assertFalse(HeadsetRegistry.isLeIdentity(classic))
     }
 
     @Test
-    fun `a reported identity is found from any of its addresses`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft, leRight),
+    fun `a session registers under the tandem identifier, not an address`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+
+        val record = HeadsetRegistry.recordFor(leLeft)
+        assertEquals(key, record?.key)
+        assertEquals(listOf(leLeft), record?.addresses)
+        // The identifier is not address-shaped, so it is a key and nothing else.
+        assertNull(record?.controlAddress)
+    }
+
+    @Test
+    fun `reported addresses need a key and are unioned, never substituted`() {
+        assertNull(
+            HeadsetRegistry.rememberReportedAddresses(
+                key = null,
+                reported = listOf(leLeft, classic),
+                bondedAddresses = bonded,
+            )
+        )
+        assertNull(HeadsetRegistry.recordFor(leLeft))
+
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(leLeft, classic, leRight),
             bondedAddresses = bonded,
         )
+        assertEquals(listOf(leLeft, classic, leRight), HeadsetRegistry.recordFor(classic)?.addresses)
 
-        listOf(control, leLeft, leRight).forEach { address ->
-            assertEquals(control, HeadsetRegistry.controlAddressFor(address))
-            assertEquals(control, HeadsetRegistry.sessionTargetFor(address))
-        }
-        assertFalse(HeadsetRegistry.isLeIdentity(control))
+        // A later reply naming one address must not shrink the set.
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(leLeft),
+            bondedAddresses = bonded,
+        )
+        assertEquals(listOf(leLeft, classic, leRight), HeadsetRegistry.recordFor(leRight)?.addresses)
+    }
+
+    @Test
+    fun `an address the phone is not bonded to is not stored`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(classic),
+            bondedAddresses = listOf(leLeft),
+        )
+
+        assertEquals(listOf(leLeft), HeadsetRegistry.recordFor(leLeft)?.addresses)
+    }
+
+    @Test
+    fun `direction is only ever recorded by a prover`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(leLeft, classic),
+            bondedAddresses = bonded,
+        )
+        // Both addresses known, direction unproved: every consumer still sees itself.
+        assertEquals(leLeft, HeadsetRegistry.controlAddressFor(leLeft))
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(classic))
+        assertNull(HeadsetRegistry.leAddressFor(leLeft))
+        assertFalse(HeadsetRegistry.isLeIdentity(leLeft))
+
+        HeadsetRegistry.proveControlAddress(leLeft, classic)
+
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
+        assertEquals(classic, HeadsetRegistry.sessionTargetFor(leLeft))
+        assertEquals(leLeft, HeadsetRegistry.leAddressFor(classic))
         assertTrue(HeadsetRegistry.isLeIdentity(leLeft))
-        assertTrue(HeadsetRegistry.isLeIdentity(leRight))
+        assertFalse(HeadsetRegistry.isLeIdentity(classic))
     }
 
     @Test
-    fun `an LE address the phone is not bonded to is not stored`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft, leRight),
-            bondedAddresses = listOf(control, leLeft),
-        )
+    fun `the pairing flow may state the pair before any session exists`() {
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
 
-        assertEquals(listOf(leLeft), HeadsetRegistry.leAddressesFor(control))
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
+        assertEquals(leLeft, HeadsetRegistry.leAddressFor(classic))
+        assertEquals(1, HeadsetRegistry.all().size)
+        assertEquals(HeadsetRegistry.recordFor(classic), HeadsetRegistry.recordFor(leLeft))
     }
 
     @Test
-    fun `a later reply that resolves nothing does not erase the known LE addresses`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft),
-            bondedAddresses = bonded,
-        )
-        // Same headset, reported while the LE bond is momentarily absent from the bonded set.
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft),
-            bondedAddresses = listOf(control),
-        )
-
-        assertEquals(listOf(leLeft), HeadsetRegistry.leAddressesFor(control))
-    }
-
-    @Test
-    fun `the pairing flow can state the pair before any session exists`() {
-        HeadsetRegistry.rememberLeAddress(leLeft, control)
-
-        assertEquals(control, HeadsetRegistry.controlAddressFor(leLeft))
-        assertEquals(listOf(leLeft), HeadsetRegistry.leAddressesFor(control))
-        // An address is never its own LE identity.
-        assertNull(HeadsetRegistry.rememberLeAddress(control, control))
-    }
-
-    @Test
-    fun `the live transport is recorded from any identity of the headset`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft),
+    fun `a pair naming an address of a known headset does not fork the record`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(leLeft, classic),
             bondedAddresses = bonded,
         )
 
-        HeadsetRegistry.updateService(leLeft, PairingService.LEA)
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
 
-        assertEquals(PairingService.LEA, HeadsetRegistry.serviceFor(control))
+        assertEquals(1, HeadsetRegistry.all().size)
+        assertEquals(key, HeadsetRegistry.recordFor(leLeft)?.key)
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
     }
 
     @Test
-    fun `unpairing any identity keeps the record while another is still bonded`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft),
+    fun `one bonded identity keeps a record, none drops it, and nothing is stripped`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(leLeft, classic),
             bondedAddresses = bonded,
         )
 
-        HeadsetRegistry.prune(listOf(leLeft))
+        HeadsetRegistry.prune(listOf(classic))
+        // SC leaves a stale group member until the next capability reply rewrites it, and stripping
+        // is what erased the pair the pairing flow records before its own bond exists.
+        assertEquals(listOf(leLeft, classic), HeadsetRegistry.recordFor(classic)?.addresses)
 
-        assertEquals(control, HeadsetRegistry.controlAddressFor(leLeft))
+        HeadsetRegistry.prune(listOf("11:22:33:44:55:66"))
+        assertNull(HeadsetRegistry.recordFor(classic))
     }
 
     @Test
-    fun `an LE identity that was unpaired stops being listed on its record`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft, leRight),
-            bondedAddresses = bonded,
-        )
+    fun `a pinned headset survives having no bonded identity at all`() {
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
+        // What the pairing flow looks like between removeBond and createBond.
+        HeadsetRegistry.pin(listOf(classic, leLeft))
 
-        HeadsetRegistry.prune(listOf(control, leRight))
+        HeadsetRegistry.prune(listOf("11:22:33:44:55:66"))
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
 
-        assertEquals(listOf(leRight), HeadsetRegistry.leAddressesFor(control))
+        HeadsetRegistry.unpin()
+        HeadsetRegistry.prune(listOf("11:22:33:44:55:66"))
         assertNull(HeadsetRegistry.recordFor(leLeft))
     }
 
     @Test
-    fun `unpairing every identity drops the record`() {
-        HeadsetRegistry.remember(
-            uniqueId = control,
-            reportedLeAddresses = listOf(leLeft),
-            bondedAddresses = bonded,
-        )
-
-        HeadsetRegistry.prune(listOf("11:22:33:44:55:66"))
-
-        assertNull(HeadsetRegistry.recordFor(control))
-    }
-
-    @Test
     fun `an empty bonded set prunes nothing`() {
-        HeadsetRegistry.remember(uniqueId = control, bondedAddresses = bonded)
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
 
-        // The adapter being off, or the permission missing, is not "everything was unpaired".
         HeadsetRegistry.prune(emptyList())
 
-        assertEquals(control, HeadsetRegistry.controlAddressFor(control))
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
     }
 
     @Test
-    fun `records round trip through the snapshot feed and normalize case`() {
-        HeadsetRegistry.remember(
-            uniqueId = control.lowercase(),
-            name = "WF-1000XM6",
-            reportedLeAddresses = listOf(leLeft.lowercase()),
-            bondedAddresses = bonded.map { it.lowercase() },
-            service = PairingService.LEA,
-            supportsLeClassic = true,
-            bothPairedHistory = true,
-        )
+    fun `the snapshot feed replaces, so a pruned record does not linger`() {
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
+        HeadsetRegistry.rememberSession(key = "second", sessionAddress = leRight)
         val lines = HeadsetRegistry.snapshotLines()
+        assertEquals(2, lines.size)
 
         HeadsetRegistry.resetForTesting()
         HeadsetRegistry.ingest(lines)
+        assertEquals(2, HeadsetRegistry.all().size)
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
 
-        val record = HeadsetRegistry.recordFor(leLeft.lowercase())!!
-        assertEquals(control, record.uniqueId)
-        assertEquals(listOf(leLeft), record.leAddresses)
-        assertEquals("WF-1000XM6", record.name)
-        assertEquals(PairingService.LEA, record.service)
-        assertTrue(record.supportsLeClassic)
-        assertTrue(record.bothPairedHistory)
+        // The engine forgot one; a consumer must forget it too.
+        HeadsetRegistry.ingest(lines.take(1))
+        assertEquals(1, HeadsetRegistry.all().size)
+        assertNull(HeadsetRegistry.recordFor(leRight))
     }
 
     @Test
-    fun `a name containing the field separator survives serialization`() {
-        HeadsetRegistry.remember(uniqueId = control, name = "WH|1000", bondedAddresses = bonded)
+    fun `a key or name carrying a separator survives serialization`() {
+        val nasty = "we|ird\nname"
+        HeadsetRegistry.rememberSession(key = nasty, sessionAddress = leLeft, name = nasty)
+        HeadsetRegistry.proveControlAddress(leLeft, leLeft)
 
-        val record = HeadsetRecord.deserialize(HeadsetRegistry.snapshotLines().single())!!
+        val round = HeadsetRecord.deserialize(HeadsetRegistry.snapshotLines().single())
+        assertEquals(nasty, round?.key)
+        assertEquals(nasty, round?.name)
+        assertEquals(listOf(leLeft), round?.addresses)
+        assertEquals(leLeft, round?.controlAddress)
+    }
 
-        assertEquals("WH|1000", record.name)
+    @Test
+    fun `address case is normalized on the way in and out`() {
+        HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft.lowercase())
+        HeadsetRegistry.rememberReportedAddresses(
+            key = key,
+            reported = listOf(classic.lowercase()),
+            bondedAddresses = listOf(classic.lowercase()),
+        )
+        HeadsetRegistry.proveControlAddress(leLeft.lowercase(), classic.lowercase())
+
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft.lowercase()))
+        assertEquals(listOf(leLeft, classic), HeadsetRegistry.recordFor(classic)?.addresses)
     }
 }

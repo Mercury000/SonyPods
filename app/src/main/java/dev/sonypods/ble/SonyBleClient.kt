@@ -952,6 +952,9 @@ class SonyBleClient(
         writeToChannel(channel, bytes)
     }
 
+    /** Whether the live control transport is SPP, which only the classic identity can carry. */
+    fun activeTransportIsSpp(): Boolean = sppTransport != null
+
     fun availableChannels(): Set<TandemChannel> {
         val channels = mutableSetOf<TandemChannel>()
         if (sppTransport != null) channels.add(TandemChannel.SPP_MDR)
@@ -2097,8 +2100,9 @@ class SonyBleClient(
                 bluetoothType = device.type,
                 advertisedServices = device.uuids?.map { it.uuid.toString() }.orEmpty(),
                 isLikelyControlEndpoint = runCatching {
-                    // The registry's own address is the control one by construction; anything it
-                    // does not know yet falls back to the transport/name hints.
+                    // A hint, not a verdict — it is OR'd with the transport and name hints below, and
+                    // the connect path re-resolves the target anyway. An unproved direction reads as
+                    // "not known to be the LE half", which is the useful side for a discovery hint.
                     HeadsetRegistry.recordFor(device.address)?.isLeIdentity(device.address) == false
                 }.getOrDefault(false) ||
                     device.type == BluetoothDevice.DEVICE_TYPE_LE ||
@@ -2120,12 +2124,19 @@ class SonyBleClient(
         if (control.equals(device.address, ignoreCase = true)) return device
         val remote = adapter?.bondedDevices.orEmpty()
             .firstOrNull { it.address.equals(control, ignoreCase = true) }
+        if (remote == null) {
+            // The record can outlive one of its bonds — prune only drops a record when *no* identity
+            // is bonded. Dialing an address with no link key fails every time, so the requested one,
+            // which at least has a live link, is the better answer.
+            log("control identity $control is not bonded; staying on ${device.address}")
+            return device
+        }
         log("Retargeting LE Audio identity ${device.address} to control identity $control")
         return device.copy(
             address = control,
-            name = remote?.let(::safeDeviceName) ?: device.name.removePrefix("LE_"),
-            bluetoothType = remote?.type ?: device.bluetoothType,
-            advertisedServices = remote?.uuids?.map { it.uuid.toString() }.orEmpty(),
+            name = safeDeviceName(remote) ?: device.name.removePrefix("LE_"),
+            bluetoothType = remote.type,
+            advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),
             isLikelyControlEndpoint = true,
         )
     }
@@ -2141,8 +2152,8 @@ class SonyBleClient(
      */
     @SuppressLint("MissingPermission")
     private fun resolveLeAudioTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val leAddresses = HeadsetRegistry.leAddressesFor(device.address)
-            .filterNot { it.equals(device.address, ignoreCase = true) }
+        val leAddresses = HeadsetRegistry.siblingAddressesOf(device.address)
+            .filterNot { HeadsetRegistry.controlAddressFor(it) == it }
         if (leAddresses.isEmpty()) return device
         val bonded = adapter?.bondedDevices.orEmpty()
         val remote = leAddresses.firstNotNullOfOrNull { le ->

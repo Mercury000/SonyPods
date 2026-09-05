@@ -3,222 +3,257 @@ package dev.sonypods.device
 import android.content.Context
 import android.util.Log
 import dev.sonypods.device.HeadsetRecord.Companion.normalizeAddress
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The headsets we have had a Tandem session with, and what each one said about itself.
  *
  * This replaces classifying bonds. Sound Connect never classifies one — it keeps a registry of
  * devices it has connected to (`C13896f`, persisted as JSON per record) and takes every identity
- * fact from the headset's own Tandem replies. The chain, end to end:
+ * fact from the headset's own Tandem replies:
  *
- * 1. Something connects — A2DP or LE Audio. SC's `C14326e.m61860c` (*autoPickup*) asks the stack
- *    which is live, LE Audio winning over A2DP (`C14332g.m61875b`), and looks the raw address up in
- *    the registry. A hit connects the stored record; a miss registers a shallow one first.
- * 2. The Tandem session comes up and the capability table completes. `C14322c1.m61848o`
- *    (*syncDeviceState*) then builds the full record — `zb0.C32170h.m115675v` — whose identity
- *    fields come from `LEA_RET_CAPABILITY` (unique id + LE addresses) and the LEA status'
- *    `StreamingStatus` (which transport is live).
- * 3. That record is saved, deduped against the existing ones by unique id.
- * 4. `C14322c1.m61845g` (*connectHoldingDeviceIfNeed*) then dials the sibling identity over GATT.
+ * 1. `CONNECT_RET_CAPABILITY_INFO` (frame three of every session) carries the Tandem identifier.
+ *    That is the record's [HeadsetRecord.key] and the only thing that says "same headset".
+ * 2. `LEA_RET_CAPABILITY` lists the addresses serving the headset, with no reliable direction.
+ *    They are unioned into that record's address set.
+ * 3. Nothing else may invent an address set or a direction. A writer that does not know which
+ *    address is the classic one does not write one — [HeadsetRecord.controlAddress] stays null and
+ *    every consumer falls back to the address it already had.
  *
  * Consequences worth keeping in mind:
  * - **Nothing here answers before the first session.** A bonded-but-never-connected headset is
- *   unknown, by construction. That is why the device list is this registry rather than the OS
- *   bonded set.
+ *   unknown, by construction, so callers need a safe default rather than treating "unknown" as an
+ *   answer.
  * - **No permission is needed.** No `bt_config.conf`, no reflection into `AdapterService`, no CSIS
  *   group read. The identity is the headset's testimony.
  *
- * One deliberate deviation from SC: it keys its repository by **address**, so a headset connected
- * once over classic and once over LE Audio ends up as two records cross-linked by `tandem_uniqueId`
- * (`C13896f.m60185h` matches them, `C21510k.m84700o` propagates flags across them, `m84703t` deletes
- * them together, and `UpdateDeviceItemListTask` merely syncs their selected state so both rows
- * highlight at once). Here one record is one headset: the unique id is the key and the LE addresses
- * are a field on it. Every consumer wants a single canonical control address, and one row per
- * headset is what the picker should show.
+ * All state is behind [lock]: writes arrive on Tandem frame-dispatch threads, on the LE Audio
+ * pairing flow's handler and on the publish coroutine, and reads arrive from every hooked process's
+ * callbacks.
  */
 object HeadsetRegistry {
     private const val TAG = "SonyPods-Engine"
     private const val STORE_FILE = "sonypods_headsets.txt"
 
-    /** Records keyed by [HeadsetRecord.uniqueId]. */
-    private val records = ConcurrentHashMap<String, HeadsetRecord>()
+    private val lock = Any()
 
-    /** Insertion order of [records], oldest first. */
-    private val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+    /** Records by [HeadsetRecord.key], in first-seen order. */
+    private val records = LinkedHashMap<String, HeadsetRecord>()
+
+    /**
+     * Addresses a run of the LE Audio pairing flow is holding.
+     *
+     * That flow removes the classic bond before it creates the LE one and records the pair in
+     * between, so for a moment the record has no bonded address at all. [prune] must not read that
+     * as "the user unpaired this headset".
+     */
+    private val pinned = mutableSetOf<String>()
 
     /**
      * Where the engine persists. Only the Bluetooth process passes a context; every other process
-     * lives off [ingest] and never writes, the same split the old identity service used.
+     * lives off [ingest] and never writes.
      */
-    @Volatile
     private var store: java.io.File? = null
 
     fun initializeForEngine(engineContext: Context? = null) {
-        store = engineContext?.let { java.io.File(it.filesDir, STORE_FILE) }
-        load()
-        log("initialized with ${records.size} headset record(s)")
+        synchronized(lock) {
+            store = engineContext?.let { java.io.File(it.filesDir, STORE_FILE) }
+            load()
+            log("initialized with ${records.size} headset record(s)")
+        }
     }
 
     // ---- Lookup ----
 
-    /**
-     * The headset [address] belongs to, or null when no session has ever identified it.
-     *
-     * Set membership over the record's own address plus its reported LE addresses — SC's
-     * `SettingsTopPresenter.m59962m`, and the same predicate its A2DP auto-connect path
-     * (`C14289i.m61741x`) uses to turn a raw event address into a registered one.
-     */
+    /** The headset [address] belongs to, or null when no session has ever named it. */
     fun recordFor(address: String?): HeadsetRecord? {
         val normalized = normalizeAddress(address) ?: return null
-        records[normalized]?.let { return it }
-        return records.values.firstOrNull { normalized in it.leAddresses }
+        return synchronized(lock) {
+            records[normalized] ?: records.values.firstOrNull { normalized in it.addresses }
+        }
     }
 
-    /** Every known headset, in the order they were first identified. */
-    fun all(): List<HeadsetRecord> = order.mapNotNull { records[it] }
+    /** Every known headset, most recently seen first. */
+    fun all(): List<HeadsetRecord> = synchronized(lock) { records.values.reversed() }
 
     /**
-     * The control (classic) address for [address], or null when the headset is unknown.
+     * The address to use for control, given any identity of the headset.
      *
-     * This is the whole of "normalization" in SC's model: one record, one canonical address, and
-     * every identity of the headset resolves to it.
+     * Returns [address] unchanged unless a control identity has actually been proved. Answering a
+     * *different* address on a guess is what inverts every consumer at once, so the unknown case
+     * deliberately looks like "this address is already the one to use".
      */
-    fun controlAddressFor(address: String?): String? = recordFor(address)?.uniqueId
+    fun controlAddressFor(address: String?): String? {
+        val normalized = normalizeAddress(address) ?: return null
+        return recordFor(normalized)?.controlAddress ?: normalized
+    }
 
-    /** The LE addresses of the headset [address] belongs to, in the order it reported them. */
-    fun leAddressesFor(address: String?): List<String> = recordFor(address)?.leAddresses.orEmpty()
+    /** The addresses of this headset other than [address]. No direction implied. */
+    fun siblingAddressesOf(address: String?): List<String> {
+        val normalized = normalizeAddress(address) ?: return emptyList()
+        return recordFor(normalized)?.addresses?.filterNot { it == normalized }.orEmpty()
+    }
 
-    /** Which transport the headset [address] belongs to last reported as carrying audio. */
-    fun serviceFor(address: String?): PairingService? = recordFor(address)?.service
+    /**
+     * An identity of this headset that is known not to be its classic one.
+     *
+     * Null while the direction is unproved: a caller asking this wants somewhere to write an LE Audio
+     * policy or retry a transfer, and guessing sends it at the classic bond.
+     */
+    fun leAddressFor(address: String?): String? {
+        val record = recordFor(address) ?: return null
+        val control = record.controlAddress ?: return null
+        return record.addresses.firstOrNull { it != control }
+    }
 
-    /** Whether [address] is an LE identity rather than the control one. */
+    /** Whether [address] is an identity of the headset other than its proved classic one. */
     fun isLeIdentity(address: String?): Boolean = recordFor(address)?.isLeIdentity(address) == true
+
+    /**
+     * The address a session should target, given whatever address an event carried.
+     *
+     * SC `C14289i.m61741x` folds a raw event address onto the registered one. Here it only folds when
+     * a control identity is proved; otherwise the event's own address is the best answer available.
+     */
+    fun sessionTargetFor(rawAddress: String): String =
+        recordFor(rawAddress)?.controlAddress ?: rawAddress
 
     // ---- Recording ----
 
     /**
-     * Record what a Tandem session learned about the headset it is talking to.
+     * Register the headset a session is talking to, from `CONNECT_RET_CAPABILITY_INFO`.
      *
-     * [reportedLeAddresses] are the raw strings the headset sent; they are kept only when the OS is
-     * actually bonded to them, which is SC's `C12272j.m52763b` — exact match against the bonded set
-     * first, then [RpaResolver] for a resolvable private address. An LE address the phone has no
-     * bond for is not a dialable identity, so storing it would only produce connect attempts that
-     * cannot land.
-     *
-     * Returns the stored record, or null when [uniqueId] is not a usable address.
+     * [key] is the Tandem identifier verbatim — not validated as an address, because it is not one by
+     * contract. [sessionAddress] is added to the address set, since a session is proof that address
+     * serves this headset. Nothing about direction is inferred.
      */
-    fun remember(
-        uniqueId: String?,
+    fun rememberSession(
+        key: String?,
+        sessionAddress: String?,
         name: String? = null,
-        reportedLeAddresses: List<String> = emptyList(),
-        bondedAddresses: Collection<String> = emptyList(),
-        identityResolvingKeys: List<ByteArray> = emptyList(),
         service: PairingService? = null,
-        supportsLeClassic: Boolean? = null,
-        bothPairedHistory: Boolean? = null,
     ): HeadsetRecord? {
-        val key = normalizeAddress(uniqueId) ?: return null
-        val bonded = bondedAddresses.mapNotNull(::normalizeAddress).toSet()
-        val resolved = RpaResolver
-            .resolveAll(reportedLeAddresses, bonded, identityResolvingKeys, ::log)
-            .filterNot { it == key }
-        val existing = records[key]
-        val merged = HeadsetRecord(
-            uniqueId = key,
-            name = name ?: existing?.name,
-            // A reply that resolved nothing must not erase what an earlier one did: the LE bond can
-            // be absent at the moment a classic-only session reports, and SC keeps the stored group
-            // in exactly that case (`C13896f.m60188o` saves the incoming record but its uniqueId
-            // branch leaves the previous fields alone).
-            leAddresses = resolved.ifEmpty { existing?.leAddresses.orEmpty() },
-            service = service ?: existing?.service ?: PairingService.CLASSIC,
-            supportsLeClassic = supportsLeClassic ?: existing?.supportsLeClassic ?: false,
-            bothPairedHistory = bothPairedHistory ?: existing?.bothPairedHistory ?: false,
-        )
-        return put(merged, existing)
+        val id = key?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return synchronized(lock) {
+            val existing = records[id]
+            val merged = (existing ?: HeadsetRecord(key = id)).let { base ->
+                base.copy(
+                    addresses = base.addresses.plusAddress(sessionAddress),
+                    name = name?.takeIf { it.isNotBlank() } ?: base.name,
+                    service = service ?: base.service,
+                )
+            }
+            put(merged, existing)
+        }
     }
 
     /**
-     * Merge a set of addresses the headset named as its own into whichever record already owns one
-     * of them, without deciding which of them is the control identity.
+     * Union the addresses the headset named into the record for [key].
      *
-     * The `LEA_RET_CAPABILITY` reply's first field is documented as a *Device Unique Id*, and it is
-     * tempting to read that as the classic BD address. On a LinkBuds S it is not: measured
-     * 2026-09-05, the headset answers `unique=80:99:E7:D8:60:09 le=[C5:93:15:6B:E6:34,
-     * 80:99:E7:D8:60:09]` while `80:99:E7:D8:60:09` is the address the LE Audio profile is connected
-     * on and `C5:93:15:6B:E6:34` is the classic one the capability store is keyed by. Taking the
-     * first field as the key therefore inverts the pair and every consumer of
-     * [controlAddressFor] with it.
+     * No-op without a key: an address list with nothing to attach it to cannot be stored without
+     * inventing a key, and every key this could invent is one of the addresses whose role is exactly
+     * what is unknown.
      *
-     * So direction is not taken from this reply at all. The control identity is whatever
-     * `CONNECT_RET_CAPABILITY_INFO` named — it arrives first, on the link that carries control — and
-     * this call only widens that record's address set. SC's own "same headset" test is set
-     * membership with no direction (`SettingsTopPresenter.m59962m`), which is exactly what this
-     * preserves.
-     *
-     * Falls back to keying on the first bonded address when no record exists yet, so a session that
-     * somehow never saw the capability info still records something usable.
+     * [reported] is filtered to addresses the OS is bonded to — SC `C12272j.m52763b`, exact match
+     * first then [RpaResolver] for a resolvable private address. Filtering is a union, never a
+     * replacement: one reply naming one address must not erase a record that holds two.
      */
     fun rememberReportedAddresses(
-        addresses: List<String>,
-        name: String? = null,
+        key: String?,
+        reported: List<String>,
         bondedAddresses: Collection<String> = emptyList(),
         identityResolvingKeys: List<ByteArray> = emptyList(),
+        name: String? = null,
         service: PairingService? = null,
         supportsLeClassic: Boolean? = null,
         bothPairedHistory: Boolean? = null,
     ): HeadsetRecord? {
+        val id = key?.trim()?.takeIf { it.isNotBlank() } ?: return null
         val bonded = bondedAddresses.mapNotNull(::normalizeAddress).toSet()
-        val resolved = RpaResolver.resolveAll(addresses, bonded, identityResolvingKeys, ::log)
-        if (resolved.isEmpty()) return null
-        val existing = resolved.firstNotNullOfOrNull { recordFor(it) }
-        val key = existing?.uniqueId ?: resolved.first()
-        return remember(
-            uniqueId = key,
-            name = name,
-            reportedLeAddresses = resolved,
-            bondedAddresses = bondedAddresses,
-            identityResolvingKeys = identityResolvingKeys,
-            service = service,
-            supportsLeClassic = supportsLeClassic,
-            bothPairedHistory = bothPairedHistory,
-        )
+        val resolved = RpaResolver.resolveAll(reported, bonded, identityResolvingKeys, ::log)
+        return synchronized(lock) {
+            val existing = records[id] ?: return@synchronized null
+            val merged = existing.copy(
+                addresses = resolved.fold(existing.addresses) { acc, a -> acc.plusAddress(a) },
+                name = name?.takeIf { it.isNotBlank() } ?: existing.name,
+                service = service ?: existing.service,
+                supportsLeClassic = supportsLeClassic ?: existing.supportsLeClassic,
+                bothPairedHistory = bothPairedHistory ?: existing.bothPairedHistory,
+            )
+            put(merged, existing)
+        }
     }
 
     /**
-     * Record that [leAddress] serves the headset reachable at [controlAddress].
+     * Record that [controlAddress] is the headset's classic identity.
      *
-     * The module's own LE Audio pairing flow is the one place that knows the pair before any Tandem
-     * session exists — it created both bonds. SC has no equivalent because it never pairs.
+     * Only two things may call this, and both have proof rather than an inference: a session that ran
+     * over SPP (a transport only the classic identity can carry), and the module's own pairing flow,
+     * which created both bonds and therefore knows which one it kept.
      */
-    fun rememberLeAddress(leAddress: String?, controlAddress: String?): HeadsetRecord? {
+    fun proveControlAddress(address: String?, controlAddress: String?): HeadsetRecord? {
+        val control = normalizeAddress(controlAddress) ?: return null
+        return synchronized(lock) {
+            val existing = recordForLocked(address) ?: recordForLocked(control) ?: return@synchronized null
+            if (existing.controlAddress == control) return@synchronized existing
+            put(
+                existing.copy(
+                    addresses = existing.addresses.plusAddress(control),
+                    controlAddress = control,
+                ),
+                existing,
+            )
+        }
+    }
+
+    /**
+     * Record a pair the LE Audio pairing flow created: [leAddress] is an LE identity of the headset
+     * whose classic identity is [controlAddress].
+     *
+     * This is the one writer that legitimately knows the direction without a Tandem reply, because it
+     * removed one bond and created the other. It also keys on [controlAddress] when no record exists —
+     * the flow only runs from a bonded headset's own page, so that address is a real identifier.
+     */
+    fun rememberPair(leAddress: String?, controlAddress: String?): HeadsetRecord? {
         val le = normalizeAddress(leAddress) ?: return null
-        val key = normalizeAddress(controlAddress) ?: return null
-        if (le == key) return null
-        val existing = records[key]
-        val merged = (existing ?: HeadsetRecord(uniqueId = key)).copy(
-            leAddresses = (existing?.leAddresses.orEmpty() + le).distinct(),
-        )
-        return put(merged, existing)
+        val control = normalizeAddress(controlAddress) ?: return null
+        if (le == control) return null
+        return synchronized(lock) {
+            val existing = recordForLocked(control) ?: recordForLocked(le)
+            val base = existing ?: HeadsetRecord(key = control)
+            put(
+                base.copy(
+                    addresses = base.addresses.plusAddress(control).plusAddress(le),
+                    controlAddress = control,
+                ),
+                existing,
+            )
+        }
     }
 
     /** Update which transport is live, leaving every other field alone. */
-    fun updateService(address: String?, service: PairingService): HeadsetRecord? {
-        val existing = recordFor(address) ?: return null
-        if (existing.service == service) return existing
-        return put(existing.copy(service = service), existing)
+    fun updateService(address: String?, service: PairingService): HeadsetRecord? =
+        synchronized(lock) {
+            val existing = recordForLocked(address) ?: return@synchronized null
+            if (existing.service == service) return@synchronized existing
+            put(existing.copy(service = service), existing)
+        }
+
+    private fun List<String>.plusAddress(address: String?): List<String> {
+        val normalized = normalizeAddress(address) ?: return this
+        return if (normalized in this) this else this + normalized
+    }
+
+    private fun recordForLocked(address: String?): HeadsetRecord? {
+        val normalized = normalizeAddress(address) ?: return null
+        return records[normalized] ?: records.values.firstOrNull { normalized in it.addresses }
     }
 
     private fun put(record: HeadsetRecord, existing: HeadsetRecord?): HeadsetRecord {
-        records[record.uniqueId] = record
-        // Append-only: the list the picker renders should not reshuffle every time a poll reports the
-        // same transport again.
-        if (record.uniqueId !in order) order.add(record.uniqueId)
+        records[record.key] = record
         if (record != existing) {
             log(
-                "headset ${record.uniqueId} service=${record.service} " +
-                    "le=${record.leAddresses} bothHistory=${record.bothPairedHistory}"
+                "headset ${record.key} addresses=${record.addresses} " +
+                    "control=${record.controlAddress ?: "unproved"} service=${record.service}"
             )
             persist()
         }
@@ -228,100 +263,109 @@ object HeadsetRegistry {
     // ---- Pruning ----
 
     /**
-     * Reconciles the registry with what the OS is still bonded to.
+     * Hold [addresses] against [prune] for the duration of a pairing run.
      *
-     * SC `C14356p0.m62048o1` (*maintainRegisteredDevicesWithOsBondedDevices*) with the survivor test
-     * in `m61982d0`: a record survives if the bonded set contains its own address **or** any address
-     * in its group. Unpairing in system settings is what makes a registry entry stale, and this is
-     * the only thing that removes one — nothing prunes on a mere disconnect.
+     * The LE Audio pairing flow removes the classic bond, records the pair, and only then creates the
+     * LE bond, so between those steps the record has no bonded address. Without this the very next
+     * publish deletes it and the LE-only identity comes up unrecognised — which is what makes the
+     * session build its capability table from the LEA-only support-function list.
+     */
+    fun pin(addresses: Collection<String>) {
+        synchronized(lock) { pinned += addresses.mapNotNull(::normalizeAddress) }
+    }
+
+    fun unpin() {
+        synchronized(lock) { pinned.clear() }
+    }
+
+    /**
+     * Forget headsets the phone is no longer bonded to any identity of.
      *
-     * An LE address of a surviving record is dropped the same way. SC leaves those in place until the
-     * next capability reply rewrites the group, which leaves the module's own LE-only unpair flow
-     * advertising a bond it just removed.
+     * SC `C14356p0.m62048o1` with the survivor test in `m61982d0`: a record survives while the bonded
+     * set contains any address in its group. Unpairing in system settings is the only thing that makes
+     * a record stale, and this is the only thing that removes one.
      *
-     * A no-op when [bondedAddresses] is empty: an empty answer means the adapter is off or the
-     * permission is missing, not that every headset was unpaired.
+     * Individual addresses are never stripped. SC leaves a stale group member in place until the next
+     * capability reply rewrites the group, and stripping instead is what erased the pair the pairing
+     * flow records before its bond exists.
+     *
+     * A no-op on an empty bonded set: that means the adapter is off or the permission is missing, not
+     * that every headset was unpaired.
      */
     fun prune(bondedAddresses: Collection<String>) {
         val bonded = bondedAddresses.mapNotNull(::normalizeAddress).toSet()
         if (bonded.isEmpty()) return
-        var changed = false
-        records.values.toList().forEach { record ->
-            if (record.addresses.none { it in bonded }) {
-                records.remove(record.uniqueId)
-                order.remove(record.uniqueId)
-                log("forgetting ${record.uniqueId}: no identity of it is bonded any more")
-                changed = true
-                return@forEach
+        synchronized(lock) {
+            val stale = records.values.filter { record ->
+                record.addresses.none { it in bonded || it in pinned }
             }
-            val live = record.leAddresses.filter { it in bonded }
-            if (live.size != record.leAddresses.size) {
-                records[record.uniqueId] = record.copy(leAddresses = live)
-                log("dropping unbonded LE identities of ${record.uniqueId}: kept $live")
-                changed = true
+            if (stale.isEmpty()) return
+            stale.forEach { record ->
+                records.remove(record.key)
+                log("forgetting ${record.key}: no identity of it is bonded any more")
             }
+            persist()
         }
-        if (changed) persist()
     }
 
-    // ---- Session targeting ----
+    /** Forget the headset [address] belongs to, for an explicit unpair from our own UI. */
+    fun forget(address: String?) {
+        synchronized(lock) {
+            val record = recordForLocked(address) ?: return
+            records.remove(record.key)
+            log("forgetting ${record.key} on request")
+            persist()
+        }
+    }
 
-    /**
-     * The address a session should target, given whatever address an event carried.
-     *
-     * SC `C14289i.m61741x`: the registry is searched for a record owning the event's address and
-     * that record's own address is dialed instead. Unknown addresses pass through unchanged, so
-     * callers can use this without a null check.
-     */
-    fun sessionTargetFor(rawAddress: String): String =
-        recordFor(rawAddress)?.uniqueId ?: rawAddress
+    // ---- Persistence and the cross-process feed ----
 
-    // ---- Persistence (engine only) ----
-
+    /** Callers already hold [lock]. */
     private fun load() {
         val file = store ?: return
         val text = runCatching { if (file.isFile) file.readText() else null }.getOrNull() ?: return
         records.clear()
-        order.clear()
         text.lineSequence().forEach { line ->
             if (line.isBlank()) return@forEach
-            HeadsetRecord.deserialize(line)?.let {
-                records[it.uniqueId] = it
-                order.remove(it.uniqueId)
-                order.add(it.uniqueId)
-            }
+            HeadsetRecord.deserialize(line)?.let { records[it.key] = it }
         }
     }
 
+    /** Callers already hold [lock]. */
     private fun persist() {
         val file = store ?: return
-        val text = order.mapNotNull { records[it] }.joinToString("\n") { it.serialize() }
+        val text = records.values.joinToString("\n") { it.serialize() }
         runCatching { file.writeText(text) }
             .onFailure { log("persist failed: ${it.javaClass.simpleName}") }
     }
-
-    // ---- Cross-process feed ----
 
     /**
      * Every record as one serialized line, for [dev.sonypods.bridge.SonyStateSnapshot].
      *
      * Only the process holding the Tandem session learns any of this, so this is how the answer
-     * reaches the app and the MiLink hooks. No consumer derives it locally.
+     * reaches the app and the MiLink hooks.
      */
-    fun snapshotLines(): List<String> = order.mapNotNull { records[it]?.serialize() }
+    fun snapshotLines(): List<String> =
+        synchronized(lock) { records.values.map { it.serialize() } }
 
-    /** Adopt the records a snapshot carried. Never persists — only the engine's store is real. */
+    /**
+     * Adopt the engine's records verbatim.
+     *
+     * A replacement, not a merge: the snapshot is the engine's complete list, so a record missing from
+     * it is one the engine pruned. Merging left every consumer process holding an unpaired headset's
+     * aliases until that process died. Never persists — only the engine's store is real.
+     */
     fun ingest(lines: List<String>) {
-        var changed = false
+        val incoming = LinkedHashMap<String, HeadsetRecord>()
         lines.forEach { line ->
-            val record = HeadsetRecord.deserialize(line) ?: return@forEach
-            if (records[record.uniqueId] == record) return@forEach
-            records[record.uniqueId] = record
-            order.remove(record.uniqueId)
-            order.add(record.uniqueId)
-            changed = true
+            HeadsetRecord.deserialize(line)?.let { incoming[it.key] = it }
         }
-        if (changed) log("adopted ${lines.size} headset record(s) from snapshot")
+        synchronized(lock) {
+            if (store != null || records == incoming) return
+            records.clear()
+            records.putAll(incoming)
+        }
+        log("adopted ${incoming.size} headset record(s) from the engine")
     }
 
     private fun log(message: String) {
@@ -330,8 +374,10 @@ object HeadsetRegistry {
 
     /** Reset all state. Only for unit tests. */
     internal fun resetForTesting() {
-        records.clear()
-        order.clear()
-        store = null
+        synchronized(lock) {
+            records.clear()
+            pinned.clear()
+            store = null
+        }
     }
 }

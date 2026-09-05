@@ -18,6 +18,7 @@ import android.os.ParcelUuid
 import android.os.SystemClock
 import com.mercury.sonypods.R
 import dev.sonypods.bridge.SonyBridge
+import dev.sonypods.device.HeadsetRegistry
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.utils.ModuleText
 import java.util.UUID
@@ -194,6 +195,11 @@ class LeAudioBond(
             add(ScanPass(filtered = false, extended = extended))
         }
         registerReceiver()
+        // Step 2 removes the classic bond and beginBond records the pair before createBond returns,
+        // so for a while this headset has no bonded identity at all. Hold its addresses against the
+        // registry's prune, which runs on every snapshot publish and would otherwise read that as
+        // "the user unpaired it" and delete the record the flow just wrote.
+        runCatching { HeadsetRegistry.pin(involvedAddresses()) }
         log("started reportedLe=$targets name=${targetName.orEmpty()} control=$control")
         runScanPass()
     }
@@ -558,6 +564,7 @@ class LeAudioBond(
     }
 
     private fun cleanUp() {
+        runCatching { HeadsetRegistry.unpin() }
         handler.removeCallbacks(clearTimeout)
         handler.removeCallbacks(bondTimeout)
         handler.removeCallbacks(joinDeadline)
