@@ -18,13 +18,18 @@ import java.util.Locale
  * - [controlAddress] — the classic identity, and only when something has actually proved it. Null is
  *   the normal state.
  *
- * The reason direction is its own field rather than a position in [addresses]: `LEA_RET_CAPABILITY`
- * labels its first field *Device Unique Id*, which invites reading it as the classic address, and
- * that reading is wrong. Measured 2026-09-05 the headset answers
- * `unique=80:99:E7:D8:60:09 le=[C5:93:15:6B:E6:34, 80:99:E7:D8:60:09]` while `80:99:…` is the address
- * the LE Audio profile is connected on and `C5:93:…` is the classic one. A model that forces every
- * writer to name a control address makes writers guess, and three of the four have nothing to guess
- * from.
+ * The reason direction is its own field rather than a position in [addresses]: most writers have no
+ * way to know it. Three sources can prove one — `LEA_RET_CAPABILITY`'s *Device Unique Id*, which is
+ * the classic BD address; a session running over SPP, a transport only the classic identity carries;
+ * and the module's own pairing flow, which removed one bond and created the other. Everything else
+ * (the capability-info identifier, a 0x0E instruction's `ConnectionType`, a MiLink snapshot) knows
+ * only *that* an address serves this headset, and a model that made those writers name a control
+ * address made them guess.
+ *
+ * Measured on a LinkBuds S (2026-09-06): `unique=80:99:E7:D8:60:09 le=[C5:93:15:6B:E6:34,
+ * 80:99:E7:D8:60:09]`, where `80:99:…` is the classic address and the right earbud's LE identity reuses
+ * it (CTKD — see `LeAudioBond`), while `C5:93:…` is the left earbud's own LE identity. So the LE list
+ * legitimately contains the classic address, which is why [addresses] carries no direction of its own.
  *
  * @property service Which transport was carrying audio at the last sync. SC's
  *   `model_pairing_service`, from the headset's own `StreamingStatus`, not from any stack-side signal.

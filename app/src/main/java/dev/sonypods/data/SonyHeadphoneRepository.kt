@@ -4198,6 +4198,14 @@ class SonyHeadphoneRepository private constructor(
                 service = lastStreamingService,
                 supportsLeClassic = true,
             )
+            // After the merge, not before: proving needs the record to already own the address.
+            //
+            // The reply's first field is the classic BD address — SC dials it for SPP
+            // (`C14356p0.m61992j0`: "Falling back to SPP via Classic BD address"), and the LE list
+            // legitimately repeats it because one earbud's LE identity reuses the classic bond under
+            // CTKD. That makes this reply a prover of direction, unlike the capability-info
+            // identifier, which is an opaque key.
+            HeadsetRegistry.proveControlAddress(response.uniqueId, response.uniqueId)
         }.onFailure { appendLog("Recording headset identity failed: ${it.javaClass.simpleName}") }
         lastReportedAddresses = reported
     }
