@@ -1436,8 +1436,42 @@ object SonyEngineHost {
         pruneForgottenHeadsets()
         retryPendingLeAudioPermission()
         return withControlIdentity(withLdac(withLeAudioPolicy(base)).let { snapshot ->
-            snapshot.copy(phoneSupportsLeAudio = phoneSupportsLeAudio())
+            snapshot.copy(
+                phoneSupportsLeAudio = phoneSupportsLeAudio(),
+                audioLinkConnected = isAudioLinkConnected(
+                    snapshot.deviceAddress ?: linkTracker.currentAddress ?: lastConnectedAddress,
+                ),
+            )
         })
+    }
+
+    /**
+     * Whether the system currently has an audio profile connected to this headset.
+     *
+     * The profile answer, never an ACL probe: the LE identity keeps a GATT/ACL link alive for seconds
+     * after audio is gone, so `isConnected` would still say yes while nothing is playing — the same
+     * trap [isLeAudioStillConnected] documents. Both transports count, and either identity of the
+     * headset counts, because the session legitimately sits on either one.
+     *
+     * This is the fact a surface needs to tell "the headset is here and we are still getting the
+     * session up" apart from "the headset is leaving". Sound Connect gates its own auto-pickup on
+     * exactly this pair of questions (`C14332g.m61875b`: LE Audio first, then A2DP).
+     */
+    @SuppressLint("MissingPermission")
+    private fun isAudioLinkConnected(address: String?): Boolean {
+        val candidate = address ?: return false
+        val remote = runCatching {
+            appContext?.getSystemService(BluetoothManager::class.java)?.adapter
+                ?.getRemoteDevice(candidate)
+        }.getOrNull() ?: return false
+        if (isLeAudioStillConnected(remote)) return true
+        val related = buildSet {
+            add(candidate.uppercase())
+            HeadsetRegistry.recordFor(candidate)?.addresses?.forEach { add(it) }
+        }
+        return runCatching { a2dpProxy?.connectedDevices }.getOrNull().orEmpty().any { device ->
+            runCatching { device.address }.getOrNull()?.uppercase() in related
+        }
     }
 
     /**
@@ -1548,6 +1582,8 @@ object SonyEngineHost {
             leAudioPolicyAllowed = effective?.let { it > CONNECTION_POLICY_FORBIDDEN },
             leAudioSystemConnected = system.connected,
             leAudioSystemActive = system.active,
+            // Only this process runs the link tracker, so only it can say whether the session now
+            // coming up is a new episode or the same one being held across a transport loss.
         )
     }
 

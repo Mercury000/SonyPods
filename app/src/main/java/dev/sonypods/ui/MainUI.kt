@@ -1238,6 +1238,17 @@ fun MainUI(
                     val currentEarphonePref = earphonePrefs.value.firstOrNull {
                         it.address.equals(imageLookupAddress, ignoreCase = true)
                     }
+                    // The headset is here and the session is not usable yet: audio is connected, the
+                    // Tandem side is not done. That covers every real wait — a first connect, a cold
+                    // start, the re-probe an LC3 toggle costs, and the module's own hot-reload
+                    // self-recovery, which is a genuine re-dial even though the engine marks it
+                    // RECOVERING so the island does not replay a connect animation.
+                    //
+                    // A teardown looks identical in every other field: it briefly opens a session on
+                    // the headset's other identity, so `connected` goes true while nothing is ready.
+                    // The audio link is what actually differs — it is going away — and it is the only
+                    // thing here that says so.
+                    val showSessionProgress = sonyState.audioLinkConnected && !canShowDetailPage
                     var showPowerOffDialog by remember { mutableStateOf(false) }
                     // What the page renders. While the control channel is unusable it is frozen on
                     // the last operable snapshot, because a teardown does not go straight to empty:
@@ -1346,13 +1357,7 @@ fun MainUI(
                                         boxImagePath = currentEarphonePref?.boxImagePath,
                                         boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
                                     )
-                                    // Only when there is nothing to show yet — a first-ever connect,
-                                    // or a cold start. Once the page holds a real state, a session
-                                    // coming back is a recovery: the greyed content already says
-                                    // "not controllable right now", and spinning on top of it turns
-                                    // every LE Audio teardown (which briefly opens a session on the
-                                    // other identity) into a fake reconnect animation.
-                                    if (sonyConnected && !canShowDetailPage && !pageState.capabilitiesKnown) {
+                                    if (showSessionProgress) {
                                         Box(
                                             modifier = Modifier
                                                 .align(Alignment.TopCenter)

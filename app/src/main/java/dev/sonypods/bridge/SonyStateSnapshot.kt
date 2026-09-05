@@ -59,6 +59,17 @@ data class SonyStateSnapshot(
      * fast-connect dialog wait for this rather than for the whole burst.
      */
     val essentialValuesReady: Boolean = false,
+    /**
+     * Whether the system has an audio profile (A2DP or LE Audio) connected to this headset.
+     *
+     * Not the same fact as [connected], which is the Tandem control transport: audio connects first
+     * and the Tandem session is built on top of it, over LE after seconds of GATT discovery. It is
+     * also not the same as an ACL probe — the LE identity's link outlives audio by seconds.
+     *
+     * This is what separates "the headset is here and the session is still coming up" from "the
+     * headset is leaving", which no other field in this snapshot can express.
+     */
+    val audioLinkConnected: Boolean = false,
     val deviceName: String? = null,
     val deviceAddress: String? = null,
     val firmwareVersion: String? = null,
@@ -312,6 +323,7 @@ data class SonyStateSnapshot(
         putBoolean(KEY_CAPABILITIES_KNOWN, capabilitiesKnown)
         putBoolean(KEY_INITIAL_VALUES_READY, initialValuesReady)
         putBoolean(KEY_ESSENTIAL_VALUES_READY, essentialValuesReady)
+        putBoolean(KEY_AUDIO_LINK_CONNECTED, audioLinkConnected)
         deviceName?.let { putString(KEY_DEVICE_NAME, it) }
         deviceAddress?.let { putString(KEY_DEVICE_ADDRESS, it) }
         firmwareVersion?.let { putString(KEY_FIRMWARE, it) }
@@ -443,6 +455,7 @@ data class SonyStateSnapshot(
         private const val KEY_CAPABILITIES_KNOWN = "capabilities_known"
         private const val KEY_INITIAL_VALUES_READY = "initial_values_ready"
         private const val KEY_ESSENTIAL_VALUES_READY = "essential_values_ready"
+        private const val KEY_AUDIO_LINK_CONNECTED = "audio_link_connected"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_DEVICE_ADDRESS = "device_address"
         private const val KEY_FIRMWARE = "firmware"
@@ -581,6 +594,7 @@ data class SonyStateSnapshot(
             capabilitiesKnown = bundle.getBoolean(KEY_CAPABILITIES_KNOWN, false),
             initialValuesReady = bundle.getBoolean(KEY_INITIAL_VALUES_READY, false),
             essentialValuesReady = bundle.getBoolean(KEY_ESSENTIAL_VALUES_READY, false),
+            audioLinkConnected = bundle.getBoolean(KEY_AUDIO_LINK_CONNECTED, false),
             deviceName = bundle.getString(KEY_DEVICE_NAME),
             deviceAddress = bundle.getString(KEY_DEVICE_ADDRESS),
             firmwareVersion = bundle.getString(KEY_FIRMWARE),
