@@ -712,13 +712,24 @@ class SonyHeadphoneRepository private constructor(
     private val debugLogForwarder: ((String, DebugLogKind) -> Unit)? = null,
 ) : SonyBleClientListener {
     private val appContext = systemContext.applicationContext ?: systemContext
-    private val client = SonyBleClient(appContext, this)
     private val mediaController = MediaPlaybackController(appContext)
     private val modelImageCatalog = SonyModelImageCatalog(remoteModelInfoReader)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val leAudioProfileGateway = LeAudioProfileGateway(appContext)
     private val _state = MutableStateFlow(SonyHeadphoneUiState())
     private val _debugLogs = MutableStateFlow<List<DebugLogEntry>>(emptyList())
+    /**
+     * Constructed last of the fields a [SonyBleClientListener] callback can reach, because `this`
+     * becomes the client's listener before the constructor returns.
+     *
+     * The client's own init binds the LE Audio profile proxy and logs the result, so [onLog] runs
+     * on the constructing thread mid-construction, and `getProfileProxy` delivers
+     * `onServiceConnected` on the Bluetooth main looper while that is still in flight. Declared
+     * above [_debugLogs] — as it was — both reached a null flow: the in-constructor throw only
+     * aborted the hot-reload activation, but the main-looper one was an uncaught NPE on
+     * com.android.bluetooth's main thread and took the whole stack down with it.
+     */
+    private val client = SonyBleClient(appContext, this)
     private val leAudioCoordinator = LeAudioSwitchCoordinator(
         object : LeAudioSwitchCoordinator.Callbacks {
             override fun requestPairedHistory(): Boolean {
