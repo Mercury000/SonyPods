@@ -253,13 +253,16 @@ object ConfigManager {
     private var store: SharedPreferences? = null
 
     /**
-     * Config awaiting a remote-prefs write because the LSPosed service was unavailable
-     * at save time (app process only). Flushed by [attachStore] once the service
-     * (re)binds, so the cross-process store stays authoritative even if a save raced
-     * the service connection. Memory-only by design: no local prefs file may reappear.
+     * Save-time mutations awaiting a remote-prefs write because the LSPosed service was
+     * unavailable at save time (app process only). Replayed over the config read from the
+     * store by [attachStore] once the service (re)binds. They are buffered as mutations
+     * rather than as a whole-config snapshot: before the store is attached the cache is
+     * still the untouched [AppConfig] default, so serializing a snapshot derived from it
+     * would overwrite the user's persisted config with defaults. Memory-only by design:
+     * no local prefs file may reappear.
      */
     @Volatile
-    private var pendingConfig: AppConfig? = null
+    private var pendingMutation: ((AppConfig) -> AppConfig)? = null
 
     internal fun encode(config: AppConfig): String = json.encodeToString(AppConfig.serializer(), config)
 
@@ -281,10 +284,15 @@ object ConfigManager {
         }
         store = prefs
         refreshFromPrefs(prefs)
-        pendingConfig?.let { pending ->
-            pendingConfig = null
-            writeToStore(prefs, pending)
-            Log.d(TAG, "flushed buffered config fakeDeviceId=${pending.fakeDeviceId}")
+        val buffered = pendingMutation
+        if (buffered != null) {
+            pendingMutation = null
+            val base = cachedConfig
+            val replayed = buffered(base).normalized()
+            cachedConfig = replayed
+            logConfigChange("flushPending", base, replayed)
+            writeToStore(prefs, replayed)
+            Log.d(TAG, "flushed buffered config mutations")
         }
     }
 
@@ -397,18 +405,37 @@ object ConfigManager {
         it.copy(scSafeListeningMode = mode.coerceIn(SC_SL_MODE_UNKNOWN, SC_SL_MODE_ON))
     }
 
-    /** Mutate, normalize, cache, and persist the config to the cross-process store. */
+    /**
+     * Mutate, normalize, cache, and persist the config to the cross-process store.
+     *
+     * While the store is attached the mutation is applied to the cached config right
+     * away and the whole config is written. Before the store is attached the cache has
+     * never seen the persisted config (it is still the default), so the mutation itself
+     * is buffered instead — building a snapshot now would later overwrite the user's
+     * real config with defaults when [attachStore] flushes it.
+     */
     private fun save(mutate: (AppConfig) -> AppConfig) {
-        val oldConfig = cachedConfig
-        val normalized = mutate(cachedConfig).normalized()
-        cachedConfig = normalized
-        logConfigChange("save", oldConfig, normalized)
         val target = store
         if (target != null) {
+            val oldConfig = cachedConfig
+            val normalized = mutate(cachedConfig).normalized()
+            cachedConfig = normalized
+            logConfigChange("save", oldConfig, normalized)
             writeToStore(target, normalized)
         } else {
-            pendingConfig = normalized
-            Log.w(TAG, "save before store bind; buffering until LSPosed service connects")
+            bufferMutation(mutate)
+            Log.w(TAG, "save before store bind; buffering mutation until LSPosed service connects")
+        }
+    }
+
+    /**
+     * Compose a mutation onto the pre-bind buffer so buffered saves replay in call order
+     * over the store's config once [attachStore] reads it.
+     */
+    private fun bufferMutation(mutate: (AppConfig) -> AppConfig) {
+        synchronized(this) {
+            val previous = pendingMutation
+            pendingMutation = previous?.let { earlier -> { config -> mutate(earlier(config)) } } ?: mutate
         }
     }
 
