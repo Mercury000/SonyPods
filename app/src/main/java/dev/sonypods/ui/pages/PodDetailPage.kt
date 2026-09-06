@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
@@ -102,6 +103,14 @@ fun PodDetailPage(
     boxImagePath: String? = null,
     /** Changes whenever the cached image record is rewritten, even if its path is stable. */
     boxImageRevision: Long = 0L,
+    /**
+     * Whether the per-device image record has been read at all.
+     *
+     * False means "not known yet", which is not the same as "no image": the metadata store binds after
+     * composition starts, and drawing the Sony placeholder in that window makes a cold launch swap the
+     * hero image once the real one arrives. Nothing is drawn until this is true.
+     */
+    imageKnown: Boolean = true,
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (isLandscape) {
@@ -128,7 +137,7 @@ fun PodDetailPage(
                         contentAlignment = Alignment.TopCenter,
                     ) {
                         Image(
-                            painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
+                            painter = rememberPodImagePainter(boxImagePath, boxImageRevision, imageKnown),
                             contentDescription = stringResource(R.string.cd_earphones),
                             modifier = Modifier
                                 .fillMaxWidth(0.62f)
@@ -182,7 +191,7 @@ fun PodDetailPage(
         item {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 Image(
-                    painter = rememberPodImagePainter(boxImagePath, boxImageRevision),
+                    painter = rememberPodImagePainter(boxImagePath, boxImageRevision, imageKnown),
                     contentDescription = stringResource(R.string.cd_earphones),
                     modifier = Modifier
                         .fillMaxWidth(0.7f)
@@ -208,17 +217,22 @@ fun PodDetailPage(
 }
 
 @Composable
-private fun rememberPodImagePainter(path: String?, revision: Long): Painter {
+private fun rememberPodImagePainter(path: String?, revision: Long, known: Boolean): Painter {
     // The downloader intentionally reuses the per-device path. The revision is
     // persisted together with the image record and changes after every completed
     // replacement, so Compose does not keep a Bitmap decoded from the old bytes.
-    return remember(path, revision) {
+    val cached = remember(path, revision) {
         path?.let {
             runCatching { BitmapFactory.decodeFile(it) }
                 .getOrNull()
                 ?.let { bitmap -> BitmapPainter(bitmap.asImageBitmap()) }
         }
-    } ?: painterResource(defaultLogoRes())
+    }
+    if (cached != null) return cached
+    // Nothing rather than the placeholder while the record is still unknown, so a cold launch shows
+    // one image, not two.
+    val empty = remember { BitmapPainter(ImageBitmap(1, 1)) }
+    return if (known) painterResource(defaultLogoRes()) else empty
 }
 
 /** Effective night mode: AppTheme rewrites the LocalContext uiMode, so the manual

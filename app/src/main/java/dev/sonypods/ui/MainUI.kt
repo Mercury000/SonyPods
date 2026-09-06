@@ -238,6 +238,15 @@ fun MainUI(
     val startupTab = remember { mutableStateOf(LegacyConfigMigrator.readStartupTab(context)) }
     val visibility = remember { mutableStateOf(appConfig.visibility) }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.loadCurrent()) }
+    /**
+     * Whether the per-device metadata store has been read at all.
+     *
+     * It lives behind the Xposed service, which binds after composition starts, so the first frames
+     * see an empty list that is indistinguishable from "this phone has never connected a headset".
+     * Committing to a fallback in that window is what made the earphone tab open on the generic title
+     * and placeholder image and then visibly swap both for the real ones.
+     */
+    var earphonePrefsLoaded by remember { mutableStateOf(PodImagePrefs.isStoreAttached()) }
 
     val sonyConnected = sonyState.connected
     val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
@@ -548,6 +557,7 @@ fun MainUI(
         val storeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
             if (key == PodImagePrefs.PREF_KEY_EARPHONES || key == null) {
                 earphonePrefs.value = PodImagePrefs.load(changed)
+                earphonePrefsLoaded = true
             }
         }
         val serviceListener: (io.github.libxposed.service.XposedService?) -> Unit = { service ->
@@ -561,6 +571,7 @@ fun MainUI(
                 store?.let {
                     runCatching { it.registerOnSharedPreferenceChangeListener(storeListener) }
                     earphonePrefs.value = PodImagePrefs.load(it)
+                    earphonePrefsLoaded = true
                 }
             }
         }
@@ -606,6 +617,7 @@ fun MainUI(
         ancCycleModes.value = c.ancCycleModes
         visibility.value = c.visibility
         earphonePrefs.value = PodImagePrefs.loadCurrent()
+        earphonePrefsLoaded = earphonePrefsLoaded || PodImagePrefs.isStoreAttached()
         // First launch after the app-only split: migrateAppOnlyPrefsToUi ran during
         // bind (before this listener fired), so local prefs now holds the startup tab
         // the user saved in the old remote config. Apply it if composition already
@@ -1217,8 +1229,7 @@ fun MainUI(
                         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
                     // The headset is the page's subject, so its identity outlives the link — and
                     // outlives the process. `remember` alone only survives while this composition
-                    // does, which is why a fresh launch with nothing connected showed the generic
-                    // placeholder: the fallback has to come from the persisted per-device record.
+                    // does, so the cross-launch fallback comes from the persisted per-device record:
                     // PodImagePrefs.upsertConnected stamps `lastConnectedAt` on every connect, so the
                     // newest of those is the headset the user last used.
                     val lastUsedPref = remember(earphonePrefs.value) {
@@ -1230,12 +1241,19 @@ fun MainUI(
                     // such a session for a moment — following it flashed "Sony headphones" over the
                     // real name, and worse, latched it as the remembered one.
                     if (canShowDetailPage && displayTitle.isNotEmpty()) lastKnownTitle = displayTitle
-                    val detailTitle = displayTitle
+                    val knownTitle = displayTitle
                         .takeIf { canShowDetailPage }
                         .orEmpty()
                         .ifEmpty { lastKnownTitle }
                         .ifEmpty { lastUsedPref?.name.orEmpty() }
-                        .ifEmpty { stringResource(R.string.pod_info) }
+                    // The generic title is a conclusion, not a default: it means "there is no headset
+                    // to name". Until the metadata store has been read that conclusion is not
+                    // available, and drawing it anyway is what made the tab open on 耳机信息 and the
+                    // placeholder image and then visibly swap both — worst of all when this is the
+                    // startup tab, where it is the first thing on screen.
+                    val detailTitle = knownTitle.ifEmpty {
+                        if (earphonePrefsLoaded) stringResource(R.string.pod_info) else ""
+                    }
                     var lastKnownImageAddress by remember { mutableStateOf(connectedDeviceAddress) }
                     if (connectedDeviceAddress.isNotBlank()) {
                         lastKnownImageAddress = connectedDeviceAddress
@@ -1367,6 +1385,9 @@ fun MainUI(
                                         listState = detailListState,
                                         boxImagePath = currentEarphonePref?.boxImagePath,
                                         boxImageRevision = currentEarphonePref?.imageRevision ?: 0L,
+                                        // Same reason as the title: no record yet is not the same as
+                                        // no image, and the placeholder must not be drawn on a guess.
+                                        imageKnown = earphonePrefsLoaded,
                                     )
                                     if (showSessionProgress) {
                                         Box(
