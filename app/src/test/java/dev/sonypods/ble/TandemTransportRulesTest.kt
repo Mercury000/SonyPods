@@ -18,13 +18,33 @@ class TandemTransportRulesTest {
     }
 
     @Test
-    fun writableValueLength_requiresValidTwoByteBigEndianProtocolRange() {
+    fun writableValueLength_parsesOnlyTwoByteBigEndianValues() {
         assertEquals(17, TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x00, 0x11)))
         assertEquals(509, TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x01, 0xFD.toByte())))
         assertNull(TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x00)))
         assertNull(TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x00, 0x11, 0x00)))
-        assertNull(TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x00, 0x10)))
-        assertNull(TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x02, 0x00)))
+    }
+
+    @Test
+    fun writableValueLength_outOfWindowIsAdvisoryNotFatal() {
+        // Sound Connect logs "Too small / Too large" and still adopts the raw value
+        // (`C19228a.mo69459d`), so the range is a warning, never a parse failure.
+        assertEquals(16, TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x00, 0x10)))
+        assertEquals(512, TandemGattProtocolRules.parseWritableValueLength(byteArrayOf(0x02, 0x00)))
+        assertTrue(TandemGattProtocolRules.isOutOfProtocolRange(16))
+        assertTrue(TandemGattProtocolRules.isOutOfProtocolRange(512))
+        assertFalse(TandemGattProtocolRules.isOutOfProtocolRange(17))
+        assertFalse(TandemGattProtocolRules.isOutOfProtocolRange(509))
+    }
+
+    @Test
+    fun determineMtuReady_onlyOneByteMtuIsDetermined() {
+        // gh.C17018p: DETERMINE_MTU is a single-byte MtuStatus; 0x01 = MTU_IS_DETERMINED.
+        assertTrue(TandemGattProtocolRules.isDetermineReady(byteArrayOf(0x01)))
+        assertFalse(TandemGattProtocolRules.isDetermineReady(byteArrayOf(0x00)))
+        assertFalse(TandemGattProtocolRules.isDetermineReady(byteArrayOf(0xFF.toByte())))
+        assertFalse(TandemGattProtocolRules.isDetermineReady(byteArrayOf(0x01, 0x00)))
+        assertFalse(TandemGattProtocolRules.isDetermineReady(byteArrayOf()))
     }
 
     @Test

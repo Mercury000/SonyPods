@@ -126,15 +126,17 @@ class SonyTandemHeadphoneAdapterTest {
     }
 
     @Test
-    fun withEndpointChannels_v1McRebindsToV1() {
+    fun withEndpointChannels_v1OverSppBindsToV1() {
+        // A V1 device (WH-1000XM4) is always SPP on the wire; SC has no V1-over-GATT at all.
         val profile = SonyTandemHeadphoneAdapter.withEndpointChannels(
             HeadphoneAdapterRegistry.resolve(xm4Device()),
-            setOf(TandemChannel.GATT_V1_MC),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
         )
         assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.BATTERY))
         assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.NOISE_CONTROL))
         assertEquals(HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1, profile.protocolFor(HeadphoneFeature.EQ))
-        assertEquals(TandemChannel.GATT_V1_MC, profile.channelFor(HeadphoneFeature.NOISE_CONTROL))
+        assertEquals(TandemChannel.SPP_MDR, profile.channelFor(HeadphoneFeature.NOISE_CONTROL))
         assertTrue(profile.rebindGeneration > 0)
     }
 
@@ -167,7 +169,8 @@ class SonyTandemHeadphoneAdapterTest {
     fun parse_protocolInfoResponse_returnsWhitelistedVersion() {
         val profile = SonyTandemHeadphoneAdapter.withEndpointChannels(
             HeadphoneAdapterRegistry.resolve(xm4Device()),
-            setOf(TandemChannel.GATT_V1_MC),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
         )
         // RET_PROTOCOL_INFO: [0x0E][0x01][type 0x00][0x70][0x10] -> 0x7010
         val raw = byteArrayOf(0x0E, 0x01, 0x00, 0x70, 0x10)
@@ -1043,11 +1046,14 @@ class SonyTandemHeadphoneAdapterTest {
         device: DiscoveredSonyDevice,
         functions: List<SonySupportedFunction>,
     ): ConnectedHeadphoneProfile {
+        // V1 devices are always SPP on the wire (SC has no V1-over-GATT); bind the V1 generation
+        // through the SPP record so the feature/channel model matches a real V1 session.
         val neutral = SonyTandemHeadphoneAdapter.withEndpointChannels(
             resolve(device),
-            setOf(TandemChannel.GATT_V1_MC),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
         )
-        return SonyCapabilityProbe.applyToProfile(neutral, functions, HeadphoneTransport.GATT_MC)
+        return SonyCapabilityProbe.applyToProfile(neutral, functions, HeadphoneTransport.SPP)
     }
 
     private fun xm4Device(): DiscoveredSonyDevice =

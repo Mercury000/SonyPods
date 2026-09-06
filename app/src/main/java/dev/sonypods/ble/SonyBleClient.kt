@@ -72,7 +72,6 @@ data class SonyAudioAdvertisement(
 data class SonyBleConnectionInfo(
     val mtu: Int = 23,
     val writableValueLength: Int? = null,
-    val optimalMtu: Int? = null,
     val transport: String = "GATT_HPC",
     /** Channels the transport actually exposes (GATT endpoints + SPP). Used at
      * connection time to bind the neutral profile to the protocol generation
@@ -180,8 +179,10 @@ internal fun tandemEndpointSupportState(services: Collection<UUID>): String? =
 internal fun unsupportedTandemEndpointReason(services: Collection<UUID>): String {
     val labels = services.map { SonyGatt.serviceLabel(it) }
     return when {
-        SonyGatt.TANDEM_V1_MC_SERVICE in services ->
-            "Tandem V1 MC service was found, but no usable MC control endpoint could be registered. Services: ${labels.joinToString()}"
+        SonyGatt.TANDEM_V2_HPC_SERVICE in services ->
+            "Tandem V2 HPC service was found, but its control endpoint (HPC TO/FROM-ACC) is not usable on this connection. Services: ${labels.joinToString()}"
+        SonyGatt.TANDEM_V2_MC_SERVICE in services || SonyGatt.TANDEM_V1_MC_SERVICE in services ->
+            "This LE endpoint exposes only a Tandem MC service; Sound Connect's GATT control runs over the V2 HPC service alone. Services: ${labels.joinToString()}"
         SonyGatt.LE_AUDIO_CAPABILITY_FOR_HPC in services ->
             "This LE endpoint exposes LE Audio capability, not Tandem V2 HPC control. Try disabling LE Audio / using classic-only mode, then rescan."
         SonyGatt.BLUETOOTH_PAIRING_COMPLETE_NAME_SERVICE in services ->
@@ -191,8 +192,10 @@ internal fun unsupportedTandemEndpointReason(services: Collection<UUID>): String
 }
 
 private val supportedGattControlServices = setOf(
+    // Sound Connect's GATT Tandem session exists only over the V2 HPC service
+    // (`C23641b.m92443C` constructs it on TANDEM_V2_HPC_SERVICE; no MC service is ever
+    // used as a control bearer, and a V1 bearer is never dialled over GATT).
     SonyGatt.TANDEM_V2_HPC_SERVICE,
-    SonyGatt.TANDEM_V1_MC_SERVICE,
 )
 
 interface SonyBleClientListener {
@@ -230,11 +233,8 @@ class SonyBleClient(
     private var scanning = false
     private var gatt: BluetoothGatt? = null
     private var connectedDevice: DiscoveredSonyDevice? = null
-    private var toAcc: BluetoothGattCharacteristic? = null
-    private var fromAcc: BluetoothGattCharacteristic? = null
     private val gattEndpoints: MutableMap<TandemChannel, GattTandemEndpoint> = mutableMapOf()
     private var writableValueLength: Int? = null
-    private var optimalMtu: Int? = null
     private var negotiatedMtu: Int = 23
     private var handshakeStep: HandshakeStep = HandshakeStep.Idle
     private var determineMtuNotificationEnabled = false
@@ -265,6 +265,26 @@ class SonyBleClient(
      */
     private var gattAttempt = 0
     private var gattRouteTarget: Pair<DiscoveredSonyDevice, BluetoothDevice>? = null
+
+    /**
+     * A connect that arrived while the LE Audio profile proxy was still binding.
+     *
+     * [resolveTandemRoute] keys the transport on the proxy's connected list, so deciding against a
+     * half-bound proxy reads "no LE Audio session": a hot-start connect on a headset whose LE Audio
+     * is already up would route to SPP and then get its GATT vetoed. Sound Connect defers the same
+     * decision behind `awaitLeAudioReady` (`BtProfileGateway.mo61779l`), which queues the whole
+     * dispatch until the proxy is READY. We mirror that with a bounded defer that lands on
+     * [leAudioServiceListener]; if the bind never completes, [LE_AUDIO_PROXY_READY_TIMEOUT_MS] lets
+     * it through under the current "LE Audio down" reading rather than hanging the request.
+     */
+    private data class PendingConnectRequest(
+        val device: DiscoveredSonyDevice,
+        val tandemMigration: LeaConnectionType?,
+    )
+
+    private val pendingConnectLock = Any()
+    private var pendingConnect: PendingConnectRequest? = null
+    private val proxyReadyTimeout = Runnable { runPendingConnect("LE Audio proxy bind timed out") }
     /**
      * The LE Audio profile proxy, and whether a bind is already in flight.
      *
@@ -285,12 +305,16 @@ class SonyBleClient(
             leAudioProxy = proxy
             leAudioProxyBinding = false
             runCatching { log("LE Audio profile proxy connected (profile=$profile)") }
+            runPendingConnect("LE Audio proxy ready")
         }
 
         override fun onServiceDisconnected(profile: Int) {
             leAudioProxy = null
             leAudioProxyBinding = false
             runCatching { log("LE Audio profile proxy disconnected (profile=$profile)") }
+            // A connect deferred for the bind should not hang once the proxy is gone; let it
+            // through so the route re-reads the live (now empty) connected list.
+            runPendingConnect("LE Audio proxy disconnected before deferred connect")
         }
     }
 
@@ -391,14 +415,11 @@ class SonyBleClient(
                 closeGattSessions()
                 pendingNotifyEndpoints.clear()
                 writing = false
-                toAcc = null
-                fromAcc = null
                 gattEndpoints.clear()
                 val mtuPending = handshakeStep == HandshakeStep.RequestMtu
                 handshakeStep = HandshakeStep.Idle
                 determineMtuNotificationEnabled = false
                 writableValueLength = null
-                optimalMtu = null
                 negotiatedMtu = 23
                 unsupportedProbe = null
                 closeGattAfterMtuSettles(gatt, mtuPending)
@@ -426,51 +447,31 @@ class SonyBleClient(
             }
             val services = gatt.services.map { it.uuid }
             val service = gatt.getService(SonyGatt.TANDEM_V2_HPC_SERVICE)
-            if (service != null) {
-                log("Tandem V2 HPC service discovered")
-                val hpcSpec = TandemGattRouting.endpointSpecFor(TandemChannel.GATT_V2_HPC)
-                toAcc = service.getCharacteristic(hpcSpec.toAccUuid)
-                fromAcc = service.getCharacteristic(hpcSpec.fromAccUuid)
-                if (toAcc != null && fromAcc != null) {
-                    gattEndpoints[TandemChannel.GATT_V2_HPC] = GattTandemEndpoint(
-                        channel = TandemChannel.GATT_V2_HPC,
-                        toAcc = toAcc!!,
-                        fromAcc = fromAcc!!,
-                    )
-                } else {
-                    val characteristics = service.characteristics.joinToString { it.uuid.toString() }
-                    log("Tandem V2 HPC characteristics incomplete. Available=[$characteristics]")
-                }
-            }
-            discoverMcEndpoints(gatt)
-            if (gattEndpoints.isEmpty()) {
+            val hpcSpec = TandemGattRouting.endpointSpecFor(TandemChannel.GATT_V2_HPC)
+            val hpcToAcc = service?.getCharacteristic(hpcSpec.toAccUuid)
+            val hpcFromAcc = service?.getCharacteristic(hpcSpec.fromAccUuid)
+            if (service == null || hpcToAcc == null || hpcFromAcc == null) {
+                val characteristics = service?.characteristics?.joinToString { it.uuid.toString() }.orEmpty()
                 val labels = services.joinToString { SonyGatt.serviceLabel(it) }
-                val reason = unsupportedTandemEndpointReason(services)
-                log("No usable Tandem GATT endpoint on the LE bearer. Available services=[$labels]")
-                beginUnsupportedEndpointProbe(gatt, services, reason)
+                log(
+                    "No Tandem V2 HPC control endpoint on the LE bearer. " +
+                        "Services=[$labels] HPC chars=[$characteristics]"
+                )
+                // Sound Connect builds its GATT Tandem session on the V2 HPC service alone
+                // (`C23641b.mo77715c` fails any device without it) and funnels every table over
+                // that one pipe. An MC-only or V1 bearer is unsupported here, never half-handshaken
+                // into a session with no writable-value basis.
+                beginUnsupportedEndpointProbe(gatt, services, unsupportedTandemEndpointReason(services))
                 return
             }
-            log("Tandem GATT endpoints discovered: ${gattEndpoints.keys.joinToString()}")
+            log("Tandem V2 HPC service discovered")
+            gattEndpoints[TandemChannel.GATT_V2_HPC] = GattTandemEndpoint(
+                channel = TandemChannel.GATT_V2_HPC,
+                toAcc = hpcToAcc,
+                fromAcc = hpcFromAcc,
+            )
+            log("Tandem GATT control endpoint ready: ${gattEndpoints.keys.joinToString()}")
             beginTandemHandshake(gatt)
-        }
-
-        private fun discoverMcEndpoints(gatt: BluetoothGatt) {
-            for (channel in listOf(TandemChannel.GATT_V2_MC, TandemChannel.GATT_V1_MC)) {
-                val spec = TandemGattRouting.endpointSpecFor(channel)
-                val service = gatt.getService(spec.serviceUuid) ?: continue
-                val mcToAcc = service.getCharacteristic(spec.toAccUuid)
-                val mcFromAcc = service.getCharacteristic(spec.fromAccUuid)
-                if (mcToAcc != null && mcFromAcc != null) {
-                    gattEndpoints[channel] = GattTandemEndpoint(
-                        channel = channel,
-                        toAcc = mcToAcc,
-                        fromAcc = mcFromAcc,
-                    )
-                    log("MC endpoint registered: $channel")
-                } else {
-                    log("MC service $channel found but characteristics incomplete")
-                }
-            }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
@@ -488,6 +489,11 @@ class SonyBleClient(
             }
             log("MTU changed: mtu=$mtu status=$status")
             if (handshakeStep == HandshakeStep.RequestMtu) {
+                // MTU is settled on the Android side. Sound Connect's active wiring reads
+                // WRITABLE_VALUE_LENGTH straight after this (its accessory DETERMINE_MTU handshake
+                // is gated on NOT having requested MTU); we keep a bounded readiness probe first so
+                // accessories that publish WVL only behind their own MTU-determined signal still
+                // yield a valid value. The probe is non-fatal — see enableDetermineMtuNotifications.
                 enableDetermineMtuNotifications(gatt)
             }
         }
@@ -554,28 +560,25 @@ class SonyBleClient(
             when {
                 descriptor.characteristic?.uuid == SonyGatt.DETERMINE_MTU &&
                     handshakeStep == HandshakeStep.EnableDetermineMtu -> {
+                    cancelHandshakeTimeout()
                     if (status != BluetoothGatt.GATT_SUCCESS) {
-                        failGattSession(gatt, "Failed to enable DETERMINE_MTU notification: $status")
+                        // Probe only: a device that rejects the subscription is exactly the
+                        // Android-requestMtu family SC reads WVL from directly. Never fail on it.
+                        log("DETERMINE_MTU enable write failed ($status); reading WRITABLE_VALUE_LENGTH directly")
+                        readWritableValueLength(gatt)
                         return
                     }
                     determineMtuNotificationEnabled = true
                     handshakeStep = HandshakeStep.WaitDetermineMtu
-                    scheduleHandshakeTimeout(
+                    scheduleHandshakeFallback(
                         gatt,
                         HandshakeStep.WaitDetermineMtu,
-                        DETERMINE_MTU_READY_TIMEOUT_MS,
-                        "Timed out waiting for DETERMINE_MTU ready notification",
-                    )
-                }
-                descriptor.characteristic?.uuid == SonyGatt.DETERMINE_MTU &&
-                    handshakeStep == HandshakeStep.DisableDetermineMtu -> {
-                    cancelHandshakeTimeout()
-                    if (status != BluetoothGatt.GATT_SUCCESS) {
-                        failGattSession(gatt, "Failed to disable DETERMINE_MTU notification: $status")
-                        return
+                        DETERMINE_MTU_PROBE_TIMEOUT_MS,
+                    ) {
+                        determineMtuNotificationEnabled = false
+                        log("DETERMINE_MTU ready not signalled within ${DETERMINE_MTU_PROBE_TIMEOUT_MS}ms; reading WRITABLE_VALUE_LENGTH directly")
+                        readWritableValueLength(gatt)
                     }
-                    determineMtuNotificationEnabled = false
-                    readWritableValueLength(gatt)
                 }
                 handshakeStep == HandshakeStep.EnableTandemNotifications &&
                     TandemGattRouting.fromAccChannel(
@@ -783,6 +786,43 @@ class SonyBleClient(
             listener.onBluetoothUnavailable("Bluetooth connect permission is missing")
             return
         }
+        // The transport decision reads the LE Audio proxy's connected list, and a half-bound proxy
+        // reads as "no LE Audio session". Hot-start connects (generation reload while a headset is
+        // already on LE Audio) can otherwise land in that window and route to SPP. Sound Connect
+        // never lets this happen: its dispatch paths run behind `awaitLeAudioReady`. Defer until the
+        // bind resolves, or until [LE_AUDIO_PROXY_READY_TIMEOUT_MS] lets the request through under
+        // the current "LE Audio down" reading.
+        if (leAudioProxy == null) {
+            bindLeAudioProxy()
+        }
+        if (leAudioProxy == null && leAudioProxyBinding) {
+            synchronized(pendingConnectLock) {
+                pendingConnect = PendingConnectRequest(device, tandemMigration)
+            }
+            timeoutHandler.removeCallbacks(proxyReadyTimeout)
+            timeoutHandler.postDelayed(proxyReadyTimeout, LE_AUDIO_PROXY_READY_TIMEOUT_MS)
+            log(
+                "LE Audio proxy still binding; deferring connect to ${device.address} " +
+                    "(max ${LE_AUDIO_PROXY_READY_TIMEOUT_MS}ms)"
+            )
+            return
+        }
+        connectNow(device, tandemMigration)
+    }
+
+    /** Runs the deferred request that [connect] parked while the proxy was binding. */
+    private fun runPendingConnect(reason: String) {
+        val request = synchronized(pendingConnectLock) {
+            val r = pendingConnect ?: return
+            pendingConnect = null
+            r
+        }
+        timeoutHandler.removeCallbacks(proxyReadyTimeout)
+        log("$reason; running deferred connect to ${request.device.address}")
+        connectNow(request.device, request.tandemMigration)
+    }
+
+    private fun connectNow(device: DiscoveredSonyDevice, tandemMigration: LeaConnectionType?) {
         stopScan()
         val route = resolveTandemRoute(device, tandemMigration)
         if (route == null) {
@@ -866,7 +906,15 @@ class SonyBleClient(
         // it immediately after its own disconnect(), so clearing here only cancels retries that no
         // longer have a route behind them.
         gattRouteTarget = null
+        cancelPendingConnect()
         closeGatt(notify = true)
+    }
+
+    private fun cancelPendingConnect() {
+        synchronized(pendingConnectLock) {
+            pendingConnect = null
+        }
+        timeoutHandler.removeCallbacks(proxyReadyTimeout)
     }
 
     /** Generation teardown: cancel callbacks and close every transport without notifying consumers. */
@@ -875,6 +923,7 @@ class SonyBleClient(
         stopScan()
         gattRouteTarget = null
         gattAttempt = 0
+        cancelPendingConnect()
         leAudioProxy?.let { proxy ->
             val profileId =
                 if (isTargetMobilePlatform()) QUALCOMM_LE_AUDIO_PROFILE else BluetoothProfile.LE_AUDIO
@@ -900,14 +949,11 @@ class SonyBleClient(
             activeWriteGeneration = null
             writing = false
         }
-        toAcc = null
-        fromAcc = null
         gattEndpoints.clear()
         val mtuPending = handshakeStep == HandshakeStep.RequestMtu
         handshakeStep = HandshakeStep.Idle
         determineMtuNotificationEnabled = false
         writableValueLength = null
-        optimalMtu = null
         negotiatedMtu = 23
         unsupportedProbe = null
         gatt?.disconnect()
@@ -1378,27 +1424,12 @@ class SonyBleClient(
     private fun beginTandemHandshake(gatt: BluetoothGatt) {
         cancelAllTimeouts()
         writableValueLength = null
-        optimalMtu = null
-        determineMtuNotificationEnabled = false
-        handshakeStep = HandshakeStep.ReadOptimalMtu
-        val characteristic = gatt.getService(SonyGatt.TANDEM_V2_HPC_SERVICE)
-            ?.getCharacteristic(SonyGatt.OPTIMAL_MTU)
-        if (characteristic == null) {
-            log("OPTIMAL_MTU missing; requesting default large MTU")
-            requestLargeMtu(gatt)
-            return
-        }
-        log("Handshake: read OPTIMAL_MTU")
-        if (!gatt.readCharacteristic(characteristic)) {
-            failGattSession(gatt, "Failed to enqueue OPTIMAL_MTU read")
-            return
-        }
-        scheduleHandshakeTimeout(
-            gatt,
-            HandshakeStep.ReadOptimalMtu,
-            OPTIMAL_MTU_TIMEOUT_MS,
-            "Timed out reading OPTIMAL_MTU",
-        )
+        // Sound Connect never reads OPTIMAL_MTU (zero runtime references in the APK); it requests a
+        // fixed 517 (`C16505w`, 0x205) right after connecting and discovers services on
+        // onMtuChanged. Do the same: no extra round trip, and the Android MTU exchange is what
+        // settles the link before WRITABLE_VALUE_LENGTH is read.
+        handshakeStep = HandshakeStep.RequestMtu
+        requestLargeMtu(gatt)
     }
 
     private fun handleCharacteristicRead(gatt: BluetoothGatt, uuid: UUID, value: ByteArray, status: Int) {
@@ -1406,7 +1437,7 @@ class SonyBleClient(
             handleUnsupportedProbeRead(gatt, probe, uuid, value, status)
             return
         }
-        if (uuid == SonyGatt.OPTIMAL_MTU || uuid == SonyGatt.WRITABLE_VALUE_LENGTH) {
+        if (uuid == SonyGatt.WRITABLE_VALUE_LENGTH) {
             cancelHandshakeTimeout()
         }
         if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -1414,21 +1445,20 @@ class SonyBleClient(
             return
         }
         when (uuid) {
-            SonyGatt.OPTIMAL_MTU -> {
-                val parsed = value.fold(0) { acc, byte -> (acc shl 8) or (byte.toInt() and 0xFF) }
-                optimalMtu = parsed
-                log("Read $uuid = ${value.hexString()} parsed=$parsed")
-                requestLargeMtu(gatt)
-                return
-            }
             SonyGatt.WRITABLE_VALUE_LENGTH -> {
                 val parsed = TandemGattProtocolRules.parseWritableValueLength(value)
                 if (parsed == null) {
                     failGattSession(
                         gatt,
-                        "Invalid WRITABLE_VALUE_LENGTH ${value.hexString()}; expected 2-byte big-endian value with value+3 in 20..512",
+                        "Invalid WRITABLE_VALUE_LENGTH ${value.hexString()}; expected 2-byte big-endian value",
                     )
                     return
+                }
+                // Sound Connect logs an out-of-window value and proceeds with it unchanged
+                // (`C19228a.mo69459d`: "Too small/Too large" then adopts the raw value); only a
+                // malformed length fails. Mirror that instead of tearing the session down.
+                if (TandemGattProtocolRules.isOutOfProtocolRange(parsed)) {
+                    log("WRITABLE_VALUE_LENGTH $parsed is outside the 20..512 window; Sound Connect logs this and proceeds with the raw value")
                 }
                 writableValueLength = parsed
                 log("Read $uuid = ${value.hexString()} parsed=$parsed")
@@ -1497,16 +1527,18 @@ class SonyBleClient(
     ) {
         val uuid = characteristic.uuid
         if (uuid == SonyGatt.DETERMINE_MTU) {
-            log("Handshake: DETERMINE_MTU notification ${value.hexString()}")
+            // The accessory-side "MTU is determined" signal (MtuStatus.MTU_IS_DETERMINED = 0x01,
+            // `gh.C17018p`). Only meaningful while the bounded readiness probe is subscribed and
+            // still waiting; anything else is not a Tandem frame.
             if (
                 handshakeStep == HandshakeStep.WaitDetermineMtu &&
                 determineMtuNotificationEnabled &&
                 TandemGattProtocolRules.isDetermineReady(value)
             ) {
                 cancelHandshakeTimeout()
-                disableDetermineMtuNotifications(gatt)
-            } else if (handshakeStep == HandshakeStep.WaitDetermineMtu) {
-                log("Handshake: ignoring unexpected DETERMINE_MTU payload ${value.hexString()}")
+                determineMtuNotificationEnabled = false
+                log("Handshake: DETERMINE_MTU ready; reading WRITABLE_VALUE_LENGTH")
+                readWritableValueLength(gatt)
             }
             return
         }
@@ -1638,11 +1670,10 @@ class SonyBleClient(
 
     private fun requestLargeMtu(gatt: BluetoothGatt) {
         handshakeStep = HandshakeStep.RequestMtu
-        val requested = (optimalMtu ?: 517).coerceIn(23, 517)
-        log("Handshake: request MTU $requested")
+        log("Handshake: request MTU $SC_REQUESTED_MTU")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            if (!gatt.requestMtu(requested)) {
-                log("requestMtu returned false; continuing with current MTU")
+            if (!gatt.requestMtu(SC_REQUESTED_MTU)) {
+                log("requestMtu returned false; probing the accessory DETERMINE_MTU signal instead")
                 enableDetermineMtuNotifications(gatt)
             }
         } else {
@@ -1650,48 +1681,54 @@ class SonyBleClient(
         }
     }
 
+    /**
+     * Keeps the accessory-side DETERMINE_MTU handshake that Sound Connect retains in `C19228a`'s
+     * preparation, used there when the client did NOT do an Android requestMtu
+     * (`doDetermineMtu = !m69483A()`). The module always requests MTU, so SC's active wiring would
+     * skip this entirely — but a generic engine must also serve accessories that only publish a
+     * valid WRITABLE_VALUE_LENGTH behind their own MTU-determined signal. Run it as a bounded,
+     * non-fatal readiness probe: if the accessory signals MTU_IS_DETERMINED (0x01) inside
+     * [DETERMINE_MTU_PROBE_TIMEOUT_MS] we read WVL after it; otherwise we read WVL anyway once the
+     * window closes, exactly as SC does on the requestMtu path. A probe can only add latency, never
+     * tear the session down — no single device's behaviour is assumed.
+     */
     private fun enableDetermineMtuNotifications(gatt: BluetoothGatt) {
         val characteristic = gatt.getService(SonyGatt.TANDEM_V2_HPC_SERVICE)
             ?.getCharacteristic(SonyGatt.DETERMINE_MTU)
         if (characteristic == null || characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG) == null) {
-            log("DETERMINE_MTU notification endpoint missing; reading WRITABLE_VALUE_LENGTH directly")
             readWritableValueLength(gatt)
             return
         }
         handshakeStep = HandshakeStep.EnableDetermineMtu
-        log("Handshake: enable DETERMINE_MTU notification")
+        log("Handshake: probe DETERMINE_MTU readiness")
         if (!writeNotificationState(gatt, characteristic, enabled = true)) {
-            failGattSession(gatt, "Failed to enqueue DETERMINE_MTU notification enable")
-            return
-        }
-        scheduleHandshakeTimeout(
-            gatt,
-            HandshakeStep.EnableDetermineMtu,
-            DETERMINE_MTU_READY_TIMEOUT_MS,
-            "Timed out enabling DETERMINE_MTU notification",
-        )
-    }
-
-    private fun disableDetermineMtuNotifications(gatt: BluetoothGatt) {
-        val characteristic = gatt.getService(SonyGatt.TANDEM_V2_HPC_SERVICE)
-            ?.getCharacteristic(SonyGatt.DETERMINE_MTU)
-        if (characteristic == null || characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG) == null) {
-            determineMtuNotificationEnabled = false
+            log("Failed to enable DETERMINE_MTU notification; reading WRITABLE_VALUE_LENGTH directly")
             readWritableValueLength(gatt)
             return
         }
-        handshakeStep = HandshakeStep.DisableDetermineMtu
-        log("Handshake: disable DETERMINE_MTU notification")
-        if (!writeNotificationState(gatt, characteristic, enabled = false)) {
-            failGattSession(gatt, "Failed to enqueue DETERMINE_MTU notification disable")
-            return
-        }
-        scheduleHandshakeTimeout(
+        scheduleHandshakeFallback(
             gatt,
-            HandshakeStep.DisableDetermineMtu,
-            DISABLE_DETERMINE_MTU_TIMEOUT_MS,
-            "Timed out disabling DETERMINE_MTU notification",
-        )
+            HandshakeStep.EnableDetermineMtu,
+            ENABLE_TANDEM_NOTIFICATION_TIMEOUT_MS,
+        ) {
+            log("DETERMINE_MTU enable write never completed; reading WRITABLE_VALUE_LENGTH directly")
+            readWritableValueLength(gatt)
+        }
+    }
+
+    private fun writeNotificationState(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        enabled: Boolean,
+    ): Boolean {
+        if (!gatt.setCharacteristicNotification(characteristic, enabled)) return false
+        val descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG) ?: return false
+        val value = if (enabled) {
+            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        } else {
+            BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+        }
+        return writeDescriptorValue(gatt, descriptor, value)
     }
 
     private fun readWritableValueLength(gatt: BluetoothGatt) {
@@ -1699,8 +1736,10 @@ class SonyBleClient(
         val characteristic = gatt.getService(SonyGatt.TANDEM_V2_HPC_SERVICE)
             ?.getCharacteristic(SonyGatt.WRITABLE_VALUE_LENGTH)
         if (characteristic == null) {
-            log("WRITABLE_VALUE_LENGTH missing; enabling Tandem notifications")
-            enableTandemNotifications(gatt)
+            // Sound Connect treats an unreadable WRITABLE_VALUE_LENGTH as a failed preparation
+            // (`C19228a`: FAIL_READ_WRITABLE_VALUE_LENGTH), because the session framer fragments
+            // against it. Without it the connection must not limp into Ready with an unknown split.
+            failGattSession(gatt, "WRITABLE_VALUE_LENGTH characteristic missing on the HPC service")
             return
         }
         log("Handshake: read WRITABLE_VALUE_LENGTH")
@@ -1741,7 +1780,6 @@ class SonyBleClient(
                 SonyBleConnectionInfo(
                     mtu = negotiatedMtu,
                     writableValueLength = writableValueLength,
-                    optimalMtu = optimalMtu,
                     transport = gattTransportLabel(),
                     channels = gattEndpoints.keys.toSet(),
                 )
@@ -1769,21 +1807,6 @@ class SonyBleClient(
             ENABLE_TANDEM_NOTIFICATION_TIMEOUT_MS,
             "Timed out enabling Tandem notification for ${endpoint.channel}",
         )
-    }
-
-    private fun writeNotificationState(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        enabled: Boolean,
-    ): Boolean {
-        if (!gatt.setCharacteristicNotification(characteristic, enabled)) return false
-        val descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG) ?: return false
-        val value = if (enabled) {
-            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        } else {
-            BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-        }
-        return writeDescriptorValue(gatt, descriptor, value)
     }
 
     private fun writeDescriptorValue(
@@ -1876,6 +1899,27 @@ class SonyBleClient(
         val timeout = Runnable {
             if (this.gatt === gatt && handshakeStep == expectedStep) {
                 failGattSession(gatt, reason)
+            }
+        }
+        handshakeTimeout = timeout
+        timeoutHandler.postDelayed(timeout, timeoutMs)
+    }
+
+    /**
+     * Schedules a timeout that runs [onTimeout] instead of failing the session, when the handshake
+     * is still in [expectedStep]. Used by the non-fatal DETERMINE_MTU readiness probe: the probe may
+     * time out without consequence.
+     */
+    private fun scheduleHandshakeFallback(
+        gatt: BluetoothGatt,
+        expectedStep: HandshakeStep,
+        timeoutMs: Long,
+        onTimeout: () -> Unit,
+    ) {
+        cancelHandshakeTimeout()
+        val timeout = Runnable {
+            if (this.gatt === gatt && handshakeStep == expectedStep) {
+                onTimeout()
             }
         }
         handshakeTimeout = timeout
@@ -1983,20 +2027,9 @@ class SonyBleClient(
         return true
     }
 
-    private fun defaultGattWriteChannel(): TandemChannel =
-        when {
-            TandemChannel.GATT_V2_HPC in gattEndpoints -> TandemChannel.GATT_V2_HPC
-            TandemChannel.GATT_V1_MC in gattEndpoints -> TandemChannel.GATT_V1_MC
-            TandemChannel.GATT_V2_MC in gattEndpoints -> TandemChannel.GATT_V2_MC
-            else -> TandemChannel.GATT_V2_HPC
-        }
+    private fun defaultGattWriteChannel(): TandemChannel = TandemChannel.GATT_V2_HPC
 
-    private fun gattTransportLabel(): String =
-        if (TandemChannel.GATT_V2_HPC in gattEndpoints) {
-            "GATT_HPC"
-        } else {
-            "GATT_MC"
-        }
+    private fun gattTransportLabel(): String = "GATT_HPC"
 
     private fun hasScanPermission(): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -2344,11 +2377,9 @@ class SonyBleClient(
 
     private enum class HandshakeStep {
         Idle,
-        ReadOptimalMtu,
         RequestMtu,
         EnableDetermineMtu,
         WaitDetermineMtu,
-        DisableDetermineMtu,
         ReadWritableValueLength,
         EnableTandemNotifications,
         Ready,
@@ -2373,14 +2404,26 @@ class SonyBleClient(
         private const val SONY_CHUNK_TANDEM_TRANSMITTING_LINE = 0x03
         private const val SONY_CHUNK_CLASSIC_BLUETOOTH_HASH = 0x05
         private const val SPP_WRITABLE_VALUE_LENGTH = 1024
-        private const val OPTIMAL_MTU_TIMEOUT_MS = 2_000L
         /** Ceiling on how long a close waits for its MTU reply; observed replies land ≤1.4 s. */
         private const val MTU_SETTLE_TIMEOUT_MS = 2_000L
-        private const val DETERMINE_MTU_READY_TIMEOUT_MS = 10_000L
-        private const val DISABLE_DETERMINE_MTU_TIMEOUT_MS = 5_000L
         private const val WRITABLE_VALUE_LENGTH_TIMEOUT_MS = 2_000L
+        /** How long the DETERMINE_MTU readiness probe waits for the accessory's 0x01 before reading
+         *  WRITABLE_VALUE_LENGTH anyway (SC's requestMtu path reads it with no wait at all). */
+        private const val DETERMINE_MTU_PROBE_TIMEOUT_MS = 500L
         private const val ENABLE_TANDEM_NOTIFICATION_TIMEOUT_MS = 5_000L
-        private const val WRITE_COMPLETION_TIMEOUT_MS = 500L
+        /**
+         * The MTU this GATT session requests, verbatim from Sound Connect: `C16505w` dials
+         * `requestMtu(517)` (0x205) right after connecting, before service discovery.
+         */
+        private const val SC_REQUESTED_MTU = 517
+        /**
+         * Sound Connect serializes characteristic writes behind a 5 s semaphore window
+         * (`C16505w.mo69538d`: tryAcquire(5000 ms), released by onCharacteristicWrite). A 500 ms
+         * window tears sessions down on links that are merely congested (status 143,
+         * GATT_CONNECTION_CONGESTED), so match SC's detection window instead of killing the
+         * connection on a slow-but-fine write.
+         */
+        private const val WRITE_COMPLETION_TIMEOUT_MS = 5_000L
         /** Qualcomm's private LE Audio profile id (mirrors LeAudioProfileGateway). */
         private const val QUALCOMM_LE_AUDIO_PROFILE = 32
         /**
@@ -2390,6 +2433,9 @@ class SonyBleClient(
          */
         private const val SC_CONNECT_ATTEMPTS = 3
         private const val SC_RETRY_DELAY_MS = 2_000L
+        /** Ceiling on how long [connect] waits for the LE Audio proxy bind before proceeding under
+         *  the current "LE Audio down" reading. Observed proxy binds land well under this. */
+        private const val LE_AUDIO_PROXY_READY_TIMEOUT_MS = 3_000L
         /**
          * The Sony Xperia platform flag Sound Connect keys its two divergent behaviours on
          * (`QualcommLEAudioConnectionChecker.m61691g()`, logged as "isTargetMobilePF"): reading the

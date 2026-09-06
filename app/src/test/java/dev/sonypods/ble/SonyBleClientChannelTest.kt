@@ -115,8 +115,10 @@ class SonyBleClientChannelTest {
     }
 
     @Test
-    fun tandemEndpointSupportState_v1McOnlyIsSupported() {
-        assertNull(tandemEndpointSupportState(listOf(SonyGatt.TANDEM_V1_MC_SERVICE)))
+    fun tandemEndpointSupportState_v1McOnlyIsNotSupported() {
+        // Sound Connect's GATT control session is the V2 HPC service alone (`C23641b.m92443C`); an
+        // MC-only bearer is never a supported control endpoint.
+        assertTrue(tandemEndpointSupportState(listOf(SonyGatt.TANDEM_V1_MC_SERVICE)) != null)
     }
 
     // ── Channel characteristic resolution ────────────────────────────────────

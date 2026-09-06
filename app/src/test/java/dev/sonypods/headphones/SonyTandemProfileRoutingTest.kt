@@ -614,10 +614,13 @@ class SonyTandemProfileRoutingTest {
         device: DiscoveredSonyDevice,
         functions: List<SonySupportedFunction>,
     ): ConnectedHeadphoneProfile {
+        // V1 devices are always SPP on the wire (SC has no V1-over-GATT); bind the V1 generation
+        // through the SPP record so the feature/channel model matches a real V1 session.
         val neutral = SonyTandemHeadphoneAdapter.withEndpointChannels(
             HeadphoneAdapterRegistry.resolve(device),
-            setOf(TandemChannel.GATT_V1_MC),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
         )
-        return SonyCapabilityProbe.applyToProfile(neutral, functions, HeadphoneTransport.GATT_MC)
+        return SonyCapabilityProbe.applyToProfile(neutral, functions, HeadphoneTransport.SPP)
     }
 }

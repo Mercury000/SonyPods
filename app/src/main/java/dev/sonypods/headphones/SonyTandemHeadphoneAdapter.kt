@@ -128,9 +128,9 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
      * endpoints. For SPP, the generation is resolved from the SPP service UUID
      * the SDP handshake bound to — matching SC, which keys V1/V2 off the SPP
      * UUID (96cc203e… → TABLE_SET_1/V1, 956c7b26… → TABLE_SET_2/V2), not the
-     * model name. A V1 MC GATT endpoint means V1; V2 HPC/MC means V2 (the V1
-     * fallback only triggers when no V2/SPP endpoint exists). Returns the
-     * profile unchanged when the generation already matches.
+     * model name. A GATT session is always the V2 HPC service (TABLE_SET_2),
+     * exactly as Sound Connect builds it; there is no V1-over-GATT and no MC
+     * bearer. Returns the profile unchanged when the generation already matches.
      */
     fun withEndpointChannels(
         profile: ConnectedHeadphoneProfile,
@@ -139,8 +139,7 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
     ): ConnectedHeadphoneProfile {
         val variant = bindVariantFromChannels(channels, sppUuid) ?: return profile
         if (variant == profile.protocolFor(HeadphoneFeature.DEVICE_INFO)) {
-            // Same table, but the endpoints may still have changed — a reconnect over LE Audio
-            // exposes only the HPC service where the previous session had MC.
+            // Same table, but the endpoint set may still have changed between connects.
             return profile.copy(
                 featureBindings = buildFeatureBindings(
                     profile.featureProtocolMap,
@@ -170,9 +169,10 @@ object SonyTandemHeadphoneAdapter : HeadphoneAdapter {
                     }
                 }
             }
+        // Sound Connect's GATT Tandem session is always the V2 HPC service (`C23641b.m92443C`,
+        // TABLE_SET_2) — an MC or V1 service is never a GATT control bearer. Only the HPC
+        // endpoint therefore resolves a generation; a V1_MC-only set binds nothing.
         TandemChannel.GATT_V2_HPC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
-        TandemChannel.GATT_V2_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V2_TABLE1
-        TandemChannel.GATT_V1_MC in channels -> HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE1
         else -> null
     }
 

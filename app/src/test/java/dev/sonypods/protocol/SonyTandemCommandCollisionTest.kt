@@ -279,11 +279,13 @@ class SonyTandemCommandCollisionTest {
         )
 
     private fun xm4Profile(): ConnectedHeadphoneProfile {
+        // V1 devices are always SPP on the wire (SC has no V1-over-GATT).
         val neutral = SonyTandemHeadphoneAdapter.withEndpointChannels(
             HeadphoneAdapterRegistry.resolve(xm4Device()),
-            setOf(TandemChannel.GATT_V1_MC),
+            setOf(TandemChannel.SPP_MDR),
+            sppUuid = java.util.UUID.fromString("96cc203e-5068-46ad-b32d-e316f5e069ba"),
         )
-        return SonyCapabilityProbe.applyToProfile(neutral, v1FullSet(), HeadphoneTransport.GATT_MC)
+        return SonyCapabilityProbe.applyToProfile(neutral, v1FullSet(), HeadphoneTransport.SPP)
     }
 
     private fun linkBudsSProfile(): ConnectedHeadphoneProfile {
