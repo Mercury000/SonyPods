@@ -69,8 +69,6 @@ fun SettingsPage(
     onMoreClickActionChange: (Int) -> Unit = {},
     fusionMoreClickAction: MutableState<Int> = mutableStateOf(ConfigManager.FUSION_MORE_CLICK_SYSTEM_SETTINGS),
     onFusionMoreClickActionChange: (Int) -> Unit = {},
-    ignoreRandomLePairingRequests: MutableState<Boolean> = mutableStateOf(false),
-    onIgnoreRandomLePairingRequestsChange: (Boolean) -> Unit = {},
     fakeDeviceId: MutableState<String> = mutableStateOf(ConfigManager.DEFAULT_FAKE_DEVICE_ID),
     onFakeDeviceIdChange: (String) -> Unit = {},
     onOpenTheme: () -> Unit = {}
@@ -340,22 +338,6 @@ fun SettingsPage(
                     items = fusionMoreClickActionOptions,
                     selectedIndex = fusionMoreClickActionValues.indexOf(fusionMoreClickAction.value).coerceAtLeast(0),
                     onSelectedIndexChange = { onFusionMoreClickActionChange(fusionMoreClickActionValues[it]) },
-                )
-            }
-        }
-
-        item {
-            SmallTitle(
-                text = stringResource(R.string.settings_section_bluetooth),
-                modifier = Modifier.fillMaxWidth(),
-                insideMargin = sectionTitleInsideMargin,
-            )
-            Card {
-                SwitchPreference(
-                    title = stringResource(R.string.ignore_random_le_pairing),
-                    summary = stringResource(R.string.ignore_random_le_pairing_summary),
-                    checked = ignoreRandomLePairingRequests.value,
-                    onCheckedChange = { onIgnoreRandomLePairingRequestsChange(it) }
                 )
             }
         }
