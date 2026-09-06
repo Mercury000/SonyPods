@@ -104,6 +104,8 @@ abstract class HookContext {
     protected fun registerRemoteConfigChangeListener() {
         if (remoteConfigListener != null) return
         val source = runCatching { prefsProvider() }.getOrElse { prefs }
+        runCatching { ConfigManager.refreshFromPrefs(source) }
+            .onFailure { android.util.Log.w("SonyPods-Hook", "initial remote config refresh failed", it) }
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             // Re-fetch: getRemotePreferences returns a snapshot at call time, and a fresh
             // fetch reflects the latest data the framework holds.

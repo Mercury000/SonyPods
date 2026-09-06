@@ -293,8 +293,16 @@ object ConfigManager {
     fun refreshFromPrefs(prefs: SharedPreferences): AppConfig {
         val oldConfig = cachedConfig
         val raw = runCatching { prefs.getString(PREF_KEY_CONFIG_JSON, null) }.getOrNull()
-        val loaded = raw?.let(::decode) ?: AppConfig().also {
-            if (raw != null) Log.w(TAG, "config_json failed to decode; using defaults")
+        if (raw == null) {
+            if (runCatching { prefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)) {
+                Log.w(TAG, "config_json returned null despite key present; keeping current cache")
+            }
+            return cachedConfig
+        }
+        val loaded = decode(raw)
+        if (loaded == null) {
+            Log.w(TAG, "config_json failed to decode; keeping current cache")
+            return cachedConfig
         }
         cachedConfig = loaded.normalized()
         logConfigChange("refreshFromPrefs", oldConfig, cachedConfig)

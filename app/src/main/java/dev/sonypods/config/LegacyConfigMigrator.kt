@@ -81,15 +81,23 @@ object LegacyConfigMigrator {
             val legacy = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
             if (!remote.contains(ConfigManager.PREF_KEY_CONFIG_JSON)) {
                 val config = readLegacyConfig(legacy)
-                remote.edit()
+                val success = remote.edit()
                     .putString(ConfigManager.PREF_KEY_CONFIG_JSON, ConfigManager.encode(config))
-                    .apply()
-                Log.d(TAG, "seeded remote store from legacy file fakeDeviceId=${config.fakeDeviceId}")
+                    .commit()
+                Log.d(TAG, "seeded remote store from legacy file fakeDeviceId=${config.fakeDeviceId} success=$success")
+                if (!success) {
+                    Log.w(TAG, "remote config commit failed; aborting legacy prefs deletion")
+                    return@runCatching
+                }
             }
             if (!remote.contains(PodImagePrefs.PREF_KEY_EARPHONES)) {
                 legacy.getString(PodImagePrefs.PREF_KEY_EARPHONES, null)?.let { earphonesJson ->
-                    remote.edit().putString(PodImagePrefs.PREF_KEY_EARPHONES, earphonesJson).apply()
-                    Log.d(TAG, "copied legacy earphone metadata (${earphonesJson.length} bytes)")
+                    val success = remote.edit().putString(PodImagePrefs.PREF_KEY_EARPHONES, earphonesJson).commit()
+                    Log.d(TAG, "copied legacy earphone metadata (${earphonesJson.length} bytes) success=$success")
+                    if (!success) {
+                        Log.w(TAG, "remote earphones commit failed; aborting legacy prefs deletion")
+                        return@runCatching
+                    }
                 }
             }
             // The remote store is authoritative from here on; the local copy is redundant

@@ -626,6 +626,14 @@ fun MainUI(
             startupTab.value = migratedStartupTab
             if (layers.isEmpty()) applyStartupTabSelection()
         }
+        val migratedNotificationClick = LegacyConfigMigrator.readNotificationClickAction(context)
+        if (migratedNotificationClick != notificationClickAction.value) {
+            notificationClickAction.value = migratedNotificationClick
+        }
+        val migratedMoreClick = LegacyConfigMigrator.readMoreClickAction(context)
+        if (migratedMoreClick != moreClickAction.value) {
+            moreClickAction.value = migratedMoreClick
+        }
     }
 
     // Hook liveness ping: the bluetooth-process hook answers UI_INIT with SERVICE_ALIVE.

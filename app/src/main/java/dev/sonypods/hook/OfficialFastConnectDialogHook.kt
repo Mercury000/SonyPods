@@ -115,6 +115,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     override fun onBeforeReload() {
+        unregisterRemoteConfigChangeListener()
         unregisterReceiverForReload(mainContext, mainStateReceiver)
         unregisterReceiverForReload(uiContext, uiStateReceiver)
         mainStateReceiver = null
@@ -177,6 +178,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun installMainHooks() {
+        registerRemoteConfigChangeListener()
         installActivityLaunchGuard()
         currentApplicationContext()?.let { registerMainStateReceiver(it) }
         // MiuiBluetoothNotification is constructed after package-ready on some
@@ -204,6 +206,7 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun installUiHooks() {
+        registerRemoteConfigChangeListener()
         installUiImageFallback()
         installActivityLaunchGuard()
         installUiApplicationHook()
@@ -939,6 +942,10 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun shouldLaunchOfficialDialog(context: Context, snapshot: SonyStateSnapshot): Boolean {
+        runCatching {
+            val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
+            ConfigManager.refreshFromPrefs(livePrefs)
+        }
         if (!ConfigManager.popupOnConnect() ||
             ConfigManager.connectDialogMode() != ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL
         ) {
