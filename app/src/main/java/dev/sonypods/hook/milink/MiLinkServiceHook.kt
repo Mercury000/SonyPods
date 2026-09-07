@@ -40,6 +40,9 @@ object MiLinkServiceHook : HookContext() {
     internal var context: Context? = null
     private var receiverRegistered = false
     private var stateSeeded = false
+    /** Set when [currentAddress] is cleared for a non-Sony device; prevents [loadState] from
+     *  re-seeding from SharedPreferences until the next process start. */
+    private var addressClearedThisSession = false
     internal var currentAddress: String? = null
     internal var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
@@ -54,6 +57,8 @@ object MiLinkServiceHook : HookContext() {
     internal var currentSpatialAudioMode = ConfigManager.SPATIAL_AUDIO_OFF
     internal var lastAncBatteryController: Any? = null
     internal var lastProfileContext: Any? = null
+    internal var musicVolume: Int? = null
+    internal var musicVolumeStep: Int = 0
     private val spatialAudioHook = MiLinkSpatialAudioHook(this)
     private val remoteProtocolHook = MiLinkRemoteProtocolHook(this)
     private val leAudioIdentityHook = MiLinkLeAudioIdentityHook(this)
@@ -399,6 +404,10 @@ object MiLinkServiceHook : HookContext() {
             NoiseControlMode.AMBIENT_SOUND -> 3
             else -> 1
         }
+        if (snapshot.playbackMusicVolumeStep > 0) {
+            musicVolumeStep = snapshot.playbackMusicVolumeStep
+            musicVolume = snapshot.playbackMusicVolume
+        }
         saveState(context)
         Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         fusionRegistryHook.onSonyStateChanged()
@@ -422,6 +431,9 @@ object MiLinkServiceHook : HookContext() {
                 currentAddress = resolved
             }
             currentName = runCatching { device.name ?: device.alias }.getOrNull() ?: currentName
+        } else {
+            currentAddress = null
+            addressClearedThisSession = true
         }
         return result
     }
@@ -714,6 +726,8 @@ object MiLinkServiceHook : HookContext() {
             .putInt("case_battery", currentBattery.case?.battery ?: 0)
             .putBoolean("case_charging", currentBattery.case?.isCharging == true)
             .putBoolean("case_connected", currentBattery.case?.isConnected == true)
+            .putInt("music_volume", musicVolume ?: -1)
+            .putInt("music_volume_step", musicVolumeStep)
             .apply()
     }
 
@@ -729,7 +743,9 @@ object MiLinkServiceHook : HookContext() {
         if (stateSeeded) return
         val prefs = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) ?: return
         stateSeeded = true
-        currentAddress = prefs.getString("address", currentAddress)
+        if (!addressClearedThisSession) {
+            currentAddress = prefs.getString("address", currentAddress)
+        }
         currentName = prefs.getString("name", currentName)
         if (currentFormFactor == null) {
             currentFormFactor = prefs.getString("form_factor", null)
@@ -764,5 +780,8 @@ object MiLinkServiceHook : HookContext() {
                 0
             )
         )
+        val savedVolume = prefs.getInt("music_volume", -1)
+        if (savedVolume >= 0) musicVolume = savedVolume
+        musicVolumeStep = prefs.getInt("music_volume_step", musicVolumeStep)
     }
 }

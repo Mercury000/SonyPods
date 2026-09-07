@@ -147,22 +147,13 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     }
 
     /**
-     * The Sony pod this process currently manages. Prefers the address of the connected
-     * headset the module is feeding (mirrors the card the user actually sees); otherwise
-     * the most recent EarphonePref that is recognised as Sony here. Unknown/blank falls
-     * back to stock, never guessing at a stranger's card.
+     * The Sony pod this process currently manages. Returns the address only when the
+     * connected device is Sony; never guesses from history.
      */
     private fun targetSonyAddress(): String? {
         val current = hook.currentAddress
-        val candidate = if (!current.isNullOrBlank() && hook.isSonyAddress(current)) {
-            current
-        } else {
-            PodImagePrefs.load(hook.prefs)
-                .filter { hook.isSonyAddress(it.address) }
-                .maxByOrNull { it.lastConnectedAt }
-                ?.address
-        } ?: return null
-        return SonyDeviceService.resolveControlAddress(candidate) ?: candidate
+        if (current.isNullOrBlank() || !hook.isSonyAddress(current)) return null
+        return SonyDeviceService.resolveControlAddress(current) ?: current
     }
 
     private companion object {

@@ -1,6 +1,5 @@
 package dev.sonypods.hook.milink
 
-import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import dev.sonypods.bridge.SonyBridge
@@ -51,15 +50,15 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     @Volatile
     private var mirroredDeviceId: String? = null
 
-    @Volatile
-    private var lastVolume = -1
-
-    /** Signature of the last mode/battery push, so no-op snapshots do not re-render surfaces. */
+    /** Signature of the last mode/battery/volume push, so no-op snapshots do not re-render surfaces. */
     @Volatile
     private var lastPushMode = -1
 
     @Volatile
     private var lastPushBatteryKey: String? = null
+
+    @Volatile
+    private var lastPushVolume = -1
 
     /** Guards notify fan-out so a listener that re-enters the controller cannot loop. */
     private val broadcasting = ThreadLocal.withInitial { false }
@@ -74,9 +73,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         controller = null
         service = null
         mirroredDeviceId = null
-        lastVolume = -1
         lastPushMode = -1
         lastPushBatteryKey = null
+        lastPushVolume = -1
     }
 
     /** Called whenever module state lands (see [MiLinkServiceHook.applySnapshot]). */
@@ -188,7 +187,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 remember(svc, instance)
                 val volume = (args.getOrNull(1) as? Int)?.coerceIn(0, 100) ?: return@hookBefore
                 applyVolume(volume)
-                writeMirrorVolume(volume)
                 broadcastVolume(volume)
                 this.result = completed(100)
             }
@@ -219,18 +217,21 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
      */
     private fun hookNotifySubscription() {
         runCatching {
-            val method = hook.findClass(CONTROLLER_BASE).declaredMethods
-                .filter { it.name == "registerServiceNotify" && it.parameterTypes.size == 1 }
-                .firstOrNull() ?: throw NoSuchMethodException("$CONTROLLER_BASE.registerServiceNotify/1")
+            val controllerClass = hook.findClass(HEADSET_SERVICE_CONTROLLER)
+            val baseClass = generateSequence<Class<*>>(controllerClass.superclass) { it.superclass }
+                .firstOrNull { it.declaredMethods.any { m -> m.name == "registerServiceNotify" && m.parameterTypes.size == 1 } }
+                ?: throw NoSuchMethodException("registerServiceNotify not found in class hierarchy of $HEADSET_SERVICE_CONTROLLER")
+            val method = baseClass.declaredMethods
+                .first { it.name == "registerServiceNotify" && it.parameterTypes.size == 1 }
             method.isAccessible = true
             hook.hookAfter(method, logicalRole = "fusion-registry-subscribe-announce") {
                 if (instance !== controller) return@hookAfter
                 announceCurrentState()
             }
-        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook $CONTROLLER_BASE.registerServiceNotify skipped", it) }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook registerServiceNotify skipped", it) }
     }
 
-    /** Push the current mode/battery to subscribed listeners once (e.g. right after attach). */
+    /** Push the current mode/battery/volume to subscribed listeners once (e.g. right after attach). */
     private fun announceCurrentState() {
         val svc = service ?: return
         val deviceId = runCatching { getObjectField(svc, "deviceId") as? String }.getOrNull() ?: return
@@ -241,6 +242,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             try {
                 notifyListeners("onBluetoothModeChanged", panelAncMode())
                 notifyListeners("onBluetoothBatteryChanged", java.util.ArrayList(hook.miLinkBatteryLevels()))
+                notifyListeners("onBluetoothVolumeChanged", mirrorVolume())
             } finally {
                 broadcasting.set(false)
             }
@@ -315,16 +317,12 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         info
     }.getOrNull()
 
-    /** Track the headset volume we last mirrored; before any write, seed from the system media stream. */
+    /** Read the headphone's own volume step and convert to 0-100 for the fusion panel. */
     private fun mirrorVolume(): Int {
-        if (lastVolume >= 0) return lastVolume
-        val ctx = hook.context ?: return 0
-        return runCatching {
-            val audio = ctx.getSystemService(AudioManager::class.java) ?: return@runCatching 0
-            val stream = AudioManager.STREAM_MUSIC
-            val max = audio.getStreamMaxVolume(stream)
-            if (max <= 0) 0 else (audio.getStreamVolume(stream) * 100) / max
-        }.getOrDefault(0)
+        val step = hook.musicVolume ?: return 0
+        val maxStep = hook.musicVolumeStep
+        if (maxStep <= 1) return 0
+        return (step * 100) / (maxStep - 1)
     }
 
     private fun manager(): Any? = runCatching {
@@ -343,12 +341,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         runCatching { setObjectField(info, "mode", panelMode) }
     }
 
-    private fun writeMirrorVolume(volume: Int) {
-        lastVolume = volume
-        val info = storedInfo() ?: return
-        runCatching { setObjectField(info, "headsetVolume", volume) }
-    }
-
     /**
      * Module state domain is {0=关闭,1=降噪,2=通透} (runtime client domain); the fusion
      * registry expects {0=降噪,1=通透,2=关闭}. Rotate once at this boundary.
@@ -363,7 +355,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
 
     private fun applyVolume(volume: Int) {
         val ctx = hook.context ?: return
-        runCatching { SonyBridge.setPlaybackVolume(ctx, volume) }
+        val stepMax = hook.musicVolumeStep
+        val scaled = if (stepMax > 1) (volume * (stepMax - 1) + 50) / 100 else volume
+        runCatching { SonyBridge.setPlaybackVolume(ctx, scaled) }
             .onFailure { Log.w(MiLinkServiceHook.TAG, "Sony volume write failed volume=$volume", it) }
     }
 
@@ -376,6 +370,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             if (!statePushChanged()) return
             notifyListeners("onBluetoothModeChanged", panelAncMode())
             notifyListeners("onBluetoothBatteryChanged", java.util.ArrayList(hook.miLinkBatteryLevels()))
+            notifyListeners("onBluetoothVolumeChanged", mirrorVolume())
         } finally {
             broadcasting.set(false)
         }
@@ -385,9 +380,11 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     private fun statePushChanged(): Boolean {
         val mode = panelAncMode()
         val batteryKey = hook.miLinkBatteryLevels().joinToString(",")
-        val changed = mode != lastPushMode || batteryKey != lastPushBatteryKey
+        val volume = mirrorVolume()
+        val changed = mode != lastPushMode || batteryKey != lastPushBatteryKey || volume != lastPushVolume
         lastPushMode = mode
         lastPushBatteryKey = batteryKey
+        lastPushVolume = volume
         return changed
     }
 
@@ -439,9 +436,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     private companion object {
         const val HEADSET_DEVICE_INFO = "com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo"
         const val HEADSET_DEVICE_MANAGER = "com.miui.circulate.api.protocol.headset.HeadsetDeviceManager"
-
-        /** Common controller base that declares registerServiceNotify (headset/bluetooth/synergy). */
-        const val CONTROLLER_BASE = "ba.AbstractC2181g"
+        const val HEADSET_SERVICE_CONTROLLER = "com.miui.circulate.api.protocol.headset.HeadsetServiceController"
 
         /** Over-ear single-battery headphone: detail battery card renders slots 2/5 as one cell. */
         const val TYPE_OVER_EAR = 7
