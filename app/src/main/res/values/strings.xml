@@ -519,4 +519,12 @@
     <string name="speak_to_chat_mode_out_time_mid">Standard (approx. 15 sec)</string>
     <string name="speak_to_chat_mode_out_time_slow">Long (approx. 30 sec)</string>
     <string name="speak_to_chat_mode_out_time_none">Do not close automatically</string>
+    <string name="custom_pod_images">Custom image</string>
+    <string name="custom_image_sync_cloud">Sync cloud image</string>
+    <string name="custom_image_pick_failed">Could not read the selected image</string>
+    <string name="custom_image_apply_failed">Failed to save the image</string>
+    <string name="custom_image_service_unready">Module service not ready. Check the service status and try again.</string>
+    <string name="custom_image_no_cloud">This device has no cloud model image</string>
+    <string name="custom_image_cloud_failed">Failed to fetch the cloud image</string>
+    <string name="custom_image_cloud_synced">Cloud image restored</string>
 </resources>

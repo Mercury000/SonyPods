@@ -26,8 +26,10 @@ data class EarphonePref(
     val lastConnectedAt: Long = System.currentTimeMillis(),
     /** Cloud catalog URL the box image was downloaded from; null = no catalog image cached. */
     val autoImageUrl: String? = null,
-    /** Monotonic UI cache key; increments whenever automatic image bytes are replaced. */
+    /** Monotonic UI cache key; increments whenever image bytes are replaced (auto or manual). */
     val imageRevision: Long = 0L,
+    /** User took over the BOX image manually; the automatic catalog download must not replace it. */
+    val boxManual: Boolean = false,
 ) {
     fun imagePath(resource: PodImageResource): String? = when (resource) {
         PodImageResource.BOX -> boxImagePath
@@ -111,9 +113,9 @@ object PodImagePrefs {
         if (address.isBlank()) return loadCurrent()
         val current = loadCurrent()
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        // Drop records created by the removed custom-image feature. Catalog images keep
-        // their URL marker and are refreshed by ModelImageSync when needed.
-        val base = existing?.takeIf { it.autoImageUrl != null }
+        // Keep catalog-owned records and manual BOX overrides; only stale records with
+        // neither (leftovers of the pre-catalog custom-image era) are dropped on connect.
+        val base = existing?.takeIf { it.autoImageUrl != null || it.boxManual }
             ?: EarphonePref(address = address, name = name)
         val updated = base.copy(
             name = name.ifBlank { existing?.name.orEmpty() },
@@ -134,8 +136,9 @@ object PodImagePrefs {
         if (address.isBlank()) return loadCurrent()
         val current = loadCurrent()
         val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        // Never carry image paths from the removed custom-image records into the
-        // automatic catalog cache.
+        // A manual BOX override is user-owned: automatic catalog bytes must not clobber it.
+        if (existing?.boxManual == true) return current
+        // Do not carry image paths from stale pre-catalog records into the automatic catalog cache.
         var updated = existing?.takeIf { it.autoImageUrl != null }
             ?: EarphonePref(address = address, name = name)
         var imageUpdated = false
@@ -153,6 +156,68 @@ object PodImagePrefs {
         )
         val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
         return persist(normalized)
+    }
+
+    /**
+     * Replace the BOX image with a user-picked picture. Writes into the same
+     * `<address>_box.img` slot the catalog uses, so every surface (detail page,
+     * notification, island, card) sees it once the Remote File is published.
+     * Marks the record [EarphonePref.boxManual] so the automatic catalog download
+     * leaves it alone; the retained [EarphonePref.autoImageUrl] stays as the target
+     * for a later "restore from cloud". Bumps [EarphonePref.imageRevision] so the
+     * detail page repaints even though the file path is unchanged.
+     */
+    fun saveBoxOverride(
+        context: Context,
+        service: XposedService?,
+        address: String,
+        name: String,
+        bytes: ByteArray,
+    ): EarphonePref? {
+        if (address.isBlank() || bytes.isEmpty()) return null
+        val current = loadCurrent()
+        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
+        val base = existing ?: EarphonePref(address = address, name = name)
+        val path = copyImage(context, service, address, PodImageResource.BOX, bytes)
+        val updated = base.copy(
+            boxImagePath = path,
+            boxManual = true,
+            name = name.ifBlank { base.name },
+            lastConnectedAt = System.currentTimeMillis(),
+            imageRevision = base.imageRevision + 1L,
+        )
+        persist(listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) })
+        return updated
+    }
+
+    /**
+     * Restore the BOX image from the cloud catalog: clears the manual override and
+     * stores freshly downloaded [bytes] for [url] into the shared slot. Bumps
+     * [EarphonePref.imageRevision] so surfaces repaint.
+     */
+    fun applyCloudBox(
+        context: Context,
+        service: XposedService?,
+        address: String,
+        name: String,
+        url: String,
+        bytes: ByteArray,
+    ): EarphonePref? {
+        if (address.isBlank() || bytes.isEmpty() || url.isBlank()) return null
+        val current = loadCurrent()
+        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
+        val base = existing ?: EarphonePref(address = address, name = name)
+        val path = copyImage(context, service, address, PodImageResource.BOX, bytes)
+        val updated = base.copy(
+            boxImagePath = path,
+            boxManual = false,
+            autoImageUrl = url,
+            name = name.ifBlank { base.name },
+            lastConnectedAt = System.currentTimeMillis(),
+            imageRevision = base.imageRevision + 1L,
+        )
+        persist(listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) })
+        return updated
     }
 
     private fun decode(raw: String): List<EarphonePref> = runCatching {

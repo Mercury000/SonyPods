@@ -520,4 +520,12 @@
     <string name="speak_to_chat_mode_out_time_mid">标准（约15秒）</string>
     <string name="speak_to_chat_mode_out_time_slow">长（约30秒）</string>
     <string name="speak_to_chat_mode_out_time_none">不自动关闭</string>
+    <string name="custom_pod_images">自定义图片</string>
+    <string name="custom_image_sync_cloud">同步云端图</string>
+    <string name="custom_image_pick_failed">无法读取所选图片</string>
+    <string name="custom_image_apply_failed">图片保存失败</string>
+    <string name="custom_image_service_unready">模块服务未就绪，请检查服务状态后重试</string>
+    <string name="custom_image_no_cloud">该设备没有云端型号图</string>
+    <string name="custom_image_cloud_failed">云端图获取失败</string>
+    <string name="custom_image_cloud_synced">已恢复云端图</string>
 </resources>

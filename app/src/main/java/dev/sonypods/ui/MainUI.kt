@@ -96,6 +96,7 @@ import dev.sonypods.ui.dialogs.MultipointAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioAlertDialog
 import dev.sonypods.ui.dialogs.LeAudioPairingHelpDialog
 import dev.sonypods.ui.dialogs.PowerOffDialog
+import dev.sonypods.ui.dialogs.PodImageConfigDialog
 import dev.sonypods.utils.RootManager
 import dev.sonypods.utils.SoundConnectPrefs
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
@@ -104,6 +105,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -118,6 +121,7 @@ import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Pause
 import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -1285,6 +1289,7 @@ fun MainUI(
                     // thing here that says so.
                     val showSessionProgress = sonyState.audioLinkConnected && !canShowDetailPage
                     var showPowerOffDialog by remember { mutableStateOf(false) }
+                    var showCustomImageDialog by remember { mutableStateOf(false) }
                     // What the page renders. While the control channel is unusable it is frozen on
                     // the last operable snapshot, because a teardown does not go straight to empty:
                     // the stack battery lands a single level before Tandem's L/R and case arrive, and
@@ -1325,22 +1330,37 @@ fun MainUI(
                                                 )
                                             }
                                         }
-                                        // With nothing connected there is no per-device page to open,
-                                        // so the same button goes to the Bluetooth list instead — the
-                                        // one place the user can do something about it.
-                                        IconButton(
-                                            onClick = {
-                                                if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
-                                                    openSystemHeadsetSettings()
-                                                } else {
-                                                    openBluetoothSettings()
-                                                }
-                                            },
-                                        ) {
-                                            Icon(
-                                                imageVector = MiuixIcons.Settings,
-                                                contentDescription = stringResource(R.string.click_action_system_settings),
-                                            )
+                                        // Connected: the gear opens a selector — System Settings (the
+                                        // former direct behaviour) or the custom headphone-box image
+                                        // dialog. With nothing connected the same button just opens the
+                                        // Bluetooth list, the one place the user can do something.
+                                        if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
+                                            OverlayIconDropdownMenu(
+                                                entry = DropdownEntry(
+                                                    items = listOf(
+                                                        DropdownItem(
+                                                            text = stringResource(R.string.click_action_system_settings),
+                                                            onClick = { openSystemHeadsetSettings() },
+                                                        ),
+                                                        DropdownItem(
+                                                            text = stringResource(R.string.custom_pod_images),
+                                                            onClick = { showCustomImageDialog = true },
+                                                        ),
+                                                    ),
+                                                ),
+                                            ) {
+                                                Icon(
+                                                    imageVector = MiuixIcons.Settings,
+                                                    contentDescription = stringResource(R.string.cd_more_options),
+                                                )
+                                            }
+                                        } else {
+                                            IconButton(onClick = { openBluetoothSettings() }) {
+                                                Icon(
+                                                    imageVector = MiuixIcons.Settings,
+                                                    contentDescription = stringResource(R.string.click_action_system_settings),
+                                                )
+                                            }
                                         }
                                     }
                                     if (isLandscape) {
@@ -1412,6 +1432,14 @@ fun MainUI(
                                             showPowerOffDialog = false
                                             sonyActions.onPowerOff()
                                         },
+                                    )
+                                    PodImageConfigDialog(
+                                        show = showCustomImageDialog,
+                                        targetAddress = connectedDeviceAddress,
+                                        displayName = detailTitle,
+                                        pref = currentEarphonePref,
+                                        urlHint = sonyState.modelImageUrl,
+                                        onDismissRequest = { showCustomImageDialog = false },
                                     )
                                 }
                             }

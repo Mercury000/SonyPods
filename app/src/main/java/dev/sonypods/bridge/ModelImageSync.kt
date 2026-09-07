@@ -74,6 +74,12 @@ object ModelImageSync {
 
         val appContext = context.applicationContext ?: context
         val existing = PodImagePrefs.findCurrent(address)
+        // A user-picked BOX image owns the slot; the automatic catalog must not replace it.
+        if (existing?.boxManual == true) {
+            failedKeys.remove(key)
+            onComplete()
+            return
+        }
         val upToDate = existing?.autoImageUrl == url &&
             existing.boxImagePath?.let { File(it).isFile && File(it).length() > 0L } == true
         if (upToDate) {
@@ -89,15 +95,9 @@ object ModelImageSync {
 
         scope.launch {
             try {
-                val bytes = runCatching {
-                    URL(url).openConnection().apply {
-                        connectTimeout = DOWNLOAD_TIMEOUT_MS
-                        readTimeout = DOWNLOAD_TIMEOUT_MS
-                    }.getInputStream().use { it.readBytes() }
-                }
-                    .onFailure { Log.w(TAG, "model image download failed url=$url", it) }
-                    .getOrNull()
+                val bytes = downloadImage(url)
                 if (bytes == null || bytes.isEmpty()) {
+                    Log.w(TAG, "model image download failed url=$url")
                     failedKeys.add(key)
                     return@launch
                 }
@@ -151,5 +151,69 @@ object ModelImageSync {
         }
     }
 
+    private fun downloadImage(url: String): ByteArray? = runCatching {
+        URL(url).openConnection().apply {
+            connectTimeout = DOWNLOAD_TIMEOUT_MS
+            readTimeout = DOWNLOAD_TIMEOUT_MS
+        }.getInputStream().use { it.readBytes() }
+    }.getOrNull()
+
+    /**
+     * On-demand "sync cloud box image" for the custom-image dialog: re-downloads the
+     * device's catalog image and applies it, clearing any manual override. Unlike the
+     * connect-time auto flow this always downloads — the user asked for it, and it also
+     * doubles as a manual retry when the automatic download failed (e.g. offline at
+     * connect): the auto-failure keys are bypassed and the currently announced URL is
+     * used even when no catalog image was ever cached. Blocking; call from
+     * [Dispatchers.IO].
+     */
+    fun syncBoxImageBlocking(
+        context: Context,
+        address: String,
+        urlHint: String? = null,
+    ): BoxSyncResult {
+        if (!PodImagePrefs.isStoreAttached()) return BoxSyncResult.Unavailable
+        if (address.isBlank()) return BoxSyncResult.NoUrl
+        val existing = PodImagePrefs.findCurrent(address)
+        // Prefer the URL the engine is announcing right now (covers a download that
+        // failed before any catalog image was cached, and refreshes a stale one), then
+        // fall back to the last URL we actually applied.
+        val url = urlHint?.takeIf { it.isNotBlank() }
+            ?: existing?.autoImageUrl?.takeIf { it.isNotBlank() }
+            ?: return BoxSyncResult.NoUrl
+        val bytes = downloadImage(url)
+        if (bytes == null || bytes.isEmpty()) return BoxSyncResult.Failed
+        val appContext = context.applicationContext ?: context
+        val stored = runCatching {
+            PodImagePrefs.applyCloudBox(
+                context = appContext,
+                service = SonyPodsApp.xposedService,
+                address = address,
+                name = existing?.name.orEmpty(),
+                url = url,
+                bytes = bytes,
+            )
+        }.getOrNull()
+        if (stored == null) return BoxSyncResult.Failed
+        Log.d(TAG, "cloud box image synced address=$address bytes=${bytes.size}")
+        return BoxSyncResult.Ok
+    }
+
     private const val DOWNLOAD_TIMEOUT_MS = 15_000
+}
+
+/**
+ * Outcome of an explicit in-dialog "sync from cloud" / "restore from cloud" request.
+ * Restore is download-only (no offline copy), so any failure leaves the current
+ * manual override untouched.
+ */
+sealed interface BoxSyncResult {
+    /** Cloud image downloaded and applied; manual override cleared. */
+    data object Ok : BoxSyncResult
+    /** No cloud URL for this device — nothing to restore. */
+    data object NoUrl : BoxSyncResult
+    /** Download or persist failed; the manual image is kept. */
+    data object Failed : BoxSyncResult
+    /** The framework-backed store is not attached yet; retry once the service binds. */
+    data object Unavailable : BoxSyncResult
 }
