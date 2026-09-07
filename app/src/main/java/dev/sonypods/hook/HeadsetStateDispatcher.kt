@@ -270,7 +270,7 @@ object HeadsetStateDispatcher : HookContext() {
         val proven = controlAddress != null &&
             HeadsetRegistry.recordFor(device.address)?.controlAddress != null
         val fromControlIdentity = if (proven) {
-            controlAddress?.equals(device.address, ignoreCase = true) == true
+            controlAddress.equals(device.address, ignoreCase = true)
         } else {
             val group = leAudioGroupAddresses(serviceInstance, device)
             // A lone device is its own set: nothing else can own the session, so its transition is
