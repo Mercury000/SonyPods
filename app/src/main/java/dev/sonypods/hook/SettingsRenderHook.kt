@@ -12,14 +12,9 @@ import dev.sonypods.utils.PodImageLoader
 import java.lang.ref.WeakReference
 
 /**
- * Hooks MiuiHeadsetAnimation in com.android.settings so that the Bluetooth settings page
- * (MiuiHeadsetActivity) shows the catalog box image for Sony devices instead of the default
- * headset silhouette.
- *
- * fakeDeviceId 01010607 matches HeadsetIDConstants.isK73WhiteHeadset, so loadDefaultInternal
- * takes the K73 white branch and posts setImageResource(R.drawable.headset_default_k73_white)
- * at 50ms. We hook loadDefaultInternal *before* to skip the stock drawable entirely and post
- * our own image at the same 50ms delay, avoiding any flicker.
+ * Replaces the Settings headset page's stock picture with the catalog image belonging
+ * to that page's real Sony Bluetooth address. The activity is the animation context, so
+ * the gate does not rely on a Xiaomi model id or on whichever headset connected last.
  */
 class SettingsRenderHook : HookContext() {
     private val TAG = "SonyPods-Hook"
@@ -36,26 +31,14 @@ class SettingsRenderHook : HookContext() {
             val m = findMethodByParamCount(animClass, "loadDefaultInternal", 0)
             hookBefore(m) {
                 val instance = this.instance ?: return@hookBefore
-                // MiuiHeadsetAnimation carries the *spoofed* device id, not a
-                // BluetoothDevice — reading mDevice/mBluetoothDevice always came
-                // back null and silently disabled the image swap. Gate on the id
-                // again, and only claim the render when the device that actually
-                // owns this page is a Sony pod (guards against a genuine Xiaomi
-                // headset that happens to share the spoofed id).
-                val deviceId = runCatching {
-                    getObjectField(instance, "mDeviceId") as? String
-                }.getOrNull()
-                if (deviceId != fakeDeviceId()) return@hookBefore
-                val device = runCatching {
-                    getObjectField(instance, "mDevice") as? BluetoothDevice
-                }.getOrNull() ?: runCatching {
-                    getObjectField(instance, "mBluetoothDevice") as? BluetoothDevice
-                }.getOrNull()
-                if (device != null && !SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
-
                 val ctx = runCatching {
                     (getObjectField(instance, "mContext") as? WeakReference<*>)?.get() as? Context
                 }.getOrNull() ?: return@hookBefore
+                val device = runCatching {
+                    callMethod(ctx, "getDevice") as? BluetoothDevice
+                }.getOrNull() ?: return@hookBefore
+                if (!SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
+                val address = runCatching { device.address }.getOrNull() ?: return@hookBefore
                 val rootView = runCatching {
                     (getObjectField(instance, "mRootView") as? WeakReference<*>)?.get() as? View
                 }.getOrNull() ?: return@hookBefore
@@ -63,11 +46,12 @@ class SettingsRenderHook : HookContext() {
                     (getObjectField(instance, "mHandler") as? WeakReference<*>)?.get() as? Handler
                 }.getOrNull()
 
-                val earphone = PodImagePrefs.load(prefsProvider())
-                    .filter { it.autoImageUrl != null }
-                    .maxByOrNull { it.lastConnectedAt }
-                if (earphone == null) {
-                    Log.d(TAG, "no earphone with box image, falling through to stock")
+                val earphone = PodImagePrefs.find(prefsProvider(), address) ?: run {
+                    Log.d(TAG, "no image metadata for $address, falling through to stock")
+                    return@hookBefore
+                }
+                if (earphone.autoImageUrl == null && !earphone.boxManual) {
+                    Log.d(TAG, "no box image metadata for $address, falling through to stock")
                     return@hookBefore
                 }
 

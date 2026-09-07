@@ -120,8 +120,6 @@ internal fun MainTabsScaffold(
     fusionMoreClickAction: MutableState<Int>,
     onFusionMoreClickActionChange: (Int) -> Unit,
     onOpenTandemDebug: () -> Unit,
-    fakeDeviceId: MutableState<String>,
-    onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
     onOpenReferences: () -> Unit,
     showRestartScopeDialog: Boolean,
@@ -237,8 +235,6 @@ internal fun MainTabsScaffold(
                             onMoreClickActionChange = onMoreClickActionChange,
                             fusionMoreClickAction = fusionMoreClickAction,
                             onFusionMoreClickActionChange = onFusionMoreClickActionChange,
-                            fakeDeviceId = fakeDeviceId,
-                            onFakeDeviceIdChange = onFakeDeviceIdChange,
                             onOpenTheme = onOpenTheme,
                         )
 
@@ -417,8 +413,6 @@ private fun SettingsTabPage(
     onMoreClickActionChange: (Int) -> Unit,
     fusionMoreClickAction: MutableState<Int>,
     onFusionMoreClickActionChange: (Int) -> Unit,
-    fakeDeviceId: MutableState<String>,
-    onFakeDeviceIdChange: (String) -> Unit,
     onOpenTheme: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
@@ -485,8 +479,6 @@ private fun SettingsTabPage(
                         onMoreClickActionChange = onMoreClickActionChange,
                         fusionMoreClickAction = fusionMoreClickAction,
                         onFusionMoreClickActionChange = onFusionMoreClickActionChange,
-                        fakeDeviceId = fakeDeviceId,
-                        onFakeDeviceIdChange = onFakeDeviceIdChange,
                         onOpenTheme = onOpenTheme,
                     )
                 }

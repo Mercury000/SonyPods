@@ -84,7 +84,7 @@ object LegacyConfigMigrator {
                 val success = remote.edit()
                     .putString(ConfigManager.PREF_KEY_CONFIG_JSON, ConfigManager.encode(config))
                     .commit()
-                Log.d(TAG, "seeded remote store from legacy file fakeDeviceId=${config.fakeDeviceId} success=$success")
+                Log.d(TAG, "seeded remote store from legacy file success=$success")
                 if (!success) {
                     Log.w(TAG, "remote config commit failed; aborting legacy prefs deletion")
                     return@runCatching
@@ -193,8 +193,6 @@ object LegacyConfigMigrator {
             }
 
         return base.copy(
-            fakeDeviceId = prefs.getString(ConfigManager.PREF_KEY_FAKE_DEVICE_ID, null)
-                ?.trim()?.takeIf { it.isNotEmpty() } ?: base.fakeDeviceId,
             logLevel = prefs.getInt(ConfigManager.PREF_KEY_LOG_LEVEL, Int.MIN_VALUE).orNull() ?: base.logLevel,
             superIslandMode = prefs.getInt(ConfigManager.PREF_KEY_SUPER_ISLAND_MODE, Int.MIN_VALUE).orNull()
                 ?: base.superIslandMode,

@@ -66,6 +66,7 @@ import dev.sonypods.config.CardLocation
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.utils.MiuiHeadsetSupport
 import dev.sonypods.ui.components.AppIcons
 import dev.sonypods.ui.components.BarBackdropContent
 import dev.sonypods.ui.components.BarBlurHost
@@ -234,7 +235,6 @@ fun MainUI(
     val fusionMoreClickAction = remember { mutableStateOf(appConfig.fusionMoreClickAction) }
     val desktopIconHidden = remember { mutableStateOf(isLauncherIconHidden(context)) }
     val logLevel = remember { mutableStateOf(appConfig.logLevel) }
-    val fakeDeviceId = remember { mutableStateOf(appConfig.fakeDeviceId) }
     val islandMode = remember { mutableStateOf(appConfig.superIslandMode) }
     val islandDurationSeconds = remember { mutableStateOf(appConfig.islandDurationSeconds) }
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
@@ -613,7 +613,6 @@ fun MainUI(
         suppressPopupInGameOrLandscape.value = c.suppressPopupInGameOrLandscape
         fusionMoreClickAction.value = c.fusionMoreClickAction
         logLevel.value = c.logLevel
-        fakeDeviceId.value = c.fakeDeviceId
         islandMode.value = c.superIslandMode
         islandDurationSeconds.value = c.islandDurationSeconds
         ancCycleModes.value = c.ancCycleModes
@@ -699,9 +698,8 @@ fun MainUI(
             setClassName("com.android.settings", "com.android.settings.bluetooth.MiuiHeadsetActivity")
             putExtra("android.bluetooth.device.extra.DEVICE", device)
             putExtra("bluetoothaddress", device.address)
-            putExtra("MIUI_HEADSET_SUPPORT", ConfigManager.fakeSupport())
+            putExtra("MIUI_HEADSET_SUPPORT", MiuiHeadsetSupport.encode(device.address))
             putExtra("COME_FROM", "MIUI_BLUETOOTH_SETTINGS")
-            putExtra("DEVICE_ID", ConfigManager.fakeDeviceId())
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { context.startActivity(this) }
                 .onFailure { Toast.makeText(context, R.string.connect_failed, Toast.LENGTH_SHORT).show() }
@@ -1528,11 +1526,6 @@ fun MainUI(
                     ConfigManager.updateFusionMoreClickAction(it)
                 },
                 onOpenTandemDebug = { openScreen(Screen.TandemDebug) },
-                fakeDeviceId = fakeDeviceId,
-                onFakeDeviceIdChange = {
-                    fakeDeviceId.value = it
-                    ConfigManager.updateFakeDeviceId(it)
-                },
                 onOpenTheme = { openScreen(Screen.Theme) },
                 onOpenReferences = { openScreen(Screen.References) },
                 showRestartScopeDialog = showRestartScopeDialog,

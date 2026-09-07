@@ -51,6 +51,7 @@ import dev.sonypods.ui.displayName
 import dev.sonypods.ui.noiseAdaptiveSensitivityValue
 import dev.sonypods.ui.toBatteryParams
 import dev.sonypods.ui.toSinglePodParams
+import dev.sonypods.utils.MiuiHeadsetSupport
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -177,9 +178,8 @@ class PopupActivity : ComponentActivity() {
             setClassName("com.android.settings", "com.android.settings.bluetooth.MiuiHeadsetActivity")
             putExtra("android.bluetooth.device.extra.DEVICE", bluetoothDevice)
             putExtra("bluetoothaddress", bluetoothDevice.address)
-            putExtra("MIUI_HEADSET_SUPPORT", ConfigManager.fakeSupport())
+            putExtra("MIUI_HEADSET_SUPPORT", MiuiHeadsetSupport.encode(bluetoothDevice.address))
             putExtra("COME_FROM", "MIUI_BLUETOOTH_SETTINGS")
-            putExtra("DEVICE_ID", ConfigManager.fakeDeviceId())
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { startActivity(intent) }.onFailure { openModule() }

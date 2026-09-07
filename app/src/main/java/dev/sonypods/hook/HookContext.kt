@@ -36,6 +36,9 @@ abstract class HookContext {
     lateinit var resources: ResourceRegistry
         private set
 
+    /** Legacy MiLink carrier id; retained only by the pre-refactor MiLink path. */
+    open fun fakeDeviceId(): String = "01010607"
+
     abstract fun onHook()
 
     /** Called in the old generation before libxposed captures old hook handles. */
@@ -83,10 +86,6 @@ abstract class HookContext {
     }
 
     internal fun dynamicTargetClasses(): List<String> = hookRegistry.dynamicTargets()
-
-    open fun fakeDeviceId(): String = ConfigManager.fakeDeviceId()
-
-    fun fakeSupport(): String = ConfigManager.fakeSupport()
 
     private var remoteConfigListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var remoteConfigListenerSource: SharedPreferences? = null

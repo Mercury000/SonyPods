@@ -99,7 +99,6 @@ data class VisibilityConfig(
 
 @Serializable
 data class AppConfig(
-    val fakeDeviceId: String = ConfigManager.DEFAULT_FAKE_DEVICE_ID,
     val logLevel: Int = ConfigManager.LOG_LEVEL_BASIC,
     /** Super Island renderer: none, official system island, or module island. */
     val superIslandMode: Int = ConfigManager.ISLAND_MODE_MODULE,
@@ -156,7 +155,6 @@ object ConfigManager {
 
     // Legacy direct keys. Never written anymore; parsed only by LegacyConfigMigrator
     // when seeding the remote store from a pre-remote-pref install.
-    const val PREF_KEY_FAKE_DEVICE_ID = "fake_device_id"
     const val PREF_KEY_LOG_LEVEL = "log_level"
     // Deliberately uses a new key. The old island_mode/island_show_timings keys
     // are not read, so an upgrade starts with the new defaults instead of
@@ -182,7 +180,6 @@ object ConfigManager {
     const val PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE = "anc_implementation_capability_override"
     const val PREF_KEY_ANC_CYCLE_MODES = "anc_cycle_modes"
     const val PREF_KEY_STARTUP_TAB = "startup_tab"
-    const val DEFAULT_FAKE_DEVICE_ID = "01010607"
     const val LOG_LEVEL_OFF = 0
     const val LOG_LEVEL_BASIC = 1
     const val LOG_LEVEL_DEBUG = 2
@@ -314,8 +311,6 @@ object ConfigManager {
     /** True after this process has adopted the framework-backed remote store. */
     fun isStoreAttached(): Boolean = store != null
 
-    fun fakeDeviceId(): String = current().fakeDeviceId.normalizedFakeDeviceId()
-
     fun logLevel(): Int = current().logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)
 
     fun islandMode(): Int = current().superIslandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE)
@@ -353,10 +348,6 @@ object ConfigManager {
     fun ancCycleModes(): Set<String> = current().ancCycleModes.normalizedAncCycleModes()
 
     fun visibility(): VisibilityConfig = current().visibility
-
-    fun fakeSupport(): String = "${fakeDeviceId()},000000000000000010000000"
-
-    fun updateFakeDeviceId(fakeDeviceId: String) = save { it.copy(fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId()) }
 
     fun updateLogLevel(logLevel: Int) = save { it.copy(logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)) }
 
@@ -449,7 +440,6 @@ object ConfigManager {
     }
 
     private fun AppConfig.normalized(): AppConfig = copy(
-        fakeDeviceId = fakeDeviceId.normalizedFakeDeviceId(),
         logLevel = logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG),
         superIslandMode = superIslandMode.coerceIn(ISLAND_MODE_NONE, ISLAND_MODE_MODULE),
         islandDurationSeconds = islandDurationSeconds.normalizedIslandDuration(),
@@ -466,8 +456,6 @@ object ConfigManager {
         popupDenylist = popupDenylist.normalizedPackageSet(),
         startupTab = startupTab.coerceIn(STARTUP_TAB_MODULE, STARTUP_TAB_EARPHONES),
     )
-
-    private fun String.normalizedFakeDeviceId(): String = trim().takeIf { it.isNotEmpty() } ?: DEFAULT_FAKE_DEVICE_ID
 
     private fun Int.normalizedCapabilityOverride(): Int = coerceIn(CAPABILITY_OVERRIDE_AUTO, CAPABILITY_OVERRIDE_FORCE_DISABLED)
 
@@ -510,9 +498,6 @@ object ConfigManager {
 
     private fun changedFields(oldConfig: AppConfig, newConfig: AppConfig): List<String> {
         return buildList {
-            if (oldConfig.fakeDeviceId != newConfig.fakeDeviceId) {
-                add("fakeDeviceId=${oldConfig.fakeDeviceId}->${newConfig.fakeDeviceId}")
-            }
             if (oldConfig.logLevel != newConfig.logLevel) {
                 add("logLevel=${oldConfig.logLevel}->${newConfig.logLevel}")
             }

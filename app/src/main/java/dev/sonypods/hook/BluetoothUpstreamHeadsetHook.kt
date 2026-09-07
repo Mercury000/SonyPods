@@ -21,6 +21,7 @@ import dev.sonypods.config.ConfigManager
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
+import dev.sonypods.utils.MiuiHeadsetSupport
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
@@ -272,13 +273,13 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 val device = args[0] as? BluetoothDevice
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
-                result = fakeSupport()
+                result = settingsSupport(device?.address ?: return@hookBefore)
                 Log.d(TAG, "BinderC6776v.checkSupport forced device=${device.describe()} support=$result")
             }
             Log.d(TAG, "BinderC6776v.checkSupport hook installed")
         }.onFailure { Log.d(TAG, "hook BinderC6776v.checkSupport skipped", it) }
 
-        hookAddressStringResult(binderClass, listOf("getDeviceInfo"), "getDeviceInfo") { fakeSupport() }
+        hookAddressStringResult(binderClass, listOf("getDeviceInfo"), "getDeviceInfo") { address -> settingsSupport(address) }
         hookAddressStringResult(binderClass, listOf("isSupportAudioSwitch", "mo19775z1", "z1"), "isSupportAudioSwitch") { "1" }
         hookAddressBooleanResult(binderClass, listOf("isMiTWS", "mo19771O0", "O0"), "isMiTWS", true)
         hookAddressBooleanResult(binderClass, listOf("checkIsMiTWS", "mo19766B", "B"), "checkIsMiTWS", true)
@@ -376,7 +377,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook BinderC6776v.$methodName skipped", it) }
     }
 
-    private fun hookAddressStringResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: () -> String) {
+    private fun hookAddressStringResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: (String) -> String) {
         val methodName = methodNames.firstOrNull { name ->
             runCatching { binderClass.method(name, String::class.java) }.isSuccess
         } ?: run {
@@ -387,7 +388,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             hookBefore(binderClass.method(methodName, String::class.java)) {
                 val address = args[0] as? String
                 if (address == null || !isSonyAddress(address)) return@hookBefore
-                result = forced()
+                result = forced(address)
                 Log.d(TAG, "BinderC6776v.$label forced address=$address result=$result method=$methodName")
             }
             Log.d(TAG, "BinderC6776v.$label hook installed method=$methodName")
@@ -550,14 +551,14 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 4 -> handleDeviceVoid("connect", data, reply)
                 9 -> handleAncMode(data, reply)
                 10 -> handleAncLevel(data, reply)
-                11 -> handleAddressString("getDeviceInfo", data, reply, fakeSupport())
+                11 -> handleAddressString("getDeviceInfo", data, reply) { settingsSupport(it) }
                 12 -> handleDeviceVoid("getDeviceConfig", data, reply)
                 14 -> handleSetCommonCommand(data, reply)
                 15 -> handleCommonConfig(data, reply)
                 16 -> handleRegisterCallbackDevice(data, reply)
                 18 -> handleAddressBoolean("isMiTWS", data, reply, true)
                 19 -> handleAddressBoolean("checkIsMiTWS", data, reply, true)
-                20 -> handleAddressString("isSupportAudioSwitch", data, reply, "1")
+                20 -> handleAddressString("isSupportAudioSwitch", data, reply) { "1" }
                 24 -> handleAddressBoolean("getRingFindState", data, reply, false)
                 else -> null
             }
@@ -575,7 +576,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         if (!isSony) return null
         lastSonyDevice = device
         reply.writeNoException()
-        val support = fakeSupport()
+        val support = settingsSupport(device?.address ?: return null)
         reply.writeString(support)
         Log.d(TAG, "checkSupport upstream forced $support")
         return true
@@ -636,14 +637,15 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         return true
     }
 
-    private fun handleAddressString(method: String, data: Parcel, reply: Parcel, forced: String): Boolean? {
+    private fun handleAddressString(method: String, data: Parcel, reply: Parcel, forced: (String) -> String): Boolean? {
         val address = data.readString()
         val isSony = address != null && isSonyAddress(address)
         Log.d(TAG, "$method upstream address=$address isSony=$isSony")
         if (!isSony) return null
+        val value = forced(address)
         reply.writeNoException()
-        reply.writeString(forced)
-        Log.d(TAG, "$method upstream forced $forced")
+        reply.writeString(value)
+        Log.d(TAG, "$method upstream forced $value")
         return true
     }
 
@@ -1002,6 +1004,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         if (this == null) return "null"
         return "left=${left?.battery}/${left?.isCharging}/${left?.isConnected} right=${right?.battery}/${right?.isCharging}/${right?.isConnected} case=${case?.battery}/${case?.isCharging}/${case?.isConnected}"
     }
+
+    private fun settingsSupport(address: String): String = MiuiHeadsetSupport.encode(address)
 
     private fun isSonyAddress(address: String): Boolean {
         return SonyDeviceService.isKnownSonyAddress(address)
