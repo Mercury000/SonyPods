@@ -3,6 +3,8 @@ package dev.sonypods.hook.milink
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
@@ -13,22 +15,10 @@ import java.util.Collections
 import java.util.WeakHashMap
 
 /**
- * Replaces the generic third-party headset art on the device-interconnect "big card" with
- * the module's catalog product shot — same delivery path the notification/island/settings
- * surfaces already use: image bytes come from the libxposed Remote Files reader
- * ([PodImageLoader.remoteImageReader]) and are injected as a BitmapDrawable immediately
- * after the stock `setImageResource(...)` call.
- *
- * Card classes and members around the art are obfuscated, so nothing here is looked up by
- * a method or field name:
- *  - the hook anchor is the framework `ImageView.setImageResource(int)` method (stable);
- *  - "is this the headset art ImageView" is inferred from the resource id alone: these art
- *    drawables are handed out only by HeadsetDeviceUtils, whose sole caller is the
- *    BluetoothCardView bind method, so the id set is never used for list rows or icons;
- *  - the target pod is the latest EarphonePref this process recognises as Sony.
- *
- * In addition, guards against asynchronous or re-binding overwrites (`setImageDrawable`)
- * by tracking identified headset art Views in memory and intercepting subsequent writes.
+ * Replaces the generic third-party headset art on the device-interconnect card with
+ * the module's catalog product shot — per-card: walks up the [ImageView] hierarchy to
+ * find the enclosing BluetoothCardView, reads its [CirculateDeviceInfo] to identify the
+ * Bluetooth address, and only replaces art when that specific card's device is Sony.
  */
 internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
 
@@ -39,6 +29,7 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     private var isApplyingArt = false
     @Volatile
     private var cachedBoxBitmap: Pair<String, Bitmap>? = null
+    private val cardAddressCache = WeakHashMap<ImageView, String?>()
 
     fun hookCardArt() {
         runCatching { install() }
@@ -61,6 +52,7 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
             val resId = args.getOrNull(0) as? Int ?: return@hookAfter
             if (resId in artResourceIds || isArtView(view)) {
                 artViews.add(view)
+                cardAddressCache.remove(view)
                 replaceCardArtIfSony(view)
             }
         }
@@ -71,10 +63,9 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
             if (isApplyingArt) return@hookBefore
             val view = instance as? ImageView ?: return@hookBefore
             if (!isArtView(view)) return@hookBefore
-            val address = targetSonyAddress() ?: return@hookBefore
+            val address = resolveCardSonyAddress(view) ?: return@hookBefore
             this.result = null
             applyCardArt(view, address)
-            Log.d(MiLinkServiceHook.TAG, "milink card art guarded setImageDrawable with catalog image address=$address")
         }
         Log.d(MiLinkServiceHook.TAG, "milink card art hook installed art=${artResourceIds.size}")
     }
@@ -123,8 +114,22 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
         return bitmap
     }
 
+    /**
+     * Per-card: walk up the view hierarchy to find the enclosing BluetoothCardView,
+     * read its CirculateDeviceInfo → circulateServices → deviceId (the BT address),
+     * and return the resolved Sony address only if that card's device is Sony.
+     */
+    private fun resolveCardSonyAddress(view: ImageView): String? {
+        cardAddressCache[view]?.let { return it }
+        val address = extractBluetoothAddressFromCard(view) ?: return null
+        if (!SonyDeviceService.isKnownSonyAddress(address)) return null
+        val resolved = SonyDeviceService.resolveControlAddress(address) ?: address
+        cardAddressCache[view] = resolved
+        return resolved
+    }
+
     private fun replaceCardArtIfSony(view: ImageView) {
-        val address = targetSonyAddress() ?: return
+        val address = resolveCardSonyAddress(view) ?: return
         applyCardArt(view, address)
     }
 
@@ -138,7 +143,7 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
         isApplyingArt = true
         try {
             view.setImageDrawable(BitmapDrawable(ctx.resources, bitmap))
-            Log.d(MiLinkServiceHook.TAG, "milink card art replaced generic headset art with catalog image address=$address")
+            Log.d(MiLinkServiceHook.TAG, "milink card art replaced art with catalog image address=$address")
         } catch (t: Throwable) {
             Log.d(MiLinkServiceHook.TAG, "milink card art setImageDrawable failed", t)
         } finally {
@@ -147,20 +152,68 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     }
 
     /**
-     * The Sony pod this process currently manages. Returns the address only when the
-     * connected device is Sony; never guesses from history.
+     * Walk up from [view] to find the enclosing BluetoothCardView that holds a
+     * CirculateDeviceInfo field, then extract the BT address from its service info.
      */
-    private fun targetSonyAddress(): String? {
-        val current = hook.currentAddress
-        if (current.isNullOrBlank() || !hook.isSonyAddress(current)) return null
-        return SonyDeviceService.resolveControlAddress(current) ?: current
+    private fun extractBluetoothAddressFromCard(view: View): String? {
+        var current: View? = view.parent as? View
+        while (current != null) {
+            val deviceInfo = findCirculateDeviceInfo(current)
+            if (deviceInfo != null) {
+                return extractBluetoothMac(deviceInfo)
+            }
+            current = current.parent as? View
+        }
+        return null
+    }
+
+    private fun findCirculateDeviceInfo(view: View): Any? {
+        var clazz: Class<*>? = view.javaClass
+        while (clazz != null && clazz != Any::class.java) {
+            for (field in clazz.declaredFields) {
+                if (field.type.name == CIRCULATE_DEVICE_INFO_CLASS) {
+                    field.isAccessible = true
+                    return field.get(view)
+                }
+            }
+            clazz = clazz.superclass
+        }
+        return null
+    }
+
+    /**
+     * Extract the Bluetooth MAC address from [deviceInfo] by reading
+     * `CirculateServiceInfo.deviceId` from its `circulateServices` set.
+     *
+     * The circulate headset flow stores the real BT address in `CirculateServiceInfo.deviceId`
+     * (set by `HeadsetDeviceManager.convertToBluetoothService` → `headsetInfo.getAddress()`).
+     * The `CirculateDeviceInfo.f20363id` is a host-level ID, and `deviceProperties` only
+     * contains `MIPLAY_ID` — neither is the BT MAC.
+     */
+    private fun extractBluetoothMac(deviceInfo: Any): String? {
+        return runCatching {
+            val servicesField = deviceInfo.javaClass
+                .getDeclaredField("circulateServices")
+                .apply { isAccessible = true }
+            val services = servicesField.get(deviceInfo) as? Set<*> ?: return@runCatching null
+            for (svc in services) {
+                if (svc == null) continue
+                val deviceIdField = svc.javaClass
+                    .getDeclaredField("deviceId")
+                    .apply { isAccessible = true }
+                val deviceId = deviceIdField.get(svc) as? String
+                if (!deviceId.isNullOrBlank()) return@runCatching deviceId
+            }
+            null
+        }.getOrNull()
     }
 
     private companion object {
-        /** Both R classes coexist in the APK; a resource may live in either. */
         val RESOURCE_CLASSES = listOf(
             "com.miui.circulate.device.service.R\$drawable",
             "com.miui.circulate.world.R\$drawable",
         )
+        private const val CIRCULATE_DEVICE_INFO_CLASS =
+            "com.miui.circulate.api.service.CirculateDeviceInfo"
     }
 }

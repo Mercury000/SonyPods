@@ -40,9 +40,6 @@ object MiLinkServiceHook : HookContext() {
     internal var context: Context? = null
     private var receiverRegistered = false
     private var stateSeeded = false
-    /** Set when [currentAddress] is cleared for a non-Sony device; prevents [loadState] from
-     *  re-seeding from SharedPreferences until the next process start. */
-    private var addressClearedThisSession = false
     internal var currentAddress: String? = null
     internal var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
@@ -431,9 +428,6 @@ object MiLinkServiceHook : HookContext() {
                 currentAddress = resolved
             }
             currentName = runCatching { device.name ?: device.alias }.getOrNull() ?: currentName
-        } else {
-            currentAddress = null
-            addressClearedThisSession = true
         }
         return result
     }
@@ -743,9 +737,7 @@ object MiLinkServiceHook : HookContext() {
         if (stateSeeded) return
         val prefs = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) ?: return
         stateSeeded = true
-        if (!addressClearedThisSession) {
-            currentAddress = prefs.getString("address", currentAddress)
-        }
+        currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
         if (currentFormFactor == null) {
             currentFormFactor = prefs.getString("form_factor", null)
