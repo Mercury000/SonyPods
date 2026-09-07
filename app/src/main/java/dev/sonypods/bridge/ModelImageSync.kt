@@ -1,8 +1,11 @@
 package dev.sonypods.bridge
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import dev.sonypods.SonyPodsApp
+import dev.sonypods.config.CloudModelInfoNetwork
+import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.PodImageResource
@@ -164,8 +167,9 @@ object ModelImageSync {
      * connect-time auto flow this always downloads — the user asked for it, and it also
      * doubles as a manual retry when the automatic download failed (e.g. offline at
      * connect): the auto-failure keys are bypassed and the currently announced URL is
-     * used even when no catalog image was ever cached. Blocking; call from
-     * [Dispatchers.IO].
+     * used even when no catalog image was ever cached. When no URL is known the local
+     * cloud catalog is absent or stale, so a fresh one is pulled before concluding that
+     * the model has no cloud image. Blocking; call from [Dispatchers.IO].
      */
     fun syncBoxImageBlocking(
         context: Context,
@@ -173,17 +177,23 @@ object ModelImageSync {
         urlHint: String? = null,
     ): BoxSyncResult {
         if (!PodImagePrefs.isStoreAttached()) return BoxSyncResult.Unavailable
+        if (SonyPodsApp.xposedService == null) return BoxSyncResult.Unavailable
         if (address.isBlank()) return BoxSyncResult.NoUrl
         val existing = PodImagePrefs.findCurrent(address)
+        val appContext = context.applicationContext ?: context
         // Prefer the URL the engine is announcing right now (covers a download that
         // failed before any catalog image was cached, and refreshes a stale one), then
-        // fall back to the last URL we actually applied.
-        val url = urlHint?.takeIf { it.isNotBlank() }
+        // fall back to the last URL we actually applied. With neither known, pull a
+        // fresh catalog and let the engine (which owns model + colour) re-resolve before
+        // declaring that the model has no cloud image.
+        var url = urlHint?.takeIf { it.isNotBlank() }
             ?: existing?.autoImageUrl?.takeIf { it.isNotBlank() }
-            ?: return BoxSyncResult.NoUrl
+        if (url.isNullOrBlank()) {
+            url = fetchCatalogAndResolve(appContext, address)
+        }
+        if (url.isNullOrBlank()) return BoxSyncResult.NoUrl
         val bytes = downloadImage(url)
         if (bytes == null || bytes.isEmpty()) return BoxSyncResult.Failed
-        val appContext = context.applicationContext ?: context
         val stored = runCatching {
             PodImagePrefs.applyCloudBox(
                 context = appContext,
@@ -199,7 +209,42 @@ object ModelImageSync {
         return BoxSyncResult.Ok
     }
 
+    /**
+     * Download the latest cloud catalog, publish it, then ask the engine to re-resolve
+     * the connected device's image URL (only it knows model + colour) and wait for the
+     * refreshed URL on the mirrored state. Returns null when the catalog is unavailable
+     * or the model still has no entry in it.
+     */
+    private fun fetchCatalogAndResolve(context: Context, address: String): String? {
+        val service = SonyPodsApp.xposedService ?: return null
+        val fetched = runCatching { CloudModelInfoNetwork.fetchCatalog() }.getOrNull()
+            ?.takeIf { it.isNotEmpty() } ?: return null
+        val prefs = CloudModelInfoStore.preferences(context)
+        val raw = runCatching { CloudModelInfoStore.saveCachedJson(prefs, fetched) }.getOrNull()
+            ?: return null
+        CloudModelInfoStore.publishJson(raw, service)
+        SonyBridge.sendCommand(context, SonyBridge.CMD_CLOUD_MODEL_INFO_READY)
+        return awaitResolvedImageUrl(address)
+    }
+
+    /** Bounded wait for the engine to publish a resolved model image URL for [address]. */
+    private fun awaitResolvedImageUrl(address: String): String? {
+        val target = address.trim().uppercase()
+        val deadline = SystemClock.elapsedRealtime() + RESOLVE_WAIT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val snapshot = SonyRemoteState.state.value
+            val url = snapshot.modelImageUrl?.takeIf { it.isNotBlank() }
+            if (url != null && snapshot.deviceAddress?.equals(target, ignoreCase = true) == true) {
+                return url
+            }
+            Thread.sleep(RESOLVE_POLL_MS)
+        }
+        return null
+    }
+
     private const val DOWNLOAD_TIMEOUT_MS = 15_000
+    private const val RESOLVE_WAIT_MS = 5_000L
+    private const val RESOLVE_POLL_MS = 120L
 }
 
 /**
