@@ -3,6 +3,7 @@ package dev.sonypods.config
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import dev.sonypods.device.SonyDeviceService
 import io.github.libxposed.service.XposedService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -162,10 +163,14 @@ object PodImagePrefs {
      * Replace the BOX image with a user-picked picture. Writes into the same
      * `<address>_box.img` slot the catalog uses, so every surface (detail page,
      * notification, island, card) sees it once the Remote File is published.
-     * Marks the record [EarphonePref.boxManual] so the automatic catalog download
-     * leaves it alone; the retained [EarphonePref.autoImageUrl] stays as the target
-     * for a later "restore from cloud". Bumps [EarphonePref.imageRevision] so the
-     * detail page repaints even though the file path is unchanged.
+     *
+     * A headset holds two Bluetooth identities (CLASSIC control + LE Audio) that the module
+     * stores under separate addresses, so the picture is written for every identity of the
+     * same headset — whichever identity a surface renders from, it sees the same override.
+     * Marks each record [EarphonePref.boxManual] so the automatic catalog download leaves it
+     * alone; the retained [EarphonePref.autoImageUrl] stays as the target for a later
+     * "restore from cloud". Bumps [EarphonePref.imageRevision] so the detail page repaints
+     * even though the file path is unchanged.
      */
     fun saveBoxOverride(
         context: Context,
@@ -175,25 +180,30 @@ object PodImagePrefs {
         bytes: ByteArray,
     ): EarphonePref? {
         if (address.isBlank() || bytes.isEmpty()) return null
-        val current = loadCurrent()
-        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        val base = existing ?: EarphonePref(address = address, name = name)
-        val path = copyImage(context, service, address, PodImageResource.BOX, bytes)
-        val updated = base.copy(
-            boxImagePath = path,
-            boxManual = true,
-            name = name.ifBlank { base.name },
-            lastConnectedAt = System.currentTimeMillis(),
-            imageRevision = base.imageRevision + 1L,
-        )
-        persist(listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) })
-        return updated
+        val primary = address.trim().uppercase()
+        var primarySaved: EarphonePref? = null
+        boxIdentityAddresses(primary).forEach { target ->
+            val current = loadCurrent()
+            val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
+            val base = existing ?: EarphonePref(address = target, name = name)
+            val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
+            val updated = base.copy(
+                boxImagePath = path,
+                boxManual = true,
+                name = name.ifBlank { base.name },
+                lastConnectedAt = System.currentTimeMillis(),
+                imageRevision = base.imageRevision + 1L,
+            )
+            persist(listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) })
+            if (target == primary) primarySaved = updated
+        }
+        return primarySaved
     }
 
     /**
      * Restore the BOX image from the cloud catalog: clears the manual override and
-     * stores freshly downloaded [bytes] for [url] into the shared slot. Bumps
-     * [EarphonePref.imageRevision] so surfaces repaint.
+     * stores freshly downloaded [bytes] for [url] into the shared slot, for every
+     * identity of the headset. Bumps [EarphonePref.imageRevision] so surfaces repaint.
      */
     fun applyCloudBox(
         context: Context,
@@ -204,20 +214,44 @@ object PodImagePrefs {
         bytes: ByteArray,
     ): EarphonePref? {
         if (address.isBlank() || bytes.isEmpty() || url.isBlank()) return null
-        val current = loadCurrent()
-        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        val base = existing ?: EarphonePref(address = address, name = name)
-        val path = copyImage(context, service, address, PodImageResource.BOX, bytes)
-        val updated = base.copy(
-            boxImagePath = path,
-            boxManual = false,
-            autoImageUrl = url,
-            name = name.ifBlank { base.name },
-            lastConnectedAt = System.currentTimeMillis(),
-            imageRevision = base.imageRevision + 1L,
-        )
-        persist(listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) })
-        return updated
+        val primary = address.trim().uppercase()
+        var primaryStored: EarphonePref? = null
+        boxIdentityAddresses(primary).forEach { target ->
+            val current = loadCurrent()
+            val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
+            val base = existing ?: EarphonePref(address = target, name = name)
+            val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
+            val updated = base.copy(
+                boxImagePath = path,
+                boxManual = false,
+                autoImageUrl = url,
+                name = name.ifBlank { base.name },
+                lastConnectedAt = System.currentTimeMillis(),
+                imageRevision = base.imageRevision + 1L,
+            )
+            persist(listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) })
+            if (target == primary) primaryStored = updated
+        }
+        return primaryStored
+    }
+
+    /**
+     * Every identity address that must share the BOX picture: the given one plus the other
+     * bonded identities (LE/CLASSIC) of the same headset, per [dev.sonypods.device.HeadsetRegistry].
+     * The registry is process-local and populated by ingesting the engine snapshot, so when it
+     * has not learned the headset yet this degrades to the single address given.
+     */
+    private fun boxIdentityAddresses(address: String): List<String> {
+        val primary = address.trim().uppercase()
+        val siblings = runCatching { SonyDeviceService.identityAliasesOf(address) }
+            .getOrDefault(emptyList())
+        return buildList {
+            add(primary)
+            siblings.forEach { sib ->
+                val normalized = sib.trim().uppercase()
+                if (normalized != primary && normalized !in this) add(normalized)
+            }
+        }
     }
 
     private fun decode(raw: String): List<EarphonePref> = runCatching {
