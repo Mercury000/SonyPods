@@ -6,11 +6,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Bundle
+import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.Bundle
 import android.os.Parcel
+import android.os.RemoteException
 import java.lang.reflect.Method
 import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
@@ -29,7 +31,13 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private val TAG = "SonyPods-Hook"
     private val reloadCallbackBinders = mutableListOf<IBinder>()
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
-    private val callbacks = linkedMapOf<IBinder, Any>()
+    private data class CallbackRegistration(
+        val callback: Any,
+        val deathRecipient: IBinder.DeathRecipient,
+    )
+
+    private val callbackLock = Any()
+    private val callbacks = linkedMapOf<IBinder, CallbackRegistration>()
     private val handler = Handler(Looper.getMainLooper())
     private val hookedBinderClasses = linkedSetOf<String>()
     private var lastSonyDevice: BluetoothDevice? = null
@@ -87,7 +95,8 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     override fun saveReloadState(state: Bundle) {
         val binders = Bundle()
-        callbacks.keys.forEachIndexed { index, binder -> binders.putBinder(index.toString(), binder) }
+        synchronized(callbackLock) { callbacks.keys.toList() }
+            .forEachIndexed { index, binder -> binders.putBinder(index.toString(), binder) }
         if (!binders.isEmpty) state.putBundle(KEY_RELOAD_CALLBACK_BINDERS, binders)
     }
 
@@ -103,7 +112,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         stateMirror.close()
         unregisterRemoteConfigChangeListener()
         receiverRegistered = false
-        callbacks.clear()
+        clearCallbacks()
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
@@ -344,9 +353,10 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             val asInterface = stub.getDeclaredMethod("asInterface", IBinder::class.java)
             reloadCallbackBinders.forEach { binder ->
                 val callback = asInterface.invoke(null, binder) ?: return@forEach
-                callbacks[binder] = callback
+                rememberCallback(binder, callback)
             }
-            Log.d(TAG, "restored ${callbacks.size} MIUI headset callbacks after reload")
+            val restoredCount = synchronized(callbackLock) { callbacks.size }
+            Log.d(TAG, "restored $restoredCount MIUI headset callbacks after reload")
         }.onFailure { Log.w(TAG, "failed to restore MIUI headset callbacks after reload", it) }
         reloadCallbackBinders.clear()
     }
@@ -449,11 +459,56 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun rememberCallback(callback: Any) {
-        (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks[it] = callback }
+        val binder = callMethod(callback, "asBinder") as? IBinder ?: return
+        rememberCallback(binder, callback)
+    }
+
+    private fun rememberCallback(binder: IBinder, callback: Any) {
+        val deathRecipient = IBinder.DeathRecipient {
+            val removed = removeCallback(binder, unlink = false)
+            if (removed != null) Log.d(TAG, "MIUI headset callback binder died; removed callback=$callback")
+        }
+        val registration = CallbackRegistration(callback, deathRecipient)
+        synchronized(callbackLock) {
+            callbacks.remove(binder)?.let { previous ->
+                runCatching { binder.unlinkToDeath(previous.deathRecipient, 0) }
+            }
+            callbacks[binder] = registration
+            try {
+                binder.linkToDeath(deathRecipient, 0)
+            } catch (_: RemoteException) {
+                callbacks.remove(binder, registration)
+                Log.d(TAG, "MIUI headset callback already dead; registration skipped callback=$callback")
+            }
+        }
     }
 
     private fun forgetCallback(callback: Any) {
-        (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks.remove(it) }
+        val binder = callMethod(callback, "asBinder") as? IBinder ?: return
+        removeCallback(binder)
+    }
+
+    private fun removeCallback(
+        binder: IBinder,
+        expected: CallbackRegistration? = null,
+        unlink: Boolean = true,
+    ): CallbackRegistration? {
+        val removed = synchronized(callbackLock) {
+            val current = callbacks[binder] ?: return@synchronized null
+            if (expected != null && current !== expected) return@synchronized null
+            callbacks.remove(binder)
+        }
+        if (unlink && removed != null) runCatching { binder.unlinkToDeath(removed.deathRecipient, 0) }
+        return removed
+    }
+
+    private fun clearCallbacks() {
+        val registrations = synchronized(callbackLock) {
+            callbacks.toList().also { callbacks.clear() }
+        }
+        registrations.forEach { (binder, registration) ->
+            runCatching { binder.unlinkToDeath(registration.deathRecipient, 0) }
+        }
     }
 
     private fun firstExistingClass(vararg classNames: String): String? {
@@ -530,7 +585,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         val callback = data.readCallbackBinder()
         Log.d(TAG, "register upstream callback=$callback lastDevice=${lastSonyDevice.describe()}")
         if (callback == null || lastSonyDevice == null) return null
-        (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks[it] = callback }
+        rememberCallback(callback)
         reply.writeNoException()
         sendRealStatus(lastSonyDevice, "register")
         return true
@@ -538,7 +593,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun handleUnregister(data: Parcel): Boolean? {
         val binder = data.readStrongBinder() ?: return null
-        callbacks.remove(binder)
+        removeCallback(binder)
         Log.d(TAG, "unregister upstream callback removed=$binder")
         return null
     }
@@ -642,7 +697,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         Log.d(TAG, "registerCallbackDevice upstream callback=$callback device=${device.describe()} isSony=$isSony")
         if (!isSony || callback == null) return null
         lastSonyDevice = device
-        (callMethod(callback, "asBinder") as? IBinder)?.let { callbacks[it] = callback }
+        rememberCallback(callback)
         reply.writeNoException()
         sendRealStatus(device, "registerCallbackDevice")
         return true
@@ -687,22 +742,45 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun sendRealStatus(address: String, reason: String) {
-        if (callbacks.isEmpty()) {
+        val registrations = synchronized(callbackLock) { callbacks.toList() }
+        if (registrations.isEmpty()) {
             Log.d(TAG, "send real status skipped: no callback reason=$reason address=$address")
             return
         }
         val payload = realRefreshPayload()
         handler.post {
-            callbacks.values.toList().forEach { callback ->
+            registrations.forEach { (binder, registration) ->
+                val isCurrent = synchronized(callbackLock) { callbacks[binder] === registration }
+                if (!isCurrent) return@forEach
+                if (!binder.isBinderAlive) {
+                    if (removeCallback(binder, registration, unlink = false) != null) {
+                        Log.d(TAG, "removed dead MIUI headset callback before refreshStatus callback=${registration.callback}")
+                    }
+                    return@forEach
+                }
                 runCatching {
-                    callMethod(callback, "refreshStatus", address, payload)
-                    Log.d(TAG, "sent real refreshStatus reason=$reason address=$address payload=$payload callback=$callback")
-                }.onFailure {
-                    forgetCallback(callback)
-                    Log.w(TAG, "send real refreshStatus failed reason=$reason callback=$callback", it)
+                    callMethod(registration.callback, "refreshStatus", address, payload)
+                    Log.d(TAG, "sent real refreshStatus reason=$reason address=$address payload=$payload callback=${registration.callback}")
+                }.onFailure { error ->
+                    val removed = removeCallback(binder, registration)
+                    if (removed == null) return@onFailure
+                    if (error.hasCause<DeadObjectException>()) {
+                        Log.d(TAG, "MIUI headset callback died during refreshStatus; removed callback=${registration.callback}")
+                    } else {
+                        Log.w(TAG, "send real refreshStatus failed reason=$reason callback=${registration.callback}", error)
+                    }
                 }
             }
         }
+    }
+
+    private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is T) return true
+            current = current.cause
+        }
+        return false
     }
 
     private fun realRefreshPayload(): String {
