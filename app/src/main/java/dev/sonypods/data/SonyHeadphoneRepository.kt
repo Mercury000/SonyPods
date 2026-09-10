@@ -1312,46 +1312,6 @@ class SonyHeadphoneRepository private constructor(
     /** Wall clock of the last full refresh burst; see [fullRefreshAgeMs]. */
     private var lastFullRefreshAtMs = 0L
 
-    /**
-     * Rebuilds the capability tableset from the control identity's stored row.
-     *
-     * A session parked on the holding identity cannot probe — that identity answers with the
-     * LEA-only support-function list — and [probeCapabilities] runs once per Tandem channel, so
-     * there is no later attempt either. Left at that, `capabilitiesKnown` never becomes true: the
-     * phase stays CONNECTING and every control surface is dead. Observed twice on 2026-09-04, once
-     * right after a successful LE bond (the headset brings its GATT link up on the LE identity) and
-     * once the moment the LE Audio switch moved the session there on purpose.
-     *
-     * The tableset is not missing, only elsewhere. Sound Connect keys its capability store by
-     * identifier for exactly this reason, and the control identity's row was written by its own
-     * session. Rebuilding from that row is the same funnel a counter hit uses
-     * ([applyConnectCapabilityInfo]), so nothing here is a new code path — only a new reason to
-     * enter it.
-     *
-     * Moving the session instead does not work: dialing the control identity while the holding
-     * identity owns the link fails every attempt and the retries turn into a reconnect storm.
-     */
-    private fun restoreControlIdentityCapabilities(holdingAddress: String): Boolean {
-        val control = HeadsetRegistry.sessionTargetFor(holdingAddress)
-        if (control.equals(holdingAddress, ignoreCase = true)) return false
-        val profile = runCatching { ensureConnectedProfile() }.getOrNull() ?: return false
-        val storeGroup = storeGroupFor(profile)
-        val session = CapabilityProbeSession(deviceAddress = holdingAddress, storeGroup = storeGroup)
-        session.identifier = control
-        capabilitySession = session
-        val restored = restoreCapabilitiesFromStorage(session, control, storeGroup)
-        appendLog(
-            if (restored) {
-                "Rebuilt the capability tableset from control identity $control " +
-                    "(storeGroup=$storeGroup)"
-            } else {
-                "No stored capability tableset for control identity $control; control stays " +
-                    "unavailable until that identity runs its own session"
-            }
-        )
-        if (!restored) capabilitySession = null
-        return restored
-    }
 
     fun refreshBasics(initial: Boolean = false) {
         lastFullRefreshAtMs = SystemClock.elapsedRealtime()
@@ -1587,23 +1547,13 @@ class SonyHeadphoneRepository private constructor(
                 mainHandler.removeCallbacks(tandemMigrationTimeoutRunnable)
             }
         }
-        // Tandem target is the single identity that carries control and therefore owns the
-        // capability tableset; the other bonded identity of a dual-mode headset is only a
-        // holding connection (Sound Connect `je0.C19229b`: one target + one holding slot,
-        // and only the target's session ever runs the initializer). A pure-LE holding
-        // identity advertises a different, LEA-only support-function list, so letting it
-        // probe would build the profile from the wrong identity.
-        if (connectedAddress != null) {
-            if (isLeOnlyHoldingIdentity(connectedAddress)) {
-                appendLog(
-                    "Skipping capability probe for LE holding identity $connectedAddress; " +
-                        "control identity owns the tableset"
-                )
-                restoreControlIdentityCapabilities(connectedAddress)
-                refreshBasics(initial = true)
-                return
-            }
-        }
+        // Every session runs its own capability exchange, whatever identity it landed on.
+        // Sound Connect does exactly that: `RunnableC14334g1.run` starts one initializer per
+        // deviceId (`"startInitialize deviceId: "`), and nothing between it and `wv.e.e` gates on
+        // target versus holding. The store it fills is keyed by the identifier the session
+        // reports — `wv.e.e.m112157F` sets it from `CONNECT_RET_CAPABILITY_INFO`, `m112158F0`
+        // writes with it, `m112169M`/`m112171N` read with it — so skipping the exchange on one
+        // identity leaves the tableset unknown and every control surface dead.
         // One initializer per physical headset at a time, whatever the transport.
         capabilitySession?.let { live ->
             if (live.awaitingCapabilityInfo || live.supportFunctionProbeRunning) return
@@ -1775,21 +1725,6 @@ class SonyHeadphoneRepository private constructor(
             HeadphoneProtocolVariant.SONY_TANDEM_V1_TABLE2 -> STORE_GROUP_V1
             else -> STORE_GROUP_V2
         }
-
-    /**
-     * Whether [address] is the pure-LE half of a dual-mode headset — Sound
-     * Connect's "holding" identity. The classic identity is the Tandem target and
-     * owns the capability tableset; the LE half holds the link but must never run
-     * the initializer, or it would overwrite the tableset with its LEA-only
-     * support-function list.
-     *
-     * False unless a control identity has actually been proved — an unknown
-     * headset and a known one whose direction nothing has settled both answer no.
-     * That is the safe side: skipping the initializer on a guess costs the session
-     * its capability table, while running it once too often costs a re-probe.
-     */
-    private fun isLeOnlyHoldingIdentity(address: String): Boolean =
-        HeadsetRegistry.recordFor(address)?.isLeIdentity(address) == true
 
     /** SC's `command_table_number`, taken from the frame's dataType. */
     private fun tableNumberFor(raw: ByteArray): Int =
