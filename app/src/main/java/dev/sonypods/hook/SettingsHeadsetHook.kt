@@ -12,6 +12,8 @@ import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -31,15 +33,17 @@ import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import java.lang.ref.WeakReference
 import java.lang.reflect.Modifier
-import java.util.Collections
-import java.util.IdentityHashMap
 import java.util.WeakHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 @SuppressLint("MissingPermission")
 object SettingsHeadsetHook : HookContext() {
     private const val TAG = "SonyPods-Hook"
     private const val PREFS_NAME = "sonypods_milink_state"
     private const val REPUBLISH_DEBOUNCE_MS = 600L
+    private const val INITIAL_UI_QUIET_MS = 350L
     private const val PKG_SETTINGS = "com.android.settings"
     private val batteryViews = WeakHashMap<Any, BluetoothDevice>()
     private val batteryValuesCache = WeakHashMap<Any, String>()
@@ -72,6 +76,12 @@ object SettingsHeadsetHook : HookContext() {
     private var proxyGetDeviceConfigCalls = 0
     private var proxyGetCommonConfigCalls = 0
     private var lastRepublishAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingFragmentUpdates = WeakHashMap<Any, Boolean>()
+    private val pendingBatteryUpdates = WeakHashMap<Any, Boolean>()
+    @Volatile private var initialUiReleaseAt = 0L
+    @Volatile private var bootstrapScheduled = false
+    @Volatile private var backgroundExecutor: ExecutorService = newBackgroundExecutor()
 
     override fun onHook() {
         hookActivityEntry()
@@ -96,6 +106,10 @@ object SettingsHeadsetHook : HookContext() {
         batteryValuesCache.clear()
         headsetFragments.clear()
         batteryLabelOriginals.clear()
+        pendingFragmentUpdates.clear()
+        pendingBatteryUpdates.clear()
+        backgroundExecutor.shutdownNow()
+        bootstrapScheduled = false
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
@@ -111,14 +125,22 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     internal fun startAfterReload(context: Context) {
+        ensureBackgroundExecutor()
         registerStatusReceiver(context)
+        // Existing fragment/battery maps are transferred between generations. Re-rendering
+        // those tracked instances is sufficient; avoid the former recursive ActivityThread
+        // object-graph scan, which could monopolize Settings' main thread.
+        mainHandler.postDelayed({
+            applyBatteryLayouts()
+            updateBatteryViews()
+            updateFragments()
+        }, INITIAL_UI_QUIET_MS)
     }
 
     private fun hookActivityEntry() {
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetActivity", "onCreate", Bundle::class.java)) {
-                val activity = instance as? Context ?: return@hookBefore
-                registerStatusReceiver(activity)
+            val activityOnCreate = findMethod("com.android.settings.bluetooth.MiuiHeadsetActivity", "onCreate", Bundle::class.java)
+            hookBefore(activityOnCreate) {
                 val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
                 val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
                 Log.d(TAG, "Activity.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
@@ -133,8 +155,6 @@ object SettingsHeadsetHook : HookContext() {
 
         runCatching {
             hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetActivityPlugin", "onCreate", Bundle::class.java)) {
-                val activity = instance as? Context ?: return@hookBefore
-                registerStatusReceiver(activity)
                 val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
                 val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
                 Log.d(TAG, "Plugin.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
@@ -325,12 +345,12 @@ object SettingsHeadsetHook : HookContext() {
             hookConstructorAfter(findConstructorByParamCount("com.android.settings.bluetooth.tws.MiuiHeadsetBattery", 4)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookConstructorAfter
                 val ctx = args[1] as? Context
-                registerStatusReceiver(ctx)
-                Log.d(TAG, "Battery.<init> device=${device.describe()} isSony=${isSonyPod(device)} ctx=$ctx currentBattery=${settingsBatteryString()}")
                 if (!isSonyPod(device)) return@hookConstructorAfter
-                batteryViews[instance ?: return@hookConstructorAfter] = device
+                registerStatusReceiver(ctx)
+                val batteryView = instance ?: return@hookConstructorAfter
+                batteryViews[batteryView] = device
                 requestBluetoothStatus("battery-init")
-                updateBatteryView(instance)
+                scheduleBatteryUpdate(batteryView)
                 Log.d(TAG, "MiuiHeadsetBattery registered address=${device.address}")
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetBattery constructor skipped", it) }
@@ -352,13 +372,22 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun hookFragmentState() {
         runCatching {
+            hookAfter(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "onCreate", Bundle::class.java)) {
+                if (!isSonyFragment(instance)) return@hookAfter
+                removeUnsupportedVirtualSurround(instance)
+            }
+        }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onCreate skipped", it) }
+
+        runCatching {
             hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetFragment", "onCreateView", 3)) {
-                registerStatusReceiver(runCatching { getObjectField(instance, "mActivity") as? Context }.getOrNull())
                 Log.d(TAG, "Fragment.onCreateView after ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (!isSonyFragment(instance)) return@hookAfter
-                instance?.let { headsetFragments[it] = true }
+                val fragment = instance ?: return@hookAfter
+                headsetFragments[fragment] = true
+                initialUiReleaseAt = maxOf(initialUiReleaseAt, SystemClock.uptimeMillis() + INITIAL_UI_QUIET_MS)
+                registerStatusReceiver(runCatching { getObjectField(fragment, "mActivity") as? Context }.getOrNull())
                 requestBluetoothStatus("fragment-create")
-                injectFragmentStatus(instance)
+                scheduleFragmentUpdate(fragment)
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onCreateView skipped", it) }
 
@@ -366,9 +395,10 @@ object SettingsHeadsetHook : HookContext() {
             hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetFragment", "onServiceConnected", 0)) {
                 Log.d(TAG, "Fragment.onServiceConnected after ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (!isSonyFragment(instance)) return@hookAfter
-                instance?.let { headsetFragments[it] = true }
+                val fragment = instance ?: return@hookAfter
+                headsetFragments[fragment] = true
                 requestBluetoothStatus("service-connected")
-                injectFragmentStatus(instance)
+                scheduleFragmentUpdate(fragment)
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onServiceConnected skipped", it) }
 
@@ -379,7 +409,7 @@ object SettingsHeadsetHook : HookContext() {
                 Log.d(TAG, "Fragment.refreshStatus before key=$key data=$data ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (isSonyFragment(instance) && key?.startsWith("MMA_CONNECTION_FAILED") == true) {
                     Log.d(TAG, "Fragment.refreshStatus swallowed MMA failure for virtual Oppo device key=$key")
-                    injectFragmentStatus(instance)
+                    scheduleFragmentUpdate(instance)
                     result = null
                 }
             }
@@ -389,7 +419,7 @@ object SettingsHeadsetHook : HookContext() {
             hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "handleConnectMmaFailed", String::class.java)) {
                 Log.d(TAG, "Fragment.handleConnectMmaFailed arg=${args[0]} ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (isSonyFragment(instance)) {
-                    injectFragmentStatus(instance)
+                    scheduleFragmentUpdate(instance)
                     result = null
                     Log.d(TAG, "Fragment.handleConnectMmaFailed swallowed for virtual Oppo device")
                 }
@@ -425,6 +455,29 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.updateAncUi depth-hide skipped", it) }
     }
 
+    private fun removeUnsupportedVirtualSurround(fragment: Any?) {
+        val preference = runCatching {
+            callMethod(fragment, "findPreference", "virtualSurroundSound")
+        }.getOrNull() ?: return
+        val parent = runCatching { callMethod(preference, "getParent") }.getOrNull() ?: return
+        val removed = runCatching {
+            callMethod(parent, "removePreference", preference) as? Boolean == true
+        }.getOrDefault(false)
+        if (removed) {
+            runCatching { setObjectField(fragment, "mVirtualSurroundSound", null) }
+            val preferenceCount = runCatching {
+                callMethod(parent, "getPreferenceCount") as? Int
+            }.getOrNull()
+            if (preferenceCount == 0) {
+                val container = runCatching { callMethod(parent, "getParent") }.getOrNull()
+                if (container != null) {
+                    runCatching { callMethod(container, "removePreference", parent) }
+                }
+            }
+            Log.d(TAG, "removed unsupported virtualSurroundSound from Sony headset page")
+        }
+    }
+
     private fun hookFragmentAncCommand(methodName: String, vararg parameterTypes: Class<*>, mode: (List<Any?>) -> Int?) {
         runCatching {
             hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", methodName, *parameterTypes)) {
@@ -448,7 +501,6 @@ object SettingsHeadsetHook : HookContext() {
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
-        loadState()
         val filter = IntentFilter().apply {
             addAction(SonyBridge.ACTION_STATE)
             addAction(SonyPodsAction.ACTION_PODS_CONNECTED)
@@ -505,8 +557,9 @@ object SettingsHeadsetHook : HookContext() {
                                 SonyDeviceService.rememberAddress(currentAddress)
                                 Log.d(TAG, "state snapshot address=$currentAddress connected=${snapshot.connected} formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
                                 saveState(context)
-                                rebindExistingBatteryViews()
-                                applyBatteryLayouts()
+                                // Live instances are already registered by their constructor and
+                                // fragment hooks. A full ActivityThread object-graph walk here was
+                                // the remaining deterministic UI-thread stall on every snapshot.
                                 updateBatteryViews()
                                 updateFragments()
                             } else if (!snapshot.connected) {
@@ -563,20 +616,56 @@ object SettingsHeadsetHook : HookContext() {
         context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         stateReceiver = receiver
         receiverRegistered = true
-        // Config changes arrive through the native remote-pref change callback
-        // (HookContext.registerRemoteConfigChangeListener) instead of a custom broadcast.
-        registerRemoteConfigChangeListener()
-        rebindExistingBatteryViews()
-        requestBluetoothStatus("receiver-register")
+        // Disk-backed state, RemotePreferences, config parsing and cross-process
+        // broadcasts must never execute on Settings' main thread. They are serialized on
+        // the hook worker, then only the final view mutation returns to the main looper.
+        scheduleBackgroundBootstrap()
         Log.d(TAG, "registered status receiver context=$context")
     }
 
     override fun onRemoteConfigChanged() {
-        // Visibility-driven overlays refresh on the main thread like the broadcast path.
-        android.os.Handler(android.os.Looper.getMainLooper()).post { updateFragments() }
+        mainHandler.post { updateFragments() }
+    }
+
+    private fun newBackgroundExecutor(): ExecutorService =
+        Executors.newSingleThreadExecutor { task ->
+            Thread(task, "SonyPods-SettingsHook").apply { isDaemon = true }
+        }
+
+    @Synchronized
+    private fun ensureBackgroundExecutor(): ExecutorService {
+        if (backgroundExecutor.isShutdown) backgroundExecutor = newBackgroundExecutor()
+        return backgroundExecutor
+    }
+
+    private fun runInBackground(task: () -> Unit) {
+        try {
+            ensureBackgroundExecutor().execute(task)
+        } catch (_: RejectedExecutionException) {
+            ensureBackgroundExecutor().execute(task)
+        }
+    }
+
+    private fun scheduleBackgroundBootstrap() {
+        if (bootstrapScheduled) return
+        bootstrapScheduled = true
+        runInBackground {
+            loadState()
+            registerRemoteConfigChangeListener()
+            requestBluetoothStatusNow("receiver-register")
+            mainHandler.post {
+                updateBatteryViews()
+                updateFragments()
+            }
+        }
     }
 
     private fun requestBluetoothStatus(reason: String) {
+        runInBackground { requestBluetoothStatusNow(reason) }
+    }
+
+    @Synchronized
+    private fun requestBluetoothStatusNow(reason: String) {
         val ctx = context ?: return
         // Ask the engine to re-broadcast its current state. Without this the settings
         // process only receives a snapshot after the engine *changes* state (battery/
@@ -586,10 +675,9 @@ object SettingsHeadsetHook : HookContext() {
         // battery-init, fragment-create, service-connected) in the same moment; each
         // would otherwise trigger a full cross-process republish round trip.
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRepublishAt > REPUBLISH_DEBOUNCE_MS) {
-            lastRepublishAt = now
-            SonyBridge.sendCommand(ctx, SonyBridge.CMD_REPUBLISH)
-        }
+        if (now - lastRepublishAt <= REPUBLISH_DEBOUNCE_MS) return
+        lastRepublishAt = now
+        SonyBridge.sendCommand(ctx, SonyBridge.CMD_REPUBLISH)
         listOf(SonyPodsAction.ACTION_PODS_UI_INIT, SonyPodsAction.ACTION_REFRESH_STATUS).forEach { action ->
             ctx.sendBroadcast(Intent(action).apply {
                 setPackage(BuildConfig.APPLICATION_ID)
@@ -599,83 +687,36 @@ object SettingsHeadsetHook : HookContext() {
         Log.d(TAG, "requested bluetooth status reason=$reason")
     }
 
+    private fun scheduleFragmentUpdate(fragment: Any?) {
+        val target = fragment ?: return
+        val schedule = {
+            if (pendingFragmentUpdates.put(target, true) == null) {
+                val delay = (initialUiReleaseAt - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+                mainHandler.postDelayed({
+                    pendingFragmentUpdates.remove(target)
+                    if (isSonyFragment(target)) injectFragmentStatus(target)
+                }, delay)
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) schedule() else mainHandler.post(schedule)
+    }
+
+    private fun scheduleBatteryUpdate(view: Any?) {
+        val target = view ?: return
+        val schedule = {
+            if (pendingBatteryUpdates.put(target, true) == null) {
+                val delay = (initialUiReleaseAt - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+                mainHandler.postDelayed({
+                    pendingBatteryUpdates.remove(target)
+                    if (batteryViews.containsKey(target)) updateBatteryView(target)
+                }, delay)
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) schedule() else mainHandler.post(schedule)
+    }
+
     private fun updateBatteryViews() {
-        batteryViews.keys.toList().forEach { view ->
-            runCatching { updateBatteryView(view) }
-                .onFailure { Log.w(TAG, "update battery view failed", it) }
-        }
-    }
-
-    /**
-     * MiuiHeadsetBattery instances survive a libxposed reload, but their
-     * WeakHashMap belongs to the old classloader. Re-discover the small set of
-     * live battery objects from ActivityThread so an already-open Settings page
-     * keeps receiving state immediately after the new generation starts.
-     */
-    private fun rebindExistingBatteryViews() {
-        runCatching {
-            val thread = Class.forName("android.app.ActivityThread")
-                .getDeclaredMethod("currentActivityThread")
-                .apply { isAccessible = true }
-                .invoke(null)
-                ?: return
-            var type: Class<*>? = thread.javaClass
-            var activities: Any? = null
-            while (type != null && activities == null) {
-                activities = runCatching {
-                    type.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread)
-                }.getOrNull()
-                type = type.superclass
-            }
-            val records = (activities as? Map<*, *>)?.values.orEmpty()
-            val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
-            records.forEach { record ->
-                val activity = findFieldValue(record, "activity") ?: return@forEach
-                findObjectsByClassName(activity, "com.android.settings.bluetooth.tws.MiuiHeadsetBattery", seen)
-                    .forEach { battery ->
-                        val device = findBatteryDevice(battery) ?: return@forEach
-                        if (isSonyPod(device)) batteryViews[battery] = device
-                    }
-            }
-        }.onFailure { Log.d(TAG, "existing Settings battery rebind skipped", it) }
-    }
-
-    private fun findObjectsByClassName(
-        root: Any?,
-        className: String,
-        seen: MutableSet<Any>,
-        depth: Int = 0,
-    ): List<Any> {
-        if (root == null || depth > 7 || !seen.add(root)) return emptyList()
-        if (root.javaClass.name == className) return listOf(root)
-        if (root is String || root is Number || root is Boolean || root is Enum<*> ||
-            root is Class<*> || root is ClassLoader || (root is Context && depth > 0) ||
-                root is View
-        ) return emptyList()
-        val result = mutableListOf<Any>()
-        when (root) {
-            is Map<*, *> -> root.values.forEach {
-                result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
-            }
-            is Iterable<*> -> root.forEach {
-                result.addAll(findObjectsByClassName(it, className, seen, depth + 1))
-            }
-            else -> {
-                var type: Class<*>? = root.javaClass
-                while (type != null) {
-                    type.declaredFields.forEach { field ->
-                        if (Modifier.isStatic(field.modifiers) || field.type.isPrimitive) return@forEach
-                        val value = runCatching {
-                            field.isAccessible = true
-                            field.get(root)
-                        }.getOrNull()
-                        result.addAll(findObjectsByClassName(value, className, seen, depth + 1))
-                    }
-                    type = type.superclass
-                }
-            }
-        }
-        return result
+        batteryViews.keys.toList().forEach(::scheduleBatteryUpdate)
     }
 
     private fun findBatteryDevice(owner: Any?): BluetoothDevice? {
@@ -690,18 +731,6 @@ object SettingsHeadsetHook : HookContext() {
                 }.getOrNull()?.let { value ->
                     if (value is BluetoothDevice) return value
                 }
-            }
-            type = type.superclass
-        }
-        return null
-    }
-
-    private fun findFieldValue(owner: Any?, fieldName: String): Any? {
-        if (owner == null) return null
-        var type: Class<*>? = owner.javaClass
-        while (type != null) {
-            runCatching {
-                return type.getDeclaredField(fieldName).apply { isAccessible = true }.get(owner)
             }
             type = type.superclass
         }
@@ -837,11 +866,7 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun updateFragments() {
-        headsetFragments.keys.toList().forEach { fragment ->
-            if (isSonyFragment(fragment)) {
-                injectFragmentStatus(fragment)
-            }
-        }
+        headsetFragments.keys.toList().forEach(::scheduleFragmentUpdate)
     }
 
     private fun injectFragmentStatus(fragment: Any?) {
@@ -1089,7 +1114,6 @@ object SettingsHeadsetHook : HookContext() {
      *  Over-ear headphones expose a single value; it lands in the right slot and the
      *  left/case slots stay "not present" (255), while those slot views are hidden. */
     private fun settingsBatteryValues(): List<Int> {
-        loadState()
         return if (isOverEar()) {
             listOf(
                 255,
@@ -1131,7 +1155,6 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun settingsAncMode(): String {
-        loadState()
         return when (currentAnc) {
             2, 5, 6, 7, 8 -> "1"
             3 -> "2"
@@ -1140,7 +1163,6 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun settingsAncLevel(): String {
-        loadState()
         // MIUI Settings level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep,
         // 0200=Transparency, 0201=Transparency vocal enhancement, 0000=Off.
         return when (currentAnc) {
