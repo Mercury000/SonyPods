@@ -42,6 +42,11 @@ object MiLinkServiceHook : HookContext() {
     internal var context: Context? = null
     private var receiverRegistered = false
     private var stateSeeded = false
+    @Volatile
+    private var snapshotReceived = false
+    /** Address whose Tandem control session is driven by this device. */
+    @Volatile
+    private var engineHeldAddress: String? = null
     internal var currentAddress: String? = null
     internal var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
@@ -289,6 +294,8 @@ object MiLinkServiceHook : HookContext() {
             hookBefore(findMethod(className, methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
                 if (!isSonyPod(device)) return@hookBefore
+                val address = runCatching { device.address }.getOrNull() ?: return@hookBefore
+                if (!isCurrentlyHeld(address)) return@hookBefore
                 cacheRuntimeOwner(className, instance)
                 captureRuntimeContext(instance)
                 currentAnc = sonyAnc
@@ -305,6 +312,8 @@ object MiLinkServiceHook : HookContext() {
             hookBefore(findMethod("com.miui.headset.runtime.AncBatteryController", "setAncStateBlock", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookBefore
                 if (!isSonyPod(device)) return@hookBefore
+                val address = runCatching { device.address }.getOrNull() ?: return@hookBefore
+                if (!isCurrentlyHeld(address)) return@hookBefore
                 lastAncBatteryController = instance
                 captureRuntimeContext(instance)
                 val miLinkMode = args[1] as? Int ?: return@hookBefore
@@ -394,6 +403,22 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun applySnapshot(snapshot: SonyStateSnapshot) {
+        // Only the device with the live Tandem session may emulate the local Sony runtime.
+        // On a Wear/tablet remote, connected=false leaves stock MiLink free to forward writes.
+        snapshotReceived = true
+        // Keep holder authority across the short Tandem recovery window. Clearing it here would
+        // briefly re-enable the remote/local interception race while the audio link is still up.
+        if (!snapshot.connected && snapshot.deviceAddress == null && currentAddress != null &&
+            snapshot.audioLinkConnected
+        ) {
+            Log.d(TAG, "transient disconnect snapshot; retaining panel state and holder")
+            return
+        }
+        engineHeldAddress = if (snapshot.connected && snapshot.deviceAddress != null) {
+            SonyDeviceService.resolveControlAddress(snapshot.deviceAddress) ?: snapshot.deviceAddress
+        } else {
+            null
+        }
         // The engine derives this from the stack's own bond state — the same authority the
         // LE Audio pairing flow uses. It is the only trustworthy source for which address is
         // the headset's second identity, so record the pairing the moment a snapshot lands.
@@ -486,6 +511,16 @@ object MiLinkServiceHook : HookContext() {
             SonyDeviceService.isKnownSonyAddress(resolved) ||
             address.equals(current, ignoreCase = true) ||
             resolved.equals(resolvedCurrent, ignoreCase = true)
+    }
+
+    /** Whether this process owns the Sony control session for [address]. */
+    internal fun isCurrentlyHeld(address: String?): Boolean {
+        if (address.isNullOrBlank()) return true
+        if (!snapshotReceived) return true
+        val held = engineHeldAddress ?: return false
+        val target = SonyDeviceService.resolveControlAddress(address) ?: address
+        val holder = SonyDeviceService.resolveControlAddress(held) ?: held
+        return target.equals(holder, ignoreCase = true)
     }
 
     private fun isTargetHeadsetInfo(info: Any?): Boolean {

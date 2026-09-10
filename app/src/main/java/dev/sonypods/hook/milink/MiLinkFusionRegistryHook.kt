@@ -100,6 +100,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
+                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 refreshRegistry(svc, broadcast = false)
                 this.result = completed(100)
@@ -116,6 +117,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
+                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 refreshRegistry(svc, broadcast = false)
             }
@@ -128,6 +130,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 logicalRole = "fusion-registry-support-anc",
             ) {
                 if (!isSonyService(args.getOrNull(0))) return@hookBefore
+                if (!heldHere(args.getOrNull(0))) return@hookBefore
                 remember(args[0], instance)
                 this.result = completed(2)
             }
@@ -140,6 +143,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 logicalRole = "fusion-registry-is-mma",
             ) {
                 if (!isSonyService(args.getOrNull(1))) return@hookBefore
+                if (!heldHere(args.getOrNull(1))) return@hookBefore
                 remember(args[1], instance)
                 this.result = completed(false)
             }
@@ -152,6 +156,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 logicalRole = "fusion-registry-bond-status",
             ) {
                 if (!isSonyService(args.getOrNull(1))) return@hookBefore
+                if (!heldHere(args.getOrNull(1))) return@hookBefore
                 remember(args[1], instance)
                 this.result = completed(1)
             }
@@ -167,6 +172,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
+                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 val panelMode = args.getOrNull(1) as? Int ?: return@hookBefore
                 applyPanelAncMode(panelMode)
@@ -184,6 +190,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
+                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 val volume = (args.getOrNull(1) as? Int)?.coerceIn(0, 100) ?: return@hookBefore
                 applyVolume(volume)
@@ -236,6 +243,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val svc = service ?: return
         val deviceId = runCatching { getObjectField(svc, "deviceId") as? String }.getOrNull() ?: return
         if (!hook.isSonyAddress(deviceId)) return
+        if (!hook.isCurrentlyHeld(deviceId)) return
         main.post {
             if (broadcasting.get() == true) return@post
             broadcasting.set(true)
@@ -269,6 +277,15 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ?: hook.currentAddress
 
     /**
+     * The local registry/controller shim belongs only on the physical holder. On a Wear or
+     * tablet remote, leaving these methods untouched lets stock MiLink forward ANC to the holder.
+     */
+    private fun heldHere(svc: Any?): Boolean {
+        val deviceId = deviceIdOf(svc) ?: return false
+        return hook.isCurrentlyHeld(deviceId)
+    }
+
+    /**
      * Ensure a Sony [com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo] sits in the
      * registry under the published device id, refreshed from the module's current state.
      * [broadcast] only fan mode/battery out when they actually changed since the last push,
@@ -277,6 +294,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     private fun refreshRegistry(svc: Any? = null, broadcast: Boolean) {
         val deviceId = deviceIdOf(svc) ?: return
         if (!hook.isSonyAddress(deviceId)) return
+        if (!hook.isCurrentlyHeld(deviceId)) return
         val manager = manager() ?: return
         val info = buildDeviceInfo(deviceId) ?: return
         val added = runCatching {
