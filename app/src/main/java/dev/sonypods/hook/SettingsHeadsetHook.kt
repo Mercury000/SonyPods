@@ -56,6 +56,8 @@ object SettingsHeadsetHook : HookContext() {
     private var hasLiveSnapshot = false
     private var isConnectedState = false
     private var hasAncState = false
+    /** Set once the persisted ANC/transparency pair is in memory. */
+    private var ancStateReady = false
     private var context: Context? = null
     private var receiverRegistered = false
     private var stateReceiver: BroadcastReceiver? = null
@@ -386,6 +388,7 @@ object SettingsHeadsetHook : HookContext() {
                 headsetFragments[fragment] = true
                 initialUiReleaseAt = maxOf(initialUiReleaseAt, SystemClock.uptimeMillis() + INITIAL_UI_QUIET_MS)
                 registerStatusReceiver(runCatching { getObjectField(fragment, "mActivity") as? Context }.getOrNull())
+                paintRestoredVersion(fragment)
                 requestBluetoothStatus("fragment-create")
                 scheduleFragmentUpdate(fragment)
             }
@@ -397,6 +400,7 @@ object SettingsHeadsetHook : HookContext() {
                 if (!isSonyFragment(instance)) return@hookAfter
                 val fragment = instance ?: return@hookAfter
                 headsetFragments[fragment] = true
+                paintRestoredVersion(fragment)
                 requestBluetoothStatus("service-connected")
                 scheduleFragmentUpdate(fragment)
             }
@@ -426,6 +430,23 @@ object SettingsHeadsetHook : HookContext() {
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.handleConnectMmaFailed skipped", it) }
 
+        runCatching {
+            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "refreshStatusUi", String::class.java)) {
+                if (!isSonyFragment(instance)) return@hookBefore
+                val ours = currentFirmware?.takeIf { it.isNotBlank() } ?: return@hookBefore
+                val shown = args.getOrNull(0) as? String
+                // refreshStatusUi is the only writer of R.id.versionName, and MIUI calls it
+                // with whatever firmware the virtual Oppo device reports (updateStatus keeps
+                // the display half of its "<code>+<display>" payload). Hold it to the
+                // firmware we track, the same way the ANC row and the battery reading are
+                // held. An empty argument is a pure visibility refresh and passes through.
+                if (shown.isNullOrEmpty() || shown == ours) return@hookBefore
+                Log.d(TAG, "refreshStatusUi version swallowed shown=$shown tracked=$ours")
+                result = null
+                runCatching { callMethod(instance, "refreshStatusUi", ours) }
+            }
+        }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.refreshStatusUi version guard skipped", it) }
+
         hookFragmentAncCommand("updateAncMode", Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!) { commandArgs ->
             sonyAncFromSettings(commandArgs[0] as? Int ?: 0)
         }
@@ -433,6 +454,33 @@ object SettingsHeadsetHook : HookContext() {
             val level = commandArgs[0] as? String ?: ""
             sonyAncFromLevelCommand(level)
         }
+        runCatching {
+            hookBefore(
+                findMethod(
+                    "com.android.settings.bluetooth.MiuiHeadsetFragment",
+                    "updateAncUi",
+                    String::class.java,
+                    Boolean::class.javaPrimitiveType!!,
+                ),
+            ) {
+                if (!isSonyFragment(instance)) return@hookBefore
+                // Only once an ANC/transparency state is known (live snapshot or restored
+                // from prefs). Before that currentAnc is still the field default, and
+                // holding that against the page would flash "off" for the round trip.
+                if (!hasAncState && !ancStateReady) return@hookBefore
+                val requested = args.getOrNull(0) as? String
+                val tracked = settingsAncLevel()
+                if (requested == null || requested == tracked) return@hookBefore
+                // updateAncUi is the page's ANC row render, and the level it is handed can
+                // come from anywhere — its own cached level, a device refresh — none of
+                // which describes the Sony headset. Same treatment the battery reading
+                // gets: swallow the stock value and paint ours. The nested call re-enters
+                // with the tracked level and passes through to the real render.
+                Log.d(TAG, "updateAncUi stock level swallowed requested=$requested tracked=$tracked")
+                result = null
+                runCatching { callMethod(instance, "updateAncUi", tracked, false) }
+            }
+        }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.updateAncUi level guard skipped", it) }
         runCatching {
             hookAfter(
                 findMethod(
@@ -476,6 +524,17 @@ object SettingsHeadsetHook : HookContext() {
             }
             Log.d(TAG, "removed unsupported virtualSurroundSound from Sony headset page")
         }
+    }
+
+    /**
+     * The version row opens on the layout's "connect the headset to read the version" hint
+     * and is only replaced once a firmware arrives — which on this page is the deferred
+     * injection. Paint the firmware restored from prefs as soon as the fragment exists, so
+     * the hint is not the first thing the user reads.
+     */
+    private fun paintRestoredVersion(fragment: Any?) {
+        val firmware = currentFirmware?.takeIf { it.isNotBlank() } ?: return
+        runCatching { callMethod(fragment, "refreshStatusUi", firmware) }
     }
 
     private fun hookFragmentAncCommand(methodName: String, vararg parameterTypes: Class<*>, mode: (List<Any?>) -> Int?) {
@@ -1335,6 +1394,14 @@ object SettingsHeadsetHook : HookContext() {
             .putString("firmware", currentFirmware)
             .putInt("anc", currentAnc)
             .putBoolean("transparency_vocal_enhancement", currentTransparencyVocalEnhancement)
+            // Sound-quality badge inputs. They have no other persisted home, so without
+            // these a cold Settings process paints the version and the battery from prefs
+            // but no badge, and the badge then appears on its own a moment later.
+            .putString("codec", currentCodec?.name)
+            .putString("dsee_generation", currentDseeGeneration?.name)
+            .putBoolean("dsee_active", currentDseeActive)
+            .putString("lea_streaming_left", currentLeaStreamingL)
+            .putString("lea_streaming_right", currentLeaStreamingR)
             .putInt("left_battery", currentBattery.left?.battery ?: 0)
             .putBoolean("left_charging", currentBattery.left?.isCharging == true)
             .putBoolean("left_connected", currentBattery.left?.isConnected == true)
@@ -1358,6 +1425,20 @@ object SettingsHeadsetHook : HookContext() {
             currentFirmware = prefs.getString("firmware", null)
         }
         SonyDeviceService.rememberAddress(currentAddress)
+        // Badge inputs are restored here rather than next to the ANC/battery blocks: they
+        // have no live value before the first snapshot, and those blocks are behind early
+        // returns a live ANC or battery state can trigger. Live snapshot values still win.
+        if (!hasLiveSnapshot) {
+            currentCodec = prefs.getString("codec", null)?.let { name ->
+                runCatching { SoundQualityCodec.valueOf(name) }.getOrNull()
+            }
+            currentDseeGeneration = prefs.getString("dsee_generation", null)?.let { name ->
+                runCatching { DseeGeneration.valueOf(name) }.getOrNull()
+            }
+            currentDseeActive = prefs.getBoolean("dsee_active", currentDseeActive)
+            currentLeaStreamingL = prefs.getString("lea_streaming_left", null)
+            currentLeaStreamingR = prefs.getString("lea_streaming_right", null)
+        }
         // Live snapshot data wins; persisted ANC/voice are only a bootstrap until the
         // first live state arrives. Overwriting here reverted the UI after every tap
         // (vocal-enhancement looked unclickable) because settingsAncLevel() calls
@@ -1365,6 +1446,9 @@ object SettingsHeadsetHook : HookContext() {
         if (hasAncState) return
         currentAnc = prefs.getInt("anc", currentAnc)
         currentTransparencyVocalEnhancement = prefs.getBoolean("transparency_vocal_enhancement", currentTransparencyVocalEnhancement)
+        // A restored pair is a real state too: the ANC row guard may hold it against the
+        // page's own repaint. The field default (off) before this point may not.
+        ancStateReady = true
         // Live snapshot data wins; persisted battery is only a bootstrap until the first
         // ACTION_STATE arrives. Overwriting live values here made the reading jump between
         // the live value and whatever was last saved.
