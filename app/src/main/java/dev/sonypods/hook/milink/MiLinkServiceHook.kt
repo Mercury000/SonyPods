@@ -28,6 +28,8 @@ import dev.sonypods.utils.miuiStrongToast.data.PodParams
 object MiLinkServiceHook : HookContext() {
     internal const val TAG = "SonyPods-MiLink"
     private const val PREFS_NAME = "sonypods_milink_state"
+    private const val TWS_MODEL_ID = "01010607"
+    private const val HEADPHONES_MODEL_ID = "01013A04"
 
     /**
      * MiLink carrier identity for over-ear (single-battery) headphones. Mirrors the
@@ -35,7 +37,7 @@ object MiLinkServiceHook : HookContext() {
      * device center classifies devices off this carrier, so a headphone must not ride
      * the TWS carrier or it would render as a case+left+right earbud set.
      */
-    private const val HEADPHONES_DEVICE_ID = "01013A04"
+    private const val HEADPHONES_DEVICE_ID = HEADPHONES_MODEL_ID
 
     internal var context: Context? = null
     private var receiverRegistered = false
@@ -51,6 +53,11 @@ object MiLinkServiceHook : HookContext() {
     private var currentFormFactor: String? = null
     internal val isOverEar: Boolean
         get() = currentFormFactor == HeadphoneFormFactor.HEADSET.name
+
+    /** Xiaomi model/capability key; distinct from the physical Bluetooth address. */
+    internal fun miLinkModelId(): String =
+        if (isOverEar) HEADPHONES_MODEL_ID else TWS_MODEL_ID
+
     internal var currentSpatialAudioMode = ConfigManager.SPATIAL_AUDIO_OFF
     internal var lastAncBatteryController: Any? = null
     internal var lastProfileContext: Any? = null
@@ -98,8 +105,7 @@ object MiLinkServiceHook : HookContext() {
      * carrier; everything else keeps the user-configured disguise model. Called for the
      * MiLink process only, so the settings-injection and upstream hooks are unaffected.
      */
-    override fun fakeDeviceId(): String =
-        if (isOverEar) HEADPHONES_DEVICE_ID else super.fakeDeviceId()
+    override fun fakeDeviceId(): String = miLinkModelId()
 
     private fun hookContextEntry() {
         // Primary entry: every process has an Application, so the state receiver is up
@@ -224,6 +230,7 @@ object MiLinkServiceHook : HookContext() {
                 constructor.isAccessible = true
                 hookConstructorAfter(constructor, "milink-headsetinfo-init:${constructor.parameterTypes.joinToString(",") { it.name }}") {
                     if (!isTargetHeadsetInfo(instance)) return@hookConstructorAfter
+                    stampHeadsetInfoModelId(instance)
                     val currentMode = runCatching { getObjectField(instance, "mode") as? Int }.getOrNull()
                     if (currentMode == null || currentMode < 0) {
                         runCatching { setObjectField(instance, "mode", miLinkAncState()) }
@@ -235,6 +242,24 @@ object MiLinkServiceHook : HookContext() {
                 }
             }
         }.onFailure { Log.d(TAG, "hook HeadsetInfo constructor skipped", it) }
+
+        // HeadsetInfo's Parcelable path writes the backing field directly; stamp immediately
+        // before IPC so the remote still receives the model/capability key, not the MAC.
+        runCatching {
+            hookBefore(
+                findMethodByParamCount("com.miui.headset.api.HeadsetInfo", "writeToParcel", 2),
+                logicalRole = "milink-headsetinfo-model-parcel",
+            ) {
+                if (!isTargetHeadsetInfo(instance)) return@hookBefore
+                stampHeadsetInfoModelId(instance)
+            }
+        }.onFailure { Log.d(TAG, "hook HeadsetInfo.writeToParcel model id skipped", it) }
+    }
+
+    private fun stampHeadsetInfoModelId(info: Any?) {
+        if (info == null) return
+        runCatching { setObjectField(info, "deviceId", miLinkModelId()) }
+            .onFailure { Log.d(TAG, "stamp HeadsetInfo.deviceId skipped", it) }
     }
 
     internal fun hookBluetoothDeviceResult(className: String, methodName: String, result: () -> Any) {
@@ -307,7 +332,11 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
-                this.result = result()
+                val replacement = result()
+                if (methodName == "getDeviceId" || methodName == "component3") {
+                    stampHeadsetInfoModelId(instance)
+                }
+                this.result = replacement
             }
         }.onFailure { Log.d(TAG, "hook HeadsetInfo.$methodName skipped", it) }
     }
@@ -408,6 +437,22 @@ object MiLinkServiceHook : HookContext() {
         saveState(context)
         Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         fusionRegistryHook.onSonyStateChanged()
+        pushStateToPanel()
+    }
+
+    /** Reassemble HeadsetInfo and notify native listeners so the remote receives complete state. */
+    internal fun pushStateToPanel() {
+        val address = currentAddress ?: return
+        val device = runCatching {
+            context?.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
+        }.getOrNull() ?: return
+        listOf(lastAncBatteryController, lastProfileContext)
+            .filterNotNull()
+            .distinctBy { it.javaClass.name }
+            .forEach { owner ->
+                notifyHeadsetPropertyChanged(owner, device, 4)
+                notifyHeadsetPropertyChanged(owner, device, 8)
+            }
     }
 
     /**

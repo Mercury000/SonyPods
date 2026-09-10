@@ -310,7 +310,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         // -1 = unsupported: the find-ring card only renders for a value >= 0, and a Sony has no
         // Mi profile back-end to ring it, so an unbacked 响铃查找 control must not appear.
         setObjectField(info, "findRingState", -1)
-        setObjectField(info, "vidPid", "0")
+        // MiLink forwards vidPid as the remote capability/model key. A known carrier keeps
+        // the Wear ANC surface on the complete 通透/降噪/关闭 capability set.
+        setObjectField(info, "vidPid", hook.fakeDeviceId())
         setObjectField(info, "noNeedBackBox", false)
         setObjectField(info, "isOutput", false)
         setObjectField(info, "wiredState", 0)
