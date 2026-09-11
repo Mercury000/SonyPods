@@ -85,9 +85,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val serviceName = "com.miui.circulate.api.service.CirculateServiceInfo"
         val deviceInfoName = "com.miui.circulate.api.service.CirculateDeviceInfo"
 
-        // This is presentation state only. Prime the Sony mirror synchronously and prevent the
-        // missing Xiaomi IHeadset backend from wiping it before the panel reads it. This must
-        // remain independent of local/remote command routing.
+        // Prime a fallback before the native refresh, but never consume the call. In a remote
+        // circulation the official request is what fetches the holder's authoritative HeadsetInfo;
+        // returning a synthetic success here leaves the viewer stuck on its last local snapshot.
         runCatching {
             hook.hookBefore(
                 hook.findMethod(controllerName, "refreshHeadsetProperty", hook.findClass(serviceName)),
@@ -97,12 +97,12 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 if (!isSonyService(svc)) return@hookBefore
                 remember(svc, instance)
                 refreshRegistry(svc, broadcast = false)
-                this.result = completed(100)
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.refreshHeadsetProperty skipped", it) }
 
-        // Every mode/battery/volume/name read funnels through getBluetoothDeviceInfo. Populate the
-        // mirror in every MiLink process; writes are left entirely to MiLink's native routing.
+        // Every mode/battery/volume/name read funnels through getBluetoothDeviceInfo. Populate only
+        // a missing/invalid entry. A valid entry may have just arrived from the remote holder and
+        // must not be overwritten with this process's stale cached Sony snapshot.
         runCatching {
             hook.hookBefore(
                 hook.findMethod(controllerName, "getBluetoothDeviceInfo", hook.findClass(serviceName)),
@@ -233,15 +233,22 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
 
     /**
      * Ensure a Sony [com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo] sits in the
-     * registry under the published device id, refreshed from the module's current state.
-     * This presentation mirror exists in every MiLink process and never decides command routing.
-     * [broadcast] only fans mode/battery out when they actually changed since the last push,
-     * so a state snapshot that repeats itself does not re-render every listening surface.
+     * registry under the published device id.
+     *
+     * [broadcast] means a connected Sony snapshot landed in this process, so the module state is
+     * authoritative and may replace the mirror. Read/refresh guards pass false: they are fallback
+     * paths and must preserve a valid entry produced by MiLink's native remote HeadsetHost flow.
      */
     private fun refreshRegistry(svc: Any? = null, broadcast: Boolean) {
         val deviceId = deviceIdOf(svc) ?: return
         if (!hook.isSonyAddress(deviceId)) return
         val manager = manager() ?: return
+        val existing = runCatching { callMethod(manager, "getBluetoothDevice", deviceId) }.getOrNull()
+        if (!broadcast && hasAuthoritativeMode(existing)) {
+            mirroredDeviceId = deviceId
+            return
+        }
+
         val info = buildDeviceInfo(deviceId) ?: return
         val added = runCatching {
             callMethod(manager, "addBluetoothDevice", info)
@@ -250,6 +257,12 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         if (!added) return
         mirroredDeviceId = deviceId
         if (broadcast) broadcastModeAndBattery()
+    }
+
+    /** Panel/native registry mode domain: 0=降噪, 1=通透, 2=关闭. */
+    private fun hasAuthoritativeMode(info: Any?): Boolean {
+        val mode = runCatching { getObjectField(info, "mode") as? Int }.getOrNull()
+        return mode in 0..2
     }
 
     private fun buildDeviceInfo(deviceId: String): Any? = runCatching {

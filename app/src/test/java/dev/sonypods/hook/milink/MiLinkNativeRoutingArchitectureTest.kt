@@ -28,6 +28,16 @@ class MiLinkNativeRoutingArchitectureTest {
     }
 
     @Test
+    fun remoteHeadsetStateRemainsAuthoritativeInFusionRegistry() {
+        val source = source("MiLinkFusionRegistryHook.kt")
+
+        assertTrue(source.contains("refreshRegistry(svc, broadcast = false)"))
+        assertTrue(source.contains("if (!broadcast && hasAuthoritativeMode(existing))"))
+        assertTrue(source.contains("return mode in 0..2"))
+        assertFalse(source.contains("this.result = completed(100)"))
+    }
+
+    @Test
     fun commandRoutingDoesNotDependOnLocalHolderSnapshot() {
         val sources = listOf(
             source("MiLinkFusionRegistryHook.kt"),
