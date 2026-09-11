@@ -123,16 +123,19 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.getBluetoothDeviceInfo skipped", it) }
 
-        // getSupportAncMode: 2 makes the detail panel show the full ANC card (通透/降噪/关闭).
+        // getSupportAncMode: 2 makes both the detail panel and Wear Agent advertise the full
+        // ANC set (通透/降噪/关闭). Capability is a property of the Sony headset, not of which
+        // MiLink process currently owns its Tandem session. Gating this read on heldHere() lets
+        // a cold-start/recovery race fall through to MiLink's stock query; its result 1 is then
+        // cached by Wear Agent and hides 通透 until a later mode change happens to refresh it.
         runCatching {
             hook.hookBefore(
                 hook.findMethod(controllerName, "getSupportAncMode", hook.findClass(serviceName)),
                 logicalRole = "fusion-registry-support-anc",
             ) {
                 if (!isSonyService(args.getOrNull(0))) return@hookBefore
-                if (!heldHere(args.getOrNull(0))) return@hookBefore
                 remember(args[0], instance)
-                this.result = completed(2)
+                this.result = completed(FULL_ANC_SUPPORT_MODE)
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.getSupportAncMode skipped", it) }
 
@@ -457,6 +460,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         const val HEADSET_DEVICE_INFO = "com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo"
         const val HEADSET_DEVICE_MANAGER = "com.miui.circulate.api.protocol.headset.HeadsetDeviceManager"
         const val HEADSET_SERVICE_CONTROLLER = "com.miui.circulate.api.protocol.headset.HeadsetServiceController"
+
+        /** MiLink/Wear capability value for 通透 + 降噪 + 关闭. */
+        const val FULL_ANC_SUPPORT_MODE = 2
 
         /** Over-ear single-battery headphone: detail battery card renders slots 2/5 as one cell. */
         const val TYPE_OVER_EAR = 7
