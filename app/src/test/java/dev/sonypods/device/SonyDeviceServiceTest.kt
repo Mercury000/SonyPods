@@ -101,6 +101,8 @@ class SonyDeviceServiceTest {
         assertEquals("02:00:00:00:00:22", SonyDeviceService.resolveControlAddress("02:00:00:00:00:21".lowercase()))
         // The control address itself must not be rewritten.
         assertEquals("02:00:00:00:00:22", SonyDeviceService.resolveControlAddress("02:00:00:00:00:22"))
+        assertTrue(SonyDeviceService.sameHeadset("02:00:00:00:00:21", "02:00:00:00:00:22"))
+        assertFalse(SonyDeviceService.sameHeadset("02:00:00:00:00:21", "02:00:00:00:00:29"))
     }
 
     @Test

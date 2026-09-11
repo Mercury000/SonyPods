@@ -256,8 +256,66 @@ object HeadsetRegistry {
                     "control=${record.controlAddress ?: "unproved"} service=${record.service}"
             )
             persist()
+            collapseOverlapping()
         }
         return record
+    }
+
+    /**
+     * Collapse transport-specific records once they share an identity address.
+     *
+     * Some dual-identity headsets use the current Bluetooth address as their Tandem identifier, so
+     * classic and LC3 sessions initially create one record each. A later LEA capability reply or the
+     * pairing flow makes those records overlap. From that point they are one physical headset; keeping
+     * both records makes lookup depend on insertion order and causes module-owned surfaces to alternate
+     * between two notification keys.
+     *
+     * Callers hold [lock].
+     */
+    private fun collapseOverlapping() {
+        var mergedAny = true
+        while (mergedAny) {
+            mergedAny = false
+            val snapshot = records.values.toList()
+            outer@ for (index in snapshot.indices) {
+                for (otherIndex in index + 1 until snapshot.size) {
+                    val first = snapshot[index]
+                    val second = snapshot[otherIndex]
+                    if (first.addresses.none { it in second.addresses }) continue
+                    val survivor = pickSurvivor(first, second)
+                    absorb(survivor, if (survivor.key == first.key) second else first)
+                    mergedAny = true
+                    break@outer
+                }
+            }
+        }
+    }
+
+    /** A proved control record wins; otherwise retain the record with more identity evidence. */
+    private fun pickSurvivor(first: HeadsetRecord, second: HeadsetRecord): HeadsetRecord = when {
+        first.controlAddress != null && second.controlAddress == null -> first
+        second.controlAddress != null && first.controlAddress == null -> second
+        first.addresses.size >= second.addresses.size -> first
+        else -> second
+    }
+
+    /** Fold [other] into [target], preserving one physical-headset key. Caller holds [lock]. */
+    private fun absorb(target: HeadsetRecord, other: HeadsetRecord) {
+        val merged = target.copy(
+            addresses = (target.addresses + other.addresses).distinct(),
+            name = target.name?.takeIf { it.isNotBlank() } ?: other.name,
+            controlAddress = target.controlAddress ?: other.controlAddress,
+            service = if (target.service == PairingService.CLASSIC) other.service else target.service,
+            supportsLeClassic = target.supportsLeClassic || other.supportsLeClassic,
+            bothPairedHistory = target.bothPairedHistory || other.bothPairedHistory,
+        )
+        records.remove(other.key)
+        records[merged.key] = merged
+        log(
+            "merged ${other.key} into ${merged.key} addresses=${merged.addresses} " +
+                "control=${merged.controlAddress ?: "unproved"}"
+        )
+        persist()
     }
 
     // ---- Pruning ----
@@ -329,6 +387,8 @@ object HeadsetRegistry {
             if (line.isBlank()) return@forEach
             HeadsetRecord.deserialize(line)?.let { records[it.key] = it }
         }
+        // Repair duplicate per-transport records persisted by earlier builds.
+        collapseOverlapping()
     }
 
     /** Callers already hold [lock]. */
@@ -364,6 +424,7 @@ object HeadsetRegistry {
             if (store != null || records == incoming) return
             records.clear()
             records.putAll(incoming)
+            collapseOverlapping()
         }
         log("adopted ${incoming.size} headset record(s) from the engine")
     }

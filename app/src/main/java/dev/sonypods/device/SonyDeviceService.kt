@@ -136,16 +136,25 @@ object SonyDeviceService {
     }
 
     /**
-     * The address to talk to for control, given any identity of the headset.
+     * Stable module-owned identity for a physical headset, given either Bluetooth address.
      *
-     * Returns [address] unchanged when the headset is unknown, so callers can use this
-     * unconditionally. This is SC `C14289i.m61741x`'s reverse lookup: find the record owning the
-     * address, dial the record's own address.
+     * Concrete profile operations must still use the address supplied by that profile. Notifications,
+     * images, caches and same-headset comparisons use this key so a classic+LC3 connection does not
+     * become two logical devices. Unknown addresses remain unchanged rather than being guessed.
      */
-    fun resolveControlAddress(address: String?): String? {
-        val normalized = normalizeAddress(address) ?: return address
+    fun canonicalAddress(address: String?): String? {
+        val normalized = normalizeAddress(address) ?: return null
         return HeadsetRegistry.controlAddressFor(normalized) ?: normalized
     }
+
+    fun sameHeadset(first: String?, second: String?): Boolean {
+        val firstCanonical = canonicalAddress(first) ?: return false
+        val secondCanonical = canonicalAddress(second) ?: return false
+        return firstCanonical == secondCanonical
+    }
+
+    /** Transport-facing alias retained for callers selecting the control endpoint. */
+    fun resolveControlAddress(address: String?): String? = canonicalAddress(address)
 
     /**
      * Records that [leAddress] is an LE Audio identity of the headset at [controlAddress].

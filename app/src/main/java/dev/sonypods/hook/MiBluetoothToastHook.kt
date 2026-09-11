@@ -29,6 +29,7 @@ import dev.sonypods.utils.SystemApisUtils.cancelAsUser
 import dev.sonypods.utils.SystemApisUtils.notifyAsUser
 import dev.sonypods.utils.ModuleText
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import com.mercury.sonypods.R
@@ -98,7 +99,7 @@ object MiBluetoothToastHook : HookContext() {
                 return
             }
             try {
-                val address: String = bluetoothDevice.address
+                val address = SonyDeviceService.canonicalAddress(bluetoothDevice.address) ?: return
                 var alias: String? = bluetoothDevice.alias
                 if (alias?.isEmpty() == true) {
                     alias = bluetoothDevice.name
@@ -122,6 +123,15 @@ object MiBluetoothToastHook : HookContext() {
 
                 val contentText: String = caseBattStr + leftEar + rightEar
                 val notificationManager = context.getSystemService("notification") as NotificationManager
+                SonyDeviceService.identityAliasesOf(address)
+                    .filterNot { it.equals(address, ignoreCase = true) }
+                    .forEach { aliasAddress ->
+                        notificationManager.cancelAsUser(
+                            "BTHeadset$aliasAddress",
+                            10003,
+                            SystemApisUtils.getUserAllUserHandle(),
+                        )
+                    }
                 notificationManager.createNotificationChannel(
                     NotificationChannel(
                         "BTHeadset$address",
@@ -293,8 +303,8 @@ object MiBluetoothToastHook : HookContext() {
 
         fun cancelNotification(bluetoothDevice: BluetoothDevice, context: Context) {
             try {
-                val address = bluetoothDevice.address
-                if (address.isNotEmpty()) {
+                val address = SonyDeviceService.canonicalAddress(bluetoothDevice.address)
+                if (address != null) {
                     val notificationManager = context.getSystemService("notification") as NotificationManager
                     notificationManager.cancelAsUser("BTHeadset$address", 10003, SystemApisUtils.getUserAllUserHandle())
                 }
@@ -385,8 +395,10 @@ object MiBluetoothToastHook : HookContext() {
                     SonyPodsAction.ACTION_SEND_STRONG_TOAST -> {
                         val batteryParams = intent.getParcelableExtra("batteryParams", BatteryParams::class.java)
                             ?: return
-                        val address = intent.getStringExtra("address").orEmpty()
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
+                        val address = SonyDeviceService.canonicalAddress(
+                            intent.getStringExtra("address") ?: device?.address,
+                        ).orEmpty()
                         val single = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
                         val showIsland = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SHOW_ISLAND, true)
                         val islandFirstFloat = if (intent.hasExtra(MiuiStrongToastUtil.EXTRA_ISLAND_FIRST_FLOAT)) {

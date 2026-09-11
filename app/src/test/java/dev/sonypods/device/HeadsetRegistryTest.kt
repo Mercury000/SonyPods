@@ -42,6 +42,41 @@ class HeadsetRegistryTest {
     }
 
     @Test
+    fun `sessions on both identities collapse once their pair is proved`() {
+        HeadsetRegistry.rememberSession(key = classic, sessionAddress = classic)
+        HeadsetRegistry.rememberSession(key = leLeft, sessionAddress = leLeft)
+        assertEquals(2, HeadsetRegistry.all().size)
+
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
+
+        assertEquals(1, HeadsetRegistry.all().size)
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
+        assertEquals(setOf(classic, leLeft), HeadsetRegistry.all().single().addresses.toSet())
+        assertEquals(classic, HeadsetRegistry.all().single().controlAddress)
+    }
+
+    @Test
+    fun `snapshot ingestion repairs overlapping records persisted by older builds`() {
+        val proved = HeadsetRecord(
+            key = classic,
+            addresses = listOf(classic, leLeft),
+            controlAddress = classic,
+            service = PairingService.LEA,
+        )
+        val duplicate = HeadsetRecord(
+            key = leLeft,
+            addresses = listOf(leLeft, classic),
+            service = PairingService.LEA,
+        )
+
+        HeadsetRegistry.ingest(listOf(proved.serialize(), duplicate.serialize()))
+
+        assertEquals(1, HeadsetRegistry.all().size)
+        assertEquals(classic, HeadsetRegistry.controlAddressFor(leLeft))
+        assertEquals(classic, HeadsetRegistry.recordFor(leLeft)?.key)
+    }
+
+    @Test
     fun `reported addresses need a key and are unioned, never substituted`() {
         assertNull(
             HeadsetRegistry.rememberReportedAddresses(

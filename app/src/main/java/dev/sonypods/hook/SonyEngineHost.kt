@@ -2404,8 +2404,9 @@ object SonyEngineHost {
             }
         }
 
-        val isNewPhysicalConnection = linkTracker.isNewPhysicalConnection(address)
-        lastConnectedAddress = address
+        val canonicalAddress = SonyDeviceService.canonicalAddress(address) ?: address
+        val isNewPhysicalConnection = linkTracker.isNewPhysicalConnection(canonicalAddress)
+        lastConnectedAddress = canonicalAddress
         if (isNewPhysicalConnection) {
             // A link-level reconnect: clear the old render identity so this connection
             // legitimately shows its first island/popup. The tracker decided this from
@@ -2451,7 +2452,7 @@ object SonyEngineHost {
             right = pod(snapshot.batteryRight),
             case = pod(snapshot.batteryCradle),
         )
-        val isTransportRecovery = linkTracker.isRecovery(address)
+        val isTransportRecovery = linkTracker.isRecovery(canonicalAddress)
         val hasBatteryData = battery.left != null || battery.right != null || battery.case != null
         if (!hasBatteryData) {
             // A Tandem/Sound Connect handoff can produce one probe-complete
@@ -2462,7 +2463,7 @@ object SonyEngineHost {
             Log.d(TAG, "skip surface render: no battery data yet address=$address recovery=$isTransportRecovery")
             return
         }
-        if (battery == lastRenderedBattery && address == lastRenderedAddress &&
+        if (battery == lastRenderedBattery && canonicalAddress == lastRenderedAddress &&
             !isTransportRecovery
         ) return
 
@@ -2478,10 +2479,10 @@ object SonyEngineHost {
         // A Tandem recovery only updates the existing notification/island. It must
         // never submit a new island: if the old island expired, it should stay gone.
         val showIsland = isNewDevice || isIslandReplay
-        if (isNewDevice) lastConnectAnimationKey = address
+        if (isNewDevice) lastConnectAnimationKey = canonicalAddress
         lastRenderedBattery = battery
-        lastRenderedAddress = address
-        linkTracker.onSurfaceRendered(address)
+        lastRenderedAddress = canonicalAddress
+        linkTracker.onSurfaceRendered(canonicalAddress)
 
         val device = remoteDevice(context, address) ?: return
         runCatching {
@@ -2512,7 +2513,7 @@ object SonyEngineHost {
                 },
                 transportRecovery = isTransportRecoveryReplay,
             )
-            if (isTransportRecoveryReplay) linkTracker.onSurfaceRendered(address)
+            if (isTransportRecoveryReplay) linkTracker.onSurfaceRendered(canonicalAddress)
             Log.d(
                 TAG,
                 "xiaomi surfaces updated address=$address " +
