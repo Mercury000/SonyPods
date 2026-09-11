@@ -50,6 +50,28 @@ class MiLinkNativeRoutingArchitectureTest {
     }
 
     @Test
+    fun wearCapabilityIsReadFromControllerBeforeFirstPublication() {
+        val source = source("MiLinkFusionRegistryHook.kt")
+
+        assertTrue(source.contains("hook.hookBefore(method, logicalRole = \"fusion-registry-wear-capability-seed\")"))
+        assertTrue(source.contains("resolveWearCapabilityFields(notify)"))
+        assertTrue(source.contains("HEADSET_SERVICE_NOTIFY"))
+        assertTrue(source.contains("it.type == controllerType"))
+        assertTrue(source.contains("it.type == serviceType"))
+        assertTrue(source.contains("declared.windowed(3)"))
+        assertTrue(source.contains("stateRuns.singleOrNull()?.get(1)"))
+        assertTrue(source.contains("callMethod(wearController, \"getSupportAncMode\", wearService)"))
+        assertTrue(source.contains("supportFuture.getNow(null)"))
+        assertTrue(source.contains("fields.supportMode.setInt(notify, supportMode)"))
+        assertFalse(source.contains("WEAR_HEADSET_CONTROLLER"))
+        assertFalse(source.contains("WEAR_CONTROLLER_FIELD"))
+        assertFalse(source.contains("WEAR_SERVICE_FIELD"))
+        assertFalse(source.contains("WEAR_SUPPORT_MODE_FIELD"))
+        assertFalse(source.contains("com.miui.circulate.wear.agent.device.controller.b"))
+        assertFalse(source.contains("hookWearAgentCapabilitySeed"))
+        assertFalse(source.contains("WEAR_SHARE_DEVICE"))
+    }
+    @Test
     fun endpointTranslationRemainsInstalled() {
         val runtime = source("MiLinkServiceHook.kt")
         val remote = source("MiLinkRemoteProtocolHook.kt")

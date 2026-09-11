@@ -6,6 +6,8 @@ import dev.sonypods.hook.Log
 import dev.sonypods.hook.callMethod
 import dev.sonypods.hook.getObjectField
 import dev.sonypods.hook.setObjectField
+import java.lang.reflect.Field
+import java.lang.reflect.Modifier
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -187,6 +189,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             val method = baseClass.declaredMethods
                 .first { it.name == "registerServiceNotify" && it.parameterTypes.size == 1 }
             method.isAccessible = true
+            hook.hookBefore(method, logicalRole = "fusion-registry-wear-capability-seed") {
+                seedWearCapabilityFromController(args.getOrNull(0))
+            }
             hook.hookAfter(method, logicalRole = "fusion-registry-subscribe-announce") {
                 if (instance !== controller) return@hookAfter
                 announceCurrentState()
@@ -194,6 +199,73 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook registerServiceNotify skipped", it) }
     }
 
+    /**
+     * Wear Agent publishes from its cached supportMode field, but it does not query that capability
+     * during onResume. Its first packets therefore carry the constructor default (-1); the query is
+     * only made by a later service refresh, commonly after the first ANC operation.
+     *
+     * At listener attachment the Sony service and authoritative HeadsetServiceController are both
+     * available. Read the already-completed controller capability future and seed Wear's cache before
+     * announcing mode/battery/volume. This preserves the native producer -> consumer data flow: the
+     * value comes from getSupportAncMode(), not from a Wear-layer constant or outgoing packet rewrite.
+     */
+    private fun seedWearCapabilityFromController(notify: Any?) {
+        if (notify == null) return
+        val fields = runCatching { resolveWearCapabilityFields(notify) }.getOrNull() ?: return
+        val wearController = runCatching { fields.controller.get(notify) }.getOrNull() ?: return
+        val wearService = runCatching { fields.service.get(notify) }.getOrNull() ?: return
+        if (!isSonyService(wearService)) return
+
+        val supportFuture = runCatching {
+            callMethod(wearController, "getSupportAncMode", wearService) as? CompletableFuture<*>
+        }.getOrNull() ?: return
+        val supportMode = runCatching { supportFuture.getNow(null) as? Number }
+            .getOrNull()
+            ?.toInt()
+            ?.takeIf { it in 1..2 }
+            ?: return
+
+        runCatching { fields.supportMode.setInt(notify, supportMode) }
+            .onFailure { Log.d(MiLinkServiceHook.TAG, "seed Wear supportMode from controller skipped", it) }
+    }
+
+    /**
+     * Resolve the Wear consumer by stable API shape rather than R8 names. The listener must implement
+     * HeadsetServiceNotify and declare exactly one controller field and one service-info field. In that
+     * same class, Wear stores voiceMode/supportMode/audioEffect as the sole consecutive run of three
+     * mutable ints; supportMode is the middle member. Any ambiguity fails closed.
+     */
+    private fun resolveWearCapabilityFields(notify: Any): WearCapabilityFields? {
+        val notifyType = hook.findClass(HEADSET_SERVICE_NOTIFY)
+        if (!notifyType.isInstance(notify)) return null
+
+        val controllerType = hook.findClass(HEADSET_SERVICE_CONTROLLER)
+        val serviceType = hook.findClass(CIRCULATE_SERVICE_INFO)
+        val owner = generateSequence(notify.javaClass as Class<*>?) { it.superclass }
+            .firstOrNull { type ->
+                val declared = type.declaredFields
+                declared.count { it.type == controllerType } == 1 &&
+                    declared.count { it.type == serviceType } == 1
+            }
+            ?: return null
+        val declared = owner.declaredFields.toList()
+        val controllerField = declared.single { it.type == controllerType }.apply { isAccessible = true }
+        val serviceField = declared.single { it.type == serviceType }.apply { isAccessible = true }
+        val stateRuns = declared.windowed(3).filter { run -> run.all(::isMutableIntField) }
+        val supportModeField = stateRuns.singleOrNull()?.get(1)?.apply { isAccessible = true } ?: return null
+        return WearCapabilityFields(controllerField, serviceField, supportModeField)
+    }
+
+    private fun isMutableIntField(field: Field): Boolean =
+        field.type == Int::class.javaPrimitiveType &&
+            !Modifier.isStatic(field.modifiers) &&
+            !Modifier.isFinal(field.modifiers)
+
+    private data class WearCapabilityFields(
+        val controller: Field,
+        val service: Field,
+        val supportMode: Field,
+    )
     /** Push the current mode/battery/volume to subscribed listeners once (e.g. right after attach). */
     private fun announceCurrentState() {
         val svc = service ?: return
@@ -382,6 +454,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         const val HEADSET_DEVICE_INFO = "com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo"
         const val HEADSET_DEVICE_MANAGER = "com.miui.circulate.api.protocol.headset.HeadsetDeviceManager"
         const val HEADSET_SERVICE_CONTROLLER = "com.miui.circulate.api.protocol.headset.HeadsetServiceController"
+
+        const val HEADSET_SERVICE_NOTIFY = "com.miui.circulate.api.protocol.headset.HeadsetServiceNotify"
+        const val CIRCULATE_SERVICE_INFO = "com.miui.circulate.api.service.CirculateServiceInfo"
 
         /** MiLink/Wear capability value for 通透 + 降噪 + 关闭. */
         const val FULL_ANC_SUPPORT_MODE = 2
