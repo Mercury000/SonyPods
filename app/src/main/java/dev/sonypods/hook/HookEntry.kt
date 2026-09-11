@@ -265,6 +265,7 @@ class HookEntry : XposedModule() {
         Log.module = this
         hook.module = this
         hook.appClassLoader = classLoader
+        hook.attachSymbolResolver(active.symbols(classLoader))
         hook.packageName = packageName
         hook.prefs = getRemotePreferences("sonypods_settings")
         hook.prefsProvider = { getRemotePreferences("sonypods_settings") }

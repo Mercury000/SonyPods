@@ -4,6 +4,8 @@ import android.os.Bundle
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.hook.HookContext
 import dev.sonypods.hook.Log
+import dev.sonypods.hook.symbols.AndroidTargetSymbols
+import dev.sonypods.hook.symbols.TargetSymbolResolver
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.util.concurrent.atomic.AtomicLong
@@ -58,7 +60,25 @@ class GenerationRuntime(
     private var quiesced = false
     private var reloadSnapshot: SonyStateSnapshot? = null
     private var reloadState: Bundle? = null
+    private var targetSymbols: TargetSymbolResolver? = null
 
+    @Synchronized
+    fun symbols(classLoader: ClassLoader): TargetSymbolResolver {
+        targetSymbols?.let { return it }
+        val application = runCatching {
+            Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentApplication")
+                .invoke(null) as? android.content.Context
+        }.getOrNull()
+        return AndroidTargetSymbols.create(
+            context = application,
+            packageName = scopePackage,
+            classLoader = classLoader,
+        ) { message, error ->
+            if (error == null) Log.d("SonyPods-Symbols", message)
+            else Log.e("SonyPods-Symbols", message, error)
+        }.also { targetSymbols = it }
+    }
     fun attach(context: HookContext) {
         contexts += context
         context.attachRuntime(this)

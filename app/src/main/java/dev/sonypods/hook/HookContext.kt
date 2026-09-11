@@ -12,6 +12,9 @@ import java.lang.reflect.Method
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.hook.reload.GenerationRuntime
 import dev.sonypods.hook.reload.ResourceRegistry
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
+import dev.sonypods.hook.symbols.SymbolBundleDefinition
+import dev.sonypods.hook.symbols.TargetSymbolResolver
 
 abstract class HookContext {
     lateinit var module: XposedModule
@@ -34,6 +37,8 @@ abstract class HookContext {
     lateinit var hookRegistry: dev.sonypods.hook.reload.HookRegistry
         private set
     lateinit var resources: ResourceRegistry
+        private set
+    lateinit var symbolResolver: TargetSymbolResolver
         private set
 
     /** Legacy MiLink carrier id; retained only by the pre-refactor MiLink path. */
@@ -71,6 +76,13 @@ abstract class HookContext {
         }
     }
 
+    internal fun attachSymbolResolver(resolver: TargetSymbolResolver) {
+        symbolResolver = resolver
+    }
+
+    /** Resolve one required bundle before installing any hook which consumes it. */
+    protected fun requireSymbols(definition: SymbolBundleDefinition): ResolvedSymbolBundle =
+        symbolResolver.resolve(definition)
     internal fun attachRuntime(runtime: GenerationRuntime) {
         this.runtime = runtime
         hookRegistry = runtime.hooks

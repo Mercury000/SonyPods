@@ -11,6 +11,7 @@ libxposedApi = "102.0.0"
 libxposedService = "102.0.0"
 miuix = "0.9.4-rc01"
 junit = "4.13.2"
+dexkit = "2.2.0"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
@@ -40,3 +41,4 @@ miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", ver
 miuix-nav = { group = "top.yukonga.miuix.kmp", name = "miuix-nav-android", version.ref = "miuix" }
 focus-api = { group = "com.xzakota.hyper.notification", name = "focus-api", version.ref = "focusApi" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+dexkit = { group = "org.luckypray", name = "dexkit", version.ref = "dexkit" }

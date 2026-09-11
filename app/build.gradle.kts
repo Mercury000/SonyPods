@@ -286,6 +286,7 @@ dependencies {
     compileOnly(libs.libxposedApi)
     implementation(libs.libxposedService)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.dexkit)
 
     // Compose
     implementation(platform(libs.compose.bom))
