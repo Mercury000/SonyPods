@@ -81,7 +81,7 @@ abstract class HookContext {
     }
 
     /** Resolve one required bundle before installing any hook which consumes it. */
-    protected fun requireSymbols(definition: SymbolBundleDefinition): ResolvedSymbolBundle =
+    internal fun requireSymbols(definition: SymbolBundleDefinition): ResolvedSymbolBundle =
         symbolResolver.resolve(definition)
     internal fun attachRuntime(runtime: GenerationRuntime) {
         this.runtime = runtime

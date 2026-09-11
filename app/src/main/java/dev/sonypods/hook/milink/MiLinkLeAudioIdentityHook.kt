@@ -218,9 +218,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
     }
 
     private fun profileContextInstance(): Any? = runCatching {
-        hook.findClass(PROFILE_CONTEXT).getDeclaredField("INSTANCE")
-            .apply { isAccessible = true }
-            .get(null)
+        hook.requireSymbols(MiLinkStableSymbols).field("profileContextInstance").get(null)
     }.getOrNull()
 
     /**
@@ -358,8 +356,9 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
      */
     private fun hookHostBoundProbe() {
         runCatching {
+            val hostBoundCheck = hook.requireSymbols(MiLinkRuntimeSymbols).method("hostBoundCheck")
             hook.hookAfter(
-                hook.findMethodByParamCount(MULTIPLATFORM_PROCESSOR, "hostBoundCheck", 2),
+                hostBoundCheck,
                 logicalRole = "multiplatform-host-bound-probe",
             ) {
                 val code = result as? Int ?: return@hookAfter
@@ -443,7 +442,7 @@ internal class MiLinkLeAudioIdentityHook(private val hook: MiLinkServiceHook) {
      */
     private fun hookConnectClassicAddress() {
         runCatching {
-            val proxyConnect = hook.findMethodByParamCount(PROFILE_PROXY, "connect", 3)
+            val proxyConnect = hook.requireSymbols(MiLinkStableSymbols).method("profileConnect")
             hook.hookBefore(proxyConnect, logicalRole = "profile-proxy-connect-classic-address") {
                 if (rewriting.get() == true) return@hookBefore
                 val address = args.getOrNull(1) as? String ?: return@hookBefore

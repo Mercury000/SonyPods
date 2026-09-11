@@ -25,8 +25,6 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
         hookSpatialCallbacks()
         hookProfileSpatialEffect()
         hookProfileAudioEffectState()
-        hook.hookHeadsetInfoNoArg("getAudioEffectState") { hook.miLinkAudioEffectState() }
-        hook.hookHeadsetInfoNoArg("component10") { hook.miLinkAudioEffectState() }
     }
 
     fun hookCirculateHeadsetServiceInfo() {
@@ -87,7 +85,8 @@ internal class MiLinkSpatialAudioHook(private val hook: MiLinkServiceHook) {
 
     private fun hookDeviceSpatialTypeModel() {
         runCatching {
-            hook.hookAfter(hook.findMethodByParamCount("com.miui.headset.runtime.AncBatteryModel", "getDeviceSpatialType", 0)) {
+            val getDeviceSpatialType = hook.requireSymbols(MiLinkRuntimeSymbols).method("getDeviceSpatialType")
+            hook.hookAfter(getDeviceSpatialType) {
                 if (!hook.isTargetAncBatteryModel(instance)) return@hookAfter
                 this.result = hook.miLinkDeviceSpatialType()
             }

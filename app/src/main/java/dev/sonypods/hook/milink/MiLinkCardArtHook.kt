@@ -11,6 +11,7 @@ import dev.sonypods.config.PodImageResource
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.hook.Log
 import dev.sonypods.utils.PodImageLoader
+import java.lang.reflect.Field
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -30,6 +31,9 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     @Volatile
     private var cachedBoxBitmap: Pair<String, Bitmap>? = null
     private val cardAddressCache = WeakHashMap<ImageView, String?>()
+    private lateinit var deviceInfoField: Field
+    private lateinit var circulateServicesField: Field
+    private lateinit var deviceIdField: Field
 
     fun hookCardArt() {
         runCatching { install() }
@@ -38,6 +42,10 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
 
     private fun install() {
         if (installed) return
+        val symbols = hook.requireSymbols(MiLinkCardArtSymbols)
+        deviceInfoField = symbols.field("deviceInfoField")
+        circulateServicesField = symbols.field("circulateServicesField")
+        deviceIdField = symbols.field("deviceIdField")
         installed = true
         artResourceIds = resolveArtResourceIds()
         if (artResourceIds.isEmpty()) {
@@ -168,17 +176,8 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     }
 
     private fun findCirculateDeviceInfo(view: View): Any? {
-        var clazz: Class<*>? = view.javaClass
-        while (clazz != null && clazz != Any::class.java) {
-            for (field in clazz.declaredFields) {
-                if (field.type.name == CIRCULATE_DEVICE_INFO_CLASS) {
-                    field.isAccessible = true
-                    return field.get(view)
-                }
-            }
-            clazz = clazz.superclass
-        }
-        return null
+        if (!deviceInfoField.declaringClass.isInstance(view)) return null
+        return runCatching { deviceInfoField.get(view) }.getOrNull()
     }
 
     /**
@@ -192,15 +191,9 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
      */
     private fun extractBluetoothMac(deviceInfo: Any): String? {
         return runCatching {
-            val servicesField = deviceInfo.javaClass
-                .getDeclaredField("circulateServices")
-                .apply { isAccessible = true }
-            val services = servicesField.get(deviceInfo) as? Set<*> ?: return@runCatching null
+            val services = circulateServicesField.get(deviceInfo) as? Set<*> ?: return@runCatching null
             for (svc in services) {
-                if (svc == null) continue
-                val deviceIdField = svc.javaClass
-                    .getDeclaredField("deviceId")
-                    .apply { isAccessible = true }
+                if (svc == null || !deviceIdField.declaringClass.isInstance(svc)) continue
                 val deviceId = deviceIdField.get(svc) as? String
                 if (!deviceId.isNullOrBlank()) return@runCatching deviceId
             }
@@ -213,7 +206,5 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
             "com.miui.circulate.device.service.R\$drawable",
             "com.miui.circulate.world.R\$drawable",
         )
-        private const val CIRCULATE_DEVICE_INFO_CLASS =
-            "com.miui.circulate.api.service.CirculateDeviceInfo"
     }
 }

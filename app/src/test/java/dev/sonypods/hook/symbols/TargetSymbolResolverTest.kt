@@ -96,6 +96,35 @@ class TargetSymbolResolverTest {
         }
     }
 
+
+    @Test
+    fun fixedBundleBypassesDexKitAndCache() {
+        val cache = MemorySymbolCache()
+        var opened = false
+        val definition = object : FixedSymbolBundleDefinition {
+            override val id = "fixed"
+            override val schemaVersion = 1
+            override val requiredSymbols = setOf("string", "length")
+            override val symbols = validReferences()
+        }
+        val resolver = TargetSymbolResolver(
+            target(),
+            loader,
+            cache,
+            SymbolQueryFactory {
+                opened = true
+                error("must not scan")
+            },
+        )
+
+        val bundle = resolver.resolve(definition)
+
+        assertFalse(bundle.fromCache)
+        assertFalse(opened)
+        assertEquals(6, bundle.method("length").invoke("abcdef"))
+        assertEquals(null, cache.read(definition.id))
+    }
+
     private fun target() = TargetArtifact(
         "target", 2,
         listOf(ArtifactFile("base.apk", 100, 200)),
@@ -128,7 +157,7 @@ class TargetSymbolResolverTest {
         override fun close() = onClose()
     }
 
-    private open inner class StringBundle : SymbolBundleDefinition {
+    private open inner class StringBundle : DexKitSymbolBundleDefinition {
         override val id = "bundle"
         override val schemaVersion = 3
         override val requiredSymbols = setOf("string", "length")

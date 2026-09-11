@@ -10,11 +10,19 @@ interface SymbolBundleDefinition {
     val schemaVersion: Int
     val requiredSymbols: Set<String>
 
-    /** Called only after a cache miss or failed cache validation. */
-    fun resolve(query: SymbolQuery): Map<String, SymbolReference>
-
     /** Cross-symbol semantic checks which descriptors alone cannot express. */
     fun validate(symbols: Map<String, SymbolReference>) = Unit
+}
+
+/** A bundle whose descriptors are discovered from DEX and may be cached. */
+interface DexKitSymbolBundleDefinition : SymbolBundleDefinition {
+    /** Called only after a cache miss or failed cache validation. */
+    fun resolve(query: SymbolQuery): Map<String, SymbolReference>
+}
+
+/** A bundle backed by a stable ABI whose exact descriptors are fixed in code. */
+interface FixedSymbolBundleDefinition : SymbolBundleDefinition {
+    val symbols: Map<String, SymbolReference>
 }
 
 class ResolvedSymbolBundle internal constructor(
@@ -52,8 +60,26 @@ class TargetSymbolResolver(
         resolved[definition.id]?.let { return it }
         validateDefinition(definition)
 
+        val bundle = when (definition) {
+            is FixedSymbolBundleDefinition -> resolveFixed(definition)
+            is DexKitSymbolBundleDefinition -> resolveWithDexKit(definition)
+            else -> throw SymbolResolutionException(
+                definition.id,
+                "unsupported symbol bundle type: ${definition.javaClass.name}",
+            )
+        }
+        resolved[definition.id] = bundle
+        return bundle
+    }
+
+    private fun resolveFixed(definition: FixedSymbolBundleDefinition): ResolvedSymbolBundle {
+        diagnostics.emit(SymbolDiagnostic(definition.id, "fixed", "resolved=${definition.symbols.size}"))
+        return materialize(definition, definition.symbols, fromCache = false)
+    }
+
+    private fun resolveWithDexKit(definition: DexKitSymbolBundleDefinition): ResolvedSymbolBundle {
         loadCache(definition)?.let { references ->
-            return materialize(definition, references, fromCache = true).also { resolved[definition.id] = it }
+            return materialize(definition, references, fromCache = true)
         }
 
         diagnostics.emit(SymbolDiagnostic(definition.id, "scan", "cache miss; opening DexKit"))
@@ -76,14 +102,13 @@ class TargetSymbolResolver(
         diagnostics.emit(
             SymbolDiagnostic(definition.id, "scan", "resolved=${references.size} cache=written"),
         )
-        resolved[definition.id] = bundle
         return bundle
     }
 
     @Synchronized
     fun clearMemory() = resolved.clear()
 
-    private fun loadCache(definition: SymbolBundleDefinition): Map<String, SymbolReference>? {
+    private fun loadCache(definition: DexKitSymbolBundleDefinition): Map<String, SymbolReference>? {
         val cached = cache.read(definition.id) ?: return null
         if (cached.formatVersion != CachedSymbolBundle.CACHE_FORMAT_VERSION ||
             cached.schemaVersion != definition.schemaVersion ||

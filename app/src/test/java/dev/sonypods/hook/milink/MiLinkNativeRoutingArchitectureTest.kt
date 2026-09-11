@@ -56,12 +56,17 @@ class MiLinkNativeRoutingArchitectureTest {
 
         assertTrue(source.contains("fun onApplicationReady()"))
         assertTrue(runtime.contains("fusionRegistryHook.onApplicationReady()"))
-        assertTrue(source.contains("callbackMethods(owner, callbackType).forEach"))
+        assertTrue(source.contains("hook.requireSymbols(MiLinkWearSymbols)"))
+        assertTrue(source.contains("wearCallbackMethods.forEach"))
         assertTrue(source.contains("if (registered) return@hookBefore"))
         assertTrue(source.contains("seedWearCapabilityFromController(listener)"))
         assertTrue(source.contains("callMethod(wearController, \"getSupportAncMode\", wearService)"))
         assertTrue(source.contains("supportFuture.getNow(null)"))
-        assertTrue(source.contains("fields.supportMode.setInt(notify, supportMode)"))
+        assertTrue(source.contains("wearSupportModeField.setInt(notify, supportMode)"))
+        assertFalse(source.contains("DexFile"))
+        assertFalse(source.contains("declaredFields"))
+        assertFalse(source.contains("declaredMethods"))
+        assertFalse(source.contains("applicationClassNames"))
         assertFalse(source.contains("registerServiceNotify"))
         assertFalse(source.contains("announceCurrentState"))
         assertFalse(source.contains("WEAR_HEADSET_CONTROLLER"))
@@ -80,5 +85,46 @@ class MiLinkNativeRoutingArchitectureTest {
         assertTrue(runtime.contains("hookAncStateBlock"))
         assertTrue(remote.contains("HeadsetRemoteImpl"))
         assertTrue(remote.contains("applyRemoteAncMode"))
+    }
+
+    @Test
+    fun cardArtUsesResolvedFieldsOnly() {
+        val source = source("MiLinkCardArtHook.kt")
+
+        assertTrue(source.contains("hook.requireSymbols(MiLinkCardArtSymbols)"))
+        assertTrue(source.contains("symbols.field(\"deviceInfoField\")"))
+        assertTrue(source.contains("symbols.field(\"circulateServicesField\")"))
+        assertTrue(source.contains("symbols.field(\"deviceIdField\")"))
+        assertFalse(source.contains("declaredFields"))
+        assertFalse(source.contains("getDeclaredField"))
+        assertFalse(source.contains("CIRCULATE_DEVICE_INFO_CLASS"))
+    }
+
+    @Test
+    fun milinkHasNoAmbiguousMethodOrFieldFallback() {
+        val sources = sourceRoot.resolve("dev/sonypods/hook/milink")
+            .toFile()
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .joinToString("\n") { it.readText() }
+
+        assertFalse(sources.contains("findMethodByParamCount"))
+        assertFalse(sources.contains("declaredConstructors"))
+        assertFalse(sources.contains("getDeclaredField"))
+        assertFalse(sources.contains("notify.javaClass.methods.firstOrNull"))
+        assertTrue(sources.contains("MiLinkStableSymbols"))
+        assertTrue(sources.contains("MiLinkRuntimeSymbols"))
+    }
+
+    @Test
+    fun deviceMetaGuardUsesResolvedSymbolsOnly() {
+        val source = source("MiLinkDeviceMetaGuardHook.kt")
+
+        assertTrue(source.contains("hook.requireSymbols(MiLinkDeviceMetaSymbols)"))
+        assertTrue(source.contains("symbols.field(\"deviceType\")"))
+        assertTrue(source.contains("symbols.field(\"title\")"))
+        assertFalse(source.contains("declaredMethods"))
+        assertFalse(source.contains("stringFieldOf"))
+        assertFalse(source.contains("Regex("))
     }
 }

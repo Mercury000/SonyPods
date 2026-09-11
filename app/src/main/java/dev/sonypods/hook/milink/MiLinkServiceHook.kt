@@ -13,6 +13,7 @@ import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.config.PodImagePrefs
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import dev.sonypods.headphones.HeadphoneFormFactor
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.hook.HookContext
@@ -219,43 +220,69 @@ object MiLinkServiceHook : HookContext() {
         hookStringAddressResult("com.miui.headset.runtime.AncBatteryController", "getSwitchState") { miLinkSwitchState() }
         hookAncStateBlock()
         spatialAudioHook.hookHeadsetRuntimeDisplay()
-        hookHeadsetInfoNoArg("getDeviceId") { fakeDeviceId() }
-        hookHeadsetInfoNoArg("component3") { fakeDeviceId() }
-        hookHeadsetInfoNoArgWhen("getPowers", { value -> !hasKnownBatteryLevels(value) }) { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArgWhen("component4", { value -> !hasKnownBatteryLevels(value) }) { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArgWhen("getMode", { value -> !hasKnownMode(value) }) { miLinkAncState() }
-        hookHeadsetInfoNoArgWhen("component5", { value -> !hasKnownMode(value) }) { miLinkAncState() }
-        hookHeadsetInfoNoArg("getSwitchState") { miLinkSwitchState() }
-        hookHeadsetInfoNoArg("component8") { miLinkSwitchState() }
+        hookHeadsetInfoSymbols()
+    }
+
+    private fun hookHeadsetInfoSymbols() {
         runCatching {
-            findClass("com.miui.headset.api.HeadsetInfo").declaredConstructors.forEach { constructor ->
-                constructor.isAccessible = true
-                hookConstructorAfter(constructor, "milink-headsetinfo-init:${constructor.parameterTypes.joinToString(",") { it.name }}") {
-                    if (!isTargetHeadsetInfo(instance)) return@hookConstructorAfter
-                    stampHeadsetInfoModelId(instance)
-                    val currentMode = runCatching { getObjectField(instance, "mode") as? Int }.getOrNull()
-                    if (currentMode == null || currentMode < 0) {
-                        runCatching { setObjectField(instance, "mode", miLinkAncState()) }
-                    }
-                    val currentPowers = runCatching { getObjectField(instance, "powers") }.getOrNull()
-                    if (!hasKnownBatteryLevels(currentPowers)) {
-                        runCatching { setObjectField(instance, "powers", java.util.ArrayList(miLinkBatteryLevels())) }
-                    }
+            val symbols = requireSymbols(MiLinkStableSymbols)
+            hookConstructorAfter(
+                symbols.constructor("headsetInfoConstructor"),
+                "milink-headsetinfo-init:primary",
+            ) {
+                if (!isTargetHeadsetInfo(instance)) return@hookConstructorAfter
+                stampHeadsetInfoModelId(instance)
+                val currentMode = runCatching { getObjectField(instance, "mode") as? Int }.getOrNull()
+                if (currentMode == null || currentMode < 0) {
+                    runCatching { setObjectField(instance, "mode", miLinkAncState()) }
+                }
+                val currentPowers = runCatching { getObjectField(instance, "powers") }.getOrNull()
+                if (!hasKnownBatteryLevels(currentPowers)) {
+                    runCatching { setObjectField(instance, "powers", java.util.ArrayList(miLinkBatteryLevels())) }
                 }
             }
-        }.onFailure { Log.d(TAG, "hook HeadsetInfo constructor skipped", it) }
 
-        // HeadsetInfo's Parcelable path writes the backing field directly; stamp immediately
-        // before IPC so the remote still receives the model/capability key, not the MAC.
-        runCatching {
+            hookHeadsetInfoNoArg(symbols, "headsetInfoGetDeviceId") { fakeDeviceId() }
+            hookHeadsetInfoNoArg(symbols, "headsetInfoComponent3") { fakeDeviceId() }
+            hookHeadsetInfoNoArgWhen(
+                symbols,
+                "headsetInfoGetPowers",
+                shouldReplace = { value -> !hasKnownBatteryLevels(value) },
+                replacement = { miLinkBatteryLevels() },
+            )
+            hookHeadsetInfoNoArgWhen(
+                symbols,
+                "headsetInfoComponent4",
+                shouldReplace = { value -> !hasKnownBatteryLevels(value) },
+                replacement = { miLinkBatteryLevels() },
+            )
+            hookHeadsetInfoNoArgWhen(
+                symbols,
+                "headsetInfoGetMode",
+                shouldReplace = { value -> !hasKnownMode(value) },
+                replacement = { miLinkAncState() },
+            )
+            hookHeadsetInfoNoArgWhen(
+                symbols,
+                "headsetInfoComponent5",
+                shouldReplace = { value -> !hasKnownMode(value) },
+                replacement = { miLinkAncState() },
+            )
+            hookHeadsetInfoNoArg(symbols, "headsetInfoGetSwitchState") { miLinkSwitchState() }
+            hookHeadsetInfoNoArg(symbols, "headsetInfoComponent8") { miLinkSwitchState() }
+            hookHeadsetInfoNoArg(symbols, "headsetInfoGetAudioEffectState") { miLinkAudioEffectState() }
+            hookHeadsetInfoNoArg(symbols, "headsetInfoComponent10") { miLinkAudioEffectState() }
+
+            // HeadsetInfo's Parcelable path writes the backing field directly; stamp immediately
+            // before IPC so the remote still receives the model/capability key, not the MAC.
             hookBefore(
-                findMethodByParamCount("com.miui.headset.api.HeadsetInfo", "writeToParcel", 2),
+                symbols.method("headsetInfoWriteToParcel"),
                 logicalRole = "milink-headsetinfo-model-parcel",
             ) {
                 if (!isTargetHeadsetInfo(instance)) return@hookBefore
                 stampHeadsetInfoModelId(instance)
             }
-        }.onFailure { Log.d(TAG, "hook HeadsetInfo.writeToParcel model id skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetInfo symbols skipped", it) }
     }
 
     private fun stampHeadsetInfoModelId(info: Any?) {
@@ -330,37 +357,44 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
     }
 
-    internal fun hookHeadsetInfoNoArg(methodName: String, result: () -> Any) {
+    private fun hookHeadsetInfoNoArg(
+        symbols: ResolvedSymbolBundle,
+        symbolName: String,
+        result: () -> Any,
+    ) {
         runCatching {
-            hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
+            hookAfter(symbols.method(symbolName)) {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
                 val replacement = result()
-                if (methodName == "getDeviceId" || methodName == "component3") {
+                if (symbolName == "headsetInfoGetDeviceId" || symbolName == "headsetInfoComponent3") {
                     stampHeadsetInfoModelId(instance)
                 }
                 this.result = replacement
             }
-        }.onFailure { Log.d(TAG, "hook HeadsetInfo.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetInfo.$symbolName skipped", it) }
     }
 
     private fun hookHeadsetInfoNoArgWhen(
-        methodName: String,
+        symbols: ResolvedSymbolBundle,
+        symbolName: String,
         shouldReplace: (Any?) -> Boolean,
         replacement: () -> Any,
     ) {
         runCatching {
-            hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
+            hookAfter(symbols.method(symbolName)) {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
                 if (shouldReplace(this.result)) {
                     val replaced = replacement()
                     this.result = replaced
-                    when (methodName) {
-                        "getPowers", "component4" -> runCatching { setObjectField(instance, "powers", replaced) }
-                        "getMode", "component5" -> runCatching { setObjectField(instance, "mode", replaced) }
+                    when (symbolName) {
+                        "headsetInfoGetPowers", "headsetInfoComponent4" ->
+                            runCatching { setObjectField(instance, "powers", replaced) }
+                        "headsetInfoGetMode", "headsetInfoComponent5" ->
+                            runCatching { setObjectField(instance, "mode", replaced) }
                     }
                 }
             }
-        }.onFailure { Log.d(TAG, "conditional hook HeadsetInfo.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "conditional hook HeadsetInfo.$symbolName skipped", it) }
     }
 
     private fun hasKnownBatteryLevels(value: Any?): Boolean {
