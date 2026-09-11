@@ -98,6 +98,7 @@ object MiLinkServiceHook : HookContext() {
 
     internal fun startAfterReload(context: Context) {
         registerStatusReceiver(context)
+        fusionRegistryHook.onApplicationReady()
     }
 
     /**
@@ -113,6 +114,7 @@ object MiLinkServiceHook : HookContext() {
         runCatching {
             hookAfter(findMethod("android.app.Application", "onCreate")) {
                 registerStatusReceiver(instance as? Context)
+                fusionRegistryHook.onApplicationReady()
             }
         }.onFailure { Log.d(TAG, "hook Application.onCreate skipped", it) }
 
