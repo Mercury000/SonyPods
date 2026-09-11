@@ -2,7 +2,6 @@ package dev.sonypods.hook.milink
 
 import android.os.Handler
 import android.os.Looper
-import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.hook.Log
 import dev.sonypods.hook.callMethod
 import dev.sonypods.hook.getObjectField
@@ -24,12 +23,10 @@ import java.util.concurrent.CompletableFuture
  *    entry keyed by the same address the fused service publishes, so the pure cache reads
  *    (mode/battery/name/volume) resolve natively with correct domains and no per-getter
  *    spoofing;
- *  - it answers the controller calls that would otherwise dial the real Mi headset client
- *    (IHeadset), which has no Mi host for a Sony to talk to: refresh/support/bond/mma come
- *    back as ready values, and the ANC / volume writes translate to the Sony side, mirror
- *    the change back and broadcast it over the same [com.miui.circulate.api.protocol.headset.HeadsetServiceNotify]
- *    bus a real host update would use — so the panel and the ball follow via their native
- *    listeners.
+ *  - it supplies the presentation-only answers that a Sony cannot obtain from Xiaomi's
+ *    IHeadset backend (refresh/support/bond/mma). Control writes are deliberately not handled
+ *    here: MiLink must retain its native local/remote routing, and the runtime endpoint hooks
+ *    translate the command only after it reaches the device selected by MiLink.
  *
  * Everything is gated on the service carrying a Sony address; genuine Mi headsets are
  * untouched. The registry entry carries the headset-type in the {0=降噪,1=通透,2=关闭}
@@ -87,12 +84,10 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val controllerName = "com.miui.circulate.api.protocol.headset.HeadsetServiceController"
         val serviceName = "com.miui.circulate.api.service.CirculateServiceInfo"
         val deviceInfoName = "com.miui.circulate.api.service.CirculateDeviceInfo"
-        val intType = Int::class.javaPrimitiveType!!
 
-        // The panel's open path ends in refreshHeadsetProperty; for a Sony the real body
-        // would call the Mi client and, on its failure, wipe the registry entry's mode and
-        // power. Short-circuit to success and make sure the mirror is in place first so the
-        // read of the panel right after this call resolves.
+        // This is presentation state only. Prime the Sony mirror synchronously and prevent the
+        // missing Xiaomi IHeadset backend from wiping it before the panel reads it. This must
+        // remain independent of local/remote command routing.
         runCatching {
             hook.hookBefore(
                 hook.findMethod(controllerName, "refreshHeadsetProperty", hook.findClass(serviceName)),
@@ -100,16 +95,14 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
-                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 refreshRegistry(svc, broadcast = false)
                 this.result = completed(100)
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.refreshHeadsetProperty skipped", it) }
 
-        // Every mode/battery/volume/name read funnels through getBluetoothDeviceInfo. Make the
-        // mirror exist before any of them can observe a null entry, and latch the Sony service
-        // the panel is using so later state pushes target the right listeners.
+        // Every mode/battery/volume/name read funnels through getBluetoothDeviceInfo. Populate the
+        // mirror in every MiLink process; writes are left entirely to MiLink's native routing.
         runCatching {
             hook.hookBefore(
                 hook.findMethod(controllerName, "getBluetoothDeviceInfo", hook.findClass(serviceName)),
@@ -117,7 +110,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ) {
                 val svc = args.getOrNull(0)
                 if (!isSonyService(svc)) return@hookBefore
-                if (!heldHere(svc)) return@hookBefore
                 remember(svc, instance)
                 refreshRegistry(svc, broadcast = false)
             }
@@ -125,7 +117,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
 
         // getSupportAncMode: 2 makes both the detail panel and Wear Agent advertise the full
         // ANC set (通透/降噪/关闭). Capability is a property of the Sony headset, not of which
-        // MiLink process currently owns its Tandem session. Gating this read on heldHere() lets
+        // MiLink process currently handles its Tandem session. Gating this presentation read lets
         // a cold-start/recovery race fall through to MiLink's stock query; its result 1 is then
         // cached by Wear Agent and hides 通透 until a later mode change happens to refresh it.
         runCatching {
@@ -146,7 +138,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 logicalRole = "fusion-registry-is-mma",
             ) {
                 if (!isSonyService(args.getOrNull(1))) return@hookBefore
-                if (!heldHere(args.getOrNull(1))) return@hookBefore
                 remember(args[1], instance)
                 this.result = completed(false)
             }
@@ -159,50 +150,12 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                 logicalRole = "fusion-registry-bond-status",
             ) {
                 if (!isSonyService(args.getOrNull(1))) return@hookBefore
-                if (!heldHere(args.getOrNull(1))) return@hookBefore
                 remember(args[1], instance)
                 this.result = completed(1)
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.getTargetBondStatus skipped", it) }
 
-        // ANC write: translate the panel's {0降噪,1通透,2关闭} mode to the Sony side, mirror
-        // it back into the registry and broadcast over the native notify bus, then return the
-        // success code the panel's own callback requires to commit the bar.
-        runCatching {
-            hook.hookBefore(
-                hook.findMethod(controllerName, "setNoiseCancelling", hook.findClass(serviceName), intType),
-                logicalRole = "fusion-registry-set-anc",
-            ) {
-                val svc = args.getOrNull(0)
-                if (!isSonyService(svc)) return@hookBefore
-                if (!heldHere(svc)) return@hookBefore
-                remember(svc, instance)
-                val panelMode = args.getOrNull(1) as? Int ?: return@hookBefore
-                applyPanelAncMode(panelMode)
-                writeMirrorMode(panelMode)
-                broadcastMode(panelMode)
-                this.result = completed(100)
-            }
-        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.setNoiseCancelling skipped", it) }
-
-        // Volume write: forward to the Sony side and mirror the value back.
-        runCatching {
-            hook.hookBefore(
-                hook.findMethod(controllerName, "setVolume", hook.findClass(serviceName), intType),
-                logicalRole = "fusion-registry-set-volume",
-            ) {
-                val svc = args.getOrNull(0)
-                if (!isSonyService(svc)) return@hookBefore
-                if (!heldHere(svc)) return@hookBefore
-                remember(svc, instance)
-                val volume = (args.getOrNull(1) as? Int)?.coerceIn(0, 100) ?: return@hookBefore
-                applyVolume(volume)
-                broadcastVolume(volume)
-                this.result = completed(100)
-            }
-        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.setVolume skipped", it) }
     }
-
     private fun hookHeadsetServiceLifecycle() {
         // The headset client clears the whole registry when its service dies; drop the cached
         // identity so the mirror is rebuilt (via the read guard) for a fresh generation.
@@ -246,7 +199,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val svc = service ?: return
         val deviceId = runCatching { getObjectField(svc, "deviceId") as? String }.getOrNull() ?: return
         if (!hook.isSonyAddress(deviceId)) return
-        if (!hook.isCurrentlyHeld(deviceId)) return
         main.post {
             if (broadcasting.get() == true) return@post
             broadcasting.set(true)
@@ -280,24 +232,15 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ?: hook.currentAddress
 
     /**
-     * The local registry/controller shim belongs only on the physical holder. On a Wear or
-     * tablet remote, leaving these methods untouched lets stock MiLink forward ANC to the holder.
-     */
-    private fun heldHere(svc: Any?): Boolean {
-        val deviceId = deviceIdOf(svc) ?: return false
-        return hook.isCurrentlyHeld(deviceId)
-    }
-
-    /**
      * Ensure a Sony [com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo] sits in the
      * registry under the published device id, refreshed from the module's current state.
-     * [broadcast] only fan mode/battery out when they actually changed since the last push,
+     * This presentation mirror exists in every MiLink process and never decides command routing.
+     * [broadcast] only fans mode/battery out when they actually changed since the last push,
      * so a state snapshot that repeats itself does not re-render every listening surface.
      */
     private fun refreshRegistry(svc: Any? = null, broadcast: Boolean) {
         val deviceId = deviceIdOf(svc) ?: return
         if (!hook.isSonyAddress(deviceId)) return
-        if (!hook.isCurrentlyHeld(deviceId)) return
         val manager = manager() ?: return
         val info = buildDeviceInfo(deviceId) ?: return
         val added = runCatching {
@@ -370,20 +313,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
      */
     private fun panelAncMode(): Int = (hook.miLinkAncState() + 2) % 3
 
-    /** Panel mode {0降噪,1通透,2关闭} → runtime domain {0关闭,1降噪,2通透} → Sony side. */
-    private fun applyPanelAncMode(panelMode: Int) {
-        val runtimeMode = (panelMode + 1) % 3
-        hook.applyRemoteAncMode(runtimeMode)
-    }
-
-    private fun applyVolume(volume: Int) {
-        val ctx = hook.context ?: return
-        val stepMax = hook.musicVolumeStep
-        val scaled = if (stepMax > 1) (volume * (stepMax - 1) + 50) / 100 else volume
-        runCatching { SonyBridge.setPlaybackVolume(ctx, scaled) }
-            .onFailure { Log.w(MiLinkServiceHook.TAG, "Sony volume write failed volume=$volume", it) }
-    }
-
     private fun <T> completed(value: T): CompletableFuture<T> = CompletableFuture.completedFuture(value)
 
     private fun broadcastModeAndBattery() {
@@ -409,26 +338,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         lastPushBatteryKey = batteryKey
         lastPushVolume = volume
         return changed
-    }
-
-    private fun broadcastMode(panelMode: Int) {
-        if (broadcasting.get() == true) return
-        broadcasting.set(true)
-        try {
-            notifyListeners("onBluetoothModeChanged", panelMode)
-        } finally {
-            broadcasting.set(false)
-        }
-    }
-
-    private fun broadcastVolume(volume: Int) {
-        if (broadcasting.get() == true) return
-        broadcasting.set(true)
-        try {
-            notifyListeners("onBluetoothVolumeChanged", volume)
-        } finally {
-            broadcasting.set(false)
-        }
     }
 
     /**
