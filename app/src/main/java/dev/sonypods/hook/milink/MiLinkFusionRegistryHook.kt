@@ -48,6 +48,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
 
     @Volatile
     private var mirroredDeviceId: String? = null
+    private val mirroredDeviceIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     @Volatile
     private var wearCapabilityHookInstalled = false
@@ -71,21 +72,31 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         controller = null
         service = null
         mirroredDeviceId = null
+        mirroredDeviceIds.clear()
         wearCapabilityHookInstalled = false
     }
 
     /** Remove the synthetic Sony entry through MiLink's native headset registry API. */
     fun onSonyDisconnected(address: String?) {
-        val deviceId = mirroredDeviceId ?: deviceIdOf(service) ?: address
-        if (!deviceId.isNullOrBlank()) {
-            manager()?.let { registry ->
-                runCatching { callMethod(registry, "removeBluetoothDevice", deviceId) }
-                    .onFailure { Log.d(MiLinkServiceHook.TAG, "remove disconnected Sony registry entry failed", it) }
+        val ids = buildSet {
+            addAll(mirroredDeviceIds)
+            mirroredDeviceId?.let(::add)
+            deviceIdOf(service)?.let(::add)
+            address?.let(::add)
+        }
+        manager()?.let { registry ->
+            ids.forEach { deviceId ->
+                val info = runCatching { callMethod(registry, "getBluetoothDevice", deviceId) }.getOrNull()
+                if (info != null) {
+                    runCatching { callMethod(registry, "removeBluetoothDevice", info) }
+                        .onFailure { Log.d(MiLinkServiceHook.TAG, "remove disconnected Sony registry entry failed", it) }
+                }
             }
         }
         service?.let { runCatching { setObjectField(it, "connectState", 0) } }
         service = null
         mirroredDeviceId = null
+        mirroredDeviceIds.clear()
     }
 
     /** Called whenever module state lands (see [MiLinkServiceHook.applySnapshot]). */
@@ -93,6 +104,32 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         refreshRegistry(null, broadcast = true)
         notifyNonWearConsumers()
         publishAuthoritativeWearState()
+    }
+
+    /**
+     * Ensure the native registry is keyed by an identity that MiLink has actually published.
+     * A dual-address headset may legitimately need both alias and canonical entries while stale
+     * cross-process rows drain; both entries carry the same physical Sony state.
+     */
+    fun ensureIdentity(deviceId: String?, svc: Any? = null): Boolean {
+        if (deviceId.isNullOrBlank() || (!hook.isSonyAddress(deviceId) && !isSonyService(svc))) return false
+        val manager = manager() ?: return false
+        val existing = runCatching { callMethod(manager, "getBluetoothDevice", deviceId) }.getOrNull()
+        if (existing != null) {
+            mirroredDeviceIds += deviceId
+            mirroredDeviceId = deviceId
+            return true
+        }
+        val info = buildDeviceInfo(deviceId) ?: return false
+        val added = runCatching {
+            callMethod(manager, "addBluetoothDevice", info)
+            true
+        }.getOrDefault(false)
+        if (added) {
+            mirroredDeviceIds += deviceId
+            mirroredDeviceId = deviceId
+        }
+        return added
     }
 
     private fun hookHeadsetServiceController() {
@@ -365,6 +402,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val existing = runCatching { callMethod(manager, "getBluetoothDevice", deviceId) }.getOrNull()
         if (!broadcast && hasAuthoritativeMode(existing)) {
             mirroredDeviceId = deviceId
+            mirroredDeviceIds += deviceId
             return
         }
 
@@ -375,6 +413,7 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         }.getOrDefault(false)
         if (!added) return
         mirroredDeviceId = deviceId
+        mirroredDeviceIds += deviceId
     }
 
     /** Panel/native registry mode domain: 0=降噪, 1=通透, 2=关闭. */

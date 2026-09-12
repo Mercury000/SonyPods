@@ -212,5 +212,29 @@ class MiLinkNativeRoutingArchitectureTest {
         assertFalse(source.contains("stringFieldOf"))
         assertFalse(source.contains("Regex("))
     }
+    @Test
+    fun dualAddressIdentityIsUnifiedAtProducerAndEntireMiLinkGraph() {
+        val runtime = source("MiLinkServiceHook.kt")
+        val graph = source("MiLinkIdentityGraphHook.kt")
+        val symbols = source("MiLinkIdentityGraphSymbols.kt")
+        val registry = source("MiLinkFusionRegistryHook.kt")
+        val stable = source("MiLinkStableSymbols.kt")
+
+        assertTrue(runtime.contains("hookHeadsetAddressIdentity"))
+        assertTrue(runtime.contains("stampHeadsetAddress(instance)"))
+        assertTrue(runtime.contains("setObjectField(info, \"address\", canonical)"))
+        assertTrue(stable.contains("headsetInfoGetAddress"))
+        assertTrue(stable.contains("headsetInfoComponent1"))
+        assertTrue(symbols.contains("paramTypes(\"java.lang.String\", CIRCULATE_DEVICE_INFO)"))
+        assertTrue(graph.contains("DeviceInfo.id -> CirculateDeviceInfo"))
+        assertTrue(graph.contains("setObjectField(service, \"deviceId\", selectedId)"))
+        assertTrue(graph.contains("setObjectField(service, \"connectState\", CONNECTED)"))
+        assertTrue(graph.contains("registry.ensureIdentity(selectedId, service)"))
+        assertTrue(graph.contains("hook.hookAfter(validator"))
+        assertTrue(registry.contains("mirroredDeviceIds"))
+        assertFalse(graph.contains("result = false"))
+        assertFalse(graph.contains("mo19947W"))
+        assertFalse(graph.contains("m23815j"))
+    }
 
 }

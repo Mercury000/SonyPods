@@ -71,6 +71,7 @@ object MiLinkServiceHook : HookContext() {
     private val deviceMetaGuardHook = MiLinkDeviceMetaGuardHook(this)
     private val cardArtHook = MiLinkCardArtHook(this)
     private val fusionRegistryHook = MiLinkFusionRegistryHook(this)
+    private val identityGraphHook = MiLinkIdentityGraphHook(this, fusionRegistryHook)
     @Volatile
     private var runtimeHooksInstalled = false
 
@@ -97,6 +98,7 @@ object MiLinkServiceHook : HookContext() {
             deviceMetaGuardHook.hookDeviceMetaGuard()
             cardArtHook.hookCardArt()
             fusionRegistryHook.hook()
+            identityGraphHook.hookIdentityGraph()
             runtimeHooksInstalled = true
         }
         registerStatusReceiver(appContext)
@@ -110,6 +112,7 @@ object MiLinkServiceHook : HookContext() {
         lastAncBatteryController = null
         lastProfileContext = null
         fusionRegistryHook.reset()
+        identityGraphHook.reset()
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {

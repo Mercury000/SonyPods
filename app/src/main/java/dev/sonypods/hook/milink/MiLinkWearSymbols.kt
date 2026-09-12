@@ -156,7 +156,7 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
                 "Wear $role field changed: $field"
             }
         }
-        require(battery.className == listener && battery.typeName == "java.util.List") {
+        require(battery.className == listener && battery.typeName == "java.util.List" || battery.typeName == "java.util.ArrayList") {
             "Wear battery field changed: $battery"
         }
         require(setOf(volume.toString(), battery.toString(), mode.toString(), supportMode.toString()).size == 4) {
