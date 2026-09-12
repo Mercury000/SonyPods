@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
@@ -17,6 +18,7 @@ import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import com.xzakota.hyper.notification.focus.FocusNotification
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.HookStateMirror
@@ -41,6 +43,8 @@ object MiBluetoothToastHook : HookContext() {
     // request code could overwrite the island-source marker.
     private const val POD_DIALOG_NOTIFICATION_PENDING_INTENT_REQUEST_CODE = 10087
     private const val POD_DIALOG_CONNECT_PENDING_INTENT_REQUEST_CODE = 10089
+    private lateinit var notificationSymbols: ResolvedSymbolBundle
+    @Volatile private var runtimeHookInstalled = false
 
     /**
      * Whether the module app's main activity is the foreground app, queried live
@@ -80,6 +84,32 @@ object MiBluetoothToastHook : HookContext() {
     }
 
     override fun onHook() {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "bluetooth-extension-toast-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Bluetooth Extension Application is unavailable at callApplicationOnCreate"
+            }
+            onApplicationAvailable(application)
+        }
+    }
+
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        if (runtimeHookInstalled) return
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        notificationSymbols = requireSymbols(BluetoothExtensionNotificationSymbols)
+        installRuntimeHooks()
+        runtimeHookInstalled = true
+    }
+
+    private fun installRuntimeHooks() {
 
         fun deleteIntent(context: Context, bluetoothDevice: BluetoothDevice): PendingIntent? {
             val intent = Intent("com.android.bluetooth.headset.notification.cancle")
@@ -329,12 +359,9 @@ object MiBluetoothToastHook : HookContext() {
             // (Context, Looper) when the mibt_memory_trim setting is on, otherwise
             // BluetoothHeadsetService uses (Looper, BluetoothHeadsetService). Hooking
             // one of them left the receiver unregistered on every cold start.
-            val constructors = findConstructorsByParamCount(
-                "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
-                2,
-            )
+            val constructors = notificationSymbols.constructorsWithPrefix("constructor.")
             hookConstructorAfterAll(constructors, logicalRole = "toast-notification-constructor") {
-                val context = getObjectField(instance, "mContext") as? Context
+                val context = notificationSymbols.field("contextField").get(instance) as? Context
                     ?: return@hookConstructorAfterAll
                 registerNotificationReceiver(context)
                 // This class is constructed well after package-ready, so anything the
@@ -350,6 +377,7 @@ object MiBluetoothToastHook : HookContext() {
 
     /** Rebind receivers and request a surface replay when package callbacks are not replayed. */
     internal fun startAfterReload(context: Context) {
+        onApplicationAvailable(context)
         registerNotificationReceiver(context)
         announceSurfacesReady(context)
         registerUnlockReceiver(context)

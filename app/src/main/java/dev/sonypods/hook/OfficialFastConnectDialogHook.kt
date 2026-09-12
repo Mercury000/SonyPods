@@ -2,6 +2,7 @@ package dev.sonypods.hook
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -29,6 +30,7 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import com.mercury.sonypods.R
 import dev.sonypods.utils.ModuleText
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import dev.sonypods.utils.PodImageLoader
 
 /**
@@ -99,6 +101,8 @@ object OfficialFastConnectDialogHook : HookContext() {
     private var frameworkActivityHookInstalled = false
     private var uiApplicationHookInstalled = false
     private var activityLaunchGuardInstalled = false
+    private var notificationSymbols: ResolvedSymbolBundle? = null
+    @Volatile private var mainRuntimeHooksInstalled = false
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val isUiProcess: Boolean
@@ -110,8 +114,30 @@ object OfficialFastConnectDialogHook : HookContext() {
         if (isUiProcess) {
             installUiHooks()
         } else {
-            installMainHooks()
+            hookBefore(
+                findMethod(
+                    "android.app.Instrumentation",
+                    "callApplicationOnCreate",
+                    Application::class.java,
+                ),
+                logicalRole = "official-dialog-main-application-ready",
+            ) {
+                val application = requireNotNull(args.firstOrNull() as? Application) {
+                    "Bluetooth Extension Application is unavailable at callApplicationOnCreate"
+                }
+                onMainApplicationAvailable(application)
+            }
         }
+    }
+
+    @Synchronized
+    private fun onMainApplicationAvailable(application: Context) {
+        if (mainRuntimeHooksInstalled) return
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        notificationSymbols = requireSymbols(BluetoothExtensionNotificationSymbols)
+        installMainHooks()
+        mainRuntimeHooksInstalled = true
     }
 
     override fun onBeforeReload() {
@@ -173,6 +199,7 @@ object OfficialFastConnectDialogHook : HookContext() {
             registerUiStateReceiver(context)
             findExistingManagedActivity()?.let(::onOfficialActivityCreated)
         } else {
+            onMainApplicationAvailable(context)
             registerMainStateReceiver(context)
         }
     }
@@ -185,11 +212,9 @@ object OfficialFastConnectDialogHook : HookContext() {
         // builds. Its context is a reliable second chance for registering the
         // receiver and requesting a state replay.
         runCatching {
+            val symbols = requireNotNull(notificationSymbols)
             hookConstructorAfterAll(
-                findConstructorsByParamCount(
-                    "com.android.bluetooth.ble.app.MiuiBluetoothNotification",
-                    2,
-                ),
+                symbols.constructorsWithPrefix("constructor."),
                 // MiBluetoothToastHook also observes these constructors to bring
                 // up the notification/island receiver.  Constructor identity
                 // alone is therefore not a sufficient stable ID: without a
@@ -197,7 +222,7 @@ object OfficialFastConnectDialogHook : HookContext() {
                 // Xiaomi scope loses the notification hook entirely.
                 logicalRole = "official-dialog-notification-constructor",
             ) {
-                val context = runCatching { getObjectField(instance, "mContext") as? Context }
+                val context = runCatching { symbols.field("contextField").get(instance) as? Context }
                     .getOrNull()
                     ?: return@hookConstructorAfterAll
                 registerMainStateReceiver(context)

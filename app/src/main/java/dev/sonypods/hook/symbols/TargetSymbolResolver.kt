@@ -47,6 +47,9 @@ class ResolvedSymbolBundle internal constructor(
         symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.descriptor }
     fun methodsWithPrefix(prefix: String): List<Method> =
         symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.resolveMethod(classLoader) }
+    fun constructorsWithPrefix(prefix: String): List<Constructor<*>> =
+        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }
+            .map { it.resolveConstructor(classLoader) }
     fun fieldsWithPrefix(prefix: String): List<Field> =
         symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.resolveField(classLoader) }
 }

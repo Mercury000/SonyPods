@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -10,16 +11,16 @@ import android.os.Bundle
 import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
+import android.os.IInterface
 import android.os.Looper
-import android.os.Parcel
 import android.os.RemoteException
-import java.lang.reflect.Method
 import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
 import dev.sonypods.device.SonyDeviceService
 import dev.sonypods.headphones.HeadphoneFormFactor
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import dev.sonypods.protocol.NoiseControlMode
 import dev.sonypods.utils.MiuiHeadsetSupport
 import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
@@ -51,6 +52,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     private var currentAddress: String? = null
     private var currentName: String? = null
     private var currentFormFactor: String? = null
+    private lateinit var headsetSymbols: ResolvedSymbolBundle
+    private lateinit var notificationSymbols: ResolvedSymbolBundle
+    @Volatile private var runtimeHooksInstalled = false
 
     private val stateMirror = HookStateMirror { snapshot ->
         snapshot.deviceAddress?.let {
@@ -89,9 +93,32 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     override fun onHook() {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "bluetooth-extension-headset-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Bluetooth Extension Application is unavailable at callApplicationOnCreate"
+            }
+            onApplicationAvailable(application)
+        }
+    }
+
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        if (runtimeHooksInstalled) return
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        headsetSymbols = requireSymbols(BluetoothExtensionHeadsetSymbols)
+        notificationSymbols = requireSymbols(BluetoothExtensionNotificationSymbols)
         restoreReloadCallbacks()
         hookHeadsetServiceBinder()
         hookNotificationBatteryUpstream()
+        runtimeHooksInstalled = true
     }
 
     override fun saveReloadState(state: Bundle) {
@@ -117,34 +144,30 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     override fun onReloadRejected(snapshot: SonyStateSnapshot) {
-        restoreReloadCallbacks()
-        context?.let { registerStatusReceiver(it) }
-    }
-
-    internal fun restoreDynamicHookClasses(classNames: List<String>) {
-        classNames.distinct().forEach { className ->
-            findClassOrNull(className)?.let { installHeadsetBinderHooks(it) }
+        if (runtimeHooksInstalled) restoreReloadCallbacks()
+        context?.let {
+            onApplicationAvailable(it)
+            registerStatusReceiver(it)
         }
     }
 
+    internal fun restoreDynamicHookClasses(classNames: List<String>) {
+        if (!runtimeHooksInstalled || classNames.isEmpty()) return
+        installHeadsetBinderHooks(headsetSymbols.clazz("binder"))
+    }
+
     internal fun startAfterReload(context: Context) {
+        onApplicationAvailable(context)
         registerStatusReceiver(context)
     }
 
     private fun hookNotificationBatteryUpstream() {
-        val notificationApiClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotificationApi")
-        if (notificationApiClass != null) {
+        val notificationApiMethod = notificationSymbols.method("notificationApiToast")
+        run {
             runCatching {
                 hookBefore(
-                    notificationApiClass.method(
-                        "showNewConnectedToast",
-                        Int::class.java,
-                        Int::class.java,
-                        Int::class.java,
-                        Int::class.java,
-                        BluetoothDevice::class.java,
-                        String::class.java
-                    )
+                    notificationApiMethod
+
                 ) {
                     val device = args[4] as? BluetoothDevice
                     if (!isSonyPod(device)) return@hookBefore
@@ -154,15 +177,14 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     val wearState = displayWearState(battery, args[3] as? Int ?: 1)
                     val notification = currentMiuiBluetoothNotification() ?: return@hookBefore
                     result = null
-                    callMethod(
+                    notificationSymbols.method("showConnectedToast").invoke(
                         notification,
-                        "showConnectedToast",
                         args[0] as? Int ?: 2,
                         leftBattery,
                         rightBattery,
                         wearState,
                         device,
-                        args[5] as? String
+                        args[5] as? String,
                     )
                     Log.d(TAG, "showNewConnectedToast patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState oldLeft=${args[1]} oldRight=${args[2]} oldWear=${args[3]}")
                 }
@@ -170,11 +192,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
             }.onFailure { Log.d(TAG, "hook MiuiBluetoothNotificationApi.showNewConnectedToast skipped", it) }
         }
 
-        val notificationClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotification")
-        val requestClass = findClassOrNull("com.android.bluetooth.ble.app.C4705R2")
-        if (notificationClass != null) {
+        run {
             runCatching {
-                hookBefore(notificationClass.method("invokeStatusBar", Context::class.java, String::class.java, Bundle::class.java)) {
+                hookBefore(notificationSymbols.method("invokeStatusBar")) {
                     val bundle = args[2] as? Bundle
                     if (shouldInterceptHeadsetWearIsland(bundle)) {
                         when (ConfigManager.islandMode()) {
@@ -191,19 +211,19 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "MiuiBluetoothNotification.invokeStatusBar debug hook installed")
             }.onFailure { Log.d(TAG, "hook MiuiBluetoothNotification.invokeStatusBar skipped", it) }
         }
-        if (notificationClass != null && requestClass != null) {
+        run {
             runCatching {
-                hookAfter(notificationClass.method("updateParameters", requestClass)) {
+                hookAfter(notificationSymbols.method("updateParameters")) {
                     val request = args[0] ?: return@hookAfter
-                    val device = getObjectField(request, "f18110e") as? BluetoothDevice
+                    val device = notificationSymbols.field("requestDeviceField").get(request) as? BluetoothDevice
                     if (!isSonyPod(device)) return@hookAfter
                     val battery = effectiveBattery() ?: return@hookAfter
                     val leftBattery = displayBattery(battery.left)
                     val rightBattery = displayBattery(battery.right)
-                    val wearState = displayWearState(battery, getObjectField(request, "f18109d") as? Int ?: 1)
-                    leftBattery?.let { setObjectField(request, "f18107b", it) }
-                    rightBattery?.let { setObjectField(request, "f18108c", it) }
-                    setObjectField(request, "f18109d", wearState)
+                    val wearState = displayWearState(battery, notificationSymbols.field("requestWearField").getInt(request))
+                    leftBattery?.let { notificationSymbols.field("requestLeftField").setInt(request, it) }
+                    rightBattery?.let { notificationSymbols.field("requestRightField").setInt(request, it) }
+                    notificationSymbols.field("requestWearField").setInt(request, wearState)
                     Log.d(TAG, "updateParameters patched device=${device.describe()} left=$leftBattery right=$rightBattery wear=$wearState")
                 }
                 Log.d(TAG, "MiuiBluetoothNotification.updateParameters hook installed")
@@ -212,11 +232,9 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun hookHeadsetServiceBinder() {
-        val serviceClassName = "com.android.bluetooth.ble.app.headset.BluetoothHeadsetService"
-        val serviceClass = findClassOrNull(serviceClassName)
-        if (serviceClass != null) {
+        run {
             runCatching {
-                hookAfter(serviceClass.method("onBind", Intent::class.java)) {
+                hookAfter(headsetSymbols.method("onBind")) {
                     registerStatusReceiver(instance as? Context)
                     val binder = result ?: return@hookAfter
                     installHeadsetBinderHooks(binder.javaClass)
@@ -224,25 +242,14 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                 Log.d(TAG, "BluetoothHeadsetService.onBind hook installed package=$packageName")
             }.onFailure { Log.w(TAG, "hook BluetoothHeadsetService.onBind failed package=$packageName", it) }
             runCatching {
-                hookAfter(serviceClass.method("onCreate")) {
+                hookAfter(headsetSymbols.method("onCreate")) {
                     registerStatusReceiver(instance as? Context)
                 }
                 Log.d(TAG, "BluetoothHeadsetService.onCreate hook installed package=$packageName")
             }.onFailure { Log.d(TAG, "hook BluetoothHeadsetService.onCreate skipped package=$packageName: ${it.message}") }
-        } else {
-            Log.d(TAG, "BluetoothHeadsetService class not present package=$packageName")
         }
 
-        listOf(
-            "com.android.bluetooth.ble.app.headset.BinderC6776v",
-            "com.android.bluetooth.ble.app.headset.v"
-        ).forEach { className ->
-            findClassOrNull(className)?.let { installHeadsetBinderHooks(it) }
-        }
-    }
-
-    private fun findClassOrNull(className: String): Class<*>? {
-        return runCatching { findClass(className) }.getOrNull()
+        installHeadsetBinderHooks(headsetSymbols.clazz("binder"))
     }
 
     private fun registerStatusReceiver(ctx: Context?) {
@@ -269,24 +276,24 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         Log.d(TAG, "BluetoothHeadsetService binder class=$className")
 
         runCatching {
-            hookBefore(binderClass.method("checkSupport", BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("checkSupport")) {
                 val device = args[0] as? BluetoothDevice
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
                 result = settingsSupport(device?.address ?: return@hookBefore)
-                Log.d(TAG, "BinderC6776v.checkSupport forced device=${device.describe()} support=$result")
+                Log.d(TAG, "HeadsetBinder.checkSupport forced device=${device.describe()} support=$result")
             }
-            Log.d(TAG, "BinderC6776v.checkSupport hook installed")
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.checkSupport skipped", it) }
+            Log.d(TAG, "HeadsetBinder.checkSupport hook installed")
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.checkSupport skipped", it) }
 
-        hookAddressStringResult(binderClass, listOf("getDeviceInfo"), "getDeviceInfo") { address -> settingsSupport(address) }
-        hookAddressStringResult(binderClass, listOf("isSupportAudioSwitch", "mo19775z1", "z1"), "isSupportAudioSwitch") { "1" }
-        hookAddressBooleanResult(binderClass, listOf("isMiTWS", "mo19771O0", "O0"), "isMiTWS", true)
-        hookAddressBooleanResult(binderClass, listOf("checkIsMiTWS", "mo19766B", "B"), "checkIsMiTWS", true)
-        hookAddressBooleanResult(binderClass, listOf("getRingFindState", "mo19772m0", "m0"), "getRingFindState", false)
+        hookAddressStringResult("getDeviceInfo") { address -> settingsSupport(address) }
+        hookAddressStringResult("isSupportAudioSwitch") { "1" }
+        hookAddressBooleanResult("isMiTWS", true)
+        hookAddressBooleanResult("checkIsMiTWS", true)
+        hookAddressBooleanResult("getRingFindState", false)
 
         runCatching {
-            hookBefore(binderClass.method("setCommonCommand", Int::class.java, String::class.java, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("setCommonCommand")) {
                 val command = args[0] as? Int
                 val value = args[1] as? String
                 val device = args[2] as? BluetoothDevice
@@ -297,63 +304,61 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     123 -> "4"
                     else -> "1"
                 }
-                Log.d(TAG, "BinderC6776v.setCommonCommand forced command=$command value=$value device=${device.describe()} result=$result")
+                Log.d(TAG, "HeadsetBinder.setCommonCommand forced command=$command value=$value device=${device.describe()} result=$result")
                 sendRealStatus(device, "setCommonCommand:$command")
             }
-            Log.d(TAG, "BinderC6776v.setCommonCommand hook installed")
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.setCommonCommand skipped", it) }
+            Log.d(TAG, "HeadsetBinder.setCommonCommand hook installed")
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.setCommonCommand skipped", it) }
 
-        hookBinderVoidDevice(binderClass, "connect") { device, method -> sendRealStatus(device, method) }
-        hookBinderVoidDevice(binderClass, "getDeviceConfig") { device, method -> sendRealStatus(device, method) }
-        hookBinderVoidDeviceString(binderClass, "getCommonConfig") { device, method -> sendRealStatus(device, method) }
-        hookBinderAncMode(binderClass)
-        hookBinderAncLevel(binderClass)
+        hookBinderVoidDevice("connect") { device, method -> sendRealStatus(device, method) }
+        hookBinderVoidDevice("getDeviceConfig") { device, method -> sendRealStatus(device, method) }
+        hookBinderVoidDeviceString("getCommonConfig") { device, method -> sendRealStatus(device, method) }
+        hookBinderAncMode()
+        hookBinderAncLevel()
 
         runCatching {
-            val callbackClass = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetCallback")
-            hookBefore(binderClass.method("register", callbackClass)) {
+            hookBefore(headsetSymbols.method("register")) {
                 val callback = args[0]
                 if (callback != null && lastSonyDevice != null) {
                     rememberCallback(callback)
                     result = null
-                    Log.d(TAG, "BinderC6776v.register swallowed callback=$callback device=${lastSonyDevice.describe()}")
+                    Log.d(TAG, "HeadsetBinder.register swallowed callback=$callback device=${lastSonyDevice.describe()}")
                     requestBluetoothStatus("register")
                     sendRealStatus(lastSonyDevice, "register")
                     sendRealStatusDelayed(lastSonyDevice, "register-refresh", 350L)
                 }
             }
-            hookBefore(binderClass.method("registerCallbackDevice", callbackClass, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("registerCallbackDevice")) {
                 val callback = args[0]
                 val device = args[1] as? BluetoothDevice
                 if (!isSonyPod(device) || callback == null) return@hookBefore
                 lastSonyDevice = device
                 rememberCallback(callback)
                 result = null
-                Log.d(TAG, "BinderC6776v.registerCallbackDevice swallowed callback=$callback device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.registerCallbackDevice swallowed callback=$callback device=${device.describe()}")
                 requestBluetoothStatus("registerCallbackDevice")
                 sendRealStatus(device, "registerCallbackDevice")
                 sendRealStatusDelayed(device, "registerCallbackDevice-refresh", 350L)
             }
-            hookBefore(binderClass.method("unregister", callbackClass, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("unregister")) {
                 val callback = args[0]
                 val device = args[1] as? BluetoothDevice
                 if (!isSonyPod(device) || callback == null) return@hookBefore
                 forgetCallback(callback)
                 result = null
-                Log.d(TAG, "BinderC6776v.unregister swallowed callback=$callback device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.unregister swallowed callback=$callback device=${device.describe()}")
             }
-            Log.d(TAG, "BinderC6776v callback hooks installed")
-        }.onFailure { Log.d(TAG, "hook BinderC6776v callback methods skipped", it) }
+            Log.d(TAG, "HeadsetBinder callback hooks installed")
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder callback methods skipped", it) }
     }
 
     /** Recreate callback proxies from Binder handles carried across reload. */
     private fun restoreReloadCallbacks() {
         if (reloadCallbackBinders.isEmpty()) return
         runCatching {
-            val stub = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetCallback\$Stub")
-            val asInterface = stub.getDeclaredMethod("asInterface", IBinder::class.java)
+            val callbackFactory = headsetSymbols.method("callbackFactory")
             reloadCallbackBinders.forEach { binder ->
-                val callback = asInterface.invoke(null, binder) ?: return@forEach
+                val callback = callbackFactory.invoke(null, binder) ?: return@forEach
                 rememberCallback(binder, callback)
             }
             val restoredCount = synchronized(callbackLock) { callbacks.size }
@@ -362,105 +367,92 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         reloadCallbackBinders.clear()
     }
 
-    private fun hookBinderVoidDevice(binderClass: Class<*>, methodName: String, after: (BluetoothDevice?, String) -> Unit) {
+    private fun hookBinderVoidDevice(methodName: String, after: (BluetoothDevice?, String) -> Unit) {
         runCatching {
-            hookBefore(binderClass.method(methodName, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method(methodName)) {
                 val device = args[0] as? BluetoothDevice
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
                 result = null
-                Log.d(TAG, "BinderC6776v.$methodName swallowed device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.$methodName swallowed device=${device.describe()}")
                 requestBluetoothStatus(methodName)
                 after(device, methodName)
                 sendRealStatusDelayed(device, "$methodName-refresh", 350L)
             }
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.$methodName skipped", it) }
     }
 
-    private fun hookAddressStringResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: (String) -> String) {
-        val methodName = methodNames.firstOrNull { name ->
-            runCatching { binderClass.method(name, String::class.java) }.isSuccess
-        } ?: run {
-            Log.d(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
-            return
-        }
+    private fun hookAddressStringResult(methodName: String, forced: (String) -> String) {
         runCatching {
-            hookBefore(binderClass.method(methodName, String::class.java)) {
+            hookBefore(headsetSymbols.method(methodName)) {
                 val address = args[0] as? String
                 if (address == null || !isSonyAddress(address)) return@hookBefore
                 result = forced(address)
-                Log.d(TAG, "BinderC6776v.$label forced address=$address result=$result method=$methodName")
+                Log.d(TAG, "HeadsetBinder.$methodName forced address=$address result=$result")
             }
-            Log.d(TAG, "BinderC6776v.$label hook installed method=$methodName")
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.$label skipped", it) }
+            Log.d(TAG, "HeadsetBinder.$methodName hook installed")
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.$methodName skipped", it) }
     }
 
-    private fun hookAddressBooleanResult(binderClass: Class<*>, methodNames: List<String>, label: String, forced: Boolean) {
-        val methodName = methodNames.firstOrNull { name ->
-            runCatching { binderClass.method(name, String::class.java) }.isSuccess
-        } ?: run {
-            Log.d(TAG, "hook BinderC6776v.$label skipped: no method in $methodNames")
-            return
-        }
+    private fun hookAddressBooleanResult(methodName: String, forced: Boolean) {
         runCatching {
-            hookBefore(binderClass.method(methodName, String::class.java)) {
+            hookBefore(headsetSymbols.method(methodName)) {
                 val address = args[0] as? String
                 if (address == null || !isSonyAddress(address)) return@hookBefore
                 result = forced
-                Log.d(TAG, "BinderC6776v.$label forced address=$address result=$forced method=$methodName")
+                Log.d(TAG, "HeadsetBinder.$methodName forced address=$address result=$forced")
             }
-            Log.d(TAG, "BinderC6776v.$label hook installed method=$methodName")
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.$label skipped", it) }
+            Log.d(TAG, "HeadsetBinder.$methodName hook installed")
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.$methodName skipped", it) }
     }
 
-    private fun hookBinderVoidDeviceString(binderClass: Class<*>, methodName: String, after: (BluetoothDevice?, String) -> Unit) {
+    private fun hookBinderVoidDeviceString(methodName: String, after: (BluetoothDevice?, String) -> Unit) {
         runCatching {
-            hookBefore(binderClass.method(methodName, BluetoothDevice::class.java, String::class.java)) {
+            hookBefore(headsetSymbols.method(methodName)) {
                 val device = args[0] as? BluetoothDevice
                 val value = args[1] as? String
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
                 result = null
-                Log.d(TAG, "BinderC6776v.$methodName swallowed value=$value device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.$methodName swallowed value=$value device=${device.describe()}")
                 requestBluetoothStatus("$methodName:$value")
                 after(device, "$methodName:$value")
                 sendRealStatusDelayed(device, "$methodName-refresh:$value", 350L)
             }
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.$methodName skipped", it) }
     }
 
-    private fun hookBinderAncMode(binderClass: Class<*>) {
+    private fun hookBinderAncMode() {
         runCatching {
-            hookBefore(binderClass.method("changeAncMode", Int::class.java, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("changeAncMode")) {
                 val mode = args[0] as? Int
                 val device = args[1] as? BluetoothDevice
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
                 result = null
-                Log.d(TAG, "BinderC6776v.changeAncMode swallowed mode=$mode device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.changeAncMode swallowed mode=$mode device=${device.describe()}")
                 mode?.let { sendSonyAnc(sonyAncFromMiuiMode(it)) }
                 sendRealStatus(device, "changeAncMode:$mode")
             }
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.changeAncMode skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.changeAncMode skipped", it) }
     }
 
-    private fun hookBinderAncLevel(binderClass: Class<*>) {
+    private fun hookBinderAncLevel() {
         runCatching {
-            hookBefore(binderClass.method("changeAncLevel", String::class.java, BluetoothDevice::class.java)) {
+            hookBefore(headsetSymbols.method("changeAncLevel")) {
                 val level = args[0] as? String
                 val device = args[1] as? BluetoothDevice
                 if (!isSonyPod(device)) return@hookBefore
                 lastSonyDevice = device
                 result = null
-                Log.d(TAG, "BinderC6776v.changeAncLevel swallowed level=$level device=${device.describe()}")
+                Log.d(TAG, "HeadsetBinder.changeAncLevel swallowed level=$level device=${device.describe()}")
                 level?.let { sendSonyAncLevel(it) }
                 sendRealStatus(device, "changeAncLevel:$level")
             }
-        }.onFailure { Log.d(TAG, "hook BinderC6776v.changeAncLevel skipped", it) }
+        }.onFailure { Log.d(TAG, "hook HeadsetBinder.changeAncLevel skipped", it) }
     }
-
     private fun rememberCallback(callback: Any) {
-        val binder = callMethod(callback, "asBinder") as? IBinder ?: return
+        val binder = (callback as? IInterface)?.asBinder() ?: return
         rememberCallback(binder, callback)
     }
 
@@ -485,7 +477,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
     }
 
     private fun forgetCallback(callback: Any) {
-        val binder = callMethod(callback, "asBinder") as? IBinder ?: return
+        val binder = (callback as? IInterface)?.asBinder() ?: return
         removeCallback(binder)
     }
 
@@ -510,213 +502,6 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
         registrations.forEach { (binder, registration) ->
             runCatching { binder.unlinkToDeath(registration.deathRecipient, 0) }
         }
-    }
-
-    private fun firstExistingClass(vararg classNames: String): String? {
-        return classNames.firstOrNull { className ->
-            runCatching { findClass(className) }.isSuccess
-        }
-    }
-
-    private fun Class<*>.method(name: String, vararg parameterTypes: Class<*>): Method {
-        return getDeclaredMethod(name, *parameterTypes).apply { isAccessible = true }
-    }
-
-    private fun hookMiuiHeadsetBinder() {
-        val stubClass = firstExistingClass("com.android.bluetooth.ble.app.IMiuiHeadsetService\$Stub") ?: run {
-            Log.d(TAG, "IMiuiHeadsetService.Stub fallback not found")
-            return
-        }
-        runCatching {
-            hookBefore(findMethod(stubClass, "onTransact", Int::class.java, Parcel::class.java, Parcel::class.java, Int::class.java)) {
-                val code = args[0] as? Int ?: return@hookBefore
-                val data = args[1] as? Parcel ?: return@hookBefore
-                val reply = args[2] as? Parcel ?: return@hookBefore
-                handleTransaction(code, data, reply)?.let { handled ->
-                    result = handled
-                }
-            }
-            Log.d(TAG, "IMiuiHeadsetService.Stub.onTransact hooked class=$stubClass")
-        }.onFailure { Log.d(TAG, "hook IMiuiHeadsetService.Stub.onTransact skipped", it) }
-    }
-
-    private fun handleTransaction(code: Int, data: Parcel, reply: Parcel): Boolean? {
-        val originalPosition = data.dataPosition()
-        return runCatching {
-            data.enforceInterface(DESCRIPTOR)
-            when (code) {
-                1 -> handleCheckSupport(data, reply)
-                2 -> handleRegister(data, reply)
-                3 -> handleUnregister(data)
-                4 -> handleDeviceVoid("connect", data, reply)
-                9 -> handleAncMode(data, reply)
-                10 -> handleAncLevel(data, reply)
-                11 -> handleAddressString("getDeviceInfo", data, reply) { settingsSupport(it) }
-                12 -> handleDeviceVoid("getDeviceConfig", data, reply)
-                14 -> handleSetCommonCommand(data, reply)
-                15 -> handleCommonConfig(data, reply)
-                16 -> handleRegisterCallbackDevice(data, reply)
-                18 -> handleAddressBoolean("isMiTWS", data, reply, true)
-                19 -> handleAddressBoolean("checkIsMiTWS", data, reply, true)
-                20 -> handleAddressString("isSupportAudioSwitch", data, reply) { "1" }
-                24 -> handleAddressBoolean("getRingFindState", data, reply, false)
-                else -> null
-            }
-        }.onFailure {
-            Log.w(TAG, "onTransact inspect failed code=$code", it)
-        }.also {
-            data.setDataPosition(originalPosition)
-        }.getOrNull()
-    }
-
-    private fun handleCheckSupport(data: Parcel, reply: Parcel): Boolean? {
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "checkSupport upstream device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        reply.writeNoException()
-        val support = settingsSupport(device?.address ?: return null)
-        reply.writeString(support)
-        Log.d(TAG, "checkSupport upstream forced $support")
-        return true
-    }
-
-    private fun handleRegister(data: Parcel, reply: Parcel): Boolean? {
-        val callback = data.readCallbackBinder()
-        Log.d(TAG, "register upstream callback=$callback lastDevice=${lastSonyDevice.describe()}")
-        if (callback == null || lastSonyDevice == null) return null
-        rememberCallback(callback)
-        reply.writeNoException()
-        sendRealStatus(lastSonyDevice, "register")
-        return true
-    }
-
-    private fun handleUnregister(data: Parcel): Boolean? {
-        val binder = data.readStrongBinder() ?: return null
-        removeCallback(binder)
-        Log.d(TAG, "unregister upstream callback removed=$binder")
-        return null
-    }
-
-    private fun handleDeviceVoid(method: String, data: Parcel, reply: Parcel): Boolean? {
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "$method upstream device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        reply.writeNoException()
-        Log.d(TAG, "$method upstream no-op for Sony")
-        sendRealStatus(device, method)
-        return true
-    }
-
-    private fun handleAncMode(data: Parcel, reply: Parcel): Boolean? {
-        val mode = data.readInt()
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "changeAncMode upstream mode=$mode device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        sendSonyAnc(sonyAncFromMiuiMode(mode))
-        reply.writeNoException()
-        sendRealStatus(device, "changeAncMode:$mode")
-        return true
-    }
-
-    private fun handleAncLevel(data: Parcel, reply: Parcel): Boolean? {
-        val level = data.readString()
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "changeAncLevel upstream level=$level device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        level?.let { sendSonyAncLevel(it) }
-        reply.writeNoException()
-        sendRealStatus(device, "changeAncLevel:$level")
-        return true
-    }
-
-    private fun handleAddressString(method: String, data: Parcel, reply: Parcel, forced: (String) -> String): Boolean? {
-        val address = data.readString()
-        val isSony = address != null && isSonyAddress(address)
-        Log.d(TAG, "$method upstream address=$address isSony=$isSony")
-        if (!isSony) return null
-        val value = forced(address)
-        reply.writeNoException()
-        reply.writeString(value)
-        Log.d(TAG, "$method upstream forced $value")
-        return true
-    }
-
-    private fun handleAddressBoolean(method: String, data: Parcel, reply: Parcel, forced: Boolean): Boolean? {
-        val address = data.readString()
-        val isSony = address != null && isSonyAddress(address)
-        Log.d(TAG, "$method upstream address=$address isSony=$isSony")
-        if (!isSony) return null
-        reply.writeNoException()
-        reply.writeInt(if (forced) 1 else 0)
-        Log.d(TAG, "$method upstream forced $forced")
-        return true
-    }
-
-    private fun handleSetCommonCommand(data: Parcel, reply: Parcel): Boolean? {
-        val command = data.readInt()
-        val value = data.readString()
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "setCommonCommand upstream command=$command value=$value device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        reply.writeNoException()
-        reply.writeString(
-            when (command) {
-                102 -> "1"
-                123 -> "4"
-                else -> "1"
-            }
-        )
-        sendRealStatus(device, "setCommonCommand:$command")
-        return true
-    }
-
-    private fun handleCommonConfig(data: Parcel, reply: Parcel): Boolean? {
-        val device = data.readDevice()
-        val type = data.readString()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "getCommonConfig upstream type=$type device=${device.describe()} isSony=$isSony")
-        if (!isSony) return null
-        lastSonyDevice = device
-        reply.writeNoException()
-        sendRealStatus(device, "getCommonConfig:$type")
-        return true
-    }
-
-    private fun handleRegisterCallbackDevice(data: Parcel, reply: Parcel): Boolean? {
-        val callback = data.readCallbackBinder()
-        val device = data.readDevice()
-        val isSony = isSonyPod(device)
-        Log.d(TAG, "registerCallbackDevice upstream callback=$callback device=${device.describe()} isSony=$isSony")
-        if (!isSony || callback == null) return null
-        lastSonyDevice = device
-        rememberCallback(callback)
-        reply.writeNoException()
-        sendRealStatus(device, "registerCallbackDevice")
-        return true
-    }
-
-    private fun Parcel.readCallbackBinder(): Any? {
-        val binder = readStrongBinder() ?: return null
-        return runCatching {
-            val stub = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetCallback\$Stub")
-            stub.getDeclaredMethod("asInterface", IBinder::class.java).invoke(null, binder)
-        }.onFailure {
-            Log.w(TAG, "read callback binder failed", it)
-        }.getOrNull()
-    }
-
-    private fun Parcel.readDevice(): BluetoothDevice? {
-        return if (readInt() != 0) BluetoothDevice.CREATOR.createFromParcel(this) else null
     }
 
     private fun isSonyPod(device: BluetoothDevice?): Boolean {
@@ -761,7 +546,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
                     return@forEach
                 }
                 runCatching {
-                    callMethod(registration.callback, "refreshStatus", address, payload)
+                    headsetSymbols.method("callbackRefresh").invoke(registration.callback, address, payload)
                     Log.d(TAG, "sent real refreshStatus reason=$reason address=$address payload=$payload callback=${registration.callback}")
                 }.onFailure { error ->
                     val removed = removeCallback(binder, registration)
@@ -855,10 +640,7 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun currentMiuiBluetoothNotification(): Any? {
         return runCatching {
-            findClass("com.android.bluetooth.ble.app.headset.BluetoothHeadsetService")
-                .getField("mMiuiBluetoothNotification")
-                .apply { isAccessible = true }
-                .get(null)
+            headsetSymbols.field("notificationField").get(null)
         }.getOrNull()
     }
 
