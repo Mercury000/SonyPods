@@ -12,6 +12,7 @@ libxposedService = "102.0.0"
 miuix = "0.9.4-rc01"
 junit = "4.13.2"
 dexkit = "2.2.0"
+aboutLibraries = "15.2.0"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
@@ -22,6 +23,7 @@ lsplugin-resopt = { id = "org.lsposed.lsplugin.resopt", version = "1.6" }
 kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+about-libraries = { id = "com.mikepenz.aboutlibraries.plugin.android", version.ref = "aboutLibraries" }
 
 [libraries]
 coreKtx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -42,3 +44,4 @@ miuix-nav = { group = "top.yukonga.miuix.kmp", name = "miuix-nav-android", versi
 focus-api = { group = "com.xzakota.hyper.notification", name = "focus-api", version.ref = "focusApi" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 dexkit = { group = "org.luckypray", name = "dexkit", version.ref = "dexkit" }
+about-libraries-core = { module = "com.mikepenz:aboutlibraries-core", version.ref = "aboutLibraries" }

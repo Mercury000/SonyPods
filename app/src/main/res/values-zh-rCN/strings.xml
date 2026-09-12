@@ -374,7 +374,7 @@
     <string name="about_developer">开发者</string>
     <string name="about_source_code">源码</string>
     <string name="about_references">引用</string>
-    <string name="about_references_description">SonyPods 的实现参考了以下开源项目。</string>
+    <string name="about_references_description">SonyPods 的实现参考或引用了以下开源项目。</string>
     <string name="about_reference_projects">引用项目</string>
     <string name="qa_card_title">Quick Access</string>
     <string name="home_wait_lsposed">等待 LSPosed 服务连接</string>

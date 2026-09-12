@@ -12,6 +12,7 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.parcelize)
     alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.about.libraries)
 }
 
 val signingProperties = listOf(
@@ -281,12 +282,21 @@ tasks.named("preBuild") {
     dependsOn(generateDeveloperProfile)
 }
 
+aboutLibraries {
+    offlineMode = true
+    collect {
+        configPath = file("aboutlibraries")
+        includePlatform = false
+    }
+}
+
 dependencies {
     implementation(libs.coreKtx)
     compileOnly(libs.libxposedApi)
     implementation(libs.libxposedService)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.dexkit)
+    implementation(libs.about.libraries.core)
 
     // Compose
     implementation(platform(libs.compose.bom))

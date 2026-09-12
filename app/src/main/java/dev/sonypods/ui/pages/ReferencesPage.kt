@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.mercury.sonypods.R
+import com.mikepenz.aboutlibraries.Libs
+import com.mikepenz.aboutlibraries.util.withJson
 import dev.sonypods.ui.components.SectionTitle
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
@@ -34,6 +37,20 @@ fun ReferencesPage(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val context = LocalContext.current
+    val referenceProjects = remember(context) {
+        runCatching {
+            Libs.Builder()
+                .withJson(context, R.raw.aboutlibraries)
+                .build()
+                .libraries
+                .mapNotNull { library ->
+                    val url = library.website?.takeIf { it.isNotBlank() }
+                        ?: library.scm?.url?.takeIf { it.isNotBlank() }
+                    url?.let { ReferenceProject(library.name, it) }
+                }
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        }.getOrElse { fallbackReferenceProjects }
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -69,7 +86,7 @@ fun ReferencesPage(
     }
 }
 
-private val referenceProjects = listOf(
+private val fallbackReferenceProjects = listOf(
     ReferenceProject(
         name = "OpenBuds",
         url = "https://github.com/IgnotusJee/OpenBuds",
