@@ -1,0 +1,65 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "Asia/Shanghai",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "dependencyDashboard": true,
+  "labels": [
+    "dependencies"
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "minimumReleaseAge": "3 days",
+  "rangeStrategy": "pin",
+  "commitMessagePrefix": "chore(deps):",
+  "commitMessageAction": "升级",
+  "commitMessageTopic": "{{depName}}",
+  "packageRules": [
+    {
+      "description": "Group AndroidX dependency updates",
+      "matchPackageNames": [
+        "/^androidx\\./"
+      ],
+      "groupName": "AndroidX dependencies"
+    },
+    {
+      "description": "Group Kotlin ecosystem updates",
+      "matchPackageNames": [
+        "/^org\\.jetbrains\\.kotlin/",
+        "/^com\\.google\\.devtools\\.ksp(?::|$)/"
+      ],
+      "groupName": "Kotlin dependencies"
+    },
+    {
+      "description": "Allow MIUIX release candidates because the project follows its RC channel",
+      "matchPackageNames": [
+        "/^top\\.yukonga\\.miuix\\.kmp:/"
+      ],
+      "ignoreUnstable": false,
+      "groupName": "MIUIX dependencies"
+    },
+    {
+      "description": "Keep Android build tool upgrades isolated for compatibility review",
+      "matchPackageNames": [
+        "gradle",
+        "com.android.application",
+        "com.android.library"
+      ],
+      "groupName": null
+    },
+    {
+      "description": "Automerge stable patch updates after CI succeeds",
+      "matchUpdateTypes": [
+        "patch",
+        "digest"
+      ],
+      "matchCurrentVersion": "!/^0/",
+      "automerge": true,
+      "automergeType": "pr"
+    }
+  ]
+}
