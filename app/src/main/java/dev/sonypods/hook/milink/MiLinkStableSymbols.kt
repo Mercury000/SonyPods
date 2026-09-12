@@ -16,8 +16,6 @@ internal object MiLinkStableSymbols : FixedSymbolBundleDefinition {
     override val requiredSymbols = setOf(
         "headsetInfoConstructor",
         "headsetInfoWriteToParcel",
-        "headsetInfoGetAddress",
-        "headsetInfoComponent1",
         "headsetInfoGetDeviceId",
         "headsetInfoComponent3",
         "headsetInfoGetPowers",
@@ -43,8 +41,6 @@ internal object MiLinkStableSymbols : FixedSymbolBundleDefinition {
         "headsetInfoWriteToParcel" to method(
             "Lcom/miui/headset/api/HeadsetInfo;->writeToParcel(Landroid/os/Parcel;I)V",
         ),
-        "headsetInfoGetAddress" to method("Lcom/miui/headset/api/HeadsetInfo;->getAddress()Ljava/lang/String;"),
-        "headsetInfoComponent1" to method("Lcom/miui/headset/api/HeadsetInfo;->component1()Ljava/lang/String;"),
         "headsetInfoGetDeviceId" to method("Lcom/miui/headset/api/HeadsetInfo;->getDeviceId()Ljava/lang/String;"),
         "headsetInfoComponent3" to method("Lcom/miui/headset/api/HeadsetInfo;->component3()Ljava/lang/String;"),
         "headsetInfoGetPowers" to method("Lcom/miui/headset/api/HeadsetInfo;->getPowers()Ljava/util/List;"),
@@ -108,8 +104,6 @@ internal object MiLinkStableSymbols : FixedSymbolBundleDefinition {
     private val HEADSET_INFO_METHODS = setOf(
         "headsetInfoConstructor",
         "headsetInfoWriteToParcel",
-        "headsetInfoGetAddress",
-        "headsetInfoComponent1",
         "headsetInfoGetDeviceId",
         "headsetInfoComponent3",
         "headsetInfoGetPowers",

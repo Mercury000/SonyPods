@@ -15,11 +15,12 @@ import java.util.concurrent.ConcurrentHashMap
  * the HEADSET service and native registry are keyed by 80:99, breaking that join even though every
  * individual object is otherwise valid.
  *
- * [MiLinkServiceHook] normalizes new HeadsetInfo objects at the producer boundary. This hook repairs
- * objects published before that identity became known at MiLink's exact graph-join boundary, mirrors
- * the native registry under the selected identity, and then leaves MiLink's original validator to
- * make the decision. It never returns a synthetic success and never rewrites Android's Bluetooth
- * identities or any non-Sony device.
+ * The selected DeviceInfo id is MiLink's current transport identity and is preserved exactly: the
+ * headset runtime matches control requests against its active headset before calling any hardware
+ * Profile. This hook repairs stale graph edges to that selected id, mirrors the native registry under
+ * both the selected id and its canonical sibling, and then leaves MiLink's original validator to make
+ * the decision. It never returns a synthetic success and never rewrites Android's Bluetooth identities
+ * or any non-Sony device.
  */
 internal class MiLinkIdentityGraphHook(
     private val hook: MiLinkServiceHook,
