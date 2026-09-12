@@ -1,4 +1,4 @@
-name: Build Release APK
+name: Build APK
 
 on:
   push:
@@ -131,10 +131,24 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      - name: Build debug APK
+        if: steps.version.outputs.changed != 'true'
+        run: ./gradlew :app:assembleDebug
+
+      - name: Upload debug APK
+        if: steps.version.outputs.changed != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SonyPods-${{ steps.version.outputs.version_name }}-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
       - name: Build release APK
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
         run: ./gradlew :app:assembleRelease
 
       - name: Sign release APK
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
         id: sign
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
@@ -168,7 +182,8 @@ jobs:
 
           echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Release APK
+      - name: Upload release APK
+        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.sign.outputs.apk }}
