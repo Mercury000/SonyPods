@@ -2,6 +2,7 @@ package dev.sonypods.hook
 import com.mercury.sonypods.R
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.app.StatusBarManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
@@ -12,6 +13,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import com.mercury.sonypods.BuildConfig
 import dev.sonypods.config.CloudModelInfoStore
 import dev.sonypods.utils.SystemApisUtils.setIconVisibility
@@ -29,6 +31,9 @@ object HeadsetStateDispatcher : HookContext() {
     private var appRequestReceiver: BroadcastReceiver? = null
     private var aclReceiver: BroadcastReceiver? = null
     private var receiverContext: Context? = null
+    private lateinit var adapterSymbols: ResolvedSymbolBundle
+    private lateinit var profileSymbols: ResolvedSymbolBundle
+    @Volatile private var runtimeHooksInstalled = false
 
     override fun onBeforeReload() {
         SonyEngineHost.shutdown()
@@ -57,6 +62,7 @@ object HeadsetStateDispatcher : HookContext() {
         address: String?,
         name: String?,
     ) {
+        onApplicationAvailable(context)
         SonyDeviceService.rememberAddress(address)
         // Must happen before start() launches the repository collector and its
         // startup announce. The reload's own reconnect is always a recovery,
@@ -83,8 +89,35 @@ object HeadsetStateDispatcher : HookContext() {
     }
 
     override fun onHook() {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "bluetooth-engine-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Bluetooth Application is unavailable at callApplicationOnCreate"
+            }
+            onApplicationAvailable(application)
+        }
+    }
+
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        if (runtimeHooksInstalled) return
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        adapterSymbols = requireSymbols(BluetoothAdapterSymbols)
+        profileSymbols = requireSymbols(BluetoothProfileSymbols)
+        installRuntimeHooks()
+        runtimeHooksInstalled = true
+    }
+
+    private fun installRuntimeHooks() {
         runCatching {
-            hookAfter(findMethod("com.android.bluetooth.btservice.AdapterService", "onCreate")) {
+            hookAfter(adapterSymbols.method("onCreate")) {
                 val context = instance as? Context
                 SonyEngineHost.onAdapterService(instance)
                 if (context != null) SonyEngineHost.start(
@@ -105,11 +138,11 @@ object HeadsetStateDispatcher : HookContext() {
         hookLeAudioActiveDevice()
         hookDeviceLevelDisconnect()
 
-        hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
+        hookAfter(profileSymbols.method("a2dpConnectionChanged")) {
             val currState = args[2] as Int
             val fromState = args[1] as Int
             val device = args[0] as BluetoothDevice?
-            val handler = getObjectField(instance, "mHandler") as Handler
+            val handler = profileSymbols.field("a2dpHandler").get(instance) as Handler
             if (device == null || currState == fromState) {
                 return@hookAfter
             }
@@ -224,11 +257,7 @@ object HeadsetStateDispatcher : HookContext() {
      */
     private fun hookLeAudioConnectionState() {
         runCatching {
-            hookAfter(findMethodByParamCount(
-                "com.android.bluetooth.le_audio.LeAudioService",
-                "notifyConnectionStateChanged",
-                3,
-            )) {
+            hookAfter(profileSymbols.method("leAudioConnectionChanged")) {
                 val device = args.getOrNull(0) as? BluetoothDevice
                 val currState = args.getOrNull(1) as? Int
                 val prevState = args.getOrNull(2) as? Int
@@ -354,11 +383,7 @@ object HeadsetStateDispatcher : HookContext() {
      */
     private fun hookLeAudioActiveDevice() {
         runCatching {
-            hookAfter(findMethodByParamCount(
-                "com.android.bluetooth.le_audio.LeAudioService",
-                "notifyActiveDeviceChanged",
-                1,
-            )) {
+            hookAfter(profileSymbols.method("leAudioActiveDeviceChanged")) {
                 val device = args.getOrNull(0) as? BluetoothDevice
                 // A null device means "no LE Audio route any more", which concerns us whatever
                 // it was before; a named one is only ours to act on if it is a Sony.
@@ -389,49 +414,21 @@ object HeadsetStateDispatcher : HookContext() {
      * ACL-down broadcast never reaches the milink process.
      */
     private fun hookDeviceLevelDisconnect() {
-        // The binder entry may live on AdapterService or on its IBluetooth binder inner class
-        // (AOSP: AdapterService$BluetoothServiceBinder) depending on the ROM, so search the
-        // class AND every declared inner class for the method name rather than betting on one
-        // declaration site. Non-device overloads no-op on the args guard below.
-        val candidateClasses = buildList {
-            val adapter = "com.android.bluetooth.btservice.AdapterService"
-            add(adapter)
-            runCatching { findClass(adapter).declaredClasses.map { it.name } }
-                .getOrElse { emptyList() }
-                .forEach { add(it) }
-        }
-        var hooked = 0
-        candidateClasses.forEach { className ->
-            val methods = runCatching {
-                findClass(className).declaredMethods
-                    .filter { it.name == "disconnectAllEnabledProfiles" }
-            }.getOrElse { emptyList() }
-            methods.forEach { method ->
-                runCatching {
-                    hookBefore(
-                        method,
-                        logicalRole = "adapter-device-level-disconnect:$className:" +
-                            method.parameterTypes.joinToString(",") { it.simpleName },
-                    ) {
-                        armDeviceLevelDisconnect(args.getOrNull(0) as? BluetoothDevice)
-                    }
-                    hooked++
-                }.onFailure {
-                    Log.w("SonyPods-Engine", "hook $className.disconnectAllEnabledProfiles failed", it)
-                }
+        // DexKit resolves every device-first adapter entry, including the separate Binder class
+        // used by current AOSP/HyperOS builds; the bundle is validated before any hook installs.
+        val methods = adapterSymbols.methodsWithPrefix("deviceDisconnect.")
+
+        methods.forEach { method ->
+            hookBefore(
+                method,
+                logicalRole = "adapter-device-level-disconnect:${method.declaringClass.name}:" +
+                    method.parameterTypes.joinToString(",") { it.simpleName },
+            ) {
+                armDeviceLevelDisconnect(args.getOrNull(0) as? BluetoothDevice)
             }
         }
-        if (hooked == 0) {
-            Log.w(
-                "SonyPods-Engine",
-                "hook AdapterService.disconnectAllEnabledProfiles skipped: no overload found " +
-                    "in $candidateClasses",
-            )
-        } else {
-            Log.d("SonyPods-Engine", "hooked $hooked disconnectAllEnabledProfiles overload(s) for device-level release")
-        }
+        Log.d("SonyPods-Engine", "hooked ${methods.size} DexKit-resolved device-level release method(s)")
     }
-
     private fun armDeviceLevelDisconnect(device: BluetoothDevice?) {
         val target = device ?: return
         if (!isSonyPod(target)) return
@@ -482,10 +479,7 @@ object HeadsetStateDispatcher : HookContext() {
     private fun leAudioGroupAddresses(serviceInstance: Any?, device: BluetoothDevice): Set<String>? =
         runCatching {
             val service = serviceInstance ?: return null
-            // Resolved by parameter type: getGroupDevices is overloaded on BluetoothDevice
-            // and on the raw group id, and both take one argument.
-            val members = service.javaClass
-                .getMethod("getGroupDevices", BluetoothDevice::class.java)
+            val members = profileSymbols.method("leAudioGroupDevices")
                 .invoke(service, device) as? List<*>
                 ?: return null
             members.filterIsInstance<BluetoothDevice>()
@@ -496,7 +490,7 @@ object HeadsetStateDispatcher : HookContext() {
     private fun postToProfileHandler(serviceInstance: Any?, block: () -> Unit) {
         // Serialized with profile internals like the A2DP path; connectDevice itself dedupes
         // already-live sessions and in-flight attempts.
-        val handler = runCatching { getObjectField(serviceInstance, "mHandler") as Handler }.getOrNull()
+        val handler = runCatching { profileSymbols.field("leAudioHandler").get(serviceInstance) as Handler }.getOrNull()
             ?: Handler(android.os.Looper.getMainLooper())
         handler.post(block)
     }

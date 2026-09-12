@@ -179,7 +179,6 @@ class HookEntry : XposedModule() {
             "com.android.bluetooth" -> {
                 loadHook(HeadsetStateDispatcher, classLoader, scope, active)
                 loadHook(LeAudioAllowListHook, classLoader, scope, active)
-                loadHook(BluetoothUpstreamHeadsetHook(), classLoader, scope, active)
             }
             "com.android.settings" -> {
                 loadHook(SettingsRenderHook(), classLoader, scope, active)
@@ -209,6 +208,8 @@ class HookEntry : XposedModule() {
             ?: throw IllegalStateException("target application context is unavailable after hot reload")
         when (scope) {
             "com.android.bluetooth" -> {
+                active.contexts().filterIsInstance<LeAudioAllowListHook>()
+                    .forEach { it.startAfterReload(context) }
                 val dispatcher = active.contexts().filterIsInstance<HeadsetStateDispatcher>().firstOrNull()
                     ?: throw IllegalStateException("bluetooth dispatcher was not rebuilt")
                 dispatcher.startAfterReload(

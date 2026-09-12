@@ -1,6 +1,8 @@
 package dev.sonypods.hook
 
+import android.app.Application
 import android.bluetooth.BluetoothDevice
+import android.content.Context
 import dev.sonypods.hook.Log
 import dev.sonypods.device.SonyDeviceService
 
@@ -24,12 +26,37 @@ import dev.sonypods.device.SonyDeviceService
  */
 object LeAudioAllowListHook : HookContext() {
     private const val TAG = "SonyPods-Engine"
-    private const val ADAPTER_SERVICE = "com.android.bluetooth.btservice.AdapterService"
+    @Volatile private var runtimeHookInstalled = false
 
     override fun onHook() {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "bluetooth-le-allow-list-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Bluetooth Application is unavailable at callApplicationOnCreate"
+            }
+            onApplicationAvailable(application)
+        }
+    }
+
+    internal fun startAfterReload(context: Context) {
+        onApplicationAvailable(context)
+    }
+
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        if (runtimeHookInstalled) return
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
         runCatching {
+            val symbols = requireSymbols(BluetoothAdapterSymbols)
             hookBefore(
-                findMethod(ADAPTER_SERVICE, "isLeAudioAllowed", BluetoothDevice::class.java),
+                symbols.method("isLeAudioAllowed"),
                 logicalRole = "adapter-is-le-audio-allowed",
             ) {
                 val device = args.firstOrNull() as? BluetoothDevice ?: return@hookBefore
@@ -37,6 +64,7 @@ object LeAudioAllowListHook : HookContext() {
                 if (!SonyDeviceService.isKnownSonyAddress(address)) return@hookBefore
                 result = true
             }
+            runtimeHookInstalled = true
             Log.d(TAG, "isLeAudioAllowed hook installed")
         }.onFailure {
             Log.w(TAG, "isLeAudioAllowed hook unavailable", it)
