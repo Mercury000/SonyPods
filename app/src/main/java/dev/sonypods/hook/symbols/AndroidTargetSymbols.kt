@@ -26,6 +26,10 @@ object AndroidTargetSymbols {
         val cache: SymbolCache = context?.let {
             FileSymbolCache(File(it.codeCacheDir, "sonypods-symbols"))
         } ?: MemorySymbolCache()
+        val scanCoordinator: SymbolScanCoordinator = context?.let {
+            // Keep locks outside code_cache so a cache cleanup cannot replace a locked inode.
+            FileSymbolScanCoordinator(File(it.noBackupFilesDir, "sonypods-symbol-scan-locks"))
+        } ?: ProcessSymbolScanCoordinator
         val sink = SymbolDiagnosticSink { event ->
             log("symbols bundle=${event.bundleId} phase=${event.phase} ${event.message}", null)
         }
@@ -35,6 +39,7 @@ object AndroidTargetSymbols {
             cache = cache,
             queryFactory = SymbolQueryFactory.dexKit(classLoader, sink),
             diagnostics = sink,
+            scanCoordinator = scanCoordinator,
         )
     }
 

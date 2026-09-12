@@ -64,6 +64,7 @@ class TargetSymbolResolver(
     private val cache: SymbolCache,
     private val queryFactory: SymbolQueryFactory,
     private val diagnostics: SymbolDiagnosticSink = SymbolDiagnosticSink {},
+    private val scanCoordinator: SymbolScanCoordinator = ProcessSymbolScanCoordinator,
 ) {
     private val resolved = linkedMapOf<String, ResolvedSymbolBundle>()
 
@@ -90,50 +91,64 @@ class TargetSymbolResolver(
     }
 
     private fun resolveWithDexKit(definition: DexKitSymbolBundleDefinition): ResolvedSymbolBundle {
-        loadCache(definition)?.let { references ->
+        loadCache(definition, removeInvalid = false)?.let { references ->
             return materialize(definition, references, fromCache = true)
         }
 
-        diagnostics.emit(SymbolDiagnostic(definition.id, "scan", "cache miss; opening DexKit"))
-        val references = try {
-            queryFactory.open(definition.id).use { query -> definition.resolve(query) }
-        } catch (error: SymbolResolutionException) {
-            throw error
-        } catch (error: Throwable) {
-            throw SymbolResolutionException(definition.id, "DEX query failed: ${error.message}", error)
+        return scanCoordinator.withScanLock(scanKey(definition)) {
+            // Another process may have populated the descriptor cache while this process waited.
+            loadCache(definition, removeInvalid = true)?.let { references ->
+                return@withScanLock materialize(definition, references, fromCache = true)
+            }
+
+            diagnostics.emit(SymbolDiagnostic(definition.id, "scan", "cache miss; opening DexKit"))
+            val references = try {
+                queryFactory.open(definition.id).use { query -> definition.resolve(query) }
+            } catch (error: SymbolResolutionException) {
+                throw error
+            } catch (error: Throwable) {
+                throw SymbolResolutionException(definition.id, "DEX query failed: ${error.message}", error)
+            }
+            val bundle = materialize(definition, references, fromCache = false)
+            cache.write(
+                CachedSymbolBundle(
+                    bundleId = definition.id,
+                    schemaVersion = definition.schemaVersion,
+                    targetFingerprint = target.fingerprint,
+                    symbols = references.mapValues { CachedSymbolReference.from(it.value) },
+                ),
+            )
+            diagnostics.emit(
+                SymbolDiagnostic(definition.id, "scan", "resolved=${references.size} cache=written"),
+            )
+            bundle
         }
-        val bundle = materialize(definition, references, fromCache = false)
-        cache.write(
-            CachedSymbolBundle(
-                bundleId = definition.id,
-                schemaVersion = definition.schemaVersion,
-                targetFingerprint = target.fingerprint,
-                symbols = references.mapValues { CachedSymbolReference.from(it.value) },
-            ),
-        )
-        diagnostics.emit(
-            SymbolDiagnostic(definition.id, "scan", "resolved=${references.size} cache=written"),
-        )
-        return bundle
     }
+
+    // Match the physical cache identity: fingerprints and schemas share the same bundle JSON file.
+    private fun scanKey(definition: DexKitSymbolBundleDefinition): String =
+        "${target.packageName}|${definition.id}"
 
     @Synchronized
     fun clearMemory() = resolved.clear()
 
-    private fun loadCache(definition: DexKitSymbolBundleDefinition): Map<String, SymbolReference>? {
+    private fun loadCache(
+        definition: DexKitSymbolBundleDefinition,
+        removeInvalid: Boolean = true,
+    ): Map<String, SymbolReference>? {
         val cached = cache.read(definition.id) ?: return null
         if (cached.formatVersion != CachedSymbolBundle.CACHE_FORMAT_VERSION ||
             cached.schemaVersion != definition.schemaVersion ||
             cached.targetFingerprint != target.fingerprint
         ) {
             diagnostics.emit(SymbolDiagnostic(definition.id, "cache", "stale cache rejected"))
-            cache.remove(definition.id)
+            if (removeInvalid) cache.remove(definition.id)
             return null
         }
         val references = runCatching { cached.symbols.mapValues { it.value.toReference() } }
             .getOrElse {
                 diagnostics.emit(SymbolDiagnostic(definition.id, "cache", "corrupt cache rejected: ${it.message}"))
-                cache.remove(definition.id)
+                if (removeInvalid) cache.remove(definition.id)
                 return null
             }
         return runCatching {
@@ -144,7 +159,7 @@ class TargetSymbolResolver(
             references
         }.getOrElse {
             diagnostics.emit(SymbolDiagnostic(definition.id, "cache", "cache validation failed: ${it.message}"))
-            cache.remove(definition.id)
+            if (removeInvalid) cache.remove(definition.id)
             null
         }
     }

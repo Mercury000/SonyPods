@@ -2,6 +2,10 @@ package dev.sonypods.hook.symbols
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -64,6 +68,107 @@ class TargetSymbolResolverTest {
         assertEquals(1, opened)
         assertEquals(1, closed)
         assertEquals(target.fingerprint, cache.read(definition.id)?.targetFingerprint)
+    }
+
+    @Test
+    fun cacheIsRecheckedAfterAcquiringScanLock() {
+        val cache = MemorySymbolCache()
+        val target = target()
+        val definition = StringBundle()
+        var opened = false
+        var lockCount = 0
+        val coordinator = object : SymbolScanCoordinator {
+            override fun <T> withScanLock(key: String, action: () -> T): T {
+                lockCount++
+                cache.write(cached(definition, target, validReferences()))
+                return action()
+            }
+        }
+        val resolver = TargetSymbolResolver(
+            target,
+            loader,
+            cache,
+            SymbolQueryFactory {
+                opened = true
+                error("must not scan after another process published the cache")
+            },
+            scanCoordinator = coordinator,
+        )
+
+        val bundle = resolver.resolve(definition)
+
+        assertTrue(bundle.fromCache)
+        assertFalse(opened)
+        assertEquals(1, lockCount)
+    }
+
+    @Test
+    fun scanLockFollowsSharedCacheIdentityAcrossFingerprints() {
+        val cache = MemorySymbolCache()
+        val definition = StringBundle()
+        val keys = mutableListOf<String>()
+        val coordinator = object : SymbolScanCoordinator {
+            override fun <T> withScanLock(key: String, action: () -> T): T {
+                keys += key
+                return action()
+            }
+        }
+        fun resolve(target: TargetArtifact) = TargetSymbolResolver(
+            target,
+            loader,
+            cache,
+            SymbolQueryFactory { fakeQuery() },
+            scanCoordinator = coordinator,
+        ).resolve(definition)
+
+        resolve(target().copy(versionCode = 1))
+        cache.remove(definition.id)
+        resolve(target().copy(versionCode = 2))
+
+        assertEquals(2, keys.size)
+        assertEquals(keys[0], keys[1])
+    }
+
+    @Test
+    fun fileCoordinatorAllowsOnlyOneResolverToScanSharedBundle() {
+        val root = Files.createTempDirectory("symbols-coordination").toFile()
+        val cacheDirectory = File(root, "cache")
+        val lockDirectory = File(root, "locks")
+        val target = target()
+        val scans = AtomicInteger()
+        val start = CountDownLatch(1)
+        val definition = object : StringBundle() {
+            override fun resolve(query: SymbolQuery): Map<String, SymbolReference> {
+                scans.incrementAndGet()
+                Thread.sleep(150)
+                return validReferences()
+            }
+        }
+        fun resolver() = TargetSymbolResolver(
+            target,
+            loader,
+            FileSymbolCache(cacheDirectory),
+            SymbolQueryFactory { fakeQuery() },
+            scanCoordinator = FileSymbolScanCoordinator(lockDirectory),
+        )
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures = listOf(resolver(), resolver()).map { resolver ->
+                executor.submit<ResolvedSymbolBundle> {
+                    start.await()
+                    resolver.resolve(definition)
+                }
+            }
+            start.countDown()
+            val bundles = futures.map { it.get(5, TimeUnit.SECONDS) }
+
+            assertEquals(1, scans.get())
+            assertEquals(1, bundles.count { it.fromCache })
+            assertEquals(1, bundles.count { !it.fromCache })
+        } finally {
+            executor.shutdownNow()
+            root.deleteRecursively()
+        }
     }
 
     @Test
