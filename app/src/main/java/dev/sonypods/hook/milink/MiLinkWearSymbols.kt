@@ -16,7 +16,7 @@ import org.luckypray.dexkit.wrap.DexMethod
 /** Resolves the Wear headset listener, its callback owner, callback list, and capability fields. */
 internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
     override val id = "milink-wear-capability"
-    override val schemaVersion = 3
+    override val schemaVersion = 4
     override val requiredSymbols = setOf(
         "listener",
         "callbackOwner",
@@ -24,8 +24,13 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
         "controllerField",
         "serviceField",
         "volumeField",
+        "batteryField",
         "modeField",
         "supportModeField",
+        "volumeCallback",
+        "batteryCallback",
+        "modeCallback",
+        "publishMethod",
         "callbackListField",
         "callbackMethod1",
         "callbackMethod2",
@@ -66,9 +71,26 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
 
         val controllerField = listener.fields.single { it.typeName == HEADSET_SERVICE_CONTROLLER }
         val serviceField = listener.fields.single { it.typeName == CIRCULATE_SERVICE_INFO }
-        val volumeField = callbackIntStateField(listener, "onBluetoothVolumeChanged")
-        val modeField = callbackIntStateField(listener, "onBluetoothModeChanged")
-        val audioEffectField = callbackIntStateField(listener, "onBluetoothAudioEffectChanged")
+        val volumeCallback = callbackMethod(listener, "onBluetoothVolumeChanged", "int")
+        val batteryCallback = callbackMethod(listener, "onBluetoothBatteryChanged", "java.util.List")
+        val modeCallback = callbackMethod(listener, "onBluetoothModeChanged", "int")
+        val audioEffectCallback = callbackMethod(listener, "onBluetoothAudioEffectChanged", "int")
+        val volumeField = callbackStateField(listener, volumeCallback, "int")
+        val batteryField = callbackStateField(listener, batteryCallback, "java.util.List")
+        val modeField = callbackStateField(listener, modeCallback, "int")
+        val audioEffectField = callbackStateField(listener, audioEffectCallback, "int")
+        val publishingCallbacks = listOf(volumeCallback, batteryCallback, modeCallback)
+        val publishCandidates = publishingCallbacks
+            .map { callback ->
+                callback.invokes
+                    .filter { invoked ->
+                        invoked.returnTypeName == "void" && invoked.paramTypeNames.isEmpty()
+                    }
+                    .map { it.descriptor }
+                    .toSet()
+            }
+            .reduce(Set<String>::intersect)
+        val publishDescriptor = query.requireUnique("wearPublishMethod", publishCandidates)
         // The listener stores mode/support/audioEffect as one adjacent state tuple. Resolve both
         // tuple boundaries from stable HeadsetServiceNotify callbacks; the middle field is support.
         val supportModeRuns = listener.fields.windowed(3).filter { fields ->
@@ -92,8 +114,13 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
             "controllerField" to SymbolReference(SymbolKind.FIELD, controllerField.descriptor),
             "serviceField" to SymbolReference(SymbolKind.FIELD, serviceField.descriptor),
             "volumeField" to SymbolReference(SymbolKind.FIELD, volumeField.descriptor),
+            "batteryField" to SymbolReference(SymbolKind.FIELD, batteryField.descriptor),
             "modeField" to SymbolReference(SymbolKind.FIELD, modeField.descriptor),
             "supportModeField" to SymbolReference(SymbolKind.FIELD, supportModeField.descriptor),
+            "volumeCallback" to SymbolReference(SymbolKind.METHOD, volumeCallback.descriptor),
+            "batteryCallback" to SymbolReference(SymbolKind.METHOD, batteryCallback.descriptor),
+            "modeCallback" to SymbolReference(SymbolKind.METHOD, modeCallback.descriptor),
+            "publishMethod" to SymbolReference(SymbolKind.METHOD, publishDescriptor),
             "callbackListField" to SymbolReference(SymbolKind.FIELD, callbackListField.descriptor),
             "callbackMethod1" to SymbolReference(SymbolKind.METHOD, callbacks[0].descriptor),
             "callbackMethod2" to SymbolReference(SymbolKind.METHOD, callbacks[1].descriptor),
@@ -107,8 +134,13 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
         val controller = DexField(symbols.getValue("controllerField").descriptor)
         val service = DexField(symbols.getValue("serviceField").descriptor)
         val volume = DexField(symbols.getValue("volumeField").descriptor)
+        val battery = DexField(symbols.getValue("batteryField").descriptor)
         val mode = DexField(symbols.getValue("modeField").descriptor)
         val supportMode = DexField(symbols.getValue("supportModeField").descriptor)
+        val volumeCallback = DexMethod(symbols.getValue("volumeCallback").descriptor)
+        val batteryCallback = DexMethod(symbols.getValue("batteryCallback").descriptor)
+        val modeCallback = DexMethod(symbols.getValue("modeCallback").descriptor)
+        val publishMethod = DexMethod(symbols.getValue("publishMethod").descriptor)
         val callbackList = DexField(symbols.getValue("callbackListField").descriptor)
         val callback1 = DexMethod(symbols.getValue("callbackMethod1").descriptor)
         val callback2 = DexMethod(symbols.getValue("callbackMethod2").descriptor)
@@ -124,8 +156,23 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
                 "Wear $role field changed: $field"
             }
         }
-        require(setOf(volume.toString(), mode.toString(), supportMode.toString()).size == 3) {
+        require(battery.className == listener && battery.typeName == "java.util.List") {
+            "Wear battery field changed: $battery"
+        }
+        require(setOf(volume.toString(), battery.toString(), mode.toString(), supportMode.toString()).size == 4) {
             "Wear state fields must be distinct"
+        }
+        mapOf(
+            "volume" to volumeCallback,
+            "battery" to batteryCallback,
+            "mode" to modeCallback,
+        ).forEach { (role, method) ->
+            require(method.className == listener && method.returnTypeName == "void") {
+                "Wear $role callback changed: $method"
+            }
+        }
+        require(publishMethod.returnTypeName == "void" && publishMethod.paramTypeNames.isEmpty()) {
+            "Wear publish method changed: $publishMethod"
         }
         require(callbackList.className == owner && callbackList.typeName == COPY_ON_WRITE_ARRAY_LIST) {
             "Wear callback list changed: $callbackList"
@@ -137,22 +184,26 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
         }
     }
 
-    private fun callbackIntStateField(listener: ClassData, callbackName: String): FieldData {
-        val callback = listener.methods.singleOrNull { method ->
+    private fun callbackMethod(listener: ClassData, callbackName: String, valueType: String): MethodData =
+        listener.methods.singleOrNull { method ->
             method.name == callbackName &&
                 method.returnTypeName == "void" &&
-                method.paramTypeNames == listOf(CIRCULATE_SERVICE_INFO, "int")
+                method.paramTypeNames == listOf(CIRCULATE_SERVICE_INFO, valueType)
         } ?: error("Wear $callbackName implementation is absent or ambiguous in ${listener.name}")
+
+    private fun callbackStateField(listener: ClassData, callback: MethodData, fieldType: String): FieldData {
         val writes = callback.usingFields
             .filter {
                 it.usingType == FieldUsingType.Write &&
                     it.field.declaredClassName == listener.name &&
-                    isMutableIntField(it.field)
+                    it.field.typeName == fieldType &&
+                    !Modifier.isStatic(it.field.modifiers) &&
+                    !Modifier.isFinal(it.field.modifiers)
             }
             .map { it.field }
             .distinctBy { it.descriptor }
         return writes.singleOrNull()
-            ?: error("Wear $callbackName state field is ambiguous: ${writes.map { it.descriptor }}")
+            ?: error("Wear ${callback.name} state field is ambiguous: ${writes.map { it.descriptor }}")
     }
 
     private fun isMutableIntField(field: FieldData): Boolean =

@@ -86,6 +86,7 @@ class MiLinkNativeRoutingArchitectureTest {
         assertTrue(source.contains("callMethod(wearController, \"getSupportAncMode\", wearService)"))
         assertTrue(source.contains("supportFuture.getNow(null)"))
         assertTrue(source.contains("wearVolumeField.setInt(notify, volume)"))
+        assertTrue(source.contains("wearBatteryField.set(notify"))
         assertTrue(source.contains("wearModeField.setInt(notify, mode)"))
         assertTrue(source.contains("wearSupportModeField.setInt(notify, supportMode)"))
         assertFalse(source.contains("DexFile"))
@@ -101,6 +102,26 @@ class MiLinkNativeRoutingArchitectureTest {
         assertFalse(source.contains("com.miui.circulate.wear.agent.device.controller.b"))
         assertFalse(source.contains("WEAR_SHARE_DEVICE"))
     }
+
+    @Test
+    fun fusionRegistryIsTheOnlySyntheticStateProducer() {
+        val runtime = source("MiLinkServiceHook.kt")
+        val registry = source("MiLinkFusionRegistryHook.kt")
+        val remote = source("MiLinkRemoteProtocolHook.kt")
+
+        assertFalse(runtime.contains("pushStateToPanel"))
+        assertFalse(runtime.contains("notifyHeadsetPropertyChanged(instance, device, 8)"))
+        assertFalse(registry.contains("notifyListeners("))
+        assertFalse(registry.contains("broadcastModeAndBattery"))
+        assertTrue(registry.contains("notifyNonWearConsumers()"))
+        assertTrue(registry.contains("filterNot(wearListenerClass::isInstance)"))
+        assertTrue(registry.contains("publishAuthoritativeWearState()"))
+        assertTrue(registry.contains("wearPublishMethod.invoke(notify)"))
+        assertTrue(registry.contains("this.result = null"))
+        assertTrue(runtime.contains("fusionRegistryHook.onSonyStateChanged()"))
+        assertTrue(remote.contains("hook.refreshFusionRegistry()"))
+    }
+
     @Test
     fun terminalDisconnectClearsPanelProjectionButTransportRecoveryKeepsIt() {
         val runtime = source("MiLinkServiceHook.kt")
@@ -154,9 +175,10 @@ class MiLinkNativeRoutingArchitectureTest {
     fun wearSupportModeUsesDexKitFieldShape() {
         val source = source("MiLinkWearSymbols.kt")
 
-        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothVolumeChanged\")"))
-        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothModeChanged\")"))
-        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothAudioEffectChanged\")"))
+        assertTrue(source.contains("callbackMethod(listener, \"onBluetoothVolumeChanged\", \"int\")"))
+        assertTrue(source.contains("callbackMethod(listener, \"onBluetoothBatteryChanged\", \"java.util.List\")"))
+        assertTrue(source.contains("callbackMethod(listener, \"onBluetoothModeChanged\", \"int\")"))
+        assertTrue(source.contains("publishCandidates"))
         assertTrue(source.contains("FieldUsingType.Write"))
         assertTrue(source.contains("supportModeRuns"))
         assertTrue(source.contains("isMutableIntField"))
@@ -190,4 +212,5 @@ class MiLinkNativeRoutingArchitectureTest {
         assertFalse(source.contains("stringFieldOf"))
         assertFalse(source.contains("Regex("))
     }
+
 }

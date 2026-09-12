@@ -49,27 +49,16 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     @Volatile
     private var mirroredDeviceId: String? = null
 
-    /** Signature of the last mode/battery/volume push, so no-op snapshots do not re-render surfaces. */
-    @Volatile
-    private var lastPushMode = -1
-
-    @Volatile
-    private var lastPushBatteryKey: String? = null
-
-    @Volatile
-    private var lastPushVolume = -1
-
-    /** Guards state fan-out so a listener that re-enters the controller cannot loop. */
-    private val broadcasting = ThreadLocal.withInitial { false }
-
     @Volatile
     private var wearCapabilityHookInstalled = false
     private lateinit var wearListenerClass: Class<*>
     private lateinit var wearControllerField: Field
     private lateinit var wearServiceField: Field
     private lateinit var wearVolumeField: Field
+    private lateinit var wearBatteryField: Field
     private lateinit var wearModeField: Field
     private lateinit var wearSupportModeField: Field
+    private lateinit var wearPublishMethod: Method
     private lateinit var wearCallbackListField: Field
     private lateinit var wearCallbackMethods: List<Method>
 
@@ -82,9 +71,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         controller = null
         service = null
         mirroredDeviceId = null
-        lastPushMode = -1
-        lastPushBatteryKey = null
-        lastPushVolume = -1
         wearCapabilityHookInstalled = false
     }
 
@@ -100,14 +86,13 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         service?.let { runCatching { setObjectField(it, "connectState", 0) } }
         service = null
         mirroredDeviceId = null
-        lastPushMode = -1
-        lastPushBatteryKey = null
-        lastPushVolume = -1
     }
 
     /** Called whenever module state lands (see [MiLinkServiceHook.applySnapshot]). */
     fun onSonyStateChanged() {
         refreshRegistry(null, broadcast = true)
+        notifyNonWearConsumers()
+        publishAuthoritativeWearState()
     }
 
     private fun hookHeadsetServiceController() {
@@ -209,8 +194,10 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             wearControllerField = symbols.field("controllerField")
             wearServiceField = symbols.field("serviceField")
             wearVolumeField = symbols.field("volumeField")
+            wearBatteryField = symbols.field("batteryField")
             wearModeField = symbols.field("modeField")
             wearSupportModeField = symbols.field("supportModeField")
+            wearPublishMethod = symbols.method("publishMethod")
             wearCallbackListField = symbols.field("callbackListField")
             wearCallbackMethods = listOf(
                 symbols.method("callbackMethod1"),
@@ -230,6 +217,19 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
                     // The sibling method removes callbacks. Only an absent listener is being added.
                     if (registered) return@hookBefore
                     seedWearCapabilityFromController(listener)
+                }
+            }
+            listOf("volumeCallback", "batteryCallback", "modeCallback").forEach { role ->
+                val callback = symbols.method(role)
+                hook.hookBefore(
+                    callback,
+                    logicalRole = "fusion-registry-wear-authoritative-source:$role",
+                ) {
+                    if (!wearListenerClass.isInstance(instance)) return@hookBefore
+                    if (!isSonyService(args.getOrNull(0))) return@hookBefore
+                    // Sony state is published atomically from onSonyStateChanged(). Letting these
+                    // stock per-property callbacks proceed would create a second partial producer.
+                    this.result = null
                 }
             }
             wearCapabilityHookInstalled = true
@@ -267,9 +267,67 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         // together to the first ShareDevice publication rather than as partial callback updates.
         runCatching {
             wearVolumeField.setInt(notify, volume)
+            wearBatteryField.set(notify, java.util.ArrayList(hook.miLinkBatteryLevels()))
             wearModeField.setInt(notify, mode)
             wearSupportModeField.setInt(notify, supportMode)
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "initialize complete Wear headset state skipped", it) }
+    }
+
+
+    /**
+     * Keep the native typed notifications for phone-side consumers, but never feed them into the
+     * Wear listener: its callbacks publish after every individual field and therefore cannot
+     * represent an atomic headset state transaction.
+     */
+    private fun notifyNonWearConsumers() {
+        val ctrl = controller ?: return
+        val svc = service ?: return
+        val notifies = runCatching { callMethod(ctrl, "getServiceNotifies") as? List<*> }.getOrNull() ?: return
+        val stable = hook.requireSymbols(MiLinkStableSymbols)
+        val updates = listOf(
+            stable.method("headsetNotifyMode") to panelAncMode(),
+            stable.method("headsetNotifyBattery") to java.util.ArrayList(hook.miLinkBatteryLevels()),
+            stable.method("headsetNotifyVolume") to mirrorVolume(),
+        )
+        main.post {
+            notifies.filterNotNull().filterNot(wearListenerClass::isInstance).forEach { notify ->
+                updates.forEach { (method, value) ->
+                    runCatching { method.invoke(notify, svc, value) }
+                        .onFailure {
+                            Log.d(MiLinkServiceHook.TAG, "notify ${method.name} to ${notify.javaClass.name} failed", it)
+                        }
+                }
+            }
+        }
+    }
+
+    /**
+     * Publish one complete Sony snapshot through Wear's own native publisher. This is not a
+     * debounce or duplicate filter: it replaces the incorrect parallel per-property producers
+     * with one authoritative state transition carrying mode, battery, volume, and capability.
+     */
+    private fun publishAuthoritativeWearState() {
+        if (!wearCapabilityHookInstalled) return
+        val ctrl = controller ?: return
+        val notifies = runCatching { callMethod(ctrl, "getServiceNotifies") as? List<*> }.getOrNull() ?: return
+        val mode = panelAncMode()
+        val battery = java.util.ArrayList(hook.miLinkBatteryLevels())
+        val volume = mirrorVolume()
+        main.post {
+            notifies.filterNotNull().filter(wearListenerClass::isInstance).forEach { notify ->
+                val targetService = runCatching { wearServiceField.get(notify) }.getOrNull()
+                if (!isSonyService(targetService)) return@forEach
+                runCatching {
+                    wearVolumeField.setInt(notify, volume)
+                    wearBatteryField.set(notify, java.util.ArrayList(battery))
+                    wearModeField.setInt(notify, mode)
+                    wearSupportModeField.setInt(notify, FULL_ANC_SUPPORT_MODE)
+                    wearPublishMethod.invoke(notify)
+                }.onFailure {
+                    Log.d(MiLinkServiceHook.TAG, "publish authoritative Wear headset state failed", it)
+                }
+            }
+        }
     }
 
     private fun remember(svc: Any?, ctrl: Any?) {
@@ -296,8 +354,9 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
      * registry under the published device id.
      *
      * [broadcast] means a connected Sony snapshot landed in this process, so the module state is
-     * authoritative and may replace the mirror. Read/refresh guards pass false: they are fallback
-     * paths and must preserve a valid entry produced by MiLink's native remote HeadsetHost flow.
+     * authoritative and may replace the mirror. The registry itself is the single state producer;
+     * synthetic HeadsetHost callbacks are intentionally not emitted because they create a second,
+     * non-atomic event stream beside Xiaomi's real headset pipeline.
      */
     private fun refreshRegistry(svc: Any? = null, broadcast: Boolean) {
         val deviceId = deviceIdOf(svc) ?: return
@@ -316,7 +375,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         }.getOrDefault(false)
         if (!added) return
         mirroredDeviceId = deviceId
-        if (broadcast) broadcastModeAndBattery()
     }
 
     /** Panel/native registry mode domain: 0=降噪, 1=通透, 2=关闭. */
@@ -387,53 +445,6 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     private fun panelAncMode(): Int = (hook.miLinkAncState() + 2) % 3
 
     private fun <T> completed(value: T): CompletableFuture<T> = CompletableFuture.completedFuture(value)
-
-    private fun broadcastModeAndBattery() {
-        if (broadcasting.get() == true) return
-        broadcasting.set(true)
-        try {
-            if (!statePushChanged()) return
-            val stable = hook.requireSymbols(MiLinkStableSymbols)
-            notifyListeners(stable.method("headsetNotifyMode"), panelAncMode())
-            notifyListeners(stable.method("headsetNotifyBattery"), java.util.ArrayList(hook.miLinkBatteryLevels()))
-            notifyListeners(stable.method("headsetNotifyVolume"), mirrorVolume())
-        } finally {
-            broadcasting.set(false)
-        }
-    }
-
-    /** Records the current mode/battery and reports whether they differ from the last push. */
-    private fun statePushChanged(): Boolean {
-        val mode = panelAncMode()
-        val batteryKey = hook.miLinkBatteryLevels().joinToString(",")
-        val volume = mirrorVolume()
-        val changed = mode != lastPushMode || batteryKey != lastPushBatteryKey || volume != lastPushVolume
-        lastPushMode = mode
-        lastPushBatteryKey = batteryKey
-        lastPushVolume = volume
-        return changed
-    }
-
-    /**
-     * Fan the update out over the same [com.miui.circulate.api.protocol.headset.HeadsetServiceNotify]
-     * listeners the service client would use, with the fused service as the target. The
-     * runtime delivers these on its main handler; so do we.
-     */
-    private fun notifyListeners(method: Method, value: Any?) {
-        val ctrl = controller ?: return
-        val svc = service ?: return
-        val notifies = runCatching { callMethod(ctrl, "getServiceNotifies") as? List<*> }.getOrNull() ?: return
-        main.post {
-            for (notify in notifies) {
-                if (notify == null) continue
-                runCatching {
-                    method.invoke(notify, svc, value)
-                }.onFailure {
-                    Log.d(MiLinkServiceHook.TAG, "notify ${method.name} to ${notify.javaClass.name} failed", it)
-                }
-            }
-        }
-    }
 
     private companion object {
         const val HEADSET_DEVICE_INFO = "com.miui.circulate.api.protocol.headset.HeadsetDeviceInfo"

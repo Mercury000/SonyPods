@@ -245,6 +245,7 @@ object MiLinkServiceHook : HookContext() {
                 "milink-headsetinfo-init:primary",
             ) {
                 if (!isTargetHeadsetInfo(instance)) return@hookConstructorAfter
+                stampHeadsetAddress(instance)
                 stampHeadsetInfoModelId(instance)
                 val currentMode = runCatching { getObjectField(instance, "mode") as? Int }.getOrNull()
                 if (currentMode == null || currentMode < 0) {
@@ -256,6 +257,8 @@ object MiLinkServiceHook : HookContext() {
                 }
             }
 
+            hookHeadsetAddressIdentity(symbols, "headsetInfoGetAddress")
+            hookHeadsetAddressIdentity(symbols, "headsetInfoComponent1")
             hookHeadsetInfoNoArg(symbols, "headsetInfoGetDeviceId") { fakeDeviceId() }
             hookHeadsetInfoNoArg(symbols, "headsetInfoComponent3") { fakeDeviceId() }
             hookHeadsetInfoNoArgWhen(
@@ -294,9 +297,22 @@ object MiLinkServiceHook : HookContext() {
                 logicalRole = "milink-headsetinfo-model-parcel",
             ) {
                 if (!isTargetHeadsetInfo(instance)) return@hookBefore
+                stampHeadsetAddress(instance)
                 stampHeadsetInfoModelId(instance)
             }
         }.onFailure { Log.d(TAG, "hook HeadsetInfo symbols skipped", it) }
+    }
+
+    private fun stampHeadsetAddress(info: Any?) {
+        if (info == null) return
+        val raw = runCatching { getObjectField(info, "address") as? String }.getOrNull() ?: return
+        val canonical = SonyDeviceService.resolveControlAddress(raw)
+            ?: currentAddress?.let(SonyDeviceService::resolveControlAddress)
+            ?: raw
+        if (canonical.equals(raw, ignoreCase = true)) return
+        runCatching { setObjectField(info, "address", canonical) }
+            .onSuccess { Log.d(TAG, "stamped HEADSET identity $raw -> $canonical") }
+            .onFailure { Log.d(TAG, "stamp HeadsetInfo.address skipped", it) }
     }
 
     private fun stampHeadsetInfoModelId(info: Any?) {
@@ -363,12 +379,39 @@ object MiLinkServiceHook : HookContext() {
                 if (model != null) {
                     runCatching { setObjectField(model, "ancState", miLinkMode) }
                 }
-                notifyHeadsetPropertyChanged(instance, device, 8)
-                notifyHeadsetPropertyChanged(instance, device, 4)
                 refreshFusionRegistry()
                 this.result = 100
             }
         }.onFailure { Log.d(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
+    }
+
+    /**
+     * Normalize the address at the HEADSET producer boundary. HeadsetDeviceManager derives both its
+     * CirculateServiceInfo key and its HeadsetDeviceInfo key from these getters, so doing this here
+     * prevents a new C5/80 split instead of repairing each downstream cache independently.
+     */
+    private fun hookHeadsetAddressIdentity(symbols: ResolvedSymbolBundle, symbolName: String) {
+        runCatching {
+            hookAfter(symbols.method(symbolName)) {
+                val raw = result as? String ?: return@hookAfter
+                if (!isSonyAddress(raw) && !isTargetHeadsetInfoByField(instance)) return@hookAfter
+                val canonical = SonyDeviceService.resolveControlAddress(raw)
+                    ?: currentAddress?.let(SonyDeviceService::resolveControlAddress)
+                    ?: raw
+                if (!canonical.equals(raw, ignoreCase = true)) {
+                    Log.d(TAG, "normalized HEADSET identity $raw -> $canonical")
+                }
+                result = canonical
+            }
+        }.onFailure { Log.d(TAG, "hook HeadsetInfo.$symbolName identity skipped", it) }
+    }
+
+    private fun isTargetHeadsetInfoByField(info: Any?): Boolean {
+        if (info == null) return false
+        val rawAddress = runCatching { getObjectField(info, "address") as? String }.getOrNull()
+        if (rawAddress != null && isSonyAddress(rawAddress)) return true
+        val rawName = runCatching { getObjectField(info, "name") as? String }.getOrNull()
+        return !rawName.isNullOrBlank() && rawName == currentName
     }
 
     private fun hookHeadsetInfoNoArg(
@@ -489,7 +532,6 @@ object MiLinkServiceHook : HookContext() {
         saveState(context)
         Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         fusionRegistryHook.onSonyStateChanged()
-        pushStateToPanel()
     }
 
     private fun clearDisconnectedState() {
@@ -502,21 +544,6 @@ object MiLinkServiceHook : HookContext() {
         musicVolumeStep = 0
         saveState(context)
         Log.d(TAG, "terminal disconnect; cleared panel state address=$previousAddress")
-    }
-
-    /** Reassemble HeadsetInfo and notify native listeners so the remote receives complete state. */
-    internal fun pushStateToPanel() {
-        val address = currentAddress ?: return
-        val device = runCatching {
-            context?.getSystemService(BluetoothManager::class.java)?.adapter?.getRemoteDevice(address)
-        }.getOrNull() ?: return
-        listOf(lastAncBatteryController, lastProfileContext)
-            .filterNotNull()
-            .distinctBy { it.javaClass.name }
-            .forEach { owner ->
-                notifyHeadsetPropertyChanged(owner, device, 4)
-                notifyHeadsetPropertyChanged(owner, device, 8)
-            }
     }
 
     /**

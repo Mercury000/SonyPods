@@ -97,6 +97,10 @@ class MiLinkSampleDescriptorTest {
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/wear/agent/device/controller/b;->l:I",
                 ),
+                "batteryField" to SymbolReference(
+                    SymbolKind.FIELD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->n:Ljava/util/List;",
+                ),
                 "modeField" to SymbolReference(
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/wear/agent/device/controller/b;->o:I",
@@ -104,6 +108,22 @@ class MiLinkSampleDescriptorTest {
                 "supportModeField" to SymbolReference(
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/wear/agent/device/controller/b;->p:I",
+                ),
+                "volumeCallback" to SymbolReference(
+                    SymbolKind.METHOD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->onBluetoothVolumeChanged(Lcom/miui/circulate/api/service/CirculateServiceInfo;I)V",
+                ),
+                "batteryCallback" to SymbolReference(
+                    SymbolKind.METHOD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->onBluetoothBatteryChanged(Lcom/miui/circulate/api/service/CirculateServiceInfo;Ljava/util/List;)V",
+                ),
+                "modeCallback" to SymbolReference(
+                    SymbolKind.METHOD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->onBluetoothModeChanged(Lcom/miui/circulate/api/service/CirculateServiceInfo;I)V",
+                ),
+                "publishMethod" to SymbolReference(
+                    SymbolKind.METHOD,
+                    "Lcom/miui/circulate/wear/agent/device/k;->Z()V",
                 ),
                 "callbackListField" to SymbolReference(
                     SymbolKind.FIELD,

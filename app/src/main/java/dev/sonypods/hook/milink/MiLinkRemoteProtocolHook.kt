@@ -8,12 +8,11 @@ import dev.sonypods.hook.Log
  * getHeadsetProperty / updateHeadsetMode requests from the circulating client.
  *
  * Both methods are intercepted at the server entry (HeadsetRemoteImpl):
- *  - getHeadsetProperty: refresh the complete local HeadsetInfo and reply 100.
- *  - updateHeadsetMode: apply the ANC change locally, refresh the complete local
- *    HeadsetInfo, and reply 100.
+ *  - getHeadsetProperty: refresh the authoritative fusion registry and reply 100.
+ *  - updateHeadsetMode: apply the ANC change locally, refresh that registry, and reply 100.
  *
- * The refresh goes through DiscoveryImpl.assembleHeadsetInfo() so volume and other
- * fields are not replaced by a hand-built partial HeadsetInfo.
+ * No synthetic HeadsetHost update is emitted here. The registry is the single state source;
+ * fabricating type 4/8 host events creates parallel partial updates and repeated Wear renders.
  * Any failure is only logged; the official implementation is left untouched.
  */
 internal class MiLinkRemoteProtocolHook(private val hook: MiLinkServiceHook) {
@@ -39,7 +38,7 @@ internal class MiLinkRemoteProtocolHook(private val hook: MiLinkServiceHook) {
                 val address = args[1] as? String ?: return@hookBefore
                 val deviceId = args[2] as? String ?: return@hookBefore
                 if (!isSonyRequest(address, deviceId)) return@hookBefore
-                hook.pushStateToPanel()
+                hook.refreshFusionRegistry()
                 Log.d(MiLinkServiceHook.TAG, "remote getHeadsetProperty answered 100 address=$address")
                 this.result = statusSuccess
             }
@@ -64,7 +63,7 @@ internal class MiLinkRemoteProtocolHook(private val hook: MiLinkServiceHook) {
                 if (!isSonyRequest(address, deviceId)) return@hookBefore
                 val mode = args[3] as? Int ?: return@hookBefore
                 hook.applyRemoteAncMode(mode)
-                hook.pushStateToPanel()
+                hook.refreshFusionRegistry()
                 Log.d(MiLinkServiceHook.TAG, "remote updateHeadsetMode applied anc=$mode address=$address")
                 this.result = statusSuccess
             }
