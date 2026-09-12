@@ -1,5 +1,6 @@
 package dev.sonypods.hook
 
+import android.app.Application
 import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.graphics.Bitmap
@@ -32,6 +33,7 @@ class SettingsRenderHook : HookContext() {
     private val imageLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private lateinit var renderSymbols: ResolvedSymbolBundle
+    @Volatile private var runtimeHooksInstalled = false
 
     override fun onBeforeReload() {
         reloadEpoch += 1L
@@ -105,9 +107,36 @@ class SettingsRenderHook : HookContext() {
     }
 
     override fun onHook() {
-        runCatching {
-            renderSymbols = requireSymbols(SettingsRenderSymbols)
-            hookBefore(renderSymbols.method("loadDefaultInternal")) {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "settings-render-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Settings Application is unavailable at callApplicationOnCreate"
+            }
+            install(application)
+        }
+    }
+
+    internal fun startAfterReload(context: Context) {
+        install(context)
+    }
+
+    @Synchronized
+    private fun install(application: Context) {
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        if (runtimeHooksInstalled) {
+            ensureImageExecutor()
+            loadMetadataInBackground()
+            return
+        }
+        renderSymbols = requireSymbols(SettingsRenderSymbols)
+        hookBefore(renderSymbols.method("loadDefaultInternal")) {
                 val instance = this.instance ?: return@hookBefore
                 val ctx = runCatching {
                     (renderSymbols.field("contextField").get(instance) as? WeakReference<*>)?.get() as? Context
@@ -171,9 +200,9 @@ class SettingsRenderHook : HookContext() {
                         }
                     })
                 }
-            }
-            loadMetadataInBackground()
-            Log.d(TAG, "loadDefaultInternal hook installed")
-        }.onFailure { Log.e(TAG, "Failed to hook loadDefaultInternal", it) }
+        }
+        runtimeHooksInstalled = true
+        loadMetadataInBackground()
+        Log.d(TAG, "loadDefaultInternal hook installed")
     }
 }

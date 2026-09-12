@@ -85,6 +85,10 @@ object SoundConnectHandoverHook : HookContext() {
             return
         }
 
+        // The package-load callback runs before ActivityThread.currentApplication() on a cold
+        // start, so the initial resolver is memory-only. Upgrade it now that the Application is
+        // available; this makes the DexKit session bundle survive Sound Connect process restarts.
+        attachSymbolResolver(runtime.symbols(appClassLoader, application))
         val serviceSymbols = requireSymbols(SoundConnectServiceSymbols)
         val sessionSymbols = runCatching { requireSymbols(SoundConnectSessionSymbols) }
             .onFailure { Log.w(TAG, "MDR session symbols unavailable; using lifecycle/service fallback", it) }

@@ -4,6 +4,7 @@ import dev.sonypods.utils.ModuleText
 import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -87,21 +88,50 @@ object SettingsHeadsetHook : HookContext() {
     private lateinit var fragmentSymbols: ResolvedSymbolBundle
     private lateinit var serviceProxySymbols: ResolvedSymbolBundle
     private var pluginSymbols: ResolvedSymbolBundle? = null
+    @Volatile private var runtimeHooksInstalled = false
 
     override fun onHook() {
-        activitySymbols = requireSymbols(SettingsActivitySymbols)
-        supportSymbols = requireSymbols(SettingsSupportSymbols)
-        batterySymbols = requireSymbols(SettingsBatterySymbols)
-        fragmentSymbols = requireSymbols(SettingsFragmentSymbols)
-        serviceProxySymbols = requireSymbols(SettingsServiceProxySymbols)
-        pluginSymbols = runCatching { requireSymbols(SettingsActivityPluginSymbols) }
-            .onFailure { Log.d(TAG, "optional Settings activity plugin unavailable", it) }
-            .getOrNull()
-        hookActivityEntry()
-        hookSupportChecks()
-        hookServiceProxy()
-        hookBatteryView()
-        hookFragmentState()
+        hookApplicationEntry()
+    }
+
+    private fun hookApplicationEntry() {
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "settings-headset-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "Settings Application is unavailable at callApplicationOnCreate"
+            }
+            onApplicationAvailable(application)
+        }
+    }
+
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        if (!runtimeHooksInstalled) {
+            activitySymbols = requireSymbols(SettingsActivitySymbols)
+            supportSymbols = requireSymbols(SettingsSupportSymbols)
+            batterySymbols = requireSymbols(SettingsBatterySymbols)
+            fragmentSymbols = requireSymbols(SettingsFragmentSymbols)
+            serviceProxySymbols = requireSymbols(SettingsServiceProxySymbols)
+            pluginSymbols = runCatching { requireSymbols(SettingsActivityPluginSymbols) }
+                .onFailure { Log.d(TAG, "optional Settings activity plugin unavailable", it) }
+                .getOrNull()
+            hookActivityEntry()
+            hookSupportChecks()
+            hookServiceProxy()
+            hookBatteryView()
+            hookFragmentState()
+            runtimeHooksInstalled = true
+        }
+        ensureBackgroundExecutor()
+        registerStatusReceiver(appContext)
     }
 
     override fun onBeforeReload() {
@@ -138,8 +168,7 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     internal fun startAfterReload(context: Context) {
-        ensureBackgroundExecutor()
-        registerStatusReceiver(context)
+        onApplicationAvailable(context)
         // Existing fragment/battery maps are transferred between generations. Re-rendering
         // those tracked instances is sufficient; avoid the former recursive ActivityThread
         // object-graph scan, which could monopolize Settings' main thread.
@@ -276,9 +305,7 @@ object SettingsHeadsetHook : HookContext() {
         runCatching {
             hookConstructorAfter(findConstructorByParamCount("com.android.settings.bluetooth.tws.MiuiHeadsetBattery", 4)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookConstructorAfter
-                val ctx = args[1] as? Context
                 if (!isSonyPod(device)) return@hookConstructorAfter
-                registerStatusReceiver(ctx)
                 val batteryView = instance ?: return@hookConstructorAfter
                 batteryViews[batteryView] = device
                 requestBluetoothStatus("battery-init")
@@ -317,7 +344,6 @@ object SettingsHeadsetHook : HookContext() {
                 val fragment = instance ?: return@hookAfter
                 headsetFragments[fragment] = true
                 initialUiReleaseAt = maxOf(initialUiReleaseAt, SystemClock.uptimeMillis() + INITIAL_UI_QUIET_MS)
-                registerStatusReceiver(runCatching { fragmentSymbols.field("activityField").get(fragment) as? Context }.getOrNull())
                 paintRestoredVersion(fragment)
                 requestBluetoothStatus("fragment-create")
                 scheduleFragmentUpdate(fragment)

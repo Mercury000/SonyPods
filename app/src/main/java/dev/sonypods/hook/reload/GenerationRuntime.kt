@@ -1,5 +1,6 @@
 package dev.sonypods.hook.reload
 
+import android.content.Context
 import android.os.Bundle
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.hook.HookContext
@@ -61,24 +62,38 @@ class GenerationRuntime(
     private var reloadSnapshot: SonyStateSnapshot? = null
     private var reloadState: Bundle? = null
     private var targetSymbols: TargetSymbolResolver? = null
+    private var targetSymbolsHasPersistentCache = false
 
     @Synchronized
-    fun symbols(classLoader: ClassLoader): TargetSymbolResolver {
-        targetSymbols?.let { return it }
-        val application = runCatching {
-            Class.forName("android.app.ActivityThread")
-                .getDeclaredMethod("currentApplication")
-                .invoke(null) as? android.content.Context
-        }.getOrNull()
-        return AndroidTargetSymbols.create(
-            context = application,
+    fun symbols(classLoader: ClassLoader, context: Context? = currentApplication()): TargetSymbolResolver {
+        val existing = targetSymbols
+        if (existing != null && (targetSymbolsHasPersistentCache || context == null)) return existing
+
+        val resolver = AndroidTargetSymbols.create(
+            context = context,
             packageName = scopePackage,
             classLoader = classLoader,
         ) { message, error ->
             if (error == null) Log.d("SonyPods-Symbols", message)
             else Log.e("SonyPods-Symbols", message, error)
-        }.also { targetSymbols = it }
+        }
+        targetSymbols = resolver
+        targetSymbolsHasPersistentCache = context != null
+
+        // Package load can happen before ActivityThread publishes the Application. Once a real
+        // Context is available, replace that early memory-only resolver for every attached hook.
+        if (existing != null && context != null) {
+            contexts.forEach { it.attachSymbolResolver(resolver) }
+            Log.d("SonyPods-Symbols", "upgraded symbol cache to persistent scope=$scopePackage")
+        }
+        return resolver
     }
+
+    private fun currentApplication(): Context? = runCatching {
+        Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentApplication")
+            .invoke(null) as? Context
+    }.getOrNull()
     fun attach(context: HookContext) {
         contexts += context
         context.attachRuntime(this)

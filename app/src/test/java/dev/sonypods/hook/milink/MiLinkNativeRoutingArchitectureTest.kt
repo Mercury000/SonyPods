@@ -18,6 +18,27 @@ class MiLinkNativeRoutingArchitectureTest {
         sourceRoot.resolve("dev/sonypods/hook/milink/$name").readText()
 
     @Test
+    fun dexKitHooksWaitForPersistentApplicationResolver() {
+        val runtime = source("MiLinkServiceHook.kt")
+        val onHook = runtime.substringAfter("override fun onHook()").substringBefore("/**")
+
+        assertTrue(runtime.contains("Instrumentation"))
+        assertTrue(runtime.contains("callApplicationOnCreate"))
+        assertTrue(runtime.contains("runtime.symbols(appClassLoader, appContext)"))
+        assertTrue(runtime.contains("onApplicationAvailable(application)"))
+        assertTrue(runtime.contains("if (!runtimeHooksInstalled)"))
+        assertTrue(runtime.indexOf("runtimeHooksInstalled = true") > runtime.indexOf("fusionRegistryHook.hook()"))
+        assertFalse(runtime.contains("currentApplication()?.let"))
+        assertFalse(runtime.contains("getInstanceForIsMiTWS"))
+        assertFalse(runtime.contains("SDK context"))
+        assertFalse(runtime.substringAfter("fun captureRuntimeContext").substringBefore("fun notifySpatialUiChanged")
+            .contains("registerStatusReceiver"))
+        assertFalse(onHook.contains("hookMxBluetoothRuntime()"))
+        assertFalse(onHook.contains("hookDeviceMetaGuard()"))
+        assertFalse(onHook.contains("hookCardArt()"))
+    }
+
+    @Test
     fun fusionRegistryDoesNotInterceptControllerWrites() {
         val source = source("MiLinkFusionRegistryHook.kt")
 

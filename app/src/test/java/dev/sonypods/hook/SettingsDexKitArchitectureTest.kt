@@ -11,6 +11,25 @@ class SettingsDexKitArchitectureTest {
     private val sourceRoot: Path = locateSourceRoot()
 
     @Test
+    fun settingsDexKitHooksWaitForPersistentApplicationResolver() {
+        val headset = source("SettingsHeadsetHook.kt")
+        val render = source("SettingsRenderHook.kt")
+        val headsetOnHook = headset.substringAfter("override fun onHook()").substringBefore("private fun hookApplicationEntry")
+        val renderOnHook = render.substringAfter("override fun onHook()").substringBefore("internal fun startAfterReload")
+
+        listOf(headset, render).forEach { hook ->
+            assertTrue(hook.contains("callApplicationOnCreate"))
+            assertTrue(hook.contains("runtime.symbols(appClassLoader, appContext)"))
+        }
+        assertFalse(headsetOnHook.contains("requireSymbols("))
+        assertFalse(renderOnHook.contains("requireSymbols("))
+        assertFalse(headset.substringAfter("private fun hookBatteryView").contains("registerStatusReceiver(ctx)"))
+        val fragmentInstall = headset.substringAfter("private fun hookFragmentState")
+            .substringBefore("private fun registerStatusReceiver")
+        assertFalse(fragmentInstall.contains("registerStatusReceiver("))
+    }
+
+    @Test
     fun settingsHooksConsumeResolvedTargetSymbols() {
         val headset = source("SettingsHeadsetHook.kt")
         val render = source("SettingsRenderHook.kt")
@@ -23,7 +42,10 @@ class SettingsDexKitArchitectureTest {
             "SettingsFragmentSymbols",
             "SettingsRenderSymbols",
         ).forEach { assertTrue(it, hooks.contains(it)) }
-        assertFalse(hooks.contains("findMethod("))
+        assertTrue(headset.countOccurrences("findMethod(") == 1)
+        assertTrue(render.countOccurrences("findMethod(") == 1)
+        assertTrue(headset.contains("android.app.Instrumentation"))
+        assertTrue(render.contains("android.app.Instrumentation"))
         assertFalse(hooks.contains("findMethodByParamCount("))
         assertFalse(hooks.contains("findClass("))
         assertFalse(hooks.contains("declaredFields"))
@@ -52,6 +74,10 @@ class SettingsDexKitArchitectureTest {
         assertTrue(source.contains("requireMethod"))
         assertTrue(source.contains("requireNamedField"))
     }
+
+
+    private fun String.countOccurrences(value: String): Int =
+        windowed(value.length).count { it == value }
 
     private fun source(name: String): String =
         sourceRoot.resolve("dev/sonypods/hook/$name").toFile().readText()

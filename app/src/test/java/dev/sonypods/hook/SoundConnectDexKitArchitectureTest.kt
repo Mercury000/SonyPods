@@ -16,6 +16,7 @@ class SoundConnectDexKitArchitectureTest {
 
         assertTrue(source.contains("requireSymbols(SoundConnectServiceSymbols)"))
         assertTrue(source.contains("requireSymbols(SoundConnectSessionSymbols)"))
+        assertTrue(source.contains("runtime.symbols(appClassLoader, application)"))
         assertTrue(source.contains("symbols.method(\"onBind\")"))
         assertTrue(source.contains("sessionContract?.firstSession"))
         assertFalse(source.contains("findMethodByParamCount"))

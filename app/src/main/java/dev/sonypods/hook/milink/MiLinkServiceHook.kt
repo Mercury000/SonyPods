@@ -1,6 +1,7 @@
 package dev.sonypods.hook.milink
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
@@ -70,18 +71,36 @@ object MiLinkServiceHook : HookContext() {
     private val deviceMetaGuardHook = MiLinkDeviceMetaGuardHook(this)
     private val cardArtHook = MiLinkCardArtHook(this)
     private val fusionRegistryHook = MiLinkFusionRegistryHook(this)
+    @Volatile
+    private var runtimeHooksInstalled = false
 
     override fun onHook() {
-        hookContextEntry()
-        hookMxBluetoothRuntime()
-        hookFusionMoreSettings()
-        hookHeadsetRuntimeDisplay()
-        spatialAudioHook.hookCirculateHeadsetServiceInfo()
-        remoteProtocolHook.hookRemoteProtocol()
-        leAudioIdentityHook.hookIdentityUnification()
-        deviceMetaGuardHook.hookDeviceMetaGuard()
-        cardArtHook.hookCardArt()
-        fusionRegistryHook.hook()
+        hookApplicationEntry()
+    }
+
+    /**
+     * Installs target-dependent hooks only after a real application Context is available.
+     * Package-ready runs too early on a cold start and otherwise creates a memory-only symbol
+     * resolver, forcing every MiLink process to repeat all DexKit scans.
+     */
+    @Synchronized
+    private fun onApplicationAvailable(application: Context) {
+        val appContext = application.applicationContext ?: application
+        attachSymbolResolver(runtime.symbols(appClassLoader, appContext))
+        if (!runtimeHooksInstalled) {
+            hookMxBluetoothRuntime()
+            hookFusionMoreSettings()
+            hookHeadsetRuntimeDisplay()
+            spatialAudioHook.hookCirculateHeadsetServiceInfo()
+            remoteProtocolHook.hookRemoteProtocol()
+            leAudioIdentityHook.hookIdentityUnification()
+            deviceMetaGuardHook.hookDeviceMetaGuard()
+            cardArtHook.hookCardArt()
+            fusionRegistryHook.hook()
+            runtimeHooksInstalled = true
+        }
+        registerStatusReceiver(appContext)
+        fusionRegistryHook.onApplicationReady()
     }
 
     override fun onBeforeReload() {
@@ -98,8 +117,7 @@ object MiLinkServiceHook : HookContext() {
     }
 
     internal fun startAfterReload(context: Context) {
-        registerStatusReceiver(context)
-        fusionRegistryHook.onApplicationReady()
+        onApplicationAvailable(context)
     }
 
     /**
@@ -109,25 +127,21 @@ object MiLinkServiceHook : HookContext() {
      */
     override fun fakeDeviceId(): String = miLinkModelId()
 
-    private fun hookContextEntry() {
-        // Primary entry: every process has an Application, so the state receiver is up
-        // before the fusion-center panel asks for battery/ANC.
-        runCatching {
-            hookAfter(findMethod("android.app.Application", "onCreate")) {
-                registerStatusReceiver(instance as? Context)
-                fusionRegistryHook.onApplicationReady()
+    private fun hookApplicationEntry() {
+        // This is the single cold-start entry. Instrumentation provides the final Application
+        // before its onCreate, so the persistent resolver and every target hook are ready first.
+        hookBefore(
+            findMethod(
+                "android.app.Instrumentation",
+                "callApplicationOnCreate",
+                Application::class.java,
+            ),
+            logicalRole = "milink-application-ready",
+        ) {
+            val application = requireNotNull(args.firstOrNull() as? Application) {
+                "MiLink Application is unavailable at callApplicationOnCreate"
             }
-        }.onFailure { Log.d(TAG, "hook Application.onCreate skipped", it) }
-
-        listOf(
-            "com.xiaomi.mxbluetoothsdk.service.MxBluetoothService",
-            "com.xiaomi.mxbluetoothsdk.manager.MxBluetoothManager"
-        ).forEach { className ->
-            runCatching {
-                hookBefore(findMethod(className, "getInstanceForIsMiTWS", Context::class.java)) {
-                    registerStatusReceiver(args[0] as? Context)
-                }
-            }.onFailure { Log.d(TAG, "hook $className.getInstanceForIsMiTWS skipped", it) }
+            onApplicationAvailable(application)
         }
     }
 
@@ -712,11 +726,6 @@ object MiLinkServiceHook : HookContext() {
             ?: runCatching { getObjectField(lastAncBatteryController, "context") as? Context }.getOrNull()
             ?: return
         context = ownerContext.applicationContext ?: ownerContext
-        // The panel reads battery/ANC from the state this receiver fills in. Registering
-        // it only from getInstanceForIsMiTWS is not enough: on some HyperOS builds that
-        // entry point never runs, leaving the panel with empty state forever. Register as
-        // soon as any hooked runtime call gives us a context.
-        registerStatusReceiver(context)
     }
 
     internal fun notifySpatialUiChanged(owner: Any?, device: BluetoothDevice, mode: Int) {

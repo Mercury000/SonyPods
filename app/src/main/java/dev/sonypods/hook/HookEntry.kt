@@ -219,8 +219,10 @@ class HookEntry : XposedModule() {
                 )
                 active.contexts().filterIsInstance<BluetoothUpstreamHeadsetHook>().forEach { it.startAfterReload(context) }
             }
-            "com.android.settings" ->
+            "com.android.settings" -> {
+                active.contexts().filterIsInstance<SettingsRenderHook>().forEach { it.startAfterReload(context) }
                 active.contexts().filterIsInstance<SettingsHeadsetHook>().forEach { it.startAfterReload(context) }
+            }
             "com.milink.service" ->
                 active.contexts().filterIsInstance<MiLinkServiceHook>().forEach { it.startAfterReload(context) }
             "com.xiaomi.bluetooth" -> {
