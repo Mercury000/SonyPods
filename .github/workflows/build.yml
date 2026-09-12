@@ -126,7 +126,7 @@ jobs:
           java-version: 22
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4.4.4
+        uses: gradle/actions/setup-gradle@v6.3.0
 
       - name: Grant execute permission
         run: chmod +x gradlew
