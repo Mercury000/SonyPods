@@ -6,6 +6,7 @@ import dev.sonypods.hook.symbols.SymbolQuery
 import dev.sonypods.hook.symbols.SymbolReference
 import java.lang.reflect.Modifier
 import org.luckypray.dexkit.result.ClassData
+import org.luckypray.dexkit.result.FieldData
 import org.luckypray.dexkit.result.FieldUsingType
 import org.luckypray.dexkit.result.MethodData
 import org.luckypray.dexkit.wrap.DexClass
@@ -15,7 +16,7 @@ import org.luckypray.dexkit.wrap.DexMethod
 /** Resolves the Wear headset listener, its callback owner, callback list, and capability fields. */
 internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
     override val id = "milink-wear-capability"
-    override val schemaVersion = 1
+    override val schemaVersion = 2
     override val requiredSymbols = setOf(
         "listener",
         "callbackOwner",
@@ -63,24 +64,12 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
 
         val controllerField = listener.fields.single { it.typeName == HEADSET_SERVICE_CONTROLLER }
         val serviceField = listener.fields.single { it.typeName == CIRCULATE_SERVICE_INFO }
-        val supportModeFields = listener.methods.flatMap { method ->
-            if (method.invokes.none {
-                    it.name == "getSupportAncMode" && it.declaredClassName == HEADSET_SERVICE_CONTROLLER
-                }
-            ) {
-                emptyList()
-            } else {
-                method.usingFields
-                    .filter {
-                        it.usingType == FieldUsingType.Write &&
-                            it.field.declaredClassName == listener.name &&
-                            it.field.typeName == "int"
-                    }
-                    .map { it.field }
-            }
-        }.distinctBy { it.descriptor }
-        val supportModeField = supportModeFields.singleOrNull()
-            ?: error("Wear supportMode field is ambiguous: ${supportModeFields.map { it.descriptor }}")
+        val supportModeRuns = listener.fields.windowed(3).filter { fields -> fields.all(::isMutableIntField) }
+        val supportModeField = supportModeRuns.singleOrNull()?.get(1)
+            ?: error(
+                "Wear supportMode field is ambiguous: " +
+                    supportModeRuns.map { run -> run.map { it.descriptor } },
+            )
         val callbackListField = owner.fields.single { it.typeName == COPY_ON_WRITE_ARRAY_LIST }
         val callbacks = callbackMethods(owner, callbackInterface)
             .sortedBy { it.descriptor }
@@ -127,6 +116,9 @@ internal object MiLinkWearSymbols : DexKitSymbolBundleDefinition {
             }
         }
     }
+
+    private fun isMutableIntField(field: FieldData): Boolean =
+        field.typeName == "int" && !Modifier.isStatic(field.modifiers) && !Modifier.isFinal(field.modifiers)
 
     private fun callbackMethods(owner: ClassData, callback: ClassData): List<MethodData> =
         owner.methods.filter {

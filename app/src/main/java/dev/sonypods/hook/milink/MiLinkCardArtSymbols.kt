@@ -4,25 +4,21 @@ import dev.sonypods.hook.symbols.DexKitSymbolBundleDefinition
 import dev.sonypods.hook.symbols.SymbolKind
 import dev.sonypods.hook.symbols.SymbolQuery
 import dev.sonypods.hook.symbols.SymbolReference
-import org.luckypray.dexkit.wrap.DexClass
+import java.lang.reflect.Modifier
 import org.luckypray.dexkit.wrap.DexField
 
 /** Resolves the card model field and the two stable service fields used to extract its Bluetooth address. */
 internal object MiLinkCardArtSymbols : DexKitSymbolBundleDefinition {
     override val id = "milink-card-art"
-    override val schemaVersion = 1
+    override val schemaVersion = 2
     override val requiredSymbols = setOf(
-        "cardView",
-        "deviceInfoField",
         "circulateServicesField",
         "deviceIdField",
     )
+    override val requiredPrefixes = setOf("deviceInfoField.")
 
     override fun resolve(query: SymbolQuery): Map<String, SymbolReference> {
         val bridge = requireNotNull(query.bridge) { "MiLink CardArt resolution requires DexKit" }
-        val cardView = bridge.findClass {
-            matcher { className(BLUETOOTH_CARD_VIEW) }
-        }.singleOrNull() ?: error("BluetoothCardView not found")
         val deviceInfo = requireNotNull(bridge.getClassData(CIRCULATE_DEVICE_INFO)) {
             "CirculateDeviceInfo not found"
         }
@@ -30,15 +26,13 @@ internal object MiLinkCardArtSymbols : DexKitSymbolBundleDefinition {
             "CirculateServiceInfo not found"
         }
 
-        val deviceInfoField = query.requireUnique(
-            "deviceInfoField",
-            bridge.findField {
-                matcher {
-                    declaredClass(cardView.name)
-                    type(CIRCULATE_DEVICE_INFO)
-                }
-            }.map { it.descriptor },
-        )
+        val deviceInfoFields = bridge.findField {
+            matcher { type(CIRCULATE_DEVICE_INFO) }
+        }.filter { !Modifier.isStatic(it.modifiers) }
+            .map { it.descriptor }
+            .distinct()
+            .sorted()
+        check(deviceInfoFields.isNotEmpty()) { "No CirculateDeviceInfo holder fields found" }
         val circulateServicesField = query.requireUnique(
             "circulateServicesField",
             bridge.findField {
@@ -58,23 +52,27 @@ internal object MiLinkCardArtSymbols : DexKitSymbolBundleDefinition {
             }.map { it.descriptor },
         )
 
-        return mapOf(
-            "cardView" to SymbolReference(SymbolKind.CLASS, cardView.descriptor),
-            "deviceInfoField" to SymbolReference(SymbolKind.FIELD, deviceInfoField),
-            "circulateServicesField" to SymbolReference(SymbolKind.FIELD, circulateServicesField),
-            "deviceIdField" to SymbolReference(SymbolKind.FIELD, deviceIdField),
-        )
+        return buildMap {
+            deviceInfoFields.forEachIndexed { index, descriptor ->
+                put("deviceInfoField.$index", SymbolReference(SymbolKind.FIELD, descriptor))
+            }
+            put("circulateServicesField", SymbolReference(SymbolKind.FIELD, circulateServicesField))
+            put("deviceIdField", SymbolReference(SymbolKind.FIELD, deviceIdField))
+        }
     }
 
     override fun validate(symbols: Map<String, SymbolReference>) {
-        val cardView = DexClass(symbols.getValue("cardView").descriptor).typeName
-        val deviceInfoField = DexField(symbols.getValue("deviceInfoField").descriptor)
+        val deviceInfoFields = symbols.filterKeys { it.startsWith("deviceInfoField.") }
+            .values
+            .map { DexField(it.descriptor) }
         val servicesField = DexField(symbols.getValue("circulateServicesField").descriptor)
         val deviceIdField = DexField(symbols.getValue("deviceIdField").descriptor)
 
-        require(deviceInfoField.className == cardView) { "deviceInfoField must belong to $cardView" }
-        require(deviceInfoField.typeName == CIRCULATE_DEVICE_INFO) {
-            "deviceInfoField type changed: ${deviceInfoField.typeName}"
+        require(deviceInfoFields.isNotEmpty()) { "No CirculateDeviceInfo holder fields resolved" }
+        deviceInfoFields.forEach { deviceInfoField ->
+            require(deviceInfoField.typeName == CIRCULATE_DEVICE_INFO) {
+                "deviceInfoField type changed: ${deviceInfoField.typeName}"
+            }
         }
         require(servicesField.className == CIRCULATE_DEVICE_INFO && servicesField.name == "circulateServices") {
             "circulateServices field changed: ${servicesField}"
@@ -84,7 +82,6 @@ internal object MiLinkCardArtSymbols : DexKitSymbolBundleDefinition {
         }
     }
 
-    private const val BLUETOOTH_CARD_VIEW = "com.miui.circulate.world.sticker.BluetoothCardView"
     private const val CIRCULATE_DEVICE_INFO = "com.miui.circulate.api.service.CirculateDeviceInfo"
     private const val CIRCULATE_SERVICE_INFO = "com.miui.circulate.api.service.CirculateServiceInfo"
 }

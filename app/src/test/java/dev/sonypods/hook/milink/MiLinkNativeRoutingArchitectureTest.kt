@@ -92,12 +92,31 @@ class MiLinkNativeRoutingArchitectureTest {
         val source = source("MiLinkCardArtHook.kt")
 
         assertTrue(source.contains("hook.requireSymbols(MiLinkCardArtSymbols)"))
-        assertTrue(source.contains("symbols.field(\"deviceInfoField\")"))
+        assertTrue(source.contains("symbols.fieldsWithPrefix(\"deviceInfoField.\")"))
         assertTrue(source.contains("symbols.field(\"circulateServicesField\")"))
         assertTrue(source.contains("symbols.field(\"deviceIdField\")"))
         assertFalse(source.contains("declaredFields"))
         assertFalse(source.contains("getDeclaredField"))
         assertFalse(source.contains("CIRCULATE_DEVICE_INFO_CLASS"))
+    }
+
+    @Test
+    fun deviceMetaFieldsDoNotDependOnToStringContract() {
+        val source = source("MiLinkDeviceMetaSymbols.kt")
+
+        assertTrue(source.contains("primaryConstructor"))
+        assertTrue(source.contains("classifierReadCounts"))
+        assertFalse(source.contains("toStringMethod"))
+        assertFalse(source.contains("DeviceMeta.toString"))
+    }
+
+    @Test
+    fun wearSupportModeUsesDexKitFieldShape() {
+        val source = source("MiLinkWearSymbols.kt")
+
+        assertTrue(source.contains("supportModeRuns"))
+        assertTrue(source.contains("isMutableIntField"))
+        assertFalse(source.contains("getSupportAncMode"))
     }
 
     @Test

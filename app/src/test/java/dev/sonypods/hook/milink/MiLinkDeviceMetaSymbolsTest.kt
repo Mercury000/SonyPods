@@ -55,13 +55,13 @@ class MiLinkSampleDescriptorTest {
     fun cardArtSymbolsMatchCurrentMilinkSampleContract() {
         MiLinkCardArtSymbols.validate(
             mapOf(
-                "cardView" to SymbolReference(
-                    SymbolKind.CLASS,
-                    "Lcom/miui/circulate/world/sticker/BluetoothCardView;",
-                ),
-                "deviceInfoField" to SymbolReference(
+                "deviceInfoField.0" to SymbolReference(
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/world/sticker/BluetoothCardView;->G:Lcom/miui/circulate/api/service/CirculateDeviceInfo;",
+                ),
+                "deviceInfoField.1" to SymbolReference(
+                    SymbolKind.FIELD,
+                    "Lcom/miui/circulateplus/world/headset/HeadSetsDetail;->J:Lcom/miui/circulate/api/service/CirculateDeviceInfo;",
                 ),
                 "circulateServicesField" to SymbolReference(
                     SymbolKind.FIELD,

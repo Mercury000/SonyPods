@@ -125,6 +125,27 @@ class TargetSymbolResolverTest {
         assertEquals(null, cache.read(definition.id))
     }
 
+
+    @Test
+    fun fixedBundleAcceptsRequiredMultiSymbolGroup() {
+        val definition = object : FixedSymbolBundleDefinition {
+            override val id = "fixed-group"
+            override val schemaVersion = 1
+            override val requiredSymbols = setOf("string")
+            override val requiredPrefixes = setOf("field.")
+            override val symbols = mapOf(
+                "string" to SymbolReference(SymbolKind.CLASS, "Ljava/lang/String;"),
+                "field.0" to SymbolReference(SymbolKind.CLASS, "Ljava/lang/String;"),
+                "field.1" to SymbolReference(SymbolKind.CLASS, "Ljava/lang/Integer;"),
+            )
+        }
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), SymbolQueryFactory { error("must not scan") })
+
+        val bundle = resolver.resolve(definition)
+
+        assertEquals(2, bundle.descriptorsWithPrefix("field.").size)
+    }
+
     private fun target() = TargetArtifact(
         "target", 2,
         listOf(ArtifactFile("base.apk", 100, 200)),

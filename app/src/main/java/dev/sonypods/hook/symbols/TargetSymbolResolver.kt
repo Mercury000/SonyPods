@@ -10,6 +10,9 @@ interface SymbolBundleDefinition {
     val schemaVersion: Int
     val requiredSymbols: Set<String>
 
+    /** Required multi-value symbol families; at least one key with each prefix must resolve. */
+    val requiredPrefixes: Set<String> get() = emptySet()
+
     /** Cross-symbol semantic checks which descriptors alone cannot express. */
     fun validate(symbols: Map<String, SymbolReference>) = Unit
 }
@@ -40,6 +43,10 @@ class ResolvedSymbolBundle internal constructor(
     fun constructor(name: String): Constructor<*> = get(name).resolveConstructor(classLoader)
     fun field(name: String): Field = get(name).resolveField(classLoader)
     fun descriptors(): Map<String, String> = symbols.mapValues { it.value.descriptor }
+    fun descriptorsWithPrefix(prefix: String): List<String> =
+        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.descriptor }
+    fun fieldsWithPrefix(prefix: String): List<Field> =
+        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.resolveField(classLoader) }
 }
 
 /**
@@ -157,6 +164,9 @@ class TargetSymbolResolver(
         require(definition.schemaVersion > 0) { "symbol schema version must be positive" }
         require(definition.requiredSymbols.isNotEmpty()) { "symbol bundle must require at least one symbol" }
         require(definition.requiredSymbols.none(String::isBlank)) { "blank required symbol key" }
+        require(definition.requiredPrefixes.all { it.isNotBlank() && it.endsWith(".") }) {
+            "required symbol prefixes must be non-blank and end with '.'"
+        }
     }
 
     private fun validateReferences(
@@ -164,8 +174,14 @@ class TargetSymbolResolver(
         references: Map<String, SymbolReference>,
     ) {
         val missing = definition.requiredSymbols - references.keys
-        val unexpected = references.keys - definition.requiredSymbols
+        val missingGroups = definition.requiredPrefixes.filter { prefix ->
+            references.keys.none { it.startsWith(prefix) }
+        }
+        val unexpected = references.keys.filterNot { key ->
+            key in definition.requiredSymbols || definition.requiredPrefixes.any { key.startsWith(it) }
+        }
         require(missing.isEmpty()) { "missing required symbols: ${missing.sorted().joinToString()}" }
+        require(missingGroups.isEmpty()) { "missing required symbol groups: ${missingGroups.sorted().joinToString()}" }
         require(unexpected.isEmpty()) { "unexpected symbols: ${unexpected.sorted().joinToString()}" }
     }
 

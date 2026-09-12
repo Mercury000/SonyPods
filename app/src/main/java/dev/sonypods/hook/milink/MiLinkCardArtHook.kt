@@ -31,7 +31,7 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     @Volatile
     private var cachedBoxBitmap: Pair<String, Bitmap>? = null
     private val cardAddressCache = WeakHashMap<ImageView, String?>()
-    private lateinit var deviceInfoField: Field
+    private lateinit var deviceInfoFields: List<Field>
     private lateinit var circulateServicesField: Field
     private lateinit var deviceIdField: Field
 
@@ -43,11 +43,17 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     private fun install() {
         if (installed) return
         val symbols = hook.requireSymbols(MiLinkCardArtSymbols)
-        deviceInfoField = symbols.field("deviceInfoField")
+        deviceInfoFields = symbols.fieldsWithPrefix("deviceInfoField.")
         circulateServicesField = symbols.field("circulateServicesField")
         deviceIdField = symbols.field("deviceIdField")
         installed = true
         artResourceIds = resolveArtResourceIds()
+        Log.d(
+            MiLinkServiceHook.TAG,
+            "milink card art symbols deviceFields=${symbols.descriptorsWithPrefix("deviceInfoField.")} " +
+                "services=${symbols.descriptors()["circulateServicesField"]} " +
+                "deviceId=${symbols.descriptors()["deviceIdField"]}",
+        )
         if (artResourceIds.isEmpty()) {
             Log.d(MiLinkServiceHook.TAG, "milink card art: no headset art resources found, hook idle")
             return
@@ -129,7 +135,9 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
      */
     private fun resolveCardSonyAddress(view: ImageView): String? {
         cardAddressCache[view]?.let { return it }
-        val address = extractBluetoothAddressFromCard(view) ?: return null
+        val address = extractBluetoothAddressFromCard(view)
+        Log.d(MiLinkServiceHook.TAG, "milink card art candidate address=$address view=${view.javaClass.name}")
+        if (address == null) return null
         if (!SonyDeviceService.isKnownSonyAddress(address)) return null
         val resolved = SonyDeviceService.resolveControlAddress(address) ?: address
         cardAddressCache[view] = resolved
@@ -176,8 +184,18 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     }
 
     private fun findCirculateDeviceInfo(view: View): Any? {
-        if (!deviceInfoField.declaringClass.isInstance(view)) return null
-        return runCatching { deviceInfoField.get(view) }.getOrNull()
+        for (field in deviceInfoFields) {
+            if (!field.declaringClass.isInstance(view)) continue
+            val value = runCatching { field.get(view) }.getOrNull()
+            if (value != null) {
+                Log.d(
+                    MiLinkServiceHook.TAG,
+                    "milink card art ancestor=${view.javaClass.name} field=${field.name} deviceInfo=true",
+                )
+                return value
+            }
+        }
+        return null
     }
 
     /**
@@ -192,9 +210,17 @@ internal class MiLinkCardArtHook(private val hook: MiLinkServiceHook) {
     private fun extractBluetoothMac(deviceInfo: Any): String? {
         return runCatching {
             val services = circulateServicesField.get(deviceInfo) as? Set<*> ?: return@runCatching null
+            Log.d(
+                MiLinkServiceHook.TAG,
+                "milink card art deviceInfo=${deviceInfo.javaClass.name} services=${services.size}",
+            )
             for (svc in services) {
                 if (svc == null || !deviceIdField.declaringClass.isInstance(svc)) continue
                 val deviceId = deviceIdField.get(svc) as? String
+                Log.d(
+                    MiLinkServiceHook.TAG,
+                    "milink card art service=${svc.javaClass.name} deviceId=$deviceId",
+                )
                 if (!deviceId.isNullOrBlank()) return@runCatching deviceId
             }
             null

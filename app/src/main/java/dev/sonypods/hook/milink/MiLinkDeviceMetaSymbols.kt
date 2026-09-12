@@ -23,7 +23,7 @@ import org.luckypray.dexkit.wrap.DexMethod
  */
 internal object MiLinkDeviceMetaSymbols : DexKitSymbolBundleDefinition {
     override val id = "milink-device-meta"
-    override val schemaVersion = 1
+    override val schemaVersion = 2
 
     override val requiredSymbols = setOf(
         "observer",
@@ -74,34 +74,38 @@ internal object MiLinkDeviceMetaSymbols : DexKitSymbolBundleDefinition {
         val deviceMetaClass = requireNotNull(bridge.getClassData(deviceMeta.descriptor)) {
             "DeviceMeta class is absent from DEX: ${deviceMeta.descriptor}"
         }
-        val toStringMethod = deviceMetaClass.methods.singleOrNull { method ->
-            method.name == "toString" &&
-                method.paramCount == 0 &&
-                method.returnTypeName == "java.lang.String" &&
-                method.usingStrings.contains("DeviceMeta(id='") &&
-                method.usingStrings.contains("deviceType='") &&
-                method.usingStrings.contains("title='")
-        } ?: error("DeviceMeta.toString contract not found in ${deviceMetaClass.name}")
+        val primaryConstructor = deviceMetaClass.methods.singleOrNull { method ->
+            method.isConstructor &&
+                (method.modifiers and ACC_SYNTHETIC) == 0 &&
+                method.paramTypeNames.size >= 4 &&
+                method.paramTypeNames.take(4).all { it == "java.lang.String" }
+        } ?: error("DeviceMeta primary constructor not found in ${deviceMetaClass.name}")
+        val writtenFields = primaryConstructor.usingFields
+            .filter { it.usingType == FieldUsingType.Write && it.field.declaredClassName == deviceMetaClass.name }
+            .map { it.field }
+            .distinctBy { it.descriptor }
+        check(writtenFields.size >= 4 && writtenFields.take(4).all { it.typeName == "java.lang.String" }) {
+            "DeviceMeta constructor field contract changed: ${writtenFields.take(6).map { it.descriptor }}"
+        }
 
         val classifier = deviceMetaClass.methods.singleOrNull { method ->
             method.usingStrings.contains("TV") &&
                 method.usingStrings.contains("audio_stereo") &&
                 method.usingFields.any { it.usingType == FieldUsingType.Read && it.field.typeName == "java.lang.String" }
         } ?: error("DeviceMeta deviceType classifier not found in ${deviceMetaClass.name}")
-
-        val toStringFields = toStringMethod.usingFields
+        val classifierReadCounts = classifier.usingFields
             .filter { it.usingType == FieldUsingType.Read && it.field.declaredClassName == deviceMetaClass.name }
-            .map { it.field }
-            .distinctBy { it.descriptor }
-        val classifierFields = classifier.usingFields
-            .filter { it.usingType == FieldUsingType.Read && it.field.declaredClassName == deviceMetaClass.name }
-            .map { it.field }
-            .distinctBy { it.descriptor }
-        val deviceTypeField = classifierFields.firstOrNull { it.typeName == "java.lang.String" }
-            ?: error("DeviceMeta deviceType field not found")
-        val deviceTypeIndex = toStringFields.indexOfFirst { it.descriptor == deviceTypeField.descriptor }
-        check(deviceTypeIndex >= 0) { "DeviceMeta deviceType field is not part of toString" }
-        val titleField = toStringFields.getOrNull(deviceTypeIndex + 1)
+            .groupingBy { it.field.descriptor }
+            .eachCount()
+        val deviceTypeCandidates = writtenFields.filter { it.typeName == "java.lang.String" }
+            .map { it to (classifierReadCounts[it.descriptor] ?: 0) }
+            .filter { it.second > 1 }
+        check(deviceTypeCandidates.size == 1) {
+            "DeviceMeta deviceType candidate is ambiguous: ${deviceTypeCandidates.map { it.first.descriptor to it.second }}"
+        }
+        val deviceTypeField = deviceTypeCandidates.single().first
+        val deviceTypeIndex = writtenFields.indexOfFirst { it.descriptor == deviceTypeField.descriptor }
+        val titleField = writtenFields.getOrNull(deviceTypeIndex + 1)
             ?.takeIf { it.typeName == "java.lang.String" }
             ?: error("DeviceMeta title field not found")
 
@@ -142,4 +146,5 @@ internal object MiLinkDeviceMetaSymbols : DexKitSymbolBundleDefinition {
 
     private const val BLUETOOTH_DEVICE_OBSERVER =
         "com.miui.circulate.device.service.search.impl.BluetoothDeviceObserver"
+    private const val ACC_SYNTHETIC = 0x1000
 }
