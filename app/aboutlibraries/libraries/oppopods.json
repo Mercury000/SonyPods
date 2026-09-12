@@ -1,5 +1,20 @@
 {
   "uniqueId": "github.com:1812z/OppoPods",
   "name": "OppoPods",
-  "website": "https://github.com/1812z/OppoPods"
+  "description": "System-level OPPO earphone controls for HyperOS devices.",
+  "website": "https://github.com/1812z/OppoPods",
+  "developers": [
+    {
+      "name": "1812z",
+      "organisationUrl": "https://github.com/1812z"
+    }
+  ],
+  "scm": {
+    "connection": "scm:git:https://github.com/1812z/OppoPods.git",
+    "developerConnection": "scm:git:ssh://git@github.com/1812z/OppoPods.git",
+    "url": "https://github.com/1812z/OppoPods"
+  },
+  "licenses": [
+    "GPL-3.0-only"
+  ]
 }

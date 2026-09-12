@@ -283,10 +283,16 @@ tasks.named("preBuild") {
 }
 
 aboutLibraries {
-    offlineMode = true
+    offlineMode = false
     collect {
         configPath = file("aboutlibraries")
         includePlatform = false
+    }
+    export {
+        prettyPrint = true
+    }
+    license {
+        includeLicenses.add("GPL-3.0-only")
     }
 }
 

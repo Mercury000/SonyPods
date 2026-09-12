@@ -29,6 +29,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 private data class ReferenceProject(
     val name: String,
     val url: String,
+    val developers: String,
+    val licenses: String?,
 )
 
 @Composable
@@ -46,7 +48,22 @@ fun ReferencesPage(
                 .mapNotNull { library ->
                     val url = library.website?.takeIf { it.isNotBlank() }
                         ?: library.scm?.url?.takeIf { it.isNotBlank() }
-                    url?.let { ReferenceProject(library.name, it) }
+                    url?.let {
+                        ReferenceProject(
+                            name = library.name,
+                            url = it,
+                            developers = library.developers
+                                .mapNotNull { developer -> developer.name?.takeIf(String::isNotBlank) }
+                                .joinToString()
+                                .ifBlank { context.getString(R.string.unknown_generic) },
+                            licenses = library.licenses
+                                .map { license -> license.name }
+                                .filter(String::isNotBlank)
+                                .sortedWith(String.CASE_INSENSITIVE_ORDER)
+                                .joinToString()
+                                .takeIf(String::isNotBlank),
+                        )
+                    }
                 }
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         }.getOrElse { fallbackReferenceProjects }
@@ -76,8 +93,8 @@ fun ReferencesPage(
             Card(modifier = Modifier.fillMaxWidth()) {
                 referenceProjects.forEach { project ->
                     BasicComponent(
-                        title = project.name,
-                        summary = project.url,
+                        title = "${project.developers}/${project.name}",
+                        summary = project.licenses ?: "Unknown",
                         onClick = { context.openLink(project.url) },
                     )
                 }
@@ -90,10 +107,14 @@ private val fallbackReferenceProjects = listOf(
     ReferenceProject(
         name = "OpenBuds",
         url = "https://github.com/IgnotusJee/OpenBuds",
+        developers = "IgnotusJee",
+        licenses = null,
     ),
     ReferenceProject(
         name = "OppoPods",
         url = "https://github.com/1812z/OppoPods",
+        developers = "1812z",
+        licenses = "GNU General Public License v3.0 only",
     ),
 )
 

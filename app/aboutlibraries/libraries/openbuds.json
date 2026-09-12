@@ -1,5 +1,18 @@
 {
   "uniqueId": "github.com:IgnotusJee/OpenBuds",
   "name": "OpenBuds",
-  "website": "https://github.com/IgnotusJee/OpenBuds"
+  "description": "Android application project built with Kotlin, Jetpack Compose, and Gradle.",
+  "website": "https://github.com/IgnotusJee/OpenBuds",
+  "developers": [
+    {
+      "name": "IgnotusJee",
+      "organisationUrl": "https://github.com/IgnotusJee"
+    }
+  ],
+  "scm": {
+    "connection": "scm:git:https://github.com/IgnotusJee/OpenBuds.git",
+    "developerConnection": "scm:git:ssh://git@github.com/IgnotusJee/OpenBuds.git",
+    "url": "https://github.com/IgnotusJee/OpenBuds"
+  },
+  "licenses": []
 }
