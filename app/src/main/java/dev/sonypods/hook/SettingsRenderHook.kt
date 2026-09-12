@@ -11,6 +11,7 @@ import dev.sonypods.config.PodImagePrefs
 import dev.sonypods.config.EarphonePref
 import dev.sonypods.config.PodImageResource
 import dev.sonypods.utils.PodImageLoader
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 import java.lang.ref.WeakReference
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -30,7 +31,7 @@ class SettingsRenderHook : HookContext() {
     private val bitmapCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
     private val imageLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    private val animClass = "com.android.settings.bluetooth.tws.MiuiHeadsetAnimation"
+    private lateinit var renderSymbols: ResolvedSymbolBundle
 
     override fun onBeforeReload() {
         reloadEpoch += 1L
@@ -105,22 +106,22 @@ class SettingsRenderHook : HookContext() {
 
     override fun onHook() {
         runCatching {
-            val m = findMethodByParamCount(animClass, "loadDefaultInternal", 0)
-            hookBefore(m) {
+            renderSymbols = requireSymbols(SettingsRenderSymbols)
+            hookBefore(renderSymbols.method("loadDefaultInternal")) {
                 val instance = this.instance ?: return@hookBefore
                 val ctx = runCatching {
-                    (getObjectField(instance, "mContext") as? WeakReference<*>)?.get() as? Context
+                    (renderSymbols.field("contextField").get(instance) as? WeakReference<*>)?.get() as? Context
                 }.getOrNull() ?: return@hookBefore
                 val device = runCatching {
-                    callMethod(ctx, "getDevice") as? BluetoothDevice
+                    requireSymbols(SettingsActivitySymbols).method("getDevice").invoke(ctx) as? BluetoothDevice
                 }.getOrNull() ?: return@hookBefore
                 if (!SettingsHeadsetHook.isSonyPod(device)) return@hookBefore
                 val address = runCatching { device.address }.getOrNull() ?: return@hookBefore
                 val rootView = runCatching {
-                    (getObjectField(instance, "mRootView") as? WeakReference<*>)?.get() as? View
+                    (renderSymbols.field("rootViewField").get(instance) as? WeakReference<*>)?.get() as? View
                 }.getOrNull() ?: return@hookBefore
                 val handler = runCatching {
-                    (getObjectField(instance, "mHandler") as? WeakReference<*>)?.get() as? Handler
+                    (renderSymbols.field("handlerField").get(instance) as? WeakReference<*>)?.get() as? Handler
                 }.getOrNull() ?: return@hookBefore
                 val imageView = rootView.findViewById<ImageView>(
                     ctx.resources.getIdentifier("tic", "id", "com.android.settings")

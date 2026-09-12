@@ -1,6 +1,7 @@
 package dev.sonypods.hook
 import com.mercury.sonypods.R
 import dev.sonypods.utils.ModuleText
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -32,7 +33,7 @@ import dev.sonypods.utils.miuiStrongToast.data.BatteryParams
 import dev.sonypods.utils.miuiStrongToast.data.SonyPodsAction
 import dev.sonypods.utils.miuiStrongToast.data.PodParams
 import java.lang.ref.WeakReference
-import java.lang.reflect.Modifier
+import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -73,10 +74,6 @@ object SettingsHeadsetHook : HookContext() {
     private var currentDseeActive = false
     private var currentLeaStreamingL: String? = null
     private var currentLeaStreamingR: String? = null
-    private var proxyCheckSupportCalls = 0
-    private var proxySetCommonCommandCalls = 0
-    private var proxyGetDeviceConfigCalls = 0
-    private var proxyGetCommonConfigCalls = 0
     private var lastRepublishAt = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingFragmentUpdates = WeakHashMap<Any, Boolean>()
@@ -84,8 +81,22 @@ object SettingsHeadsetHook : HookContext() {
     @Volatile private var initialUiReleaseAt = 0L
     @Volatile private var bootstrapScheduled = false
     @Volatile private var backgroundExecutor: ExecutorService = newBackgroundExecutor()
+    private lateinit var activitySymbols: ResolvedSymbolBundle
+    private lateinit var supportSymbols: ResolvedSymbolBundle
+    private lateinit var batterySymbols: ResolvedSymbolBundle
+    private lateinit var fragmentSymbols: ResolvedSymbolBundle
+    private lateinit var serviceProxySymbols: ResolvedSymbolBundle
+    private var pluginSymbols: ResolvedSymbolBundle? = null
 
     override fun onHook() {
+        activitySymbols = requireSymbols(SettingsActivitySymbols)
+        supportSymbols = requireSymbols(SettingsSupportSymbols)
+        batterySymbols = requireSymbols(SettingsBatterySymbols)
+        fragmentSymbols = requireSymbols(SettingsFragmentSymbols)
+        serviceProxySymbols = requireSymbols(SettingsServiceProxySymbols)
+        pluginSymbols = runCatching { requireSymbols(SettingsActivityPluginSymbols) }
+            .onFailure { Log.d(TAG, "optional Settings activity plugin unavailable", it) }
+            .getOrNull()
         hookActivityEntry()
         hookSupportChecks()
         hookServiceProxy()
@@ -141,9 +152,10 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun hookActivityEntry() {
         runCatching {
-            val activityOnCreate = findMethod("com.android.settings.bluetooth.MiuiHeadsetActivity", "onCreate", Bundle::class.java)
-            hookBefore(activityOnCreate) {
-                val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
+            hookBefore(activitySymbols.method("onCreate")) {
+                val intent = (instance as? Context)?.let { context ->
+                    runCatching { context.javaClass.getMethod("getIntent").invoke(context) as? Intent }.getOrNull()
+                } ?: return@hookBefore
                 val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
                 Log.d(TAG, "Activity.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
                 if (!isSonyPod(device)) return@hookBefore
@@ -152,194 +164,112 @@ object SettingsHeadsetHook : HookContext() {
                 intent.putExtra("COME_FROM", intent.getStringExtra("COME_FROM") ?: "MIUI_BLUETOOTH_SETTINGS")
                 Log.d(TAG, "MiuiHeadsetActivity intent patched address=$address")
             }
-            hookActivityStringGetter("getSupport") { device -> settingsSupport(device.address) }
-        }.onFailure { Log.d(TAG, "hook MiuiHeadsetActivity skipped", it) }
-
-        runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetActivityPlugin", "onCreate", Bundle::class.java)) {
-                val intent = callMethod(instance, "getIntent") as? Intent ?: return@hookBefore
-                val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
-                Log.d(TAG, "Plugin.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
-                if (!isSonyPod(device)) return@hookBefore
-                val address = device?.address ?: return@hookBefore
-                intent.putExtra("MIUI_HEADSET_SUPPORT", settingsSupport(address))
-                Log.d(TAG, "MiuiHeadsetActivityPlugin intent patched address=$address")
-            }
-        }.onFailure { Log.d(TAG, "hook MiuiHeadsetActivityPlugin skipped", it) }
-    }
-
-    private fun hookActivityStringGetter(methodName: String, value: (BluetoothDevice) -> String) {
-        runCatching {
-            hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetActivity", methodName, 0)) {
-                val device = runCatching { getObjectField(instance, "mDevice") as? BluetoothDevice }.getOrNull()
-                Log.d(TAG, "Activity.$methodName old=$result device=${device.describe()} isSony=${isSonyPod(device)}")
+            hookAfter(activitySymbols.method("getSupport")) {
+                val device = activitySymbols.field("deviceField").get(instance) as? BluetoothDevice
+                Log.d(TAG, "Activity.getSupport old=$result device=${device.describe()} isSony=${isSonyPod(device)}")
                 if (!isSonyPod(device) || device == null) return@hookAfter
-                result = value(device)
-                Log.d(TAG, "Activity.$methodName forced=$result")
+                result = settingsSupport(device.address)
+                Log.d(TAG, "Activity.getSupport forced=$result")
             }
-        }.onFailure { Log.d(TAG, "hook MiuiHeadsetActivity.$methodName skipped", it) }
+        }.onFailure { Log.d(TAG, "hook Settings headset activity skipped", it) }
+
+        pluginSymbols?.let { symbols ->
+            runCatching {
+                hookBefore(symbols.method("onCreate")) {
+                    val context = instance as? Context ?: return@hookBefore
+                    val intent = runCatching { context.javaClass.getMethod("getIntent").invoke(context) as? Intent }
+                        .getOrNull() ?: return@hookBefore
+                    val device = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
+                    Log.d(TAG, "Plugin.onCreate before device=${device.describe()} support=${intent.getStringExtra("MIUI_HEADSET_SUPPORT")} comeFrom=${intent.getStringExtra("COME_FROM")} btAddress=${intent.getStringExtra("bluetoothaddress")} known=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
+                    if (!isSonyPod(device)) return@hookBefore
+                    val address = device?.address ?: return@hookBefore
+                    intent.putExtra("MIUI_HEADSET_SUPPORT", settingsSupport(address))
+                    Log.d(TAG, "Settings activity plugin intent patched address=$address")
+                }
+            }.onFailure { Log.d(TAG, "hook Settings activity plugin skipped", it) }
+        }
     }
 
     private fun hookSupportChecks() {
         runCatching {
-            hookAfter(findMethod("com.android.settings.bluetooth.HeadsetIDConstants", "checkSupport", String::class.java)) {
+            hookAfter(supportSymbols.method("checkSupport")) {
                 val support = args[0] as? String ?: return@hookAfter
                 val address = MiuiHeadsetSupport.addressOf(support) ?: return@hookAfter
                 if (!isSonyAddress(address)) return@hookAfter
                 result = true
-                Log.d(TAG, "HeadsetIDConstants.checkSupport accepted Sony address=$address")
+                Log.d(TAG, "Settings headset support accepted Sony address=$address")
             }
-        }.onFailure { Log.d(TAG, "hook HeadsetIDConstants.checkSupport skipped", it) }
-        hookBleMmaConnectByContext()
-        hookBleMmaConnectByService()
+        }.onFailure { Log.d(TAG, "hook Settings headset support skipped", it) }
+        hookBleMmaConnect(supportSymbols.method("isBleMmaConnectContext"), "Context")
+        hookBleMmaConnect(supportSymbols.method("isBleMmaConnectService"), "Service")
     }
 
-    private fun hookBleMmaConnectByContext() {
+    private fun hookBleMmaConnect(method: Method, source: String) {
         runCatching {
-            hookAfter(findMethod("com.android.settings.bluetooth.HeadsetIDConstants", "isBleMmaConnect", Context::class.java, BluetoothDevice::class.java, String::class.java)) {
+            hookAfter(method) {
                 val device = args[1] as? BluetoothDevice
                 val deviceId = args[2] as? String
                 if (isSonyPod(device)) {
                     result = isDeviceConnected(device)
-                    Log.d(TAG, "isBleMmaConnect(Context) result=$result device=${device.describe()} deviceId=$deviceId")
+                    Log.d(TAG, "isBleMmaConnect($source) result=$result device=${device.describe()} deviceId=$deviceId")
                 }
             }
-        }.onFailure { Log.d(TAG, "hook HeadsetIDConstants.isBleMmaConnect(Context) skipped", it) }
-    }
-
-    private fun hookBleMmaConnectByService() {
-        runCatching {
-            val serviceClass = findClass("com.android.bluetooth.ble.app.IMiuiHeadsetService")
-            hookAfter(findMethod("com.android.settings.bluetooth.HeadsetIDConstants", "isBleMmaConnect", serviceClass, BluetoothDevice::class.java, String::class.java)) {
-                val device = args[1] as? BluetoothDevice
-                val deviceId = args[2] as? String
-                if (isSonyPod(device)) {
-                    result = isDeviceConnected(device)
-                    Log.d(TAG, "isBleMmaConnect(Service) result=$result device=${device.describe()} deviceId=$deviceId")
-                }
-            }
-        }.onFailure { Log.d(TAG, "hook HeadsetIDConstants.isBleMmaConnect(Service) skipped", it) }
+        }.onFailure { Log.d(TAG, "hook isBleMmaConnect($source) skipped", it) }
     }
 
     private fun hookServiceProxy() {
-        val proxyClass = "com.android.bluetooth.ble.app.IMiuiHeadsetService\$Stub\$Proxy"
-        hookProxyStringResult(proxyClass, "checkSupport", BluetoothDevice::class.java) { args ->
+        hookProxyString("checkSupport") { args ->
             val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
             settingsSupport(device?.address ?: currentAddress.orEmpty())
         }
-        hookProxyStringArgResult(proxyClass, "getDeviceInfo") { args ->
+        hookProxyString("getDeviceInfo") { args ->
             settingsSupport(args.firstOrNull { it is String } as? String ?: currentAddress.orEmpty())
         }
-        hookProxyStringArgResult(proxyClass, "isSupportAudioSwitch") { "1" }
-        hookProxyStringArgResult(proxyClass, "setCommonCommand", Int::class.java, String::class.java, BluetoothDevice::class.java) { commandArgs ->
-            val command = commandArgs[0] as? Int
-            // Command 102 is the wear-status probe. MIUI blocks ANC changes when it equals
-            // RECORD_SYNCED ("0") with a "请连接并佩戴耳机" toast, so report RECORD_UNSYNCED
-            // ("1", i.e. "worn/connected") to let the official updateAncMode/updateAncLevel
-            // guards pass even if our fragment hook does not swallow a call.
-            if (command == 102) "1" else "1"
-        }
-        hookProxyVoidDeviceNoop(proxyClass, "connect", BluetoothDevice::class.java)
-        hookProxyVoidDeviceNoop(proxyClass, "getDeviceConfig", BluetoothDevice::class.java)
-        hookProxyVoidDeviceStringNoop(proxyClass, "getCommonConfig", BluetoothDevice::class.java, String::class.java)
-        hookProxyBooleanStringResult(proxyClass, "isMiTWS") { true }
-        hookProxyBooleanStringResult(proxyClass, "checkIsMiTWS") { true }
-        hookProxyBooleanStringResult(proxyClass, "getRingFindState") { false }
-        hookProxyVoidDeviceCommand(proxyClass, "changeAncMode", Int::class.java, BluetoothDevice::class.java) { commandArgs ->
-            val miMode = commandArgs[0] as? Int ?: return@hookProxyVoidDeviceCommand null
-            sonyAncFromSettings(miMode)
-        }
-        hookProxyVoidDeviceCommand(proxyClass, "changeAncLevel", String::class.java, BluetoothDevice::class.java) { commandArgs ->
-            val level = commandArgs[0] as? String ?: return@hookProxyVoidDeviceCommand null
-            sonyAncFromLevelCommand(level)
+        hookProxyString("isSupportAudioSwitch") { "1" }
+        hookProxyString("setCommonCommand") { "1" }
+        listOf("isMiTWS", "checkIsMiTWS").forEach { hookProxyBoolean(it, true) }
+        hookProxyBoolean("getRingFindState", false)
+        listOf("connect", "getDeviceConfig", "getCommonConfig").forEach(::hookProxyVoid)
+        hookProxyAnc("changeAncMode") { args -> sonyAncFromSettings(args[0] as? Int ?: 0) }
+        hookProxyAnc("changeAncLevel") { args -> sonyAncFromLevelCommand(args[0] as? String ?: "") }
+    }
+
+    private fun hookProxyString(symbol: String, value: (List<Any?>) -> String) {
+        hookBefore(serviceProxySymbols.method(symbol)) {
+            val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
+            val address = args.firstOrNull { it is String } as? String
+            if (!isSonyPod(device) && (address == null || !isSonyAddress(address))) return@hookBefore
+            result = value(args)
         }
     }
 
-    private fun hookProxyStringResult(className: String, methodName: String, vararg parameterTypes: Class<*>, result: (List<Any?>) -> String) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, *parameterTypes)) {
-                val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
-                val isSony = isSonyPod(device)
-                if (methodName == "checkSupport") proxyCheckSupportCalls++
-                Log.d(TAG, "$methodName proxy call#${if (methodName == "checkSupport") proxyCheckSupportCalls else -1} device=${device.describe()} isSony=$isSony")
-                if (!isSony) return@hookBefore
-                this.result = result(args)
-                Log.d(TAG, "$methodName proxy forced result=${this.result} address=${device?.address}")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy $methodName skipped", it) }
+    private fun hookProxyBoolean(symbol: String, value: Boolean) {
+        hookBefore(serviceProxySymbols.method(symbol)) {
+            val address = args.firstOrNull() as? String ?: return@hookBefore
+            if (!isSonyAddress(address)) return@hookBefore
+            result = value
+        }
     }
 
-    private fun hookProxyStringArgResult(className: String, methodName: String, vararg parameterTypes: Class<*>, result: (List<Any?>) -> String) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, *parameterTypes)) {
-                val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
-                val address = args.firstOrNull { it is String } as? String
-                val isSony = isSonyPod(device) || (address != null && isSonyAddress(address))
-                if (methodName == "setCommonCommand") proxySetCommonCommandCalls++
-                Log.d(TAG, "$methodName proxy call#${if (methodName == "setCommonCommand") proxySetCommonCommandCalls else -1} args=${args.describeArgs()} device=${device.describe()} addressArg=$address isSony=$isSony")
-                if (!isSony) return@hookBefore
-                this.result = result(args)
-                Log.d(TAG, "$methodName proxy forced result=${this.result} address=${device?.address ?: address}")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy $methodName skipped", it) }
+    private fun hookProxyVoid(symbol: String) {
+        hookBefore(serviceProxySymbols.method(symbol)) {
+            val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
+            if (!isSonyPod(device)) return@hookBefore
+            result = null
+        }
     }
 
-    private fun hookProxyBooleanStringResult(className: String, methodName: String, result: () -> Boolean) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, String::class.java)) {
-                val address = args[0] as? String ?: return@hookBefore
-                val isSony = isSonyAddress(address)
-                Log.d(TAG, "$methodName proxy string call address=$address isSony=$isSony oldKnown=${SonyDeviceService.knownAddressSnapshot()} current=$currentAddress")
-                if (!isSony) return@hookBefore
-                this.result = result()
-                Log.d(TAG, "$methodName proxy forced result=${this.result} address=$address")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy $methodName skipped", it) }
-    }
-
-    private fun hookProxyVoidDeviceCommand(className: String, methodName: String, vararg parameterTypes: Class<*>, mode: (List<Any?>) -> Int?) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, *parameterTypes)) {
-                val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
-                Log.d(TAG, "$methodName proxy command args=${args.describeArgs()} device=${device.describe()} isSony=${isSonyPod(device)}")
-                if (!isSonyPod(device)) return@hookBefore
-                val sonyMode = mode(args) ?: return@hookBefore
-                currentAnc = sonyMode
-                hasAncState = true
-                sendSonyAnc(sonyMode)
-                sendAncChanged(sonyMode)
-                this.result = null
-                Log.d(TAG, "$methodName proxy command handled address=${device?.address} sonyMode=$sonyMode")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy $methodName skipped", it) }
-    }
-
-    private fun hookProxyVoidDeviceNoop(className: String, methodName: String, vararg parameterTypes: Class<*>) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, *parameterTypes)) {
-                val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
-                if (methodName == "getDeviceConfig") proxyGetDeviceConfigCalls++
-                val isSony = isSonyPod(device)
-                Log.d(TAG, "$methodName proxy before#${if (methodName == "getDeviceConfig") proxyGetDeviceConfigCalls else -1} device=${device.describe()} isSony=$isSony")
-                if (!isSony) return@hookBefore
-                this.result = null
-                Log.d(TAG, "$methodName proxy swallowed for virtual Oppo device")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy noop $methodName skipped", it) }
-    }
-
-    private fun hookProxyVoidDeviceStringNoop(className: String, methodName: String, vararg parameterTypes: Class<*>) {
-        runCatching {
-            hookBefore(findMethod(className, methodName, *parameterTypes)) {
-                val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
-                proxyGetCommonConfigCalls++
-                val isSony = isSonyPod(device)
-                Log.d(TAG, "$methodName proxy before#$proxyGetCommonConfigCalls args=${args.describeArgs()} device=${device.describe()} isSony=$isSony")
-                if (!isSony) return@hookBefore
-                this.result = null
-                Log.d(TAG, "$methodName proxy swallowed for virtual Oppo device")
-            }
-        }.onFailure { Log.d(TAG, "hook proxy noop $methodName skipped", it) }
+    private fun hookProxyAnc(symbol: String, mode: (List<Any?>) -> Int) {
+        hookBefore(serviceProxySymbols.method(symbol)) {
+            val device = args.firstOrNull { it is BluetoothDevice } as? BluetoothDevice
+            if (!isSonyPod(device)) return@hookBefore
+            val sonyMode = mode(args)
+            currentAnc = sonyMode
+            hasAncState = true
+            sendSonyAnc(sonyMode)
+            sendAncChanged(sonyMode)
+            result = null
+        }
     }
 
     private fun hookBatteryView() {
@@ -358,7 +288,7 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetBattery constructor skipped", it) }
 
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.tws.MiuiHeadsetBattery", "onBatteryChanged", String::class.java)) {
+            hookBefore(batterySymbols.method("onBatteryChangedString")) {
                 val device = batteryViews[instance] ?: findBatteryDevice(instance).also { found ->
                     if (instance != null && found != null && isSonyPod(found)) {
                         batteryViews[instance] = found
@@ -374,20 +304,20 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun hookFragmentState() {
         runCatching {
-            hookAfter(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "onCreate", Bundle::class.java)) {
+            hookAfter(fragmentSymbols.method("onCreate")) {
                 if (!isSonyFragment(instance)) return@hookAfter
                 removeUnsupportedVirtualSurround(instance)
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onCreate skipped", it) }
 
         runCatching {
-            hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetFragment", "onCreateView", 3)) {
+            hookAfter(fragmentSymbols.method("onCreateView")) {
                 Log.d(TAG, "Fragment.onCreateView after ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (!isSonyFragment(instance)) return@hookAfter
                 val fragment = instance ?: return@hookAfter
                 headsetFragments[fragment] = true
                 initialUiReleaseAt = maxOf(initialUiReleaseAt, SystemClock.uptimeMillis() + INITIAL_UI_QUIET_MS)
-                registerStatusReceiver(runCatching { getObjectField(fragment, "mActivity") as? Context }.getOrNull())
+                registerStatusReceiver(runCatching { fragmentSymbols.field("activityField").get(fragment) as? Context }.getOrNull())
                 paintRestoredVersion(fragment)
                 requestBluetoothStatus("fragment-create")
                 scheduleFragmentUpdate(fragment)
@@ -395,7 +325,7 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onCreateView skipped", it) }
 
         runCatching {
-            hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetFragment", "onServiceConnected", 0)) {
+            hookAfter(fragmentSymbols.method("onServiceConnected")) {
                 Log.d(TAG, "Fragment.onServiceConnected after ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (!isSonyFragment(instance)) return@hookAfter
                 val fragment = instance ?: return@hookAfter
@@ -407,7 +337,7 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.onServiceConnected skipped", it) }
 
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "refreshStatus", String::class.java, String::class.java)) {
+            hookBefore(fragmentSymbols.method("refreshStatus")) {
                 val key = args[0] as? String
                 val data = args[1] as? String
                 Log.d(TAG, "Fragment.refreshStatus before key=$key data=$data ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
@@ -420,7 +350,7 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.refreshStatus skipped", it) }
 
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "handleConnectMmaFailed", String::class.java)) {
+            hookBefore(fragmentSymbols.method("handleConnectMmaFailed")) {
                 Log.d(TAG, "Fragment.handleConnectMmaFailed arg=${args[0]} ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (isSonyFragment(instance)) {
                     scheduleFragmentUpdate(instance)
@@ -431,7 +361,7 @@ object SettingsHeadsetHook : HookContext() {
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.handleConnectMmaFailed skipped", it) }
 
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "refreshStatusUi", String::class.java)) {
+            hookBefore(fragmentSymbols.method("refreshStatusUi")) {
                 if (!isSonyFragment(instance)) return@hookBefore
                 val ours = currentFirmware?.takeIf { it.isNotBlank() } ?: return@hookBefore
                 val shown = args.getOrNull(0) as? String
@@ -443,25 +373,20 @@ object SettingsHeadsetHook : HookContext() {
                 if (shown.isNullOrEmpty() || shown == ours) return@hookBefore
                 Log.d(TAG, "refreshStatusUi version swallowed shown=$shown tracked=$ours")
                 result = null
-                runCatching { callMethod(instance, "refreshStatusUi", ours) }
+                runCatching { fragmentSymbols.method("refreshStatusUi").invoke(instance, ours) }
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.refreshStatusUi version guard skipped", it) }
 
-        hookFragmentAncCommand("updateAncMode", Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!) { commandArgs ->
+        hookFragmentAncCommand("updateAncMode") { commandArgs ->
             sonyAncFromSettings(commandArgs[0] as? Int ?: 0)
         }
-        hookFragmentAncCommand("updateAncLevel", String::class.java, Boolean::class.javaPrimitiveType!!) { commandArgs ->
+        hookFragmentAncCommand("updateAncLevel") { commandArgs ->
             val level = commandArgs[0] as? String ?: ""
             sonyAncFromLevelCommand(level)
         }
         runCatching {
             hookBefore(
-                findMethod(
-                    "com.android.settings.bluetooth.MiuiHeadsetFragment",
-                    "updateAncUi",
-                    String::class.java,
-                    Boolean::class.javaPrimitiveType!!,
-                ),
+                fragmentSymbols.method("updateAncUi"),
             ) {
                 if (!isSonyFragment(instance)) return@hookBefore
                 // Only once an ANC/transparency state is known (live snapshot or restored
@@ -478,20 +403,15 @@ object SettingsHeadsetHook : HookContext() {
                 // with the tracked level and passes through to the real render.
                 Log.d(TAG, "updateAncUi stock level swallowed requested=$requested tracked=$tracked")
                 result = null
-                runCatching { callMethod(instance, "updateAncUi", tracked, false) }
+                runCatching { fragmentSymbols.method("updateAncUi").invoke(instance, tracked, false) }
             }
         }.onFailure { Log.d(TAG, "hook MiuiHeadsetFragment.updateAncUi level guard skipped", it) }
         runCatching {
             hookAfter(
-                findMethod(
-                    "com.android.settings.bluetooth.MiuiHeadsetFragment",
-                    "updateAncUi",
-                    String::class.java,
-                    Boolean::class.javaPrimitiveType!!,
-                ),
+                fragmentSymbols.method("updateAncUi"),
             ) {
                 if (!isSonyFragment(instance)) return@hookAfter
-                val rootView = getObjectField(instance, "mRootView") as? View ?: return@hookAfter
+                val rootView = fragmentSymbols.field("rootViewField").get(instance) as? View ?: return@hookAfter
                 // Sony has no NC depth tiers: every MIUI level maps onto plain noise
                 // cancelling, so the four-step bar would only pretend to do something.
                 // Keep the mode row and the transparency slider; hide just the depth
@@ -512,7 +432,7 @@ object SettingsHeadsetHook : HookContext() {
             callMethod(parent, "removePreference", preference) as? Boolean == true
         }.getOrDefault(false)
         if (removed) {
-            runCatching { setObjectField(fragment, "mVirtualSurroundSound", null) }
+            runCatching { fragmentSymbols.field("virtualSurroundField").set(fragment, null) }
             val preferenceCount = runCatching {
                 callMethod(parent, "getPreferenceCount") as? Int
             }.getOrNull()
@@ -534,12 +454,12 @@ object SettingsHeadsetHook : HookContext() {
      */
     private fun paintRestoredVersion(fragment: Any?) {
         val firmware = currentFirmware?.takeIf { it.isNotBlank() } ?: return
-        runCatching { callMethod(fragment, "refreshStatusUi", firmware) }
+        runCatching { fragmentSymbols.method("refreshStatusUi").invoke(fragment, firmware) }
     }
 
-    private fun hookFragmentAncCommand(methodName: String, vararg parameterTypes: Class<*>, mode: (List<Any?>) -> Int?) {
+    private fun hookFragmentAncCommand(methodName: String, mode: (List<Any?>) -> Int?) {
         runCatching {
-            hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", methodName, *parameterTypes)) {
+            hookBefore(fragmentSymbols.method(methodName)) {
                 Log.d(TAG, "MiuiHeadsetFragment.$methodName before args=${args.describeArgs()} ${fragmentDebug(instance)} isSony=${isSonyFragment(instance)}")
                 if (!isSonyFragment(instance)) return@hookBefore
                 val updateDevice = args.getOrNull(1) as? Boolean ?: true
@@ -549,7 +469,7 @@ object SettingsHeadsetHook : HookContext() {
                 hasAncState = true
                 sendSonyAnc(sonyMode)
                 sendAncChanged(sonyMode)
-                runCatching { callMethod(instance, "updateAncUi", settingsAncLevel(), false) }
+                runCatching { fragmentSymbols.method("updateAncUi").invoke(instance, settingsAncLevel(), false) }
                 injectFragmentStatus(instance)
                 result = null
                 Log.d(TAG, "MiuiHeadsetFragment.$methodName handled sonyMode=$sonyMode")
@@ -778,23 +698,8 @@ object SettingsHeadsetHook : HookContext() {
         batteryViews.keys.toList().forEach(::scheduleBatteryUpdate)
     }
 
-    private fun findBatteryDevice(owner: Any?): BluetoothDevice? {
-        if (owner == null) return null
-        var type: Class<*>? = owner.javaClass
-        while (type != null) {
-            type.declaredFields.forEach { field ->
-                if (Modifier.isStatic(field.modifiers)) return@forEach
-                runCatching {
-                    field.isAccessible = true
-                    field.get(owner)
-                }.getOrNull()?.let { value ->
-                    if (value is BluetoothDevice) return value
-                }
-            }
-            type = type.superclass
-        }
-        return null
-    }
+    private fun findBatteryDevice(owner: Any?): BluetoothDevice? =
+        owner?.let { runCatching { batterySymbols.field("deviceField").get(it) as? BluetoothDevice }.getOrNull() }
 
     private fun isOverEar(): Boolean = currentFormFactor == "HEADSET"
 
@@ -821,7 +726,7 @@ object SettingsHeadsetHook : HookContext() {
         }
         if (batteryValuesCache[view] != key) {
             batteryValuesCache[view] = key
-            callMethod(view, "onBatteryChanged", values[0], values[1], values[2])
+            batterySymbols.method("onBatteryChangedInts").invoke(view, values[0], values[1], values[2])
             Log.d(TAG, "Battery.onBatteryChanged(int,int,int) forced=$key overEar=${isOverEar()}")
         }
     }
@@ -920,7 +825,7 @@ object SettingsHeadsetHook : HookContext() {
 
     /** The headset battery control keeps the inflated layout in a WeakReference mRootView. */
     private fun batteryRootView(view: Any?): View? {
-        val ref = runCatching { getObjectField(view, "mRootView") }.getOrNull() as? WeakReference<*>
+        val ref = runCatching { batterySymbols.field("rootViewField").get(view) }.getOrNull() as? WeakReference<*>
         return ref?.get() as? View
     }
 
@@ -930,22 +835,22 @@ object SettingsHeadsetHook : HookContext() {
 
     private fun injectFragmentStatus(fragment: Any?) {
         runCatching {
-            val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
+            val device = runCatching { fragmentSymbols.field("deviceField").get(fragment) as? BluetoothDevice }.getOrNull()
             if (!isDeviceConnected(device)) {
                 Log.d(TAG, "injectFragmentStatus skipped (device disconnected) ${fragmentDebug(fragment)}")
                 return
             }
             val payload = "${settingsAncMode()}|0100;0101;0102;0103;0200;0201|${settingsBatteryString()}|00"
             Log.d(TAG, "injectFragmentStatus payload=$payload ${fragmentDebug(fragment)}")
-            callMethod(fragment, "updateAtUiInfo", payload)
-            callMethod(fragment, "updateAncUi", settingsAncLevel(), false)
+            fragmentSymbols.method("updateAtUiInfo").invoke(fragment, payload)
+            fragmentSymbols.method("updateAncUi").invoke(fragment, settingsAncLevel(), false)
             val address = device?.address
             if (address != null) {
                 val refreshPayload = settingsRefreshPayload(device)
                 Log.d(TAG, "injectFragmentStatus refreshPayload=$refreshPayload address=$address")
                 // Official internals post to worker handlers that may already be dead (stale
                 // fragments in the map); a throw here must not skip the badge pass below.
-                runCatching { callMethod(fragment, "refreshStatus", address, refreshPayload) }
+                runCatching { fragmentSymbols.method("refreshStatus").invoke(fragment, address, refreshPayload) }
                     .onFailure { Log.w(TAG, "refreshStatus injection failed (stale fragment?)", it) }
             }
             Log.d(TAG, "fragment status injected connected=true anc=$currentAnc battery=${settingsBatteryString()}")
@@ -970,7 +875,7 @@ object SettingsHeadsetHook : HookContext() {
      */
     private fun updateSoundQualityBadges(fragment: Any?) {
         runCatching {
-            val rootView = getObjectField(fragment, "mRootView") as? View
+            val rootView = fragmentSymbols.field("rootViewField").get(fragment) as? View
             if (rootView == null) {
                 Log.d(TAG, "badges skip: no mRootView")
                 return@runCatching
@@ -1104,7 +1009,7 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun isSonyFragment(fragment: Any?): Boolean {
-        val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
+        val device = runCatching { fragmentSymbols.field("deviceField").get(fragment) as? BluetoothDevice }.getOrNull()
         return isSonyPod(device)
     }
 
@@ -1135,16 +1040,17 @@ object SettingsHeadsetHook : HookContext() {
     }
 
     private fun fragmentDebug(fragment: Any?): String {
-        val device = runCatching { getObjectField(fragment, "mDevice") as? BluetoothDevice }.getOrNull()
-        val deviceId = runCatching { getObjectField(fragment, "mDeviceId") as? String }.getOrNull()
-        val support = runCatching { getObjectField(fragment, "mSupport") as? String }.getOrNull()
-        val service = runCatching { getObjectField(fragment, "mService") }.getOrNull()
-        val hfp = runCatching { getObjectField(fragment, "mBluetoothHfp") }.getOrNull()
-        val cached = runCatching { getObjectField(fragment, "mCachedDevice") }.getOrNull()
-        val supportAnc = runCatching { getObjectField(fragment, "mSupportAnc") }.getOrNull()
-        val ancCached = runCatching { getObjectField(fragment, "mAncCached") }.getOrNull()
-        val pendingAnc = runCatching { getObjectField(fragment, "mPendingAnc") }.getOrNull()
-        val ancPendingStatus = runCatching { getObjectField(fragment, "mAncPendingStatus") }.getOrNull()
+        val device = runCatching { fragmentSymbols.field("deviceField").get(fragment) as? BluetoothDevice }.getOrNull()
+        fun value(symbol: String) = runCatching { fragmentSymbols.field(symbol).get(fragment) }.getOrNull()
+        val deviceId = value("deviceIdField") as? String
+        val support = value("supportField") as? String
+        val service = value("serviceField")
+        val hfp = value("bluetoothHfpField")
+        val cached = value("cachedDeviceField")
+        val supportAnc = value("supportAncField")
+        val ancCached = value("ancCachedField") as? String
+        val pendingAnc = value("pendingAncField") as? String
+        val ancPendingStatus = value("ancPendingStatusField")
         return "fragment(device=${device.describe()},deviceId=$deviceId,support=$support,service=$service,hfp=$hfp,cached=$cached,supportAnc=$supportAnc,ancCached=$ancCached,pendingAnc=$pendingAnc,ancPending=$ancPendingStatus)"
     }
 
