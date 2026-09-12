@@ -32,6 +32,7 @@ import dev.sonypods.protocol.LeaConnectionType
 import dev.sonypods.protocol.SonyGatt
 import dev.sonypods.protocol.hexString
 import java.io.IOException
+import java.util.IdentityHashMap
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -238,19 +239,26 @@ class SonyBleClient(
     private var negotiatedMtu: Int = 23
     private var handshakeStep: HandshakeStep = HandshakeStep.Idle
     private var determineMtuNotificationEnabled = false
+
+    /** Per-client lifetime tracked independently from the Sony accessory handshake. */
+    private data class GattLifecycle(
+        var connectedObserved: Boolean = false,
+        var automaticMtuSettled: Boolean = false,
+        var closeRequested: Boolean = false,
+    )
+
     /**
-     * GATT clients whose `close()` is waiting for an in-flight MTU exchange to land.
+     * Xiaomi's Bluetooth stack enables automatic MTU negotiation when a GATT client is opened.
      *
-     * `close()` is what unregisters the client and lets the stack recycle its registration
-     * control block. Doing that while our own MTU request is still outstanding leaves the
-     * pending operation pointing at a freed rcb, and when the response arrives
-     * `bta_gattc_op_cmpl` walks "clients which are not notified before" and jumps through the
-     * dangling callback — four SIGBUS/BUS_ADRALN aborts of com.android.bluetooth in
-     * `bta_gattc_cfg_mtu_cmpl` came from exactly that window. `disconnect()` still runs
-     * immediately; only the unregister waits, so the link drops on time and the stale client
-     * merely lingers for one round trip.
+     * IDA confirms that its native MTU completion fans the result out to every client sharing the
+     * ACL, then invokes a callback retained in each CLCB. Unregistering a client before that event
+     * leaves the vendor stack able to jump through stale callback state in
+     * `bta_gattc_cfg_mtu_cmpl`. Track the event per [BluetoothGatt]: `disconnect()` remains
+     * immediate, while `close()` is driven only by that client's `onMtuChanged` callback. A client
+     * that never reached CONNECTED can instead be released by its terminal DISCONNECTED event.
      */
-    private val gattAwaitingMtuSettle = mutableSetOf<BluetoothGatt>()
+    private val gattLifecycleLock = Any()
+    private val gattLifecycles = IdentityHashMap<BluetoothGatt, GattLifecycle>()
     private var unsupportedProbe: UnsupportedEndpointProbe? = null
     private var sppTransport: SonySppTransport? = null
     /**
@@ -392,8 +400,10 @@ class SonyBleClient(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                markGattConnected(gatt)
                 if (this@SonyBleClient.gatt !== gatt) {
-                    log("Ignoring stale GATT connected callback")
+                    log("Stale GATT connected; disconnecting and awaiting automatic MTU settlement")
+                    requestGattClose(gatt)
                     return
                 }
                 log("GATT connected; discovering services")
@@ -403,7 +413,11 @@ class SonyBleClient(
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 if (this@SonyBleClient.gatt !== gatt) {
-                    log("Ignoring stale GATT disconnected callback")
+                    // A replaced attempt can fail before CONNECTED (and therefore before automatic
+                    // MTU starts). Its terminal event is then sufficient to unregister it; an old
+                    // connected client still waits for its own onMtuChanged event.
+                    requestGattClose(gatt, disconnectedObserved = true)
+                    log("Handled stale GATT disconnected callback")
                     return
                 }
                 log("GATT disconnected: status=$status")
@@ -416,13 +430,12 @@ class SonyBleClient(
                 pendingNotifyEndpoints.clear()
                 writing = false
                 gattEndpoints.clear()
-                val mtuPending = handshakeStep == HandshakeStep.RequestMtu
                 handshakeStep = HandshakeStep.Idle
                 determineMtuNotificationEnabled = false
                 writableValueLength = null
                 negotiatedMtu = 23
                 unsupportedProbe = null
-                closeGattAfterMtuSettles(gatt, mtuPending)
+                requestGattClose(gatt, disconnectedObserved = true)
                 this@SonyBleClient.gatt = null
                 listener.onConnectionStateChanged(false, connectedDevice)
                 // A drop before the Tandem handshake completed is a failed connect attempt, and
@@ -475,9 +488,9 @@ class SonyBleClient(
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            // Before the staleness check: a client held open only to let its MTU request land is
-            // by definition no longer the live one, and this reply is what releases it.
-            finishDeferredGattClose(gatt, "MTU settled")
+            // Settle lifecycle state before checking staleness: this event is also what safely
+            // releases a client that was disconnected while Xiaomi's automatic MTU was in flight.
+            if (markAutomaticMtuSettled(gatt)) return
             if (this@SonyBleClient.gatt !== gatt) {
                 log("Ignoring stale GATT MTU callback")
                 return
@@ -488,12 +501,9 @@ class SonyBleClient(
                 log("MTU request failed: requestedResult=$mtu status=$status; retaining mtu=$negotiatedMtu")
             }
             log("MTU changed: mtu=$mtu status=$status")
-            if (handshakeStep == HandshakeStep.RequestMtu) {
-                // MTU is settled on the Android side. Sound Connect's active wiring reads
-                // WRITABLE_VALUE_LENGTH straight after this (its accessory DETERMINE_MTU handshake
-                // is gated on NOT having requested MTU); we keep a bounded readiness probe first so
-                // accessories that publish WVL only behind their own MTU-determined signal still
-                // yield a valid value. The probe is non-fatal — see enableDetermineMtuNotifications.
+            if (handshakeStep == HandshakeStep.AwaitAutomaticMtu) {
+                // The Xiaomi stack has completed its automatic Android MTU exchange. Continue with
+                // the accessory-side readiness probe; no second requestMtu call is necessary.
                 enableDetermineMtuNotifications(gatt)
             }
         }
@@ -889,7 +899,7 @@ class SonyBleClient(
         // afterwards answers "Tandem channel is not ready". Every route that reaches this point has
         // already established that LE is the link it wants; AUTO would hand that decision back to
         // the stack. Sound Connect hardcodes GattConnectionTransport.LE for the same reason.
-        gatt = if (Build.VERSION.SDK_INT >= 37) {
+        val newGatt = if (Build.VERSION.SDK_INT >= 37) {
             val settings = BluetoothGattConnectionSettings.Builder()
                 .setAutoConnectEnabled(false)
                 .setTransport(BluetoothDevice.TRANSPORT_LE)
@@ -899,6 +909,14 @@ class SonyBleClient(
             @Suppress("DEPRECATION")
             remote.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         }
+        if (newGatt == null) {
+            val reason = "connectGatt returned null for ${remote.address}"
+            log(reason)
+            if (!retryGattConnect(reason)) listener.onBluetoothUnavailable(reason)
+            return
+        }
+        registerGatt(newGatt)
+        gatt = newGatt
     }
 
     fun disconnect() {
@@ -950,14 +968,12 @@ class SonyBleClient(
             writing = false
         }
         gattEndpoints.clear()
-        val mtuPending = handshakeStep == HandshakeStep.RequestMtu
         handshakeStep = HandshakeStep.Idle
         determineMtuNotificationEnabled = false
         writableValueLength = null
         negotiatedMtu = 23
         unsupportedProbe = null
-        gatt?.disconnect()
-        gatt?.let { closeGattAfterMtuSettles(it, mtuPending) }
+        gatt?.let(::requestGattClose)
         gatt = null
         if (notify) {
             listener.onConnectionStateChanged(false, connectedDevice)
@@ -1060,25 +1076,61 @@ class SonyBleClient(
         drainWriteQueue()
     }
 
-    /**
-     * Unregister [target], but not before an MTU request we issued has been answered.
-     * See [gattAwaitingMtuSettle]; the wait is a posted callback, never a blocking one — this
-     * runs on com.android.bluetooth threads.
-     */
-    private fun closeGattAfterMtuSettles(target: BluetoothGatt, mtuPending: Boolean) {
-        if (!mtuPending) {
-            runCatching { target.close() }
-            return
+    private fun registerGatt(target: BluetoothGatt) {
+        synchronized(gattLifecycleLock) {
+            gattLifecycles[target] = GattLifecycle()
         }
-        log("Deferring GATT close until the outstanding MTU exchange settles")
-        gattAwaitingMtuSettle += target
-        timeoutHandler.postDelayed({ finishDeferredGattClose(target, "timeout") }, MTU_SETTLE_TIMEOUT_MS)
     }
 
-    /** Idempotent: whichever of the reply or the timeout arrives first performs the close. */
-    private fun finishDeferredGattClose(target: BluetoothGatt, reason: String) {
-        if (!gattAwaitingMtuSettle.remove(target)) return
-        log("Closing deferred GATT client ($reason)")
+    private fun markGattConnected(target: BluetoothGatt) {
+        synchronized(gattLifecycleLock) {
+            gattLifecycles.getOrPut(target, ::GattLifecycle).connectedObserved = true
+        }
+    }
+
+    private fun hasAutomaticMtuSettled(target: BluetoothGatt): Boolean =
+        synchronized(gattLifecycleLock) {
+            gattLifecycles[target]?.automaticMtuSettled == true
+        }
+
+    /**
+     * Records Xiaomi's automatic MTU completion and closes a client whose teardown was waiting for
+     * it. Returns true when the callback belonged to a client that has now been closed.
+     */
+    private fun markAutomaticMtuSettled(target: BluetoothGatt): Boolean {
+        val closeNow = synchronized(gattLifecycleLock) {
+            val lifecycle = gattLifecycles.getOrPut(target, ::GattLifecycle)
+            lifecycle.automaticMtuSettled = true
+            lifecycle.closeRequested
+        }
+        if (!closeNow) return false
+        closeGattNow(target, "automatic MTU settled")
+        return true
+    }
+
+    /** Drops the link now, but unregisters the client only at a safe lifecycle event. */
+    @SuppressLint("MissingPermission")
+    private fun requestGattClose(target: BluetoothGatt, disconnectedObserved: Boolean = false) {
+        val closeNow = synchronized(gattLifecycleLock) {
+            val lifecycle = gattLifecycles.getOrPut(target, ::GattLifecycle)
+            lifecycle.closeRequested = true
+            lifecycle.automaticMtuSettled || (disconnectedObserved && !lifecycle.connectedObserved)
+        }
+        if (!disconnectedObserved) runCatching { target.disconnect() }
+        if (closeNow) {
+            closeGattNow(
+                target,
+                if (disconnectedObserved) "disconnected before connect" else "automatic MTU already settled",
+            )
+        } else {
+            log("GATT disconnected; close deferred until automatic MTU settles")
+        }
+    }
+
+    private fun closeGattNow(target: BluetoothGatt, reason: String) {
+        val tracked = synchronized(gattLifecycleLock) { gattLifecycles.remove(target) != null }
+        if (!tracked) return
+        log("Closing GATT client ($reason)")
         runCatching { target.close() }
     }
 
@@ -1424,12 +1476,16 @@ class SonyBleClient(
     private fun beginTandemHandshake(gatt: BluetoothGatt) {
         cancelAllTimeouts()
         writableValueLength = null
-        // Sound Connect never reads OPTIMAL_MTU (zero runtime references in the APK); it requests a
-        // fixed 517 (`C16505w`, 0x205) right after connecting and discovers services on
-        // onMtuChanged. Do the same: no extra round trip, and the Android MTU exchange is what
-        // settles the link before WRITABLE_VALUE_LENGTH is read.
-        handshakeStep = HandshakeStep.RequestMtu
-        requestLargeMtu(gatt)
+        // Xiaomi opens every GATT client with automatic MTU enabled. The callback can arrive before
+        // or after service discovery, so join the two events instead of issuing a duplicate MTU
+        // request or guessing completion with a delay.
+        if (hasAutomaticMtuSettled(gatt)) {
+            log("Handshake: automatic MTU already settled")
+            enableDetermineMtuNotifications(gatt)
+        } else {
+            handshakeStep = HandshakeStep.AwaitAutomaticMtu
+            log("Handshake: waiting for automatic MTU settlement")
+        }
     }
 
     private fun handleCharacteristicRead(gatt: BluetoothGatt, uuid: UUID, value: ByteArray, status: Int) {
@@ -1668,24 +1724,9 @@ class SonyBleClient(
             .ifBlank { null }
     }
 
-    private fun requestLargeMtu(gatt: BluetoothGatt) {
-        handshakeStep = HandshakeStep.RequestMtu
-        log("Handshake: request MTU $SC_REQUESTED_MTU")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            if (!gatt.requestMtu(SC_REQUESTED_MTU)) {
-                log("requestMtu returned false; probing the accessory DETERMINE_MTU signal instead")
-                enableDetermineMtuNotifications(gatt)
-            }
-        } else {
-            enableDetermineMtuNotifications(gatt)
-        }
-    }
-
     /**
-     * Keeps the accessory-side DETERMINE_MTU handshake that Sound Connect retains in `C19228a`'s
-     * preparation, used there when the client did NOT do an Android requestMtu
-     * (`doDetermineMtu = !m69483A()`). The module always requests MTU, so SC's active wiring would
-     * skip this entirely — but a generic engine must also serve accessories that only publish a
+     * Keeps the accessory-side DETERMINE_MTU readiness signal after Xiaomi's automatic Android MTU
+     * negotiation. A generic engine must also serve accessories that only publish a
      * valid WRITABLE_VALUE_LENGTH behind their own MTU-determined signal. Run it as a bounded,
      * non-fatal readiness probe: if the accessory signals MTU_IS_DETERMINED (0x01) inside
      * [DETERMINE_MTU_PROBE_TIMEOUT_MS] we read WVL after it; otherwise we read WVL anyway once the
@@ -2377,7 +2418,7 @@ class SonyBleClient(
 
     private enum class HandshakeStep {
         Idle,
-        RequestMtu,
+        AwaitAutomaticMtu,
         EnableDetermineMtu,
         WaitDetermineMtu,
         ReadWritableValueLength,
@@ -2404,18 +2445,11 @@ class SonyBleClient(
         private const val SONY_CHUNK_TANDEM_TRANSMITTING_LINE = 0x03
         private const val SONY_CHUNK_CLASSIC_BLUETOOTH_HASH = 0x05
         private const val SPP_WRITABLE_VALUE_LENGTH = 1024
-        /** Ceiling on how long a close waits for its MTU reply; observed replies land ≤1.4 s. */
-        private const val MTU_SETTLE_TIMEOUT_MS = 2_000L
         private const val WRITABLE_VALUE_LENGTH_TIMEOUT_MS = 2_000L
         /** How long the DETERMINE_MTU readiness probe waits for the accessory's 0x01 before reading
          *  WRITABLE_VALUE_LENGTH anyway (SC's requestMtu path reads it with no wait at all). */
         private const val DETERMINE_MTU_PROBE_TIMEOUT_MS = 500L
         private const val ENABLE_TANDEM_NOTIFICATION_TIMEOUT_MS = 5_000L
-        /**
-         * The MTU this GATT session requests, verbatim from Sound Connect: `C16505w` dials
-         * `requestMtu(517)` (0x205) right after connecting, before service discovery.
-         */
-        private const val SC_REQUESTED_MTU = 517
         /**
          * Sound Connect serializes characteristic writes behind a 5 s semaphore window
          * (`C16505w.mo69538d`: tryAcquire(5000 ms), released by onCharacteristicWrite). A 500 ms

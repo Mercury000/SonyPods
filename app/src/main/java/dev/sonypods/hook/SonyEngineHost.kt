@@ -639,7 +639,9 @@ object SonyEngineHost {
             return
         }
         Log.d(TAG, "reconciling: ${device.address} is connected but has no Tandem session")
-        connectDevice(device, force = true)
+        // Reconcile repairs a missing session; it must not replace an attempt whose automatic MTU
+        // callback is still pending. Explicit identity/transport migrations use force=true elsewhere.
+        connectDevice(device)
     }
 
     /** Whether [address] belongs to the headset this host deliberately released at the last device-level disconnect. */
