@@ -18,6 +18,7 @@
   "commitMessagePrefix": "chore(deps):",
   "commitMessageAction": "升级",
   "commitMessageTopic": "{{depName}}",
+  "platformAutomerge": true,
   "packageRules": [
     {
       "description": "Group AndroidX dependency updates",
