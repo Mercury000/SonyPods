@@ -450,13 +450,15 @@ object MiLinkServiceHook : HookContext() {
         snapshot.leAudioIdentityAddress?.let { le ->
             SonyDeviceService.linkLeAudioIdentity(le, snapshot.deviceAddress)
         }
-        // The headset occasionally drops its own links for well under a second (observed
-        // REMOTE_DEVICE_TERMINATED_POWER_OFF), and the engine then publishes connected=false
-        // with no battery or ANC before the self-reconnect lands. Overwriting the cache here
-        // blanks the fusion-center panel for that blink; the last known values are still the
-        // truth about the headset, so keep them and skip persisting/pushing the empties.
+        // A Tandem-only drop is recoverable while the audio profile remains connected. Once the
+        // audio link is also gone this is a terminal physical disconnect: clear every cached panel
+        // projection instead of leaving MiLink's HeadsetDeviceInfo/PodParams connected forever.
         if (!snapshot.connected && snapshot.deviceAddress == null && currentAddress != null) {
-            Log.d(TAG, "transient disconnect snapshot; retaining panel state")
+            if (snapshot.audioLinkConnected) {
+                Log.d(TAG, "transient transport disconnect; retaining panel state")
+                return
+            }
+            clearDisconnectedState()
             return
         }
         snapshot.deviceAddress?.let {
@@ -488,6 +490,18 @@ object MiLinkServiceHook : HookContext() {
         Log.d(TAG, "state applied battery=${snapshot.batteryLeft}/${snapshot.batteryRight} anc=$currentAnc formFactor=$currentFormFactor overEar=$isOverEar")
         fusionRegistryHook.onSonyStateChanged()
         pushStateToPanel()
+    }
+
+    private fun clearDisconnectedState() {
+        val previousAddress = currentAddress
+        fusionRegistryHook.onSonyDisconnected(previousAddress)
+        currentAddress = null
+        currentBattery = BatteryParams()
+        currentAnc = 1
+        musicVolume = null
+        musicVolumeStep = 0
+        saveState(context)
+        Log.d(TAG, "terminal disconnect; cleared panel state address=$previousAddress")
     }
 
     /** Reassemble HeadsetInfo and notify native listeners so the remote receives complete state. */

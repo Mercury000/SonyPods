@@ -86,6 +86,23 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         wearCapabilityHookInstalled = false
     }
 
+    /** Remove the synthetic Sony entry through MiLink's native headset registry API. */
+    fun onSonyDisconnected(address: String?) {
+        val deviceId = mirroredDeviceId ?: deviceIdOf(service) ?: address
+        if (!deviceId.isNullOrBlank()) {
+            manager()?.let { registry ->
+                runCatching { callMethod(registry, "removeBluetoothDevice", deviceId) }
+                    .onFailure { Log.d(MiLinkServiceHook.TAG, "remove disconnected Sony registry entry failed", it) }
+            }
+        }
+        service?.let { runCatching { setObjectField(it, "connectState", 0) } }
+        service = null
+        mirroredDeviceId = null
+        lastPushMode = -1
+        lastPushBatteryKey = null
+        lastPushVolume = -1
+    }
+
     /** Called whenever module state lands (see [MiLinkServiceHook.applySnapshot]). */
     fun onSonyStateChanged() {
         refreshRegistry(null, broadcast = true)

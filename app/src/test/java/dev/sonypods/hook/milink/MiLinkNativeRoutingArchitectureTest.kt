@@ -98,6 +98,21 @@ class MiLinkNativeRoutingArchitectureTest {
         assertFalse(source.contains("WEAR_SHARE_DEVICE"))
     }
     @Test
+    fun terminalDisconnectClearsPanelProjectionButTransportRecoveryKeepsIt() {
+        val runtime = source("MiLinkServiceHook.kt")
+        val registry = source("MiLinkFusionRegistryHook.kt")
+
+        assertTrue(runtime.contains("if (snapshot.audioLinkConnected)"))
+        assertTrue(runtime.contains("clearDisconnectedState()"))
+        assertTrue(runtime.contains("currentAddress = null"))
+        assertTrue(runtime.contains("currentBattery = BatteryParams()"))
+        assertTrue(runtime.contains("fusionRegistryHook.onSonyDisconnected(previousAddress)"))
+        assertFalse(runtime.contains("transient disconnect snapshot; retaining panel state"))
+        assertTrue(registry.contains("removeBluetoothDevice",))
+        assertTrue(registry.contains("setObjectField(it, \"connectState\", 0)"))
+    }
+
+    @Test
     fun endpointTranslationRemainsInstalled() {
         val runtime = source("MiLinkServiceHook.kt")
         val remote = source("MiLinkRemoteProtocolHook.kt")
