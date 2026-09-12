@@ -24,6 +24,15 @@ on:
       - "gradlew.bat"
       - ".github/workflows/build.yml"
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build type
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
 
 jobs:
   build:
@@ -132,11 +141,11 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        if: steps.version.outputs.changed != 'true'
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_type == 'debug') || (github.event_name != 'workflow_dispatch' && steps.version.outputs.changed != 'true')
         run: ./gradlew :app:assembleDebug
 
       - name: Upload debug APK
-        if: steps.version.outputs.changed != 'true'
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_type == 'debug') || (github.event_name != 'workflow_dispatch' && steps.version.outputs.changed != 'true')
         uses: actions/upload-artifact@v7.0.1
         with:
           name: SonyPods-${{ steps.version.outputs.version_name }}-debug
@@ -144,11 +153,11 @@ jobs:
           if-no-files-found: error
 
       - name: Build release APK
-        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_type == 'release') || (github.event_name == 'push' && steps.version.outputs.changed == 'true')
         run: ./gradlew :app:assembleRelease
 
       - name: Sign release APK
-        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_type == 'release') || (github.event_name == 'push' && steps.version.outputs.changed == 'true')
         id: sign
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
@@ -183,7 +192,7 @@ jobs:
           echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload release APK
-        if: github.event_name == 'push' && steps.version.outputs.changed == 'true'
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_type == 'release') || (github.event_name == 'push' && steps.version.outputs.changed == 'true')
         uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.sign.outputs.apk }}
