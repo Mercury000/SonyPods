@@ -46,7 +46,7 @@ flowchart LR
 5. acquire 同时携带官方 App 进程创建的 Binder token。若 App 崩溃或被强杀，`IBinder.DeathRecipient` 直接触发 release；
 6. 若 `com.android.bluetooth` 在租约期间重启，引擎发送 `engine_ready`；只要仍有持有来源或正在宽限期内，官方 App Hook 就立即重申当前租约，避免重启后误抢连接。
 
-官方 13.2.1 的实际 session 检测基于其混淆 connection controller，安装失败时会自动降级为稳定类名的 Activity + `KeepConnectionForegroundService` 生命周期，不会导致整个 Hook 失效。由于本模块只面向 Android 15/HyperOS，租约统一使用该平台实际可用的校验方式：官方进程 UID/package 声明由引擎通过 PackageManager 核验，并同时检查明确目标包、lease ID 和 Binder 存活性；普通命令不进入租约校验。该机制不轮询 Sound Connect 的进程或前后台状态。15 秒 reconcile 仍只负责 SonyPods 自身连接自愈，并在官方 App 持有租约期间无条件跳过。
+官方 13.2.x 的实际 session 检测通过 DexKit 按 connection controller 的稳定日志字符串、共享 session-holder 字段及 `Map.put/remove/keySet/entrySet` 数据流解析，不再依赖 `p0/r1/u1/V0/z0` 等 R8 名称；解析或整组校验失败时会自动降级为 Activity + 稳定 Android Service ABI 的 `KeepConnectionForegroundService` 生命周期，不会安装半套 session Hook，也不会导致整个 Hook 失效。由于本模块只面向 Android 15/HyperOS，租约统一使用该平台实际可用的校验方式：官方进程 UID/package 声明由引擎通过 PackageManager 核验，并同时检查明确目标包、lease ID 和 Binder 存活性；普通命令不进入租约校验。该机制不轮询 Sound Connect 的进程或前后台状态。15 秒 reconcile 仍只负责 SonyPods 自身连接自愈，并在官方 App 持有租约期间无条件跳过。
 
 ## 4. 协议选择
 

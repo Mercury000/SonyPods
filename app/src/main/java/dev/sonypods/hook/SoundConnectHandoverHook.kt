@@ -15,6 +15,8 @@ import android.os.Looper
 import android.os.Process
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
+import dev.sonypods.hook.symbols.ResolvedSymbolBundle
+import java.lang.reflect.Method
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.UUID
@@ -31,10 +33,6 @@ import java.lang.reflect.Modifier
  */
 object SoundConnectHandoverHook : HookContext() {
     private const val TAG = "SonyPods-Hook"
-    private const val KEEP_CONNECTION_SERVICE =
-        "com.sony.songpal.mdr.service.KeepConnectionForegroundService"
-    private const val MDR_CONNECTION_CONTROLLER =
-        "com.sony.songpal.mdr.platform.connection.connection.p0"
     private const val RELEASE_GRACE_MS = 2_000L
 
     @Volatile
@@ -87,7 +85,20 @@ object SoundConnectHandoverHook : HookContext() {
             return
         }
 
-        val coordinator = LeaseCoordinator(application)
+        val serviceSymbols = requireSymbols(SoundConnectServiceSymbols)
+        val sessionSymbols = runCatching { requireSymbols(SoundConnectSessionSymbols) }
+            .onFailure { Log.w(TAG, "MDR session symbols unavailable; using lifecycle/service fallback", it) }
+            .getOrNull()
+        val sessionContract = sessionSymbols?.let {
+            MdrSessionContract(
+                controllerClassName = it.clazz("controller").name,
+                addSession = it.method("addSession"),
+                removeSession = it.method("removeSession"),
+                clearSessions = it.method("clearSessions"),
+                firstSession = it.method("firstSession"),
+            )
+        }
+        val coordinator = LeaseCoordinator(application, sessionContract)
         application.registerActivityLifecycleCallbacks(coordinator)
         val engineReadyReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
@@ -101,8 +112,8 @@ object SoundConnectHandoverHook : HookContext() {
             IntentFilter(SonyBridge.ACTION_ENGINE_READY),
             Context.RECEIVER_EXPORTED,
         )
-        installKeepConnectionServiceHooks(coordinator)
-        installMdrSessionHooks(coordinator)
+        installKeepConnectionServiceHooks(coordinator, serviceSymbols)
+        sessionContract?.let { installMdrSessionHooks(coordinator, it) }
         coordinator.restoreExistingOwnership()
         leaseCoordinator = coordinator
         this.engineReadyReceiver = engineReadyReceiver
@@ -112,17 +123,14 @@ object SoundConnectHandoverHook : HookContext() {
     }
 
     /** Stable fallback for versions whose obfuscated connection-controller names change. */
-    private fun installKeepConnectionServiceHooks(coordinator: LeaseCoordinator) {
+    private fun installKeepConnectionServiceHooks(
+        coordinator: LeaseCoordinator,
+        symbols: ResolvedSymbolBundle,
+    ) {
         runCatching {
-            val onBind = findMethod(KEEP_CONNECTION_SERVICE, "onBind", Intent::class.java)
-            val onStartCommand = findMethod(
-                KEEP_CONNECTION_SERVICE,
-                "onStartCommand",
-                Intent::class.java,
-                Int::class.javaPrimitiveType!!,
-                Int::class.javaPrimitiveType!!,
-            )
-            val onDestroy = findMethod(KEEP_CONNECTION_SERVICE, "onDestroy")
+            val onBind = symbols.method("onBind")
+            val onStartCommand = symbols.method("onStartCommand")
+            val onDestroy = symbols.method("onDestroy")
             hookBefore(onBind) {
                 coordinator.setKeepConnectionServiceActive(
                     instance,
@@ -148,34 +156,33 @@ object SoundConnectHandoverHook : HookContext() {
         }.onFailure { Log.w(TAG, "KeepConnectionForegroundService hooks unavailable", it) }
     }
 
-    /**
-     * Sound Connect 13.2.1 stores live MDR sessions in p0's holder map. These
-     * obfuscated hooks are best-effort: the stable foreground-service hook above
-     * continues to protect background ownership if a future release renames them.
-     */
-    private fun installMdrSessionHooks(coordinator: LeaseCoordinator) {
+    /** Installs the complete session mutation set atomically; partial observation is forbidden. */
+    private fun installMdrSessionHooks(coordinator: LeaseCoordinator, contract: MdrSessionContract) {
         runCatching {
-            // Resolve the complete set before installing any one hook. A partial set
-            // could observe an add but miss every removal and hold the lease forever.
-            val addSession = findMethodByParamCount(MDR_CONNECTION_CONTROLLER, "r1", 2)
-            val removeSession = findMethodByParamCount(MDR_CONNECTION_CONTROLLER, "u1", 1)
-            val clearSessions = findMethodByParamCount(MDR_CONNECTION_CONTROLLER, "V0", 0)
-            findMethodByParamCount(MDR_CONNECTION_CONTROLLER, "z0", 0)
-            hookAfter(addSession) {
+            hookAfter(contract.addSession) {
                 coordinator.refreshMdrSession(instance, "mdr-session-added")
             }
-            hookAfter(removeSession) {
+            hookAfter(contract.removeSession) {
                 coordinator.refreshMdrSession(instance, "mdr-session-removed")
             }
-            hookAfter(clearSessions) {
+            hookAfter(contract.clearSessions) {
                 coordinator.refreshMdrSession(instance, "all-mdr-sessions-removed")
             }
-            Log.d(TAG, "MDR session hooks installed controller=$MDR_CONNECTION_CONTROLLER")
+            Log.d(TAG, "MDR session hooks installed controller=${contract.controllerClassName}")
         }.onFailure { Log.w(TAG, "MDR session hooks unavailable; using lifecycle/service fallback", it) }
     }
 
+    private data class MdrSessionContract(
+        val controllerClassName: String,
+        val addSession: Method,
+        val removeSession: Method,
+        val clearSessions: Method,
+        val firstSession: Method,
+    )
+
     private class LeaseCoordinator(
         private val application: Application,
+        private val sessionContract: MdrSessionContract?,
     ) : Application.ActivityLifecycleCallbacks {
         private val handler = Handler(Looper.getMainLooper())
         private val creatingActivities = identitySet<Activity>()
@@ -226,14 +233,16 @@ object SoundConnectHandoverHook : HookContext() {
                         ?.filterNotNull()
                         .orEmpty()
                     liveServices.let(roots::addAll)
-                    if (liveServices.any { it.javaClass.name == KEEP_CONNECTION_SERVICE }) {
+                    if (liveServices.any { it.javaClass.name == SoundConnectServiceSymbols.SERVICE_CLASS }) {
                         activeKeepConnectionServices += restoredServiceMarker
                     }
-                    val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
-                    roots.flatMap { root ->
-                        findObjectsByClassName(root, MDR_CONNECTION_CONTROLLER, seen)
-                    }.distinct().forEach { controller ->
-                        refreshMdrSession(controller, "hot-reload-existing-mdr")
+                    sessionContract?.let { contract ->
+                        val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+                        roots.flatMap { root ->
+                            findObjectsByClassName(root, contract.controllerClassName, seen)
+                        }.distinct().forEach { controller ->
+                            refreshMdrSession(controller, "hot-reload-existing-mdr")
+                        }
                     }
                 }.onFailure { Log.w(TAG, "existing Sound Connect Activity scan failed", it) }
                 reconcileLocked("hot-reload-existing-ownership")
@@ -283,7 +292,8 @@ object SoundConnectHandoverHook : HookContext() {
 
         fun refreshMdrSession(instance: Any?, reason: String) {
             if (instance == null) return
-            val active = runCatching { callMethod(instance, "z0") != null }
+            val probe = sessionContract?.firstSession ?: return
+            val active = runCatching { probe.invoke(instance) != null }
                 .onFailure { Log.w(TAG, "failed to inspect Sound Connect MDR sessions", it) }
                 .getOrNull() ?: return
             synchronized(this) {
