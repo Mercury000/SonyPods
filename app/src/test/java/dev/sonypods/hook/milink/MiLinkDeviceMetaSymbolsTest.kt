@@ -93,6 +93,14 @@ class MiLinkSampleDescriptorTest {
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/wear/agent/device/controller/b;->s:Lcom/miui/circulate/api/service/CirculateServiceInfo;",
                 ),
+                "volumeField" to SymbolReference(
+                    SymbolKind.FIELD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->l:I",
+                ),
+                "modeField" to SymbolReference(
+                    SymbolKind.FIELD,
+                    "Lcom/miui/circulate/wear/agent/device/controller/b;->o:I",
+                ),
                 "supportModeField" to SymbolReference(
                     SymbolKind.FIELD,
                     "Lcom/miui/circulate/wear/agent/device/controller/b;->p:I",

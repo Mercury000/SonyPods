@@ -71,7 +71,7 @@ class MiLinkNativeRoutingArchitectureTest {
     }
 
     @Test
-    fun wearCapabilityIsInitializedBeforeActiveCallbackCanPublish() {
+    fun completeWearStateIsInitializedBeforeActiveCallbackCanPublish() {
         val source = source("MiLinkFusionRegistryHook.kt")
         val runtime = source("MiLinkServiceHook.kt")
 
@@ -81,8 +81,12 @@ class MiLinkNativeRoutingArchitectureTest {
         assertTrue(source.contains("wearCallbackMethods.forEach"))
         assertTrue(source.contains("if (registered) return@hookBefore"))
         assertTrue(source.contains("seedWearCapabilityFromController(listener)"))
+        assertTrue(source.contains("callMethod(wearController, \"getBluetoothDeviceVolume\", wearService)"))
+        assertTrue(source.contains("callMethod(wearController, \"getBluetoothDeviceMode\", wearService)"))
         assertTrue(source.contains("callMethod(wearController, \"getSupportAncMode\", wearService)"))
         assertTrue(source.contains("supportFuture.getNow(null)"))
+        assertTrue(source.contains("wearVolumeField.setInt(notify, volume)"))
+        assertTrue(source.contains("wearModeField.setInt(notify, mode)"))
         assertTrue(source.contains("wearSupportModeField.setInt(notify, supportMode)"))
         assertFalse(source.contains("DexFile"))
         assertFalse(source.contains("declaredFields"))
@@ -150,6 +154,10 @@ class MiLinkNativeRoutingArchitectureTest {
     fun wearSupportModeUsesDexKitFieldShape() {
         val source = source("MiLinkWearSymbols.kt")
 
+        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothVolumeChanged\")"))
+        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothModeChanged\")"))
+        assertTrue(source.contains("callbackIntStateField(listener, \"onBluetoothAudioEffectChanged\")"))
+        assertTrue(source.contains("FieldUsingType.Write"))
         assertTrue(source.contains("supportModeRuns"))
         assertTrue(source.contains("isMutableIntField"))
         assertFalse(source.contains("getSupportAncMode"))

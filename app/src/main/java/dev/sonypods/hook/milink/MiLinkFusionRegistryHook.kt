@@ -67,6 +67,8 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     private lateinit var wearListenerClass: Class<*>
     private lateinit var wearControllerField: Field
     private lateinit var wearServiceField: Field
+    private lateinit var wearVolumeField: Field
+    private lateinit var wearModeField: Field
     private lateinit var wearSupportModeField: Field
     private lateinit var wearCallbackListField: Field
     private lateinit var wearCallbackMethods: List<Method>
@@ -206,6 +208,8 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             wearListenerClass = symbols.clazz("listener")
             wearControllerField = symbols.field("controllerField")
             wearServiceField = symbols.field("serviceField")
+            wearVolumeField = symbols.field("volumeField")
+            wearModeField = symbols.field("modeField")
             wearSupportModeField = symbols.field("supportModeField")
             wearCallbackListField = symbols.field("callbackListField")
             wearCallbackMethods = listOf(
@@ -233,14 +237,23 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
     }
 
     /**
-     * Query the authoritative controller synchronously only when its future is already complete,
-     * then initialize Wear's consumer state before any callback-triggered ShareDevice publication.
+     * Atomically prepare the complete Wear consumer snapshot before callback registration can
+     * publish it. The synchronous mode/volume getters read the same native registry that backs
+     * the phone panel; support is accepted only when its future has already completed.
      */
     private fun seedWearCapabilityFromController(notify: Any) {
         val wearController = runCatching { wearControllerField.get(notify) }.getOrNull() ?: return
         val wearService = runCatching { wearServiceField.get(notify) }.getOrNull() ?: return
         if (!isSonyService(wearService)) return
 
+        // Make the registry entry available before reading it on a cold MiLink/Wear start.
+        refreshRegistry(wearService, broadcast = false)
+        val volume = runCatching {
+            (callMethod(wearController, "getBluetoothDeviceVolume", wearService) as? Number)?.toInt()
+        }.getOrNull()?.takeIf { it in 0..100 } ?: return
+        val mode = runCatching {
+            (callMethod(wearController, "getBluetoothDeviceMode", wearService) as? Number)?.toInt()
+        }.getOrNull()?.takeIf { it in 0..2 } ?: return
         val supportFuture = runCatching {
             callMethod(wearController, "getSupportAncMode", wearService) as? CompletableFuture<*>
         }.getOrNull() ?: return
@@ -249,8 +262,14 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             ?.toInt()
             ?.takeIf { it in 1..2 }
             ?: return
-        runCatching { wearSupportModeField.setInt(notify, supportMode) }
-            .onFailure { Log.d(MiLinkServiceHook.TAG, "initialize Wear supportMode skipped", it) }
+
+        // No listener is registered until this hook returns, so all three fields become visible
+        // together to the first ShareDevice publication rather than as partial callback updates.
+        runCatching {
+            wearVolumeField.setInt(notify, volume)
+            wearModeField.setInt(notify, mode)
+            wearSupportModeField.setInt(notify, supportMode)
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "initialize complete Wear headset state skipped", it) }
     }
 
     private fun remember(svc: Any?, ctrl: Any?) {
