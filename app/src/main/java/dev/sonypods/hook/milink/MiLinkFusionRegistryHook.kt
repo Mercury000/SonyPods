@@ -167,6 +167,21 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
             }
         }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.getBluetoothDeviceInfo skipped", it) }
 
+        // HeadSetsDetail's single-battery (type 7) open path enables the ANC card but never applies
+        // the current mode; the selection only appears when onBluetoothModeChanged arrives. The panel
+        // registers its notify right after refreshHeadsetProperty, so seeding on registration gives
+        // the first open the mirrored mode/battery/volume exactly as a real state change would.
+        runCatching {
+            hook.hookAfter(
+                hook.requireSymbols(MiLinkFusionSymbols).method("registerServiceNotify"),
+                logicalRole = "fusion-registry-notify-seed",
+            ) {
+                if (!isSonyService(service)) return@hookAfter
+                remember(service, instance)
+                notifyNonWearConsumers()
+            }
+        }.onFailure { Log.d(MiLinkServiceHook.TAG, "hook HeadsetServiceController.registerServiceNotify skipped", it) }
+
         // getSupportAncMode: 2 makes both the detail panel and Wear Agent advertise the full
         // ANC set (通透/降噪/关闭). Capability is a property of the Sony headset, not of which
         // MiLink process currently handles its Tandem session. Gating this presentation read lets
