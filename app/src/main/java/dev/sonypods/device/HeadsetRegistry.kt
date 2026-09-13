@@ -87,6 +87,14 @@ object HeadsetRegistry {
         return recordFor(normalized)?.controlAddress ?: normalized
     }
 
+    /** Whether two addresses are identities of the same known headset. */
+    fun sameHeadset(first: String?, second: String?): Boolean {
+        val a = normalizeAddress(first) ?: return false
+        val b = normalizeAddress(second) ?: return false
+        if (a == b) return true
+        return recordFor(a)?.addresses?.any { it.equals(b, ignoreCase = true) } == true
+    }
+
     /** The addresses of this headset other than [address]. No direction implied. */
     fun siblingAddressesOf(address: String?): List<String> {
         val normalized = normalizeAddress(address) ?: return emptyList()

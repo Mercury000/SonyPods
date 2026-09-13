@@ -117,6 +117,16 @@ class HeadsetRegistryTest {
     }
 
     @Test
+    fun `same-headset matching folds proved aliases only`() {
+        HeadsetRegistry.rememberPair(leAddress = leLeft, controlAddress = classic)
+
+        assertTrue(HeadsetRegistry.sameHeadset(classic, leLeft))
+        assertTrue(HeadsetRegistry.sameHeadset(leLeft, classic))
+        assertFalse(HeadsetRegistry.sameHeadset(classic, leRight))
+        assertFalse(HeadsetRegistry.sameHeadset(classic, null))
+    }
+
+    @Test
     fun `direction is only ever recorded by a prover`() {
         HeadsetRegistry.rememberSession(key = key, sessionAddress = leLeft)
         HeadsetRegistry.rememberReportedAddresses(

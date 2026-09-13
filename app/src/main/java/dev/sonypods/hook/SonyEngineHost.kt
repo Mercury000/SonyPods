@@ -550,6 +550,22 @@ object SonyEngineHost {
         connectDevice(remote, force = true)
     }
 
+    /**
+     * LE Audio connected on one identity. The topology resolver owns the exact GATT target, so
+     * do not wait for a particular public/control identity before starting recovery.
+     */
+    fun connectDeviceAfterLeAudioConnected(device: BluetoothDevice) {
+        val repo = repository ?: return
+        val address = runCatching { device.address }.getOrNull() ?: return
+        if (!repo.isTandemConnectInFlight()) {
+            if (HeadsetRegistry.sameHeadset(connectInFlightAddress, address)) {
+                connectInFlightAddress = null
+            }
+            lastConnectAttemptMs = 0L
+        }
+        connectDevice(device)
+    }
+
     /** Wake a route that is waiting for its exact LE Audio identity. */
     fun retryPendingTandem(reason: String) {
         if (officialAppOwnsTandem) return
@@ -584,7 +600,7 @@ object SonyEngineHost {
             return
         }
         val current = repo.state.value
-        val alreadyLive = current.connectedDevice?.address.equals(address, ignoreCase = true) &&
+        val alreadyLive = HeadsetRegistry.sameHeadset(current.connectedDevice?.address, address) &&
             current.deviceInfo.protocolReady &&
             repo.hasLiveTransport()
         val now = SystemClock.elapsedRealtime()
@@ -593,7 +609,7 @@ object SonyEngineHost {
             if (!force) return
         }
         val sameAttemptInFlight = !force &&
-            connectInFlightAddress?.equals(address, ignoreCase = true) == true &&
+            HeadsetRegistry.sameHeadset(connectInFlightAddress, address) &&
             now - lastConnectAttemptMs < CONNECT_IN_FLIGHT_TIMEOUT_MS
         if (sameAttemptInFlight) return
         if (!force && now - lastConnectAttemptMs < CONNECT_COOLDOWN_MS) return
@@ -609,13 +625,13 @@ object SonyEngineHost {
                 // CONNECT_IN_FLIGHT_TIMEOUT_MS. The client owns the wait and is woken directly by
                 // the LE Audio state hook.
                 if (!repo.isTandemConnectInFlight() &&
-                    connectInFlightAddress.equals(address, ignoreCase = true)
+                    HeadsetRegistry.sameHeadset(connectInFlightAddress, address)
                 ) {
                     connectInFlightAddress = null
                 }
             }
             .onFailure {
-                if (connectInFlightAddress.equals(address, ignoreCase = true)) {
+                if (HeadsetRegistry.sameHeadset(connectInFlightAddress, address)) {
                     connectInFlightAddress = null
                 }
                 Log.w(TAG, "Tandem connect request failed address=$address", it)

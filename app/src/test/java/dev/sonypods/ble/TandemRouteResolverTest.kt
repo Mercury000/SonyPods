@@ -19,6 +19,16 @@ class TandemRouteResolverTest {
     }
 
     @Test
+    fun connectedLeLeadAlone_isTheOnlyGattTarget() {
+        val decision = resolve(connected = setOf(le))
+
+        assertTrue(decision is TandemRouteDecision.Ready)
+        decision as TandemRouteDecision.Ready
+        assertEquals(le, decision.targetAddress)
+        assertEquals(TandemConnectionMode.GATT, decision.mode)
+    }
+
+    @Test
     fun exactLeIdentityAppearing_makesRouteReady() {
         val decision = resolve(connected = setOf(control, le))
 

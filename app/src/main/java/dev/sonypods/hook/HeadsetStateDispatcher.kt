@@ -287,78 +287,35 @@ object HeadsetStateDispatcher : HookContext() {
             recoverTandem = currState == BluetoothProfile.STATE_CONNECTED,
         )
 
-        // Both coordinated-set members reach CONNECTED, but only the classic identity
-        // carries Sony's services. Acting on the lead earbud's resolvable LE identity is
-        // wrong twice over: the session would never handshake on an identity with no Sony
-        // GATT server, and dialing the control counterpart while its own CIS is still
-        // forming collides with link establishment and stalls both for tens of seconds.
-        // So fold identities first and answer only for the control identity. SonyBleClient then
-        // resolves the exact connected LE target from one topology snapshot when GATT is live.
-        val controlAddress = resolveControlAddress(serviceInstance, device)
-        // Not `controlAddress == null || ...`. The registry cannot answer for a headset no Tandem
-        // session has ever named, and reading "unknown" as "this *is* the control identity" is the
-        // dangerous direction: it skips the coordinated-set guard below, so one earbud going back in
-        // its case tears down a session that is still streaming. Unknown therefore falls back to the
-        // group, which the LE Audio profile answers directly.
-        val proven = controlAddress != null &&
-            HeadsetRegistry.recordFor(device.address)?.controlAddress != null
-        val fromControlIdentity = if (proven) {
-            controlAddress.equals(device.address, ignoreCase = true)
-        } else {
-            val group = leAudioGroupAddresses(serviceInstance, device)
-            // A lone device is its own set: nothing else can own the session, so its transition is
-            // the session's. A member of a larger set is not assumed to be the owner.
-            group == null || group.size <= 1
-        }
         when (currState) {
             BluetoothProfile.STATE_CONNECTED -> {
-                if (!fromControlIdentity) {
-                    // Deferring is only right when the control identity is itself an LE Audio
-                    // device — otherwise nothing ever announces it and the session never
-                    // starts, since under LC3 there is no A2DP transition either. The profile
-                    // answers this directly: a device reaches notifyConnectionStateChanged only
-                    // if it holds a LeAudioDeviceDescriptor, and getGroupDevices lists exactly
-                    // the descriptors in that group.
-                    // Non-null by construction here: fromControlIdentity is false only when the
-                    // fold produced a different address, which requires one.
-                    val foldedControl = controlAddress ?: return
-                    val group = leAudioGroupAddresses(serviceInstance, device)
-                    if (group == null || foldedControl.uppercase() in group) {
-                        Log.d(
-                            "SonyPods-Engine",
-                            "Deferring ${device.address}; control identity $foldedControl " +
-                                "will announce separately",
-                        )
-                        return
-                    }
-                    val control = remoteControlDevice(serviceInstance, foldedControl) ?: return
-                    Log.d(
-                        "SonyPods-Engine",
-                        "Control identity $controlAddress is outside the LE Audio group " +
-                            "$group; connecting it from ${device.address}",
-                    )
-                    postToProfileHandler(serviceInstance) {
-                        SonyEngineHost.onLinkConnected(control.address)
-                    SonyEngineHost.connectDevice(control)
-                    }
-                    return
-                }
+                // Either identity can prove that the LE Audio bearer is usable. Start through
+                // SonyBleClient immediately and let its topology resolver select the exact GATT
+                // target. Waiting here for the control alias made a healthy C5 connection invisible
+                // until a second, unrelated group member finished connecting.
                 postToProfileHandler(serviceInstance) {
                     SonyEngineHost.onLinkConnected(device.address)
-                    SonyEngineHost.connectDevice(device)
+                    SonyEngineHost.connectDeviceAfterLeAudioConnected(device)
                 }
             }
 
             BluetoothProfile.STATE_DISCONNECTED -> {
+                val controlAddress = resolveControlAddress(serviceInstance, device)
+                // Unknown direction falls back to the group. Assuming an unknown address is the
+                // control identity would tear down a live session when one set member leaves.
+                val proven = controlAddress != null &&
+                    HeadsetRegistry.recordFor(device.address)?.controlAddress != null
+                val fromControlIdentity = if (proven) {
+                    controlAddress.equals(device.address, ignoreCase = true)
+                } else {
+                    val group = leAudioGroupAddresses(serviceInstance, device)
+                    group == null || group.size <= 1
+                }
+
                 // The classic path learns physical power-off from A2DP; under LE Audio no
                 // other signal marks it, and without terminal teardown the surfaces stay
-                // preserved "for recovery" forever. But a coordinated-set member leaving is
-                // routine, not terminal — one earbud back in the case drops its own CIS while
-                // the other keeps playing, and the control link is untouched. Folding that
-                // member's drop onto the control identity would tear down a session that is
-                // still exchanging frames, the same mistake the A2DP path made under LC3.
-                // Only the control identity's own transition ends the session; when the
-                // headset really powers off, that transition follows.
+                // preserved "for recovery" forever. A coordinated-set member leaving is
+                // routine, not terminal, so only the control identity ends the session.
                 if (!fromControlIdentity) {
                     Log.d(
                         "SonyPods-Engine",
@@ -519,13 +476,6 @@ object HeadsetStateDispatcher : HookContext() {
         val bonded = adapter.bondedDevices.orEmpty()
         return SonyDeviceService.resolveControlAddress(device.address) ?: device.address
     }
-
-    @SuppressLint("MissingPermission")
-    private fun remoteControlDevice(serviceInstance: Any?, address: String): BluetoothDevice? =
-        (serviceInstance as? Context)
-            ?.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
-            ?.runCatching { getRemoteDevice(address) }
-            ?.getOrNull()
 
     private fun registerAppRequestReceiver(context: Context?) {
         if (context == null || appRequestReceiverRegistered) return
