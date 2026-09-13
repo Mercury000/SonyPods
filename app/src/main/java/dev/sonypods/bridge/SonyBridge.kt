@@ -11,13 +11,11 @@ import dev.sonypods.protocol.NoiseControlMode
  * Cross-process contract between the Sony engine (hosted in the `com.android.bluetooth`
  * hook process) and every consumer: the module UI and the HyperOS surfaces.
  *
- * State flows engine -> consumers as a [SonyStateSnapshot]; commands flow
- * consumers -> engine as [ACTION_COMMAND] broadcasts.
+ * State flows engine -> consumers through [SonyStateBus] (settings entry + content
+ * observers); commands flow consumers -> engine as [ACTION_COMMAND] broadcasts (they
+ * originate from user actions and PendingIntent buttons, never from periodic work).
  */
 object SonyBridge {
-    /** Engine -> consumers: full state snapshot. */
-    const val ACTION_STATE = "dev.sonypods.action.state"
-
     /** Consumers -> engine: a control command, see [EXTRA_COMMAND]. */
     const val ACTION_COMMAND = "dev.sonypods.action.command"
 
@@ -107,8 +105,6 @@ object SonyBridge {
     const val CMD_IMAGE_READY = "image_ready"
     /** The app finished publishing the cloud model catalog to Remote Files. */
     const val CMD_CLOUD_MODEL_INFO_READY = "cloud_model_info_ready"
-    /** Ask the engine to re-broadcast its current state (for late-starting consumers). */
-    const val CMD_REPUBLISH = "republish"
 
     /**
      * Sent by the process that renders the HyperOS notification and island once its
@@ -127,14 +123,6 @@ object SonyBridge {
     /** The process that hosts the engine; all commands are addressed to it. */
     const val ENGINE_PACKAGE = "com.android.bluetooth"
     const val OFFICIAL_APP_PACKAGE = "com.sony.songpal.mdr"
-
-    /** Processes that render headphone state in system surfaces, plus the module app. */
-    val STATE_CONSUMERS = listOf(
-        "com.mercury.sonypods",
-        "com.xiaomi.bluetooth",
-        "com.milink.service",
-        "com.android.settings",
-    )
 
     fun sendCommand(context: Context, command: String, fill: Intent.() -> Unit = {}) {
         runCatching {

@@ -1,91 +1,95 @@
 package dev.sonypods.bridge
 
-import android.content.BroadcastReceiver
+import android.content.ContentResolver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.database.ContentObserver
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import dev.sonypods.device.SonyDeviceService
+import dev.sonypods.hook.Log
 
 /**
- * Keeps a hooked system process in sync with the engine's state.
+ * Consumer-side mirror of the engine's state, fed by the [SonyStateBus] settings entry.
  *
- * Each hook creates one, registers it once it has a context, and reads
- * [snapshot] whenever the system asks it for headphone state.
- *
- * Registration races with the engine at boot: a consumer process can come up
- * before the bluetooth process has booted the engine, in which case its replay
- * request goes nowhere and — since state is only broadcast on change — it would
- * stay empty until the user next touched something. So the request is retried
- * until the first snapshot actually arrives.
+ * Registering attaches a content observer and immediately reads the current value; every
+ * later engine write notifies exactly the subscribed processes. Nothing is polled and
+ * nothing is replayed, so a stopped engine simply publishes no further changes.
  */
-class HookStateMirror(private val onChanged: (SonyStateSnapshot) -> Unit = {}) {
+class HookStateMirror(
+    private val onEnvelope: ((SonyStateSnapshot, Bundle) -> Unit)? = null,
+    private val onChanged: (SonyStateSnapshot) -> Unit = {},
+) {
 
     @Volatile
     var snapshot: SonyStateSnapshot = SonyStateSnapshot()
         private set
 
-    @Volatile
-    private var received = false
-
     private var registered = false
     private var registeredContext: Context? = null
-    private var receiver: BroadcastReceiver? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var observer: ContentObserver? = null
+    private val main = Handler(Looper.getMainLooper())
 
     fun register(context: Context?) {
         if (context == null || registered) return
         val appContext = context.applicationContext ?: context
-        runCatching {
-            val stateReceiver = object : BroadcastReceiver() {
-                    override fun onReceive(ctx: Context?, intent: Intent?) {
-                        if (intent?.action != SonyBridge.ACTION_STATE) return
-                        val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
-                        received = true
-                        snapshot = SonyStateSnapshot.fromBundle(bundle)
-                        SonyDeviceService.rememberAddress(snapshot.deviceAddress)
-                        onChanged(snapshot)
-                    }
-                }
-            appContext.registerReceiver(
-                stateReceiver,
-                IntentFilter(SonyBridge.ACTION_STATE),
-                Context.RECEIVER_EXPORTED,
-            )
-            receiver = stateReceiver
-            registeredContext = appContext
-            registered = true
-            requestReplay(appContext, attempt = 0)
+        registeredContext = appContext
+        registered = true
+        val resolver = appContext.contentResolver
+        val watcher = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                readAndDispatch(resolver)
+            }
         }
+        runCatching {
+            resolver.registerContentObserver(SonyStateBus.uri(), false, watcher)
+            observer = watcher
+        }.onFailure { Log.w(TAG, "state observer registration failed", it) }
+        readAndDispatch(resolver)
     }
 
     fun close() {
-        handler.removeCallbacksAndMessages(null)
-        val ctx = registeredContext
-        val stateReceiver = receiver
-        if (ctx != null && stateReceiver != null) {
-            try {
-                ctx.unregisterReceiver(stateReceiver)
-            } catch (_: IllegalArgumentException) {
-                // The receiver was already unregistered; close remains idempotent.
+        val watcher = observer
+        observer = null
+        if (watcher != null) {
+            registeredContext?.let { context ->
+                runCatching { context.contentResolver.unregisterContentObserver(watcher) }
             }
         }
-        receiver = null
-        registeredContext = null
         registered = false
-        received = false
-        snapshot = SonyStateSnapshot()
+        registeredContext = null
     }
 
-    private fun requestReplay(context: Context, attempt: Int) {
-        if (received || attempt >= REPLAY_ATTEMPTS) return
-        SonyBridge.sendCommand(context, SonyBridge.CMD_REPUBLISH)
-        handler.postDelayed({ requestReplay(context, attempt + 1) }, REPLAY_INTERVAL_MS)
+    /** Re-reads the current value. A pull, not a replay: the bus holds one value. */
+    fun refresh() {
+        registeredContext?.let { readAndDispatch(it.contentResolver) }
+    }
+
+    private fun readAndDispatch(resolver: ContentResolver) {
+        SonyStateBus.read(resolver)?.let(::dispatch)
+    }
+
+    private fun dispatch(envelope: Bundle) {
+        val bundle = envelope.getBundle(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
+        val state = SonyStateSnapshot.fromBundle(bundle)
+        // Delivery already runs on the main handler; keep the explicit check so a
+        // caller-invoked refresh cannot bypass the main-thread contract.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            apply(state, envelope)
+        } else {
+            main.post { apply(state, envelope) }
+        }
+    }
+
+    private fun apply(state: SonyStateSnapshot, envelope: Bundle) {
+        if (!registered) return
+        snapshot = state
+        SonyDeviceService.rememberAddress(state.deviceAddress)
+        onChanged(state)
+        onEnvelope?.invoke(state, envelope)
     }
 
     private companion object {
-        const val REPLAY_ATTEMPTS = 10
-        const val REPLAY_INTERVAL_MS = 3_000L
+        const val TAG = "SonyPods-Bridge"
     }
 }

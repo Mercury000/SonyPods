@@ -25,6 +25,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
+import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import com.mercury.sonypods.R
@@ -71,9 +72,9 @@ object OfficialFastConnectDialogHook : HookContext() {
         "sonypods.reload.official_dialog.recovery_suppression_address"
 
     private var mainContext: Context? = null
-    private var mainStateReceiver: BroadcastReceiver? = null
+    private var mainStateMirror: HookStateMirror? = null
     private var uiContext: Context? = null
-    private var uiStateReceiver: BroadcastReceiver? = null
+    private var uiStateMirror: HookStateMirror? = null
     private var activeActivity: Activity? = null
     private var activeController: Any? = null
     private var activeView: View? = null
@@ -142,10 +143,10 @@ object OfficialFastConnectDialogHook : HookContext() {
 
     override fun onBeforeReload() {
         unregisterRemoteConfigChangeListener()
-        unregisterReceiverForReload(mainContext, mainStateReceiver)
-        unregisterReceiverForReload(uiContext, uiStateReceiver)
-        mainStateReceiver = null
-        uiStateReceiver = null
+        mainStateMirror?.close()
+        uiStateMirror?.close()
+        mainStateMirror = null
+        uiStateMirror = null
         mainContext = null
         uiContext = null
         activeActivity = null
@@ -237,7 +238,6 @@ object OfficialFastConnectDialogHook : HookContext() {
         installUiApplicationHook()
         currentApplicationContext()?.let { context ->
             registerUiStateReceiver(context)
-            SonyBridge.sendCommand(context, SonyBridge.CMD_REPUBLISH)
         }
         // The modern activity is loaded from a Qigsaw feature after the
         // package classloader is created. Hook the framework lifecycle as a
@@ -284,7 +284,6 @@ object OfficialFastConnectDialogHook : HookContext() {
             ) {
                 val application = args.firstOrNull() as? android.app.Application ?: return@hookAfter
                 registerUiStateReceiver(application)
-                SonyBridge.sendCommand(application, SonyBridge.CMD_REPUBLISH)
             }
             uiApplicationHookInstalled = true
             Log.d(TAG, "official dialog UI application receiver hook installed")
@@ -541,9 +540,6 @@ object OfficialFastConnectDialogHook : HookContext() {
         activeAddress = dialogAddress
         connectingSent = false
         successSent = false
-        // The main process may have sent the connected snapshot before :ui
-        // registered. Replaying from the engine closes that race.
-        SonyBridge.sendCommand(activity, SonyBridge.CMD_REPUBLISH)
         latestSnapshot?.let { applySnapshot(it) }
         // When this callback comes from android.app.Activity.onCreate, the
         // subclass has not yet assigned its controller field. Rebind after the
@@ -833,101 +829,88 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun registerMainStateReceiver(context: Context) {
-        if (mainStateReceiver != null) return
+        if (mainStateMirror != null) return
         val appContext = context.applicationContext ?: context
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(receiverContext: Context?, intent: Intent?) {
-                if (intent?.action != SonyBridge.ACTION_STATE) return
-                val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
-                val snapshot = SonyStateSnapshot.fromBundle(bundle)
-                latestSnapshot = snapshot
-                val suppressPopup = intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false)
-                val physicalDisconnectAddress = intent.getStringExtra(
-                    SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS,
-                )
-                latestPhysicalDisconnectAddress = physicalDisconnectAddress
-                updateRecoverySuppression(snapshot, suppressPopup, physicalDisconnectAddress)
-                if (!snapshot.connected || snapshot.deviceAddress.isNullOrBlank()) {
-                    // Only the terminal A2DP callback is a real disconnect. A
-                    // Tandem/GATT loss, Sound Connect handoff, or reload snapshot
-                    // must retain the key so recovery is not treated as new UI.
-                    if (!physicalDisconnectAddress.isNullOrBlank()) {
-                        lastLaunchedAddress = null
-                    } else {
-                        Log.d(TAG, "official dialog key retained during transient transport loss")
-                    }
-                    return
-                }
-                // A same-address state carrying the terminal marker is a genuine
-                // physical reconnect; allow its next connect popup once.
-                if (physicalDisconnectAddress.equals(snapshot.deviceAddress, ignoreCase = true)) {
-                    lastLaunchedAddress = null
-                }
-                if (suppressPopup) {
-                    // Sound Connect has just handed the existing session back.
-                    // This is not a new user connection, so consume the address
-                    // without launching a second official dialog.
-                    lastLaunchedAddress = snapshot.deviceAddress
-                    Log.d(
-                        TAG,
-                        "official dialog suppressed for Sound Connect handoff " +
-                            "address=${snapshot.deviceAddress}",
-                    )
-                    return
-                }
-                if (!shouldLaunchOfficialDialog(appContext, snapshot)) return
-                val address = snapshot.deviceAddress
-                if (address.equals(lastLaunchedAddress, ignoreCase = true)) return
-                if (launchOfficialActivity(appContext, snapshot)) {
-                    lastLaunchedAddress = address
-                }
+        val mirror = HookStateMirror(
+            onEnvelope = { snapshot, envelope ->
+                mainContext = appContext
+                onMainEngineState(appContext, snapshot, envelope)
+            },
+        )
+        mainContext = appContext
+        mainStateMirror = mirror
+        mirror.register(appContext)
+        Log.d(TAG, "main-process official dialog mirror registered")
+    }
+
+    private fun onMainEngineState(appContext: Context, snapshot: SonyStateSnapshot, envelope: Bundle) {
+        latestSnapshot = snapshot
+        val suppressPopup = envelope.getBoolean(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false)
+        val physicalDisconnectAddress = envelope.getString(
+            SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS,
+        )
+        latestPhysicalDisconnectAddress = physicalDisconnectAddress
+        updateRecoverySuppression(snapshot, suppressPopup, physicalDisconnectAddress)
+        if (!snapshot.connected || snapshot.deviceAddress.isNullOrBlank()) {
+            // Only the terminal A2DP callback is a real disconnect. A
+            // Tandem/GATT loss, Sound Connect handoff, or reload snapshot
+            // must retain the key so recovery is not treated as new UI.
+            if (!physicalDisconnectAddress.isNullOrBlank()) {
+                lastLaunchedAddress = null
+            } else {
+                Log.d(TAG, "official dialog key retained during transient transport loss")
             }
+            return
         }
-        runCatching {
-            appContext.registerReceiver(
-                receiver,
-                IntentFilter(SonyBridge.ACTION_STATE),
-                Context.RECEIVER_EXPORTED,
+        // A same-address state carrying the terminal marker is a genuine
+        // physical reconnect; allow its next connect popup once.
+        if (physicalDisconnectAddress.equals(snapshot.deviceAddress, ignoreCase = true)) {
+            lastLaunchedAddress = null
+        }
+        if (suppressPopup) {
+            // Sound Connect has just handed the existing session back.
+            // This is not a new user connection, so consume the address
+            // without launching a second official dialog.
+            lastLaunchedAddress = snapshot.deviceAddress
+            Log.d(
+                TAG,
+                "official dialog suppressed for Sound Connect handoff " +
+                    "address=${snapshot.deviceAddress}",
             )
-            mainContext = appContext
-            mainStateReceiver = receiver
-            SonyBridge.sendCommand(appContext, SonyBridge.CMD_REPUBLISH)
-            Log.d(TAG, "main-process official dialog receiver registered")
-        }.onFailure { Log.w(TAG, "main-process receiver registration failed", it) }
+            return
+        }
+        if (!shouldLaunchOfficialDialog(appContext, snapshot)) return
+        val address = snapshot.deviceAddress
+        if (address.equals(lastLaunchedAddress, ignoreCase = true)) return
+        if (launchOfficialActivity(appContext, snapshot)) {
+            lastLaunchedAddress = address
+        }
     }
 
     private fun registerUiStateReceiver(context: Context) {
-        if (uiStateReceiver != null) return
+        if (uiStateMirror != null) return
         val appContext = context.applicationContext ?: context
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(receiverContext: Context?, intent: Intent?) {
-                if (intent?.action != SonyBridge.ACTION_STATE) return
-                val bundle = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT) ?: return
-                val snapshot = SonyStateSnapshot.fromBundle(bundle)
+        val mirror = HookStateMirror(
+            onEnvelope = { snapshot, envelope ->
+                uiContext = appContext
                 latestSnapshot = snapshot
-                val physicalDisconnectAddress = intent.getStringExtra(
+                val physicalDisconnectAddress = envelope.getString(
                     SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS,
                 )
                 latestPhysicalDisconnectAddress = physicalDisconnectAddress
                 updateRecoverySuppression(
                     snapshot,
-                    intent.getBooleanExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false),
+                    envelope.getBoolean(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, false),
                     physicalDisconnectAddress,
                 )
                 if (activeActivity == null) findExistingManagedActivity()?.let(::onOfficialActivityCreated)
                 uiCloudFallback?.onState(snapshot)
                 applySnapshot(snapshot, physicalDisconnectAddress)
-            }
-        }
-        runCatching {
-            appContext.registerReceiver(
-                receiver,
-                IntentFilter(SonyBridge.ACTION_STATE),
-                Context.RECEIVER_EXPORTED,
-            )
-            uiContext = appContext
-            uiStateReceiver = receiver
-        }.onFailure { Log.w(TAG, "ui-process receiver registration failed", it) }
+            },
+        )
+        uiContext = appContext
+        uiStateMirror = mirror
+        mirror.register(appContext)
     }
 
     private fun updateRecoverySuppression(

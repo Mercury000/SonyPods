@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothCodecConfig
 import android.bluetooth.BluetoothCodecStatus
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.os.Bundle
 import android.os.SystemClock
 import android.os.IBinder
 import android.os.RemoteException
@@ -68,8 +69,6 @@ object SonyEngineHost {
      * `Utils.setLeAudioEnabled` handles only the two audio profiles.
      */
     private const val PROFILE_HID_HOST = 4
-    private const val STARTUP_ANNOUNCE_COUNT = 10
-    private const val STARTUP_ANNOUNCE_INTERVAL_MS = 3_000L
     /**
      * Status requests below this cache age are answered by republishing the
      * NTFY-maintained state instead of re-querying the headset. Beyond it, one
@@ -212,6 +211,7 @@ object SonyEngineHost {
 
     private var commandReceiver: BroadcastReceiver? = null
     private var unlockReceiver: BroadcastReceiver? = null
+    private var stateHub: dev.sonypods.bridge.SonyStateWriter? = null
     private var remotePreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var remotePreferenceStore: SharedPreferences? = null
     private var a2dpContext: Context? = null
@@ -243,6 +243,11 @@ object SonyEngineHost {
             appContext?.let {
                 registerCommandReceiver(it)
                 registerUnlockReceiver(it)
+                if (stateHub == null) {
+                    stateHub = runCatching { dev.sonypods.bridge.SonyStateWriter(it) }
+                        .onFailure { error -> Log.w(TAG, "state bus init failed", error) }
+                        .getOrNull()
+                }
             }
             registerRemoteConfigListener()
             if (a2dpListener == null) bindA2dpProxy(appContext ?: context)
@@ -306,7 +311,10 @@ object SonyEngineHost {
         repo.attachCapabilityStorage(CapabilityStorage(ctx))
 
         registerCommandReceiver(ctx)
-        announceEngineReadyToOfficialApp(ctx)
+        stateHub = runCatching { dev.sonypods.bridge.SonyStateWriter(ctx) }
+            .onFailure { Log.w(TAG, "state bus init failed", it) }
+            .getOrNull()
+        announceEngineReady(ctx)
 
         scope.launch {
             repo.state.collect { uiState ->
@@ -317,14 +325,6 @@ object SonyEngineHost {
                     repo.ensureModelImageCatalogIfNeeded()
                     publish(ctx, snapshot)
                 }
-            }
-        }
-        // Consumers that registered before the engine existed have nothing to show
-        // and their replay requests were lost; announce ourselves for a while.
-        scope.launch {
-            repeat(STARTUP_ANNOUNCE_COUNT) {
-                publish(ctx, snapshot())
-                delay(STARTUP_ANNOUNCE_INTERVAL_MS)
             }
         }
 
@@ -378,6 +378,8 @@ object SonyEngineHost {
             .forEach { receiver -> ctx?.let { runCatching { it.unregisterReceiver(receiver) } } }
         commandReceiver = null
         unlockReceiver = null
+        stateHub?.clear()
+        stateHub = null
 
         val prefsStore = remotePreferenceStore ?: currentPrefs()
         remotePreferenceListener?.let { listener ->
@@ -1826,20 +1828,6 @@ object SonyEngineHost {
     }
 
     /**
-     * [snapshot] with the system-side facts re-read.
-     *
-     * Nothing notifies us when the LE Audio permission or the codec preference changes — system
-     * settings writes both straight into the stack — so a replay request is the moment to look
-     * again.
-     */
-    private fun refreshedSnapshot(): SonyStateSnapshot {
-        val current = lastSnapshot ?: return SonyStateSnapshot()
-        val updated = withSystemFacts(current)
-        if (updated != current) lastSnapshot = updated
-        return updated
-    }
-
-    /**
      * Handles [SonyBridge.CMD_SET_LE_AUDIO_POLICY]: flip the switch the way HyperOS does, then
      * republish.
      *
@@ -2033,15 +2021,19 @@ object SonyEngineHost {
         }.onFailure { Log.w(TAG, "command receiver registration failed", it) }
     }
 
-    private fun announceEngineReadyToOfficialApp(context: Context) {
+    /**
+     * One-shot lifecycle signal for the official app: the engine is up. State consumers
+     * do not need it — the settings bus delivers current state on observation.
+     */
+    private fun announceEngineReady(context: Context) {
         runCatching {
             context.sendBroadcast(
                 Intent(SonyBridge.ACTION_ENGINE_READY).apply {
                     setPackage(SonyBridge.OFFICIAL_APP_PACKAGE)
-                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                    addFlags(Intent.FLAG_RECEIVER_FOREGROUND or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                 }
             )
-        }.onFailure { Log.w(TAG, "engine-ready broadcast to Sound Connect failed", it) }
+        }.onFailure { Log.w(TAG, "engine-ready broadcast failed", it) }
     }
 
     private fun handleCommand(intent: Intent) {
@@ -2073,7 +2065,6 @@ object SonyEngineHost {
         }
 
         if (officialAppOwnsTandem && command !in setOf(
-                SonyBridge.CMD_REPUBLISH,
                 SonyBridge.CMD_SURFACES_READY,
                 SonyBridge.CMD_IMAGE_READY,
             )) {
@@ -2299,12 +2290,6 @@ object SonyEngineHost {
                 }
             }
 
-            // State consumers request a replay when their process starts. Do not
-            // re-submit the notification/island for that request: surface owners
-            // have their own CMD_SURFACES_READY handshake, and re-rendering here
-            // races Remote File publication when the module is opened.
-            SonyBridge.CMD_REPUBLISH -> appContext?.let { publishState(it, refreshedSnapshot()) }
-
             SonyBridge.CMD_SURFACES_READY -> appContext?.let {
                 // Forget what we think is on screen so the island shows again.
                 lastRenderedAddress = null
@@ -2359,7 +2344,7 @@ object SonyEngineHost {
         renderXiaomiSurfaces(context, snapshot, islandFirstFloat)
     }
 
-    /** Broadcast state without touching the notification or Dynamic Island. */
+    /** Pushes state to every registered consumer through the hub; no broadcast, no fan-out. */
     private fun publishState(
         context: Context,
         snapshot: SonyStateSnapshot,
@@ -2371,24 +2356,23 @@ object SonyEngineHost {
                 "suppressPopup=$suppressConnectPopup phase=${linkTracker.currentPhase} " +
                 "linkAddress=${linkTracker.currentAddress} lastConnected=$lastConnectedAddress",
         )
-        val bundle = snapshot.toBundle()
-        SonyBridge.STATE_CONSUMERS.forEach { target ->
-            runCatching {
-                context.sendBroadcast(
-                    Intent(SonyBridge.ACTION_STATE).apply {
-                        putExtra(SonyStateSnapshot.EXTRA_SNAPSHOT, bundle)
-                        putExtra(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, suppressConnectPopup)
-                        if (linkTracker.isDisconnected()) {
-                            linkTracker.currentAddress?.let {
-                                putExtra(SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS, it)
-                            }
-                        }
-                        setPackage(target)
-                        addFlags(Intent.FLAG_RECEIVER_FOREGROUND or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                    }
-                )
-            }.onFailure { Log.w(TAG, "state broadcast to $target failed", it) }
+        val hub = stateHub ?: run {
+            stateHub = runCatching { dev.sonypods.bridge.SonyStateWriter(context) }
+                .onFailure { Log.w(TAG, "state bus init failed", it) }
+                .getOrNull()
+            stateHub
+        } ?: return
+        val envelope = Bundle().apply {
+            putBundle(SonyStateSnapshot.EXTRA_SNAPSHOT, snapshot.toBundle())
+            putBoolean(SonyBridge.EXTRA_SUPPRESS_CONNECT_POPUP, suppressConnectPopup)
+            if (linkTracker.isDisconnected()) {
+                linkTracker.currentAddress?.let {
+                    putString(SonyBridge.EXTRA_PHYSICAL_DISCONNECT_ADDRESS, it)
+                }
+            }
         }
+        runCatching { hub.emit(envelope) }
+            .onFailure { Log.w(TAG, "state emit failed", it) }
     }
 
     /**

@@ -62,15 +62,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-<!-- Receives engine state while the app has no activity so catalog images
-             are downloaded immediately after a connection. -->
-        <receiver
-            android:name="dev.sonypods.bridge.ModelImageReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="dev.sonypods.action.state" />
-            </intent-filter>
-        </receiver>
     </application>
 
 </manifest>

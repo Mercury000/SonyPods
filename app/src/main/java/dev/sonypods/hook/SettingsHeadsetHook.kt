@@ -21,6 +21,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import com.mercury.sonypods.BuildConfig
+import dev.sonypods.bridge.HookStateMirror
 import dev.sonypods.bridge.SonyBridge
 import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.config.ConfigManager
@@ -63,6 +64,7 @@ object SettingsHeadsetHook : HookContext() {
     private var context: Context? = null
     private var receiverRegistered = false
     private var stateReceiver: BroadcastReceiver? = null
+    private var stateMirror: HookStateMirror? = null
     private var currentAddress: String? = null
     private var currentName: String? = null
     private var currentFormFactor: String? = null
@@ -139,6 +141,8 @@ object SettingsHeadsetHook : HookContext() {
             unregisterReceiverForReload(context, receiver)
         }
         stateReceiver = null
+        stateMirror?.close()
+        stateMirror = null
         unregisterRemoteConfigChangeListener()
         receiverRegistered = false
         reloadBatteryViews = WeakHashMap(batteryViews)
@@ -507,7 +511,6 @@ object SettingsHeadsetHook : HookContext() {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
         val filter = IntentFilter().apply {
-            addAction(SonyBridge.ACTION_STATE)
             addAction(SonyPodsAction.ACTION_PODS_CONNECTED)
             addAction(SonyPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(SonyPodsAction.ACTION_PODS_BATTERY_CHANGED)
@@ -517,64 +520,6 @@ object SettingsHeadsetHook : HookContext() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    SonyBridge.ACTION_STATE -> {
-                        val snapshot = intent.getBundleExtra(SonyStateSnapshot.EXTRA_SNAPSHOT)
-                            ?.let { SonyStateSnapshot.fromBundle(it) }
-                        if (snapshot != null) {
-                            isConnectedState = snapshot.connected
-                            if (snapshot.deviceAddress != null) {
-                                hasLiveSnapshot = true
-                                currentAddress = snapshot.deviceAddress
-                                SonyDeviceService.rememberAddress(snapshot.deviceAddress)
-                                currentName = snapshot.deviceName
-                                // UNKNOWN is the pre-capability-table placeholder and carries no
-                                // information; keep the last real value (which is also what gets
-                                // persisted) rather than falling back to the TWS layout.
-                                snapshot.formFactor
-                                    ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
-                                    ?.let { currentFormFactor = it }
-                                snapshot.firmwareVersion
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { currentFirmware = it }
-                                currentBattery = if (snapshot.connected) snapshotBattery(snapshot) else BatteryParams()
-                                // Reconcile the ANC/transparency-vocal state from the engine's live
-                                // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
-                                // stay at their initial defaults and injectFragmentStatus keeps pushing a
-                                // stale level (e.g. "0200,false") that fights the real "0201,true" state,
-                                // making the vocal-enhancement toggle appear unresponsive.
-                                snapshot.noiseControlMode?.let { mode ->
-                                    currentAnc = when (mode) {
-                                        NoiseControlMode.OFF -> 1
-                                        NoiseControlMode.AMBIENT_SOUND -> 3
-                                        else -> 2
-                                    }
-                                }
-                                currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
-                                hasAncState = snapshot.connected
-                                // Live sound-quality badge inputs. Assigned unconditionally: the
-                                // repository nulls them on disconnect, and a stale LDAC/DSEE mark must
-                                // not outlive the link that carried it.
-                                currentCodec = snapshot.soundQualityCodec
-                                currentDseeGeneration = snapshot.dseeGeneration
-                                currentDseeActive = snapshot.dseeActive
-                                currentLeaStreamingL = snapshot.leaStreamingStatusL
-                                currentLeaStreamingR = snapshot.leaStreamingStatusR
-                                SonyDeviceService.rememberAddress(currentAddress)
-                                Log.d(TAG, "state snapshot address=$currentAddress connected=${snapshot.connected} formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
-                                saveState(context)
-                                // Live instances are already registered by their constructor and
-                                // fragment hooks. A full ActivityThread object-graph walk here was
-                                // the remaining deterministic UI-thread stall on every snapshot.
-                                updateBatteryViews()
-                                updateFragments()
-                            } else if (!snapshot.connected) {
-                                hasAncState = false
-                                currentBattery = BatteryParams()
-                                updateBatteryViews()
-                                updateFragments()
-                            }
-                        }
-                    }
                     SonyPodsAction.ACTION_PODS_CONNECTED -> {
                         hasLiveSnapshot = true
                         isConnectedState = true
@@ -621,11 +566,70 @@ object SettingsHeadsetHook : HookContext() {
         context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         stateReceiver = receiver
         receiverRegistered = true
+        val mirror = HookStateMirror { snapshot -> onEngineSnapshot(snapshot) }
+        stateMirror = mirror
+        mirror.register(context)
         // Disk-backed state, RemotePreferences, config parsing and cross-process
         // broadcasts must never execute on Settings' main thread. They are serialized on
         // the hook worker, then only the final view mutation returns to the main looper.
         scheduleBackgroundBootstrap()
         Log.d(TAG, "registered status receiver context=$context")
+    }
+
+    /** Engine snapshot handling, previously the ACTION_STATE broadcast branch. */
+    private fun onEngineSnapshot(snapshot: SonyStateSnapshot) {
+        isConnectedState = snapshot.connected
+        if (snapshot.deviceAddress != null) {
+            hasLiveSnapshot = true
+            currentAddress = snapshot.deviceAddress
+            SonyDeviceService.rememberAddress(snapshot.deviceAddress)
+            currentName = snapshot.deviceName
+            // UNKNOWN is the pre-capability-table placeholder and carries no
+            // information; keep the last real value (which is also what gets
+            // persisted) rather than falling back to the TWS layout.
+            snapshot.formFactor
+                ?.takeIf { it != HeadphoneFormFactor.UNKNOWN.name }
+                ?.let { currentFormFactor = it }
+            snapshot.firmwareVersion
+                ?.takeIf { it.isNotBlank() }
+                ?.let { currentFirmware = it }
+            currentBattery = if (snapshot.connected) snapshotBattery(snapshot) else BatteryParams()
+            // Reconcile the ANC/transparency-vocal state from the engine's live
+            // snapshot. Without this the local currentAnc/currentTransparencyVocalEnhancement
+            // stay at their initial defaults and injectFragmentStatus keeps pushing a
+            // stale level (e.g. "0200,false") that fights the real "0201,true" state,
+            // making the vocal-enhancement toggle appear unresponsive.
+            snapshot.noiseControlMode?.let { mode ->
+                currentAnc = when (mode) {
+                    NoiseControlMode.OFF -> 1
+                    NoiseControlMode.AMBIENT_SOUND -> 3
+                    else -> 2
+                }
+            }
+            currentTransparencyVocalEnhancement = snapshot.ambientVoiceMode
+            hasAncState = snapshot.connected
+            // Live sound-quality badge inputs. Assigned unconditionally: the
+            // repository nulls them on disconnect, and a stale LDAC/DSEE mark must
+            // not outlive the link that carried it.
+            currentCodec = snapshot.soundQualityCodec
+            currentDseeGeneration = snapshot.dseeGeneration
+            currentDseeActive = snapshot.dseeActive
+            currentLeaStreamingL = snapshot.leaStreamingStatusL
+            currentLeaStreamingR = snapshot.leaStreamingStatusR
+            SonyDeviceService.rememberAddress(currentAddress)
+            Log.d(TAG, "state snapshot address=$currentAddress connected=${snapshot.connected} formFactor=$currentFormFactor anc=$currentAnc voice=$currentTransparencyVocalEnhancement battery=${settingsBatteryString()}")
+            saveState(context)
+            // Live instances are already registered by their constructor and
+            // fragment hooks. A full ActivityThread object-graph walk here was
+            // the remaining deterministic UI-thread stall on every snapshot.
+            updateBatteryViews()
+            updateFragments()
+        } else if (!snapshot.connected) {
+            hasAncState = false
+            currentBattery = BatteryParams()
+            updateBatteryViews()
+            updateFragments()
+        }
     }
 
     override fun onRemoteConfigChanged() {
@@ -672,17 +676,14 @@ object SettingsHeadsetHook : HookContext() {
     @Synchronized
     private fun requestBluetoothStatusNow(reason: String) {
         val ctx = context ?: return
-        // Ask the engine to re-broadcast its current state. Without this the settings
-        // process only receives a snapshot after the engine *changes* state (battery/
-        // ANC tick), so opening the headset page can show "-" for the battery until
-        // the user toggles ANC. CMD_REPUBLISH re-publishes the last known snapshot.
+        // The hub answers with the current state; a pull is all that is needed.
         // Debounce: page open fires this from several hooks (receiver-register,
         // battery-init, fragment-create, service-connected) in the same moment; each
-        // would otherwise trigger a full cross-process republish round trip.
+        // would otherwise trigger a full cross-process query round trip.
         val now = SystemClock.elapsedRealtime()
         if (now - lastRepublishAt <= REPUBLISH_DEBOUNCE_MS) return
         lastRepublishAt = now
-        SonyBridge.sendCommand(ctx, SonyBridge.CMD_REPUBLISH)
+        stateMirror?.refresh()
         listOf(SonyPodsAction.ACTION_PODS_UI_INIT, SonyPodsAction.ACTION_REFRESH_STATUS).forEach { action ->
             ctx.sendBroadcast(Intent(action).apply {
                 setPackage(BuildConfig.APPLICATION_ID)
