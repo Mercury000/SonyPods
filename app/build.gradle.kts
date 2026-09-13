@@ -292,7 +292,7 @@ aboutLibraries {
         prettyPrint = true
     }
     license {
-        includeLicenses.add("GPL-3.0-only")
+        additionalLicenses.add("GPL-3.0-only")
     }
 }
 
