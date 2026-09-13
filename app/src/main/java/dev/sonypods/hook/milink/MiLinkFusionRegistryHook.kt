@@ -336,20 +336,25 @@ internal class MiLinkFusionRegistryHook(private val hook: MiLinkServiceHook) {
         val svc = service ?: return
         val notifies = runCatching { callMethod(ctrl, "getServiceNotifies") as? List<*> }.getOrNull() ?: return
         val stable = hook.requireSymbols(MiLinkStableSymbols)
+        val modeMethod = stable.method("headsetNotifyMode")
         val updates = listOf(
-            stable.method("headsetNotifyMode") to panelAncMode(),
+            modeMethod to panelAncMode(),
             stable.method("headsetNotifyBattery") to java.util.ArrayList(hook.miLinkBatteryLevels()),
             stable.method("headsetNotifyVolume") to mirrorVolume(),
         )
+        val headsetNotifyType = modeMethod.declaringClass
         main.post {
-            notifies.filterNotNull().filterNot(wearListenerClass::isInstance).forEach { notify ->
-                updates.forEach { (method, value) ->
-                    runCatching { method.invoke(notify, svc, value) }
-                        .onFailure {
-                            Log.d(MiLinkServiceHook.TAG, "notify ${method.name} to ${notify.javaClass.name} failed", it)
-                        }
+            notifies.filterNotNull()
+                .filterNot(wearListenerClass::isInstance)
+                .filter(headsetNotifyType::isInstance)
+                .forEach { notify ->
+                    updates.forEach { (method, value) ->
+                        runCatching { method.invoke(notify, svc, value) }
+                            .onFailure {
+                                Log.d(MiLinkServiceHook.TAG, "notify ${method.name} to ${notify.javaClass.name} failed", it)
+                            }
+                    }
                 }
-            }
         }
     }
 
