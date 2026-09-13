@@ -191,6 +191,84 @@ class TargetSymbolResolverTest {
     }
 
     @Test
+    fun prefixSymbolsAreLoadValidatedOnFirstUse() {
+        val definition = object : StringBundle() {
+            override val requiredSymbols = setOf("string")
+            override val requiredPrefixes = setOf("method.")
+            override fun resolve(query: SymbolQuery) = mapOf(
+                "string" to SymbolReference(SymbolKind.CLASS, "Ljava/lang/String;"),
+                "method.0" to SymbolReference(SymbolKind.METHOD, "Ljava/lang/String;->noSuchMethod()V"),
+            )
+        }
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), SymbolQueryFactory { fakeQuery() })
+
+        val bundle = resolver.resolve(definition)
+
+        try {
+            bundle.method("method.0")
+            fail("expected lazy load validation")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message!!.contains("not loadable"))
+        }
+    }
+
+    @Test
+    fun preloadResolvesOneBatchAndReleasesScannerOnce() {
+        val scanner = CloseCountingFactory()
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), scanner)
+        val definitions = listOf(StringBundle(), OtherBundle())
+
+        val resolvedCount = resolver.preload(definitions)
+
+        assertEquals(2, resolvedCount)
+        assertEquals(2, scanner.opens)
+        assertEquals(1, scanner.closes)
+        resolver.resolve(definitions[0])
+        assertEquals(2, scanner.opens)
+        assertEquals(1, scanner.closes)
+    }
+
+    @Test
+    fun loneScanReleasesScannerImmediately() {
+        val scanner = CloseCountingFactory()
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), scanner)
+
+        resolver.resolve(StringBundle())
+
+        assertEquals(1, scanner.opens)
+        assertEquals(1, scanner.closes)
+    }
+
+    @Test
+    fun persistentUpgradePersistsPrewarmedBundles() {
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), CloseCountingFactory())
+        val definition = StringBundle()
+        assertEquals(1, resolver.preload(listOf(definition)))
+
+        val persistent = MemorySymbolCache()
+        val upgradedTarget = target().copy(versionCode = 9)
+        resolver.attachPersistentCache(upgradedTarget, persistent)
+
+        val cached = requireNotNull(persistent.read(definition.id))
+        assertEquals(upgradedTarget.fingerprint, cached.targetFingerprint)
+        assertEquals(definition.schemaVersion, cached.schemaVersion)
+        assertEquals(2, cached.symbols.size)
+    }
+
+    @Test
+    fun disposeClearsResolvedBundles() {
+        val scanner = CloseCountingFactory()
+        val resolver = TargetSymbolResolver(target(), loader, MemorySymbolCache(), scanner)
+        assertFalse(resolver.resolve(StringBundle()).fromCache)
+
+        resolver.dispose()
+
+        assertTrue(resolver.resolve(StringBundle()).fromCache)
+        assertEquals(1, scanner.opens)
+        assertEquals(2, scanner.closes)
+    }
+
+    @Test
     fun fileCacheRejectsCorruptJson() {
         val directory = Files.createTempDirectory("symbols-cache").toFile()
         try {
@@ -274,13 +352,26 @@ class TargetSymbolResolverTest {
 
     private fun fakeQuery(onClose: () -> Unit = {}) = object : SymbolQuery {
         override val bridge = null
-        override fun candidates(symbol: String, descriptors: Collection<String>) = descriptors.distinct()
         override fun requireUnique(symbol: String, descriptors: Collection<String>): String {
-            val values = candidates(symbol, descriptors)
+            val values = descriptors.distinct()
             check(values.size == 1)
             return values.single()
         }
         override fun close() = onClose()
+    }
+
+    private inner class CloseCountingFactory : SymbolQueryFactory, AutoCloseable {
+        var opens = 0
+        var closes = 0
+
+        override fun open(bundleId: String): SymbolQuery {
+            opens++
+            return fakeQuery()
+        }
+
+        override fun close() {
+            closes++
+        }
     }
 
     private open inner class StringBundle : DexKitSymbolBundleDefinition {
@@ -288,5 +379,14 @@ class TargetSymbolResolverTest {
         override val schemaVersion = 3
         override val requiredSymbols = setOf("string", "length")
         override fun resolve(query: SymbolQuery) = validReferences()
+    }
+
+    private open inner class OtherBundle : DexKitSymbolBundleDefinition {
+        override val id = "bundle.other"
+        override val schemaVersion = 1
+        override val requiredSymbols = setOf("string")
+        override fun resolve(query: SymbolQuery) = mapOf(
+            "string" to SymbolReference(SymbolKind.CLASS, "Ljava/lang/String;"),
+        )
     }
 }

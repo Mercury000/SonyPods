@@ -9,8 +9,18 @@ import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 import dev.sonypods.config.ConfigManager
+import dev.sonypods.hook.milink.MiLinkCardArtSymbols
+import dev.sonypods.hook.milink.MiLinkDeviceMetaSymbols
+import dev.sonypods.hook.milink.MiLinkFusionSymbols
+import dev.sonypods.hook.milink.MiLinkIdentityGraphSymbols
+import dev.sonypods.hook.milink.MiLinkRuntimeSymbols
 import dev.sonypods.hook.milink.MiLinkServiceHook
+import dev.sonypods.hook.milink.MiLinkStableSymbols
+import dev.sonypods.hook.milink.MiLinkWearSymbols
 import dev.sonypods.hook.reload.GenerationRuntime
+import dev.sonypods.hook.symbols.AndroidTargetSymbols
+import dev.sonypods.hook.symbols.SymbolBundleDefinition
+import dev.sonypods.hook.symbols.SymbolPrewarm
 import dev.sonypods.utils.PodImageLoader
 
 /** The single libxposed 102 entry and lifecycle coordinator. */
@@ -25,6 +35,7 @@ class HookEntry : XposedModule() {
     )
     private var processName: String = "unknown"
     private var runtime: GenerationRuntime? = null
+    private var prewarm: SymbolPrewarm? = null
 
     /**
      * Keep lifecycle diagnostics visible even before ConfigManager has read the
@@ -59,6 +70,67 @@ class HookEntry : XposedModule() {
         // Class discovery and installation are intentionally deferred to
         // onPackageReady(), where the final application ClassLoader is available.
         Log.d(tag, "package loaded package=${param.packageName} first=${param.isFirstPackage} process=$processName")
+        startPrewarm(param)
+    }
+
+    /**
+     * Kicks off the declared symbol batch on the pre-application loader. The resolver is only
+     * adopted when [PackageReadyParam.classLoader] turns out to be the same instance.
+     */
+    private fun startPrewarm(param: PackageLoadedParam) {
+        if (prewarm != null || runtime != null) return
+        val definitions = scopeSymbolBundles[param.packageName].orEmpty()
+        if (definitions.isEmpty()) return
+        val loader = param.defaultClassLoader ?: return
+        // Pre-warm is an optimization; a failed start must never affect the hook generation.
+        val applicationInfo = param.applicationInfo
+        prewarm = runCatching {
+            val versionCode = packageVersionCode(param.packageName)
+            SymbolPrewarm(
+                packageName = param.packageName,
+                defaultClassLoader = loader,
+                definitions = definitions,
+                log = ::lifecycle,
+            ) { pkg, classLoader ->
+                AndroidTargetSymbols.createForPrewarm(pkg, applicationInfo, versionCode, classLoader, ::lifecycle)
+            }.also { it.start() }
+        }.onFailure {
+            lifecycle("symbol prewarm start failed package=${param.packageName}", it)
+        }.getOrNull()
+        if (prewarm != null) {
+            lifecycle("symbol prewarm started package=${param.packageName} bundles=${definitions.size}")
+        }
+    }
+
+    /**
+     * Reads the package version code before the target Application exists. The system context
+     * reaches the same PackageManager the runtime resolver uses, so the pre-warm cache
+     * identity is identical to the runtime one.
+     */
+    private fun packageVersionCode(packageName: String): Long {
+        val activityThread = Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentActivityThread")
+            .apply { isAccessible = true }
+            .invoke(null)
+        val systemContext = activityThread.javaClass
+            .getDeclaredMethod("getSystemContext")
+            .apply { isAccessible = true }
+            .invoke(activityThread) as android.content.Context
+        return systemContext.packageManager
+            .getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            .longVersionCode
+    }
+
+    private fun adoptPrewarm(active: GenerationRuntime, scope: String, classLoader: ClassLoader) {
+        val definitions = scopeSymbolBundles[scope].orEmpty()
+        val warm = prewarm
+        prewarm = null
+        if (warm != null && warm.packageName == scope) {
+            active.attachPrewarm(warm, classLoader, definitions)
+        } else {
+            warm?.close()
+            active.preloadSymbols(classLoader, definitions)
+        }
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
@@ -80,6 +152,7 @@ class HookEntry : XposedModule() {
         val scope = param.packageName
         val active = GenerationRuntime(this, processName, scope).also { runtime = it }
         try {
+            adoptPrewarm(active, scope, param.classLoader)
             lifecycle("installing scope=$scope process=$processName generation=${active.generationId}")
             loadScope(scope, param.classLoader, active)
         } catch (error: Throwable) {
@@ -147,6 +220,9 @@ class HookEntry : XposedModule() {
         )
         runtime = next
         try {
+            prewarm?.close()
+            prewarm = null
+            next.preloadSymbols(anchor, scopeSymbolBundles[scope].orEmpty())
             loadScope(scope, anchor, next)
             val dynamicClasses = saved.getStringArrayList(GenerationRuntime.KEY_DYNAMIC_BINDER_CLASSES).orEmpty()
             if (dynamicClasses.isNotEmpty()) restoreDynamicHooks(scope, dynamicClasses, next)
@@ -297,3 +373,41 @@ class HookEntry : XposedModule() {
         lifecycle("loadHook complete type=${hook.javaClass.name} scope=$packageName process=$processName")
     }
 }
+
+/**
+ * Every symbol bundle a scope resolves, in the order the pre-warm should scan them.
+ * This declaration drives the package-load pre-warm and is verified against every
+ * `requireSymbols(...)` call site by `SymbolPrewarmDeclarationTest`.
+ */
+internal val scopeSymbolBundles: Map<String, List<SymbolBundleDefinition>> = mapOf(
+    "com.android.bluetooth" to listOf(
+        BluetoothAdapterSymbols,
+        BluetoothProfileSymbols,
+    ),
+    "com.android.settings" to listOf(
+        SettingsRenderSymbols,
+        SettingsActivitySymbols,
+        SettingsSupportSymbols,
+        SettingsBatterySymbols,
+        SettingsFragmentSymbols,
+        SettingsServiceProxySymbols,
+        SettingsActivityPluginSymbols,
+    ),
+    "com.milink.service" to listOf(
+        MiLinkStableSymbols,
+        MiLinkRuntimeSymbols,
+        MiLinkCardArtSymbols,
+        MiLinkDeviceMetaSymbols,
+        MiLinkFusionSymbols,
+        MiLinkIdentityGraphSymbols,
+        MiLinkWearSymbols,
+    ),
+    "com.xiaomi.bluetooth" to listOf(
+        BluetoothExtensionNotificationSymbols,
+        BluetoothExtensionHeadsetSymbols,
+    ),
+    "com.sony.songpal.mdr" to listOf(
+        SoundConnectServiceSymbols,
+        SoundConnectSessionSymbols,
+    ),
+)

@@ -6,6 +6,8 @@ import dev.sonypods.bridge.SonyStateSnapshot
 import dev.sonypods.hook.HookContext
 import dev.sonypods.hook.Log
 import dev.sonypods.hook.symbols.AndroidTargetSymbols
+import dev.sonypods.hook.symbols.SymbolBundleDefinition
+import dev.sonypods.hook.symbols.SymbolPrewarm
 import dev.sonypods.hook.symbols.TargetSymbolResolver
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -67,7 +69,16 @@ class GenerationRuntime(
     @Synchronized
     fun symbols(classLoader: ClassLoader, context: Context? = currentApplication()): TargetSymbolResolver {
         val existing = targetSymbols
-        if (existing != null && (targetSymbolsHasPersistentCache || context == null)) return existing
+        if (existing != null) {
+            if (targetSymbolsHasPersistentCache || context == null) return existing
+            AndroidTargetSymbols.attachPersistentCache(existing, context, scopePackage) { message, error ->
+                if (error == null) Log.d("SonyPods-Symbols", message)
+                else Log.e("SonyPods-Symbols", message, error)
+            }
+            targetSymbolsHasPersistentCache = true
+            Log.d("SonyPods-Symbols", "symbol cache upgraded to persistent scope=$scopePackage")
+            return existing
+        }
 
         val resolver = AndroidTargetSymbols.create(
             context = context,
@@ -79,14 +90,53 @@ class GenerationRuntime(
         }
         targetSymbols = resolver
         targetSymbolsHasPersistentCache = context != null
-
-        // Package load can happen before ActivityThread publishes the Application. Once a real
-        // Context is available, replace that early memory-only resolver for every attached hook.
-        if (existing != null && context != null) {
-            contexts.forEach { it.attachSymbolResolver(resolver) }
-            Log.d("SonyPods-Symbols", "upgraded symbol cache to persistent scope=$scopePackage")
-        }
         return resolver
+    }
+
+    /**
+     * Adopts a package-load pre-warm when the final ClassLoader is the pre-warmed instance;
+     * otherwise cancels it and runs one fresh declared batch on the final loader so the
+     * DexKit bridge still sees a single, event-bounded scan.
+     */
+    @Synchronized
+    internal fun attachPrewarm(
+        prewarm: SymbolPrewarm,
+        classLoader: ClassLoader,
+        definitions: List<SymbolBundleDefinition>,
+    ) {
+        val adopted = prewarm.takeResolverIfLoader(classLoader)
+        if (adopted != null) {
+            targetSymbols = adopted
+            // The pre-warm resolver already reads and writes the persistent store, so the
+            // context-time cache attach is not needed for it.
+            targetSymbolsHasPersistentCache = true
+            Log.d("SonyPods-Symbols", "adopted symbol prewarm scope=$scopePackage bundles=${definitions.size}")
+            return
+        }
+        prewarm.close()
+        preloadSymbols(classLoader, definitions)
+    }
+
+    /** Resolves the declared batch up front; the resolver upgrades to the persistent cache later. */
+    @Synchronized
+    internal fun preloadSymbols(classLoader: ClassLoader, definitions: List<SymbolBundleDefinition>) {
+        if (definitions.isEmpty()) return
+        val existing = targetSymbols
+        if (existing != null) {
+            existing.preload(definitions)
+            return
+        }
+        val resolver = AndroidTargetSymbols.create(
+            context = null,
+            packageName = scopePackage,
+            classLoader = classLoader,
+        ) { message, error ->
+            if (error == null) Log.d("SonyPods-Symbols", message)
+            else Log.e("SonyPods-Symbols", message, error)
+        }
+        targetSymbols = resolver
+        targetSymbolsHasPersistentCache = false
+        resolver.preload(definitions)
     }
 
     private fun currentApplication(): Context? = runCatching {
@@ -120,6 +170,8 @@ class GenerationRuntime(
         if (quiesced) return null
         quiesced = true
         acceptingEvents = false
+        // Explicit lifecycle event: the old generation will not scan again.
+        runCatching { targetSymbols?.releaseScanner() }
         val snapshot = runCatching { dev.sonypods.hook.SonyEngineHost.snapshot() }.getOrDefault(SonyStateSnapshot())
         val reloadAddress = runCatching {
             dev.sonypods.hook.SonyEngineHost.reloadDeviceAddress()
@@ -190,6 +242,9 @@ class GenerationRuntime(
     fun abortReplacement() {
         hooks.abort()
         resources.closeAll()
+        targetSymbols?.dispose()
+        targetSymbols = null
+        targetSymbolsHasPersistentCache = false
     }
 
     /**

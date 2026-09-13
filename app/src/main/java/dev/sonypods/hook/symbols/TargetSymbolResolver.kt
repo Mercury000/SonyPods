@@ -33,10 +33,25 @@ class ResolvedSymbolBundle internal constructor(
     val fromCache: Boolean,
     private val symbols: Map<String, SymbolReference>,
     private val classLoader: ClassLoader,
+    private val onFirstResolve: (String, SymbolReference) -> Unit = { _, _ -> },
 ) {
+    private val loadChecked = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    private fun ensureLoadChecked(name: String, reference: SymbolReference) {
+        if (loadChecked.putIfAbsent(name, java.lang.Boolean.TRUE) != null) return
+        try {
+            onFirstResolve(name, reference)
+        } catch (error: Throwable) {
+            loadChecked.remove(name)
+            throw error
+        }
+    }
+
     val keys: Set<String> get() = symbols.keys
+    internal fun references(): Map<String, SymbolReference> = symbols
     operator fun get(name: String): SymbolReference =
-        symbols[name] ?: throw NoSuchElementException("$id has no symbol '$name'")
+        (symbols[name] ?: throw NoSuchElementException("$id has no symbol '$name'"))
+            .also { ensureLoadChecked(name, it) }
 
     fun clazz(name: String): Class<*> = get(name).resolveClass(classLoader)
     fun method(name: String): Method = get(name).resolveMethod(classLoader)
@@ -46,12 +61,17 @@ class ResolvedSymbolBundle internal constructor(
     fun descriptorsWithPrefix(prefix: String): List<String> =
         symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.descriptor }
     fun methodsWithPrefix(prefix: String): List<Method> =
-        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.resolveMethod(classLoader) }
+        symbols.filterKeys { it.startsWith(prefix) }.entries.sortedBy { it.value.descriptor }
+            .onEach { (name, reference) -> ensureLoadChecked(name, reference) }
+            .map { it.value.resolveMethod(classLoader) }
     fun constructorsWithPrefix(prefix: String): List<Constructor<*>> =
-        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }
-            .map { it.resolveConstructor(classLoader) }
+        symbols.filterKeys { it.startsWith(prefix) }.entries.sortedBy { it.value.descriptor }
+            .onEach { (name, reference) -> ensureLoadChecked(name, reference) }
+            .map { it.value.resolveConstructor(classLoader) }
     fun fieldsWithPrefix(prefix: String): List<Field> =
-        symbols.filterKeys { it.startsWith(prefix) }.values.sortedBy { it.descriptor }.map { it.resolveField(classLoader) }
+        symbols.filterKeys { it.startsWith(prefix) }.entries.sortedBy { it.value.descriptor }
+            .onEach { (name, reference) -> ensureLoadChecked(name, reference) }
+            .map { it.value.resolveField(classLoader) }
 }
 
 /**
@@ -59,18 +79,28 @@ class ResolvedSymbolBundle internal constructor(
  * incomplete, or unloadable bundle fails as a unit before any consumer installs hooks.
  */
 class TargetSymbolResolver(
-    private val target: TargetArtifact,
+    private var target: TargetArtifact,
     private val classLoader: ClassLoader,
-    private val cache: SymbolCache,
+    private var cache: SymbolCache,
     private val queryFactory: SymbolQueryFactory,
     private val diagnostics: SymbolDiagnosticSink = SymbolDiagnosticSink {},
     private val scanCoordinator: SymbolScanCoordinator = ProcessSymbolScanCoordinator,
 ) {
     private val resolved = linkedMapOf<String, ResolvedSymbolBundle>()
+    private val schemas = HashMap<String, Int>()
+    private val persisted = HashSet<String>()
+    private var persistentCache = false
+    private val batchLock = Any()
+    private var scanBatchDepth = 0
 
     @Synchronized
     fun resolve(definition: SymbolBundleDefinition): ResolvedSymbolBundle {
-        resolved[definition.id]?.let { return it }
+        resolved[definition.id]?.let { bundle ->
+            // Pre-warmed bundles may predate the persistent cache; write them on demand for
+            // the rare upgrade ordering where attachPersistentCache ran after resolution.
+            persistIfNeeded(definition, bundle)
+            return bundle
+        }
         validateDefinition(definition)
 
         val bundle = when (definition) {
@@ -82,7 +112,79 @@ class TargetSymbolResolver(
             )
         }
         resolved[definition.id] = bundle
+        if (definition is DexKitSymbolBundleDefinition) {
+            schemas[definition.id] = definition.schemaVersion
+        }
         return bundle
+    }
+
+    /**
+     * Resolves a whole declared batch in one scanner session and releases the DexKit bridge
+     * when the batch ends. Failures are diagnostics, never exceptions: a conditional bundle
+     * missing from one target must not abort the remaining pre-warm.
+     */
+    @Synchronized
+    fun preload(
+        definitions: Collection<SymbolBundleDefinition>,
+        cancelled: () -> Boolean = { false },
+    ): Int {
+        if (definitions.isEmpty()) return 0
+        synchronized(batchLock) { scanBatchDepth++ }
+        try {
+            var count = 0
+            for (definition in definitions) {
+                if (cancelled()) break
+                runCatching { resolve(definition) }
+                    .onSuccess { count++ }
+                    .onFailure {
+                        diagnostics.emit(
+                            SymbolDiagnostic(definition.id, "prewarm", "skipped: ${it.message}"),
+                        )
+                    }
+            }
+            return count
+        } finally {
+            val batchFinished = synchronized(batchLock) {
+                scanBatchDepth--
+                scanBatchDepth == 0
+            }
+            if (batchFinished) releaseScanner()
+        }
+    }
+
+    /** Releases the DexKit scanner while keeping every resolved descriptor in memory. */
+    @Synchronized
+    fun releaseScanner() {
+        val closable = queryFactory as? AutoCloseable ?: return
+        runCatching { closable.close() }
+            .onFailure { diagnostics.emit(SymbolDiagnostic("dexkit", "scanner", "release failed: ${it.message}")) }
+    }
+
+    /** Drops the scanner and every in-memory bundle; used when a generation is torn down. */
+    @Synchronized
+    fun dispose() {
+        resolved.clear()
+        schemas.clear()
+        persisted.clear()
+        releaseScanner()
+    }
+
+    /**
+     * Swaps the memory cache for the real artifact store once the application Context exists.
+     * The resolver instance survives, so hooks never need re-attaching; every bundle resolved
+     * before the upgrade is written to the new store immediately.
+     */
+    @Synchronized
+    fun attachPersistentCache(target: TargetArtifact, cache: SymbolCache) {
+        this.target = target
+        this.cache = cache
+        persistentCache = true
+        persisted.clear()
+        resolved.forEach { (bundleId, bundle) ->
+            val schema = schemas[bundleId] ?: return@forEach
+            writeCache(bundleId, schema, bundle)
+        }
+        diagnostics.emit(SymbolDiagnostic("dexkit", "cache", "persistent symbol cache attached"))
     }
 
     private fun resolveFixed(definition: FixedSymbolBundleDefinition): ResolvedSymbolBundle {
@@ -110,17 +212,11 @@ class TargetSymbolResolver(
                 throw SymbolResolutionException(definition.id, "DEX query failed: ${error.message}", error)
             }
             val bundle = materialize(definition, references, fromCache = false)
-            cache.write(
-                CachedSymbolBundle(
-                    bundleId = definition.id,
-                    schemaVersion = definition.schemaVersion,
-                    targetFingerprint = target.fingerprint,
-                    symbols = references.mapValues { CachedSymbolReference.from(it.value) },
-                ),
-            )
+            writeCache(definition.id, definition.schemaVersion, bundle)
             diagnostics.emit(
                 SymbolDiagnostic(definition.id, "scan", "resolved=${references.size} cache=written"),
             )
+            releaseScannerAfterSingleScan()
             bundle
         }
     }
@@ -131,6 +227,28 @@ class TargetSymbolResolver(
 
     @Synchronized
     fun clearMemory() = resolved.clear()
+
+    private fun releaseScannerAfterSingleScan() {
+        val outsideBatch = synchronized(batchLock) { scanBatchDepth == 0 }
+        if (outsideBatch) releaseScanner()
+    }
+
+    private fun persistIfNeeded(definition: SymbolBundleDefinition, bundle: ResolvedSymbolBundle) {
+        if (definition !is DexKitSymbolBundleDefinition || !persistentCache) return
+        writeCache(definition.id, definition.schemaVersion, bundle)
+    }
+
+    private fun writeCache(bundleId: String, schemaVersion: Int, bundle: ResolvedSymbolBundle) {
+        if (!persisted.add(bundleId)) return
+        cache.write(
+            CachedSymbolBundle(
+                bundleId = bundleId,
+                schemaVersion = schemaVersion,
+                targetFingerprint = target.fingerprint,
+                symbols = bundle.references().mapValues { CachedSymbolReference.from(it.value) },
+            ),
+        )
+    }
 
     private fun loadCache(
         definition: DexKitSymbolBundleDefinition,
@@ -153,7 +271,7 @@ class TargetSymbolResolver(
             }
         return runCatching {
             validateReferences(definition, references)
-            validateLoadable(references)
+            validateLoadable(requiredReferences(definition, references))
             definition.validate(references)
             diagnostics.emit(SymbolDiagnostic(definition.id, "cache", "hit symbols=${references.size}"))
             references
@@ -171,12 +289,18 @@ class TargetSymbolResolver(
     ): ResolvedSymbolBundle {
         try {
             validateReferences(definition, references)
-            validateLoadable(references)
+            validateLoadable(requiredReferences(definition, references))
             definition.validate(references)
         } catch (error: Throwable) {
             throw SymbolResolutionException(definition.id, "validation failed: ${error.message}", error)
         }
-        return ResolvedSymbolBundle(definition.id, fromCache, references.toMap(), classLoader)
+        return ResolvedSymbolBundle(
+            definition.id,
+            fromCache,
+            references.toMap(),
+            classLoader,
+            ::validateLoadableReference,
+        )
     }
 
     private fun validateDefinition(definition: SymbolBundleDefinition) {
@@ -205,19 +329,26 @@ class TargetSymbolResolver(
         require(unexpected.isEmpty()) { "unexpected symbols: ${unexpected.sorted().joinToString()}" }
     }
 
+    private fun requiredReferences(
+        definition: SymbolBundleDefinition,
+        references: Map<String, SymbolReference>,
+    ): Map<String, SymbolReference> = references.filterKeys { it in definition.requiredSymbols }
+
     private fun validateLoadable(references: Map<String, SymbolReference>) {
-        references.forEach { (name, reference) ->
-            runCatching {
-                when (reference.kind) {
-                    SymbolKind.CLASS -> reference.resolveClass(classLoader)
-                    SymbolKind.METHOD -> {
-                        val method = org.luckypray.dexkit.wrap.DexMethod(reference.descriptor)
-                        if (method.isConstructor) reference.resolveConstructor(classLoader)
-                        else reference.resolveMethod(classLoader)
-                    }
-                    SymbolKind.FIELD -> reference.resolveField(classLoader)
+        references.forEach { (name, reference) -> validateLoadableReference(name, reference) }
+    }
+
+    private fun validateLoadableReference(name: String, reference: SymbolReference) {
+        runCatching {
+            when (reference.kind) {
+                SymbolKind.CLASS -> reference.resolveClass(classLoader)
+                SymbolKind.METHOD -> {
+                    val method = org.luckypray.dexkit.wrap.DexMethod(reference.descriptor)
+                    if (method.isConstructor) reference.resolveConstructor(classLoader)
+                    else reference.resolveMethod(classLoader)
                 }
-            }.getOrElse { throw IllegalStateException("$name is not loadable (${reference.descriptor})", it) }
-        }
+                SymbolKind.FIELD -> reference.resolveField(classLoader)
+            }
+        }.getOrElse { throw IllegalStateException("$name is not loadable (${reference.descriptor})", it) }
     }
 }

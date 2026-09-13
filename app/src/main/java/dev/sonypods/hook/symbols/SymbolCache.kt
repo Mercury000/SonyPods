@@ -34,7 +34,10 @@ data class CachedSymbolReference(val kind: String, val descriptor: String) {
 }
 
 /** One JSON file per bundle; writes are atomic so a killed target process cannot poison the cache. */
-class FileSymbolCache(private val directory: File) : SymbolCache {
+class FileSymbolCache(
+    private val directory: File,
+    private val onWriteError: ((String, Throwable) -> Unit)? = null,
+) : SymbolCache {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     override fun read(bundleId: String): CachedSymbolBundle? {
@@ -44,17 +47,24 @@ class FileSymbolCache(private val directory: File) : SymbolCache {
     }
 
     override fun write(bundle: CachedSymbolBundle) {
-        directory.mkdirs()
-        val target = fileFor(bundle.bundleId)
-        val temporary = File(directory, ".${target.name}.${System.nanoTime()}.tmp")
-        temporary.writeText(json.encodeToString(bundle))
+        var temporary: File? = null
         runCatching {
-            Files.move(
-                temporary.toPath(), target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
-            )
-        }.getOrElse {
-            Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            directory.mkdirs()
+            val target = fileFor(bundle.bundleId)
+            val staging = File(directory, ".${target.name}.${System.nanoTime()}.tmp")
+            temporary = staging
+            staging.writeText(json.encodeToString(bundle))
+            runCatching {
+                Files.move(
+                    staging.toPath(), target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
+                )
+            }.getOrElse {
+                Files.move(staging.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        }.onFailure {
+            temporary?.delete()
+            onWriteError?.invoke("symbol cache write failed bundle=${bundle.bundleId}", it)
         }
     }
 
