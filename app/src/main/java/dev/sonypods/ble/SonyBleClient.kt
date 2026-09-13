@@ -147,13 +147,15 @@ internal enum class SonySppTableSet(val normalUuid: UUID, val reversedUuid: UUID
  *   an Xperia with `vendor.somc.qti_lea.support`).
  * - `C12260d.b.mo52710a`, headset-directed migration: the accessory's ConnectionType verbatim.
  *
- * The "GATT only where LE Audio is live" invariant is not enforced by any of those rules. SC
- * enforces it once, in the execution layer — see [gattVetoReason].
+ * The "GATT only where LE Audio is live" invariant is enforced from the same topology snapshot
+ * that selected this route. There is deliberately no second connected-device lookup in the
+ * execution layer: route and validation must never observe different LE Audio states.
  */
 private data class TandemRoute(
     val target: DiscoveredSonyDevice,
     val remote: BluetoothDevice,
     val mode: TandemConnectionMode,
+    val leAudioConnectedAddresses: Set<String>,
     /**
      * The Sony Tandem record this device advertises, or null when it advertises none.
      *
@@ -293,11 +295,28 @@ class SonyBleClient(
     private val pendingConnectLock = Any()
     private var pendingConnect: PendingConnectRequest? = null
     private val proxyReadyTimeout = Runnable { runPendingConnect("LE Audio proxy bind timed out") }
+
+    /**
+     * A route whose transport is known, but whose exact GATT identity has not reached LE Audio
+     * CONNECTED yet.
+     *
+     * This is not a failed connect. The resolver will be re-run on the next LE Audio topology
+     * event, and a repeated public connect request may also re-check it. Keeping the request here
+     * prevents the old behaviour where every 15-second reconcile replayed the same invalid veto.
+     */
+    private data class DeferredRouteRequest(
+        val device: DiscoveredSonyDevice,
+        val tandemMigration: LeaConnectionType?,
+        val reason: String,
+    )
+
+    private val deferredRouteLock = Any()
+    private var deferredRouteRequest: DeferredRouteRequest? = null
     /**
      * The LE Audio profile proxy, and whether a bind is already in flight.
      *
-     * Volatile because the bind completes on a binder callback while [leAudioConnectedAddresses] is
-     * read from the connect paths.
+     * Volatile because the bind completes on a binder callback while the topology is read from the
+     * connect paths.
      */
     @Volatile private var leAudioProxy: BluetoothProfile? = null
     @Volatile private var leAudioProxyBinding = false
@@ -314,6 +333,7 @@ class SonyBleClient(
             leAudioProxyBinding = false
             runCatching { log("LE Audio profile proxy connected (profile=$profile)") }
             runPendingConnect("LE Audio proxy ready")
+            retryDeferredRoute("LE Audio profile ready")
         }
 
         override fun onServiceDisconnected(profile: Int) {
@@ -323,6 +343,7 @@ class SonyBleClient(
             // A connect deferred for the bind should not hang once the proxy is gone; let it
             // through so the route re-reads the live (now empty) connected list.
             runPendingConnect("LE Audio proxy disconnected before deferred connect")
+            retryDeferredRoute("LE Audio profile disconnected")
         }
     }
 
@@ -693,76 +714,37 @@ class SonyBleClient(
     }
 
     /**
-     * Resolves the one route, or null when the request names an address this adapter cannot reach.
+     * Resolves the route from one LE Audio topology snapshot.
      *
-     * The transport half is Sound Connect's, with SDP taken back out of it:
-     * 1. Headset-directed migration (LEA_NTFY_PARAM 0x0E): the ConnectionType the accessory named,
-     *    verbatim (`C12260d.b.mo52710a`). SC's enum has only SPP and BLE_GATT and its `when` is
-     *    exhaustive, so anything else is a frame we should not act on rather than a default.
-     * 2. LE Audio live: GATT, on the LE Audio identity.
-     * 3. Otherwise: SPP, on the control identity — whether or not the device advertises a Tandem
-     *    record. This used to require the record and silently fall to GATT without it, which is a
-     *    combination SC never produces: no SC rule reads SDP, and the one that would have to
-     *    (`m61923o`) refuses GATT outright while LE Audio is down.
+     * The pure resolver owns the transport and exact-target choice. This method only supplies the
+     * runtime facts (requested device, known identities, proved control identity and one profile
+     * read); it deliberately does not repeat a connected-device query in a later veto.
      */
     @SuppressLint("MissingPermission")
     private fun resolveTandemRoute(
         device: DiscoveredSonyDevice,
         tandemMigration: LeaConnectionType?,
-    ): TandemRoute? {
-        val requested = adapter?.getRemoteDevice(device.address) ?: return null
-        val leAudioActive = isLeAudioConnected(requested)
-
-        val (target, identity, selectedMode) = when {
-            tandemMigration != null -> {
-                val mode = when (tandemMigration) {
-                    LeaConnectionType.SPP -> TandemConnectionMode.SPP
-                    LeaConnectionType.BLE_GATT -> TandemConnectionMode.GATT
-                    LeaConnectionType.OUT_OF_RANGE -> {
-                        log("Tandem migration named an out-of-range ConnectionType; ignoring the frame")
-                        return null
-                    }
-                }
-                Triple(device, "headset-directed migration", mode)
-            }
-            leAudioActive -> {
-                Triple(resolveLeAudioTarget(device), "LE Audio identity", TandemConnectionMode.GATT)
-            }
-            else -> {
-                Triple(resolveControlTarget(device), "control identity", TandemConnectionMode.SPP)
-            }
-        }
-
-        val remote = if (target.address.equals(device.address, ignoreCase = true)) {
-            requested
-        } else {
-            adapter?.getRemoteDevice(target.address) ?: return null
-        }
-        val tableSet = advertisedSppTableSet(remote)
-
-        val reason = when {
-            tandemMigration != null -> "$identity requested $selectedMode"
-            leAudioActive -> "$identity carries a live LE Audio session; selected GATT"
-            else -> "$identity with LE Audio down; selected SPP (record=${tableSet ?: "none"})"
-        }
-
-        return TandemRoute(
-            target = target,
-            remote = remote,
-            mode = selectedMode,
-            sppTableSet = tableSet,
-            reason = reason,
+        topology: LeAudioTopology = readLeAudioTopology(),
+    ): TandemRouteDecision {
+        val record = HeadsetRegistry.recordFor(device.address)
+        log(
+            "LE Audio topology: ready=${topology.ready} connected=${topology.connectedAddresses} " +
+                "known=${record?.addresses.orEmpty() + device.address} control=${record?.controlAddress}"
+        )
+        return TandemRouteResolver.resolve(
+            requestedAddress = device.address,
+            knownAddresses = record?.addresses.orEmpty(),
+            controlAddress = record?.controlAddress,
+            leAudioTopology = topology,
+            tandemMigration = tandemMigration,
         )
     }
 
     /**
      * The Sony Tandem record this device advertises, or null when it advertises none.
      *
-     * Read from the device's own SDP, cached by the stack at bonding. Mirrors
-     * `bh0.C5731a.m26000d`: the record list is walked in SC's order (TableSet 2, then TableSet 1)
-     * and each entry accepts either spelling, so the answer is a *record*, not the particular UUID
-     * that happened to be in the cache. Which spelling gets bound is then never in question — see
-     * [SonySppTableSet].
+     * Sound Connect decides SPP without consulting SDP and looks the record up only when it opens
+     * the socket. The record is therefore diagnostic for routing and required when SPP is dialled.
      */
     @SuppressLint("MissingPermission")
     private fun advertisedSppTableSet(remote: BluetoothDevice): SonySppTableSet? {
@@ -774,27 +756,64 @@ class SonyBleClient(
     }
 
     /**
-     * Why this GATT connect must not proceed, or null when it may.
+     * Reads the LE Audio profile exactly once for a route decision.
      *
-     * Sound Connect's single enforcement point for "GATT only where LE Audio is live"
-     * (`RunnableC14344k.m61923o`): unless the caller passed the force flag — which only its
-     * BLE-test-server path does — a GATT connect whose target is not in the LE Audio connected list
-     * is refused before any socket is opened, with the log line quoted below. None of SC's four
-     * routing rules checks this; they can and do ask for GATT while LC3 is down, and this is what
-     * stops it. Without it a migration frame naming GATT, or any route that guessed GATT, opens a
-     * GATT client on a bearer where Sony publishes no Tandem service, and every command afterwards
-     * answers "Tandem channel is not ready".
+     * [LeAudioTopology.ready] is distinct from an empty connected set. A binding/unknown profile
+     * must not be mistaken for a valid "LE Audio is down" answer; the public connect path waits for
+     * the proxy bind before reaching here, and this distinction keeps that fact explicit.
      */
     @SuppressLint("MissingPermission")
-    private fun gattVetoReason(remote: BluetoothDevice): String? {
-        if (isLeAudioConnectedStrict(remote)) return null
-        return "connectDevice: GATT, Fail due to LE Audio is not connected. [ ${remote.address} ]"
+    private fun readLeAudioTopology(): LeAudioTopology {
+        val proxy = leAudioProxy ?: run {
+            bindLeAudioProxy()
+            return LeAudioTopology.Unknown
+        }
+        return runCatching {
+            LeAudioTopology(
+                ready = true,
+                connectedAddresses = proxy.connectedDevices
+                    .orEmpty()
+                    .mapNotNull { device -> runCatching { device.address }.getOrNull() }
+                    .map { it.uppercase() }
+                    .toSet(),
+            )
+        }.onFailure {
+            log("LE Audio getConnectedDevices failed: " + it.message)
+        }.getOrElse {
+            LeAudioTopology.Unknown
+        }
+    }
+
+    /** Exact GATT validation for late paths that do not come from [resolveTandemRoute]. */
+    @SuppressLint("MissingPermission")
+    private fun gattVetoReason(
+        remote: BluetoothDevice,
+        topology: LeAudioTopology = readLeAudioTopology(),
+    ): String? {
+        val address = runCatching { remote.address }.getOrNull()?.uppercase()
+            ?: return "GATT target has no readable address"
+        if (!topology.ready) {
+            return "LE Audio topology is unavailable for GATT target $address"
+        }
+        if (address !in topology.connectedAddresses) {
+            return "connectDevice: GATT, Fail due to LE Audio is not connected. [ $address ]"
+        }
+        return null
     }
 
     fun connect(device: DiscoveredSonyDevice, tandemMigration: LeaConnectionType? = null) {
         if (!hasConnectPermission()) {
             listener.onBluetoothUnavailable("Bluetooth connect permission is missing")
             return
+        }
+        val deferred = deferredRouteRequestSnapshot()
+        if (deferred != null && deferred.matches(device, tandemMigration)) {
+            retryDeferredRoute("connect request repeated while route is waiting")
+            return
+        }
+        if (deferred != null) {
+            log("replacing deferred Tandem route ${deferred.device.address} with ${device.address}")
+            clearDeferredRoute()
         }
         // The transport decision reads the LE Audio proxy's connected list, and a half-bound proxy
         // reads as "no LE Audio session". Hot-start connects (generation reload while a headset is
@@ -834,42 +853,137 @@ class SonyBleClient(
 
     private fun connectNow(device: DiscoveredSonyDevice, tandemMigration: LeaConnectionType?) {
         stopScan()
-        val route = resolveTandemRoute(device, tandemMigration)
-        if (route == null) {
-            // Either the address is unreachable or the request itself was not actionable (an
-            // out-of-range migration ConnectionType); resolveTandemRoute logged which.
-            listener.onBluetoothUnavailable("Cannot resolve a Tandem route for ${device.address}")
-            return
-        }
-        val target = route.target
-        val remote = route.remote
-        log(
-            "Tandem route: ${device.address} -> ${target.address} via " +
-                "${route.mode} — ${route.reason}"
-        )
+        when (val decision = resolveTandemRoute(device, tandemMigration)) {
+            is TandemRouteDecision.Wait -> {
+                deferRoute(device, tandemMigration, decision.reason)
+                return
+            }
 
-        if (route.mode == TandemConnectionMode.SPP) {
-            connectSpp(target, remote, route.sppTableSet)
-            return
-        }
+            is TandemRouteDecision.Reject -> {
+                clearDeferredRoute()
+                listener.onBluetoothUnavailable(decision.reason)
+                return
+            }
 
-        gattVetoReason(remote)?.let { veto ->
-            log(veto)
-            listener.onBluetoothUnavailable(
-                "GATT is only available while an LE Audio session is up for ${remote.address}"
-            )
-            return
+            is TandemRouteDecision.Ready -> {
+                val requestedRemote = runCatching {
+                    adapter?.getRemoteDevice(device.address)
+                }.getOrNull()
+                if (requestedRemote == null) {
+                    clearDeferredRoute()
+                    listener.onBluetoothUnavailable("Cannot resolve Tandem address ${device.address}")
+                    return
+                }
+                val targetRemote = if (decision.targetAddress.equals(device.address, ignoreCase = true)) {
+                    requestedRemote
+                } else {
+                    runCatching { adapter?.getRemoteDevice(decision.targetAddress) }.getOrNull()
+                }
+                if (targetRemote == null) {
+                    clearDeferredRoute()
+                    listener.onBluetoothUnavailable("Cannot resolve Tandem target ${decision.targetAddress}")
+                    return
+                }
+                val target = if (targetRemote.address.equals(device.address, ignoreCase = true)) {
+                    device
+                } else {
+                    retargetDevice(device, targetRemote)
+                }
+                val route = TandemRoute(
+                    target = target,
+                    remote = targetRemote,
+                    mode = decision.mode,
+                    leAudioConnectedAddresses = decision.leAudioConnectedAddresses,
+                    sppTableSet = advertisedSppTableSet(targetRemote),
+                    reason = decision.reason,
+                )
+                log(
+                    "Tandem route: ${device.address} -> ${target.address} via " +
+                        "${route.mode} — ${route.reason}"
+                )
+                clearDeferredRoute()
+                if (route.mode == TandemConnectionMode.SPP) {
+                    connectSpp(target, targetRemote, route.sppTableSet)
+                    return
+                }
+                // Route construction and this invariant check use the same snapshot. A failure here
+                // is an internal programming error, not a reason to wait for the next 15 s poll.
+                check(targetRemote.address.uppercase() in route.leAudioConnectedAddresses) {
+                    "GATT target ${targetRemote.address} was not in the route snapshot " +
+                        route.leAudioConnectedAddresses
+                }
+                gattAttempt = 1
+                connectGatt(target, targetRemote)
+            }
         }
-        gattAttempt = 1
-        connectGatt(target, remote)
     }
+
+    private fun deferRoute(
+        device: DiscoveredSonyDevice,
+        tandemMigration: LeaConnectionType?,
+        reason: String,
+    ) {
+        val next = DeferredRouteRequest(device, tandemMigration, reason)
+        val changed = synchronized(deferredRouteLock) {
+            val previous = deferredRouteRequest
+            deferredRouteRequest = next
+            previous == null || !previous.matches(device, tandemMigration) || previous.reason != reason
+        }
+        if (changed) {
+            log("Tandem route waiting for ${device.address}: $reason")
+        }
+    }
+
+    /** Re-evaluates a route that was waiting for its exact LE Audio identity. */
+    fun retryDeferredRoute(reason: String) {
+        val request = deferredRouteRequestSnapshot() ?: return
+        log("$reason; re-evaluating deferred Tandem route for ${request.device.address}")
+        connectNow(request.device, request.tandemMigration)
+    }
+
+    private fun deferredRouteRequestSnapshot(): DeferredRouteRequest? =
+        synchronized(deferredRouteLock) { deferredRouteRequest }
+
+
+    /** True only after a real GATT/RFCOMM attempt has been handed to the Bluetooth stack. */
+    fun isConnectAttemptInFlight(): Boolean =
+        gattRouteTarget != null || sppConnectThread?.isAlive == true
+
+    private fun clearDeferredRoute() {
+        val cleared = synchronized(deferredRouteLock) {
+            val had = deferredRouteRequest != null
+            deferredRouteRequest = null
+            had
+        }
+        if (cleared) log("Cleared deferred Tandem route")
+    }
+
+    private fun DeferredRouteRequest.matches(
+        device: DiscoveredSonyDevice,
+        tandemMigration: LeaConnectionType?,
+    ): Boolean =
+        this.device.address.equals(device.address, ignoreCase = true) &&
+            this.tandemMigration == tandemMigration
+
+    @SuppressLint("MissingPermission")
+    private fun retargetDevice(
+        device: DiscoveredSonyDevice,
+        remote: BluetoothDevice,
+    ): DiscoveredSonyDevice = device.copy(
+        address = remote.address.uppercase(),
+        name = safeDeviceName(remote) ?: device.name.removePrefix("LE_"),
+        bluetoothType = remote.type,
+        advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),
+        isLikelyControlEndpoint = true,
+    )
 
     /**
      * Connects to [target] via BLE GATT using TRANSPORT_LE.
      *
-     * Every caller has already cleared [gattVetoReason]; nothing here re-decides the transport. The
-     * one SPP-to-GATT edge Sound Connect has is not this function's business either — see
-     * [sppFallbackToGattAllowed].
+     * The route has already established both the transport and the exact target. Nothing here
+     * re-decides either, so a later profile read cannot invalidate a route that was valid when it
+     * was selected. The one SPP-to-GATT edge Sound Connect has is not this function's business —
+     * see [sppFallbackToGattAllowed].
      */
     @SuppressLint("MissingPermission")
     private fun connectGatt(target: DiscoveredSonyDevice, remote: BluetoothDevice) {
@@ -932,6 +1046,7 @@ class SonyBleClient(
         synchronized(pendingConnectLock) {
             pendingConnect = null
         }
+        clearDeferredRoute()
         timeoutHandler.removeCallbacks(proxyReadyTimeout)
     }
 
@@ -1132,74 +1247,6 @@ class SonyBleClient(
         if (!tracked) return
         log("Closing GATT client ($reason)")
         runCatching { target.close() }
-    }
-
-    /**
-     * Whether an LE Audio session is live for this headset, either identity.
-     *
-     * This is the *route* predicate. Sound Connect's route input is `pairingService == LEA ||
-     * leAudioConnected(deviceId)`, and its PairingService comes from outside the address lookup —
-     * the broadcast that fired, the registry record, or the headset's own StreamingStatus
-     * (`C5960f.m26575c`). Folding both identities into one question is how we reach the same answer
-     * without a device registry: the user picks the folded control identity, and the session that
-     * decides the route belongs to its LE half.
-     *
-     * A bond alone must never read as connected. A bonded-but-idle LE identity still shows an ACL
-     * (background scans, our own previous control link, vendor keep-alives), so `isConnected()`
-     * stays true long after LC3 stopped — which is what used to drag LDAC-mode connections onto the
-     * GATT path. Only profile membership counts.
-     */
-    @SuppressLint("MissingPermission")
-    private fun isLeAudioConnected(remote: BluetoothDevice): Boolean {
-        val address = runCatching { remote.address }.getOrNull() ?: return false
-        val candidates = buildSet {
-            add(address.uppercase())
-            HeadsetRegistry.recordFor(address)?.addresses?.forEach { add(it) }
-        }
-        val connected = leAudioConnectedAddresses()
-        val result = candidates.any { it in connected }
-        log("LE Audio route check: connected=$result identities=$candidates profileDevices=$connected")
-        return result
-    }
-
-    /**
-     * Whether *this exact address* holds an LE Audio profile connection.
-     *
-     * The veto's question, and deliberately not [isLeAudioConnected]'s. SC's `m61923o` asks
-     * `mo61771d(deviceId)` — `C0090h.m447f` over the connected list, one address, no identity
-     * folding — about the address it is about to dial. Folding identities here would let a GATT
-     * connect proceed on a classic address because the headset's LE half is busy, which is the exact
-     * mistake the veto exists to catch.
-     */
-    @SuppressLint("MissingPermission")
-    private fun isLeAudioConnectedStrict(remote: BluetoothDevice): Boolean {
-        val address = runCatching { remote.address }.getOrNull()?.uppercase() ?: return false
-        return address in leAudioConnectedAddresses()
-    }
-
-    /**
-     * The addresses that currently hold an LE Audio profile connection.
-     *
-     * Read the way Sound Connect reads it: from a `BluetoothProfile` proxy this process owns
-     * (`ac0.C0090h.m453m` binds `getProfileProxy(..., m446l() ? 32 : 22)`, and `m448g` calls
-     * `getConnectedDevices()` on it). What stood here was
-     * `BluetoothManager.getConnectedDevices(int)`, which is specified for GATT and GATT_SERVER only
-     * and throws IllegalArgumentException for LE_AUDIO — so it never once answered this question,
-     * and the ASCS-plus-reflection guess underneath it was silently carrying the whole predicate
-     * with no SC counterpart of any kind. Empty while the proxy is still binding, which is the same
-     * answer SC gives before its own `LeAudioAvailability` reaches READY.
-     */
-    @SuppressLint("MissingPermission")
-    private fun leAudioConnectedAddresses(): Set<String> {
-        val proxy = leAudioProxy ?: run {
-            bindLeAudioProxy()
-            return emptySet()
-        }
-        return runCatching { proxy.connectedDevices }
-            .onFailure { log("LE Audio getConnectedDevices failed: ${it.message}") }
-            .getOrDefault(emptyList())
-            .mapNotNull { it.address?.uppercase() }
-            .toSet()
     }
 
     @SuppressLint("MissingPermission")
@@ -2183,66 +2230,6 @@ class SonyBleClient(
                     device.type == BluetoothDevice.DEVICE_TYPE_DUAL ||
                     name?.startsWith("LE_", ignoreCase = true) == true,
             )
-        )
-    }
-
-    /**
-     * Maps an LE Audio identity onto the identity that actually carries Tandem.
-     *
-     * Returns [device] unchanged for anything else, including when no control identity is
-     * bonded — failing to connect is more honest than silently targeting another headset.
-     */
-    @SuppressLint("MissingPermission")
-    private fun resolveControlTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val control = HeadsetRegistry.sessionTargetFor(device.address)
-        if (control.equals(device.address, ignoreCase = true)) return device
-        val remote = adapter?.bondedDevices.orEmpty()
-            .firstOrNull { it.address.equals(control, ignoreCase = true) }
-        if (remote == null) {
-            // The record can outlive one of its bonds — prune only drops a record when *no* identity
-            // is bonded. Dialing an address with no link key fails every time, so the requested one,
-            // which at least has a live link, is the better answer.
-            log("control identity $control is not bonded; staying on ${device.address}")
-            return device
-        }
-        log("Retargeting LE Audio identity ${device.address} to control identity $control")
-        return device.copy(
-            address = control,
-            name = safeDeviceName(remote) ?: device.name.removePrefix("LE_"),
-            bluetoothType = remote.type,
-            advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),
-            isLikelyControlEndpoint = true,
-        )
-    }
-
-    /**
-     * The headset's LE Audio identity, for when that is the half serving Tandem.
-     *
-     * A TWS reports a left and a right LE identity and the stack need not be bonded to both, so the
-     * first bonded one wins — SC `C14356p0.m61937C0`, a plain first-match of the reported group
-     * against the bonded set. Falls back to [device] when the headset is unknown or none of its LE
-     * identities is bonded: connecting the requested address is recoverable, targeting an address
-     * this run cannot account for is not.
-     */
-    @SuppressLint("MissingPermission")
-    private fun resolveLeAudioTarget(device: DiscoveredSonyDevice): DiscoveredSonyDevice {
-        val leAddresses = HeadsetRegistry.siblingAddressesOf(device.address)
-            .filterNot { HeadsetRegistry.controlAddressFor(it) == it }
-        if (leAddresses.isEmpty()) return device
-        val bonded = adapter?.bondedDevices.orEmpty()
-        val remote = leAddresses.firstNotNullOfOrNull { le ->
-            bonded.firstOrNull { it.address.equals(le, ignoreCase = true) }
-        }
-        if (remote == null) {
-            log("no LE Audio identity of $leAddresses is bonded; staying on ${device.address}")
-            return device
-        }
-        log("LE Audio is up; retargeting ${device.address} to LE Audio identity ${remote.address}")
-        return device.copy(
-            address = remote.address.uppercase(),
-            name = safeDeviceName(remote) ?: device.name,
-            bluetoothType = remote.type,
-            advertisedServices = remote.uuids?.map { it.uuid.toString() }.orEmpty(),
         )
     }
 

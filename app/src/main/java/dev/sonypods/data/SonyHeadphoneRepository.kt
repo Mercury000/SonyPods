@@ -1228,6 +1228,19 @@ class SonyHeadphoneRepository private constructor(
         )
     }
 
+    /**
+     * Re-evaluates a Tandem route that is waiting for the exact LE Audio identity to connect.
+     *
+     * HeadsetStateDispatcher calls this from the LE Audio profile hook, so recovery follows the
+     * state transition instead of waiting for the periodic reconcile timer.
+     */
+    fun retryPendingTandem(reason: String) {
+        client.retryDeferredRoute(reason)
+    }
+
+
+    fun isTandemConnectInFlight(): Boolean = client.isConnectAttemptInFlight()
+
     fun disconnect() {
         appendLog("Disconnect requested")
         client.disconnect()

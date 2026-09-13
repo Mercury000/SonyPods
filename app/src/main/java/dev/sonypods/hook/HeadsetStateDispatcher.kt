@@ -281,15 +281,19 @@ object HeadsetStateDispatcher : HookContext() {
         // Before the identity folding below, because what the stack holds is group-wide: either
         // identity connecting or dropping changes the answer, and the surfaces have no other way
         // to learn it.
-        onLeAudioSystemStateMoved(serviceInstance, "le-audio-state-$currState")
+        onLeAudioSystemStateMoved(
+            serviceInstance,
+            "le-audio-state-$currState",
+            recoverTandem = currState == BluetoothProfile.STATE_CONNECTED,
+        )
 
         // Both coordinated-set members reach CONNECTED, but only the classic identity
         // carries Sony's services. Acting on the lead earbud's resolvable LE identity is
         // wrong twice over: the session would never handshake on an identity with no Sony
         // GATT server, and dialing the control counterpart while its own CIS is still
         // forming collides with link establishment and stalls both for tens of seconds.
-        // So fold identities first and only answer for the control identity — mirroring
-        // SonyBleClient's resolveControlTarget.
+        // So fold identities first and answer only for the control identity. SonyBleClient then
+        // resolves the exact connected LE target from one topology snapshot when GATT is live.
         val controlAddress = resolveControlAddress(serviceInstance, device)
         // Not `controlAddress == null || ...`. The registry cannot answer for a headset no Tandem
         // session has ever named, and reading "unknown" as "this *is* the control identity" is the
@@ -452,9 +456,20 @@ object HeadsetStateDispatcher : HookContext() {
      * Posted onto the profile's own handler: the hooked methods run under the profile's group lock
      * and both halves of this read it back.
      */
-    private fun onLeAudioSystemStateMoved(serviceInstance: Any?, reason: String) {
+    private fun onLeAudioSystemStateMoved(
+        serviceInstance: Any?,
+        reason: String,
+        recoverTandem: Boolean = false,
+    ) {
         postToProfileHandler(serviceInstance) {
             SonyEngineHost.republishLeAudioState(reason)
+            // Recovery is not a refresh: a CONNECTED event may be the only signal that the exact
+            // GATT identity has appeared. Run it before the refresh debounce so the debounce cannot
+            // swallow the transition that ends a Wait state. Never wake a route on a disconnect:
+            // that would turn an LE Audio teardown into an unintended SPP connection.
+            if (recoverTandem) {
+                SonyEngineHost.retryPendingTandem(reason)
+            }
             val now = System.currentTimeMillis()
             if (now - lastLeAudioRefreshMs < LE_AUDIO_REFRESH_DEBOUNCE_MS) return@postToProfileHandler
             lastLeAudioRefreshMs = now

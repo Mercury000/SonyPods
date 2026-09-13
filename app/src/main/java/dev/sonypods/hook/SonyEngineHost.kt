@@ -550,6 +550,12 @@ object SonyEngineHost {
         connectDevice(remote, force = true)
     }
 
+    /** Wake a route that is waiting for its exact LE Audio identity. */
+    fun retryPendingTandem(reason: String) {
+        if (officialAppOwnsTandem) return
+        repository?.retryPendingTandem(reason)
+    }
+
     @SuppressLint("MissingPermission")
     fun connectDevice(device: BluetoothDevice, force: Boolean = false) {
         if (officialAppOwnsTandem) {
@@ -597,6 +603,17 @@ object SonyEngineHost {
             ?: SonyDeviceService.defaultDeviceName(appContext)
         Log.d(TAG, "connecting Tandem session to $name ($address)")
         runCatching { repo.connect(address, name) }
+            .onSuccess {
+                // A route parked on an LE Audio identity transition is not an in-flight socket.
+                // Leaving the host gate armed here is what made the next reconcile a no-op until
+                // CONNECT_IN_FLIGHT_TIMEOUT_MS. The client owns the wait and is woken directly by
+                // the LE Audio state hook.
+                if (!repo.isTandemConnectInFlight() &&
+                    connectInFlightAddress.equals(address, ignoreCase = true)
+                ) {
+                    connectInFlightAddress = null
+                }
+            }
             .onFailure {
                 if (connectInFlightAddress.equals(address, ignoreCase = true)) {
                     connectInFlightAddress = null
