@@ -17,7 +17,7 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         super.onCreate()
         // App-local appearance keys (theme/accent/language) move out of the legacy shared
         // prefs file into their own file before any activity reads them. The legacy file
-        // itself survives until migrateToRemote has drained it below.
+        // itself survives until the store binding transaction has drained it below.
         LegacyConfigMigrator.migrateUiPrefs(this)
         // Fetch/update the app-owned cloud cache independently of the Hook process.
         // Hooked processes consume the published Remote File, never this app Pref.
@@ -29,22 +29,23 @@ class SonyPodsApp : Application(), XposedServiceHelper.OnServiceListener {
         Log.d(TAG, "LSPosed service bound api=${service.apiVersion} framework=${service.frameworkName}/${service.frameworkVersionCode}")
         xposedService = service
         CloudModelInfoSync.onServiceBound(this, service)
-        // Migration must run before anything reads or writes the shared store: for
-        // installs predating remote-only persistence it seeds config/earphone metadata
-        // from the legacy local file and then deletes that file, so no local prefs
-        // copy of hook-consumed data survives.
-        LegacyConfigMigrator.migrateToRemote(this, service)
-        val remotePrefs = runCatching { service.getRemotePreferences(ConfigManager.PREFS_NAME) }
-            .onFailure { Log.w(TAG, "getRemotePreferences failed", it) }
-            .getOrNull()
-        // Adopt the store (reads the persisted config into the cache) and flush any
-        // saves buffered while the service was unavailable. Config is fully loaded
-        // BEFORE listeners fire so the UI never renders defaults over real values.
-        ConfigManager.attachStore(remotePrefs)
+        // App-local appearance keys already moved out in onCreate. The shared store binds
+        // through an explicit read-then-adopt: the store is read once here (the libxposed
+        // example reads its value the same way from the bound service), and only ever written
+        // by mutating that adopted value. A store that reads empty adopts defaults in memory
+        // without writing, so a store that actually holds a config is left intact; the
+        // historical default-overwrite (writing before the read) can no longer happen.
+        ConfigManager.attachWritableStore(service) { LegacyConfigMigrator.readLegacySeed(this) }
+        PodImagePrefs.attachWritableStore(service) { LegacyConfigMigrator.readLegacyEarphones(this) }
         // App-only fields (startup tab, click actions) move out of the shared blob into
-        // local UI prefs; pull any value older builds saved remotely in on the first bind.
+        // local UI prefs; runs after adoption so it reads the real config, not defaults.
         LegacyConfigMigrator.migrateAppOnlyPrefsToUi(this)
-        PodImagePrefs.attachStore(remotePrefs)
+        // The store is authoritative from here on; drop the legacy local file only once both
+        // stores hold a confirmed value, since that file is the last copy of a pre-migration
+        // configuration.
+        if (ConfigManager.isConfigReady() && PodImagePrefs.isMetadataReady()) {
+            LegacyConfigMigrator.deleteLegacyFile(this)
+        }
         ModelImageSync.onServiceBound(this)
         // No store here: this process holds no Tandem session, so it can learn nothing itself.
         // The engine identifies a headset from its own replies and ships the records in every

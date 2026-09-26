@@ -64,6 +64,7 @@ object MiBluetoothToastHook : HookContext() {
     private var lastOfficialIslandShape: Triple<Boolean, Boolean, Boolean>? = null
 
     override fun onBeforeReload() {
+        unregisterRemoteConfigChangeListener()
         surfaceHandler.removeCallbacksAndMessages(null)
         FocusIslandUtil.onBeforeReload()
         listOf(notificationReceiver, unlockReceiver).filterNotNull().forEach { receiver ->
@@ -84,6 +85,10 @@ object MiBluetoothToastHook : HookContext() {
     }
 
     override fun onHook() {
+        // Keep this process's ConfigManager current through the framework's own change
+        // notification (canonical libxposed pattern), instead of re-reading the store on every
+        // notification/island render.
+        registerRemoteConfigChangeListener()
         hookBefore(
             findMethod(
                 "android.app.Instrumentation",
@@ -193,10 +198,9 @@ object MiBluetoothToastHook : HookContext() {
                 val moduleContext = context.createPackageContext(
                     "com.mercury.sonypods", Context.CONTEXT_IGNORE_SECURITY
                 )
-                // The remote-preferences object captured when this hook process
-                // started can be a stale snapshot. Re-fetch it after the app has
-                // downloaded an image so the new image path is visible here.
-                val imagePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
+                // The published copy is current on every read, so the image path saved by the
+                // app after a download is visible here without re-fetching a store handle.
+                val imagePrefs = prefs
                 // Before the user unlocks, our ContentProvider and resources are not
                 // reachable ("user not unlocked"). Post the notification anyway with a
                 // system icon rather than dropping it for the whole session.
@@ -439,12 +443,9 @@ object MiBluetoothToastHook : HookContext() {
                             false,
                         )
                         val deviceName = intent.getStringExtra("deviceName")
-                        // Pull the freshest config at render time. The app persists the
-                        // full config into remote prefs on every change; re-reading here
-                        // keeps island mode/duration current even if a config push
-                        // broadcast was missed (e.g. receiver lost across a hot reload).
-                        val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
-                        runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
+                        // Config is kept current by the change listener registered in onHook;
+                        // prefs is still needed as the image source for the island.
+                        val livePrefs = prefs
 
                         fun updateRecoveryIsland() {
                             val updated = FocusIslandUtil.updateBatteryIsland(
@@ -546,8 +547,6 @@ object MiBluetoothToastHook : HookContext() {
                         val device = intent.getParcelableExtra("device", BluetoothDevice::class.java)
                         val sourceColor = intent.getStringExtra(MiuiStrongToastUtil.EXTRA_SOURCE_COLOR)
                         val singleBattery = intent.getBooleanExtra(MiuiStrongToastUtil.EXTRA_SINGLE_BATTERY, false)
-                        val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
-                        runCatching { ConfigManager.refreshFromPrefs(livePrefs) }
                         if (!ConfigManager.notificationEnabled()) {
                             device?.let { cancel(context, it) }
                             return

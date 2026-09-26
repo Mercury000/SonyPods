@@ -138,17 +138,12 @@ object SonyEngineHost {
     /** Whether the missing-AdapterService warning has already been emitted this generation. */
     private var adapterServiceWarned = false
 
-    @Volatile
-    private var prefs: SharedPreferences? = null
-
     /**
-     * Source of the framework-backed remote-preference store. Re-invoking it always
-     * returns a store reflecting the latest data the LSPosed framework has persisted,
-     * so we prefer this over the single [prefs] captured at package-load (which can race
-     * the remote-prefs bridge and come back empty). See [currentPrefs].
+     * The framework-backed remote-preference store handle for this process (read-only). Kept
+     * as the change-notification channel and the source [ConfigManager] re-reads on change.
      */
     @Volatile
-    private var prefsProvider: (() -> SharedPreferences)? = null
+    private var prefs: SharedPreferences? = null
 
     private var started = false
     private var lastSnapshot: SonyStateSnapshot? = null
@@ -227,15 +222,12 @@ object SonyEngineHost {
     fun start(
         context: Context,
         adapterService: Any?,
-        prefsProvider: (() -> SharedPreferences)? = null,
+        prefs: SharedPreferences? = null,
         remoteModelInfoReader: (() -> String?)? = null,
         remoteFileReader: ((String) -> ByteArray?)? = null,
     ) {
         adapterService?.let { this.adapterService = it }
-        prefsProvider?.let { this.prefsProvider = it }
-        // Keep a snapshot of the store for the rare code paths that need a value without
-        // re-fetching; the cycle command and the deferred re-read prefer currentPrefs().
-        this.prefs = prefsProvider?.invoke()
+        prefs?.let { this.prefs = it }
         if (started) {
             // A receiver registration can fail transiently while the system
             // process is still starting. Retry only the idempotent bindings on
@@ -337,28 +329,11 @@ object SonyEngineHost {
                     .onFailure { Log.w(TAG, "connection reconcile failed", it) }
             }
         }
-        // Deferred config re-read. The LSPosed remote-prefs bridge may not be ready at
-        // package-load time, so the init read (HookEntry -> ConfigManager.attachStore)
-        // can come back empty and leave cachedConfig at its default (ANC cycle includes
-        // OFF). Re-read a couple of times shortly after start so the persisted cycle
-        // config is picked up even after a scope restart with the module app never
-        // opened. Reads are harmless: the hook-side store is read-only, so this can
-        // never clobber the user's config.
-        scope.launch {
-            for (delayMs in listOf(3_000L, 8_000L)) {
-                delay(delayMs)
-                runCatching {
-                    currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
-                    Log.d(TAG, "deferred config re-read done; ancCycleModes=${ConfigManager.ancCycleModes()}")
-                }.onFailure { Log.w(TAG, "deferred config re-read failed", it) }
-            }
-        }
-        // Native remote-preference change listener (canonical libxposed pattern, see
+        // Remote-preference change listener (canonical libxposed pattern, see
         // libxposed/example ModuleMainKt). The framework notifies us whenever the app writes
-        // to the shared remote-preference store, so we refresh cachedConfig from the live
-        // store without relying on a custom broadcast. The hook-side store is read-only, but
-        // registering a listener is a read operation and is explicitly supported. This keeps
-        // the engine's config in sync with the app even while the module app is backgrounded.
+        // to the shared remote-preference store; the value itself is then read from the app's
+        // published copy, which is current by construction — no timed re-read is involved, and
+        // the hook-side store stays read-only.
         registerRemoteConfigListener()
         Log.d(TAG, "engine started in ${ctx.packageName} cloudModelInfoRemoteFile=${remoteModelInfoReader != null}")
     }
@@ -381,7 +356,7 @@ object SonyEngineHost {
         stateHub?.clear()
         stateHub = null
 
-        val prefsStore = remotePreferenceStore ?: currentPrefs()
+        val prefsStore = remotePreferenceStore ?: prefs
         remotePreferenceListener?.let { listener ->
             prefsStore?.let { runCatching { it.unregisterOnSharedPreferenceChangeListener(listener) } }
         }
@@ -415,7 +390,6 @@ object SonyEngineHost {
         ldacWriteTarget = null
         ldacWriteSettlesAtMs = 0L
         prefs = null
-        prefsProvider = null
         // Keep connection identity across a rejected reload. A replacement
         // classloader receives the same information through GenerationRuntime's
         // Bundle; clearing it here makes the first Tandem=false snapshot look like
@@ -430,10 +404,10 @@ object SonyEngineHost {
 
     private fun registerRemoteConfigListener() {
         if (remoteConfigListenerRegistered) return
-        val p = currentPrefs() ?: return
+        val p = prefs ?: return
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             runCatching {
-                currentPrefs()?.let { ConfigManager.refreshFromPrefs(it) }
+                ConfigManager.refreshFromPrefs(p)
                 Log.d(TAG, "remote config changed; refreshed; ancCycleModes=${ConfigManager.ancCycleModes()}")
             }.onFailure { Log.w(TAG, "remote config change refresh failed", it) }
         }
@@ -1991,16 +1965,6 @@ object SonyEngineHost {
     /** Latest known state; hooks render system surfaces from this. */
     fun snapshot(): SonyStateSnapshot = lastSnapshot ?: SonyStateSnapshot()
 
-    /**
-     * The live framework-backed remote-preference store. Re-invoking [prefsProvider]
-     * returns a store reflecting the latest persisted data, correcting any startup read
-     * that raced the LSPosed remote-prefs bridge and came back empty (leaving the cached
-     * config at its default, which includes OFF in the ANC cycle). Falls back to the
-     * package-load snapshot when no provider is wired.
-     */
-    private fun currentPrefs(): SharedPreferences? =
-        runCatching { prefsProvider?.invoke() }.getOrNull() ?: prefs
-
     // ── Commands ──
 
     private fun registerCommandReceiver(context: Context) {
@@ -2083,18 +2047,13 @@ object SonyEngineHost {
             }
 
             SonyBridge.CMD_CYCLE_NOISE_CONTROL -> {
-                // cachedConfig is authoritative here: it is seeded from the remote-pref
-                // store at engine start (HookEntry -> ConfigManager.attachStore), kept
-                // live by the native OnSharedPreferenceChangeListener and the deferred
-                // re-reads above, so no re-read is needed on this path. Do NOT call
-                // currentPrefs()?.let { refreshFromPrefs(it) } speculatively — before the
-                // framework bridge is ready a fresh fetch returns an empty snapshot and
-                // would clobber the live config with defaults.
+                // ConfigManager's adopted value is authoritative here: it was read at engine
+                // start (HookEntry -> ConfigManager.attachStore) and is kept current by the
+                // remote-preference change listener, so nothing needs re-reading on this path.
                 val enabledNames = ConfigManager.ancCycleModes()
                 // Build the ordered cycle from the user's chosen subset.
-                // .ifEmpty fallback only fires when cachedConfig itself has no valid mode names
-                // (genuine corruption / first boot before any config broadcast), never for a
-                // normal two-mode subset like [NC, ASM].
+                // .ifEmpty fallback only fires when no config was ever adopted (defaults),
+                // never for a normal two-mode subset like [NC, ASM].
                 val cycle = ConfigManager.ANC_CYCLE_MODE_ORDER
                     .filter { it in enabledNames }
                     .mapNotNull { name -> NoiseControlMode.entries.firstOrNull { it.name == name } }

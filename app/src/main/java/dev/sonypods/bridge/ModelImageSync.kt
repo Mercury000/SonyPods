@@ -56,7 +56,7 @@ object ModelImageSync {
         onComplete: () -> Unit = {},
     ) {
         updateConnection(snapshot)
-        if (!PodImagePrefs.isStoreAttached()) {
+        if (!PodImagePrefs.isMetadataReady()) {
             pendingSnapshot = snapshot
             onComplete()
             return
@@ -176,7 +176,7 @@ object ModelImageSync {
         address: String,
         urlHint: String? = null,
     ): BoxSyncResult {
-        if (!PodImagePrefs.isStoreAttached()) return BoxSyncResult.Unavailable
+        if (!PodImagePrefs.isMetadataReady()) return BoxSyncResult.Unavailable
         if (SonyPodsApp.xposedService == null) return BoxSyncResult.Unavailable
         if (address.isBlank()) return BoxSyncResult.NoUrl
         val existing = PodImagePrefs.findCurrent(address)

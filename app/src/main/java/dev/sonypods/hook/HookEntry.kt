@@ -347,7 +347,6 @@ class HookEntry : XposedModule() {
         hook.attachSymbolResolver(active.symbols(classLoader))
         hook.packageName = packageName
         hook.prefs = getRemotePreferences("sonypods_settings")
-        hook.prefsProvider = { getRemotePreferences("sonypods_settings") }
         val remoteReader: (String) -> ByteArray? = { name ->
             runCatching {
                 openRemoteFile(name).use { pfd ->

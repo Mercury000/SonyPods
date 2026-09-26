@@ -950,10 +950,6 @@ object OfficialFastConnectDialogHook : HookContext() {
     }
 
     private fun shouldLaunchOfficialDialog(context: Context, snapshot: SonyStateSnapshot): Boolean {
-        runCatching {
-            val livePrefs = runCatching { prefsProvider() }.getOrElse { prefs }
-            ConfigManager.refreshFromPrefs(livePrefs)
-        }
         if (!ConfigManager.popupOnConnect() ||
             ConfigManager.connectDialogMode() != ConfigManager.CONNECT_DIALOG_MODE_OFFICIAL
         ) {
@@ -1707,7 +1703,6 @@ object OfficialFastConnectDialogHook : HookContext() {
     private fun replaceOfficialImages(view: View) {
         val activity = activeActivity ?: return
         val address = activeAddress ?: return
-        val prefs = runCatching { prefsProvider() }.getOrElse { prefs }
         val bitmap = runCatching {
             PodImageLoader.loadBoxBitmap(activity, prefs, address)
         }.getOrNull()

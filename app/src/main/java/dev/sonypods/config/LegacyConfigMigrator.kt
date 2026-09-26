@@ -3,7 +3,6 @@ package dev.sonypods.config
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
-import io.github.libxposed.service.XposedService
 
 /**
  * One-shot compatibility bridge from the pre-remote-pref layout to the framework-backed
@@ -12,10 +11,10 @@ import io.github.libxposed.service.XposedService
  * History: config was authored into the module's own local file ("sonypods_settings")
  * and mirrored into the remote store on every save. The remote store is now the ONLY
  * persistence for hook-consumed data (the module app keeps no local copy), so this
- * object moves whatever a legacy install still holds locally into the shared store and
- * then deletes the local file. Pure app-local keys — appearance plus the module UI's own
- * startup tab and click actions — move to their own file so the shared-name file can go
- * away entirely.
+ * object reads whatever a legacy install still holds locally as the seed value of the
+ * store's binding transaction, and deletes the local file once both stores hold a
+ * confirmed value. Pure app-local keys — appearance plus the module UI's own startup tab
+ * and click actions — move to their own file so the shared-name file can go away entirely.
  *
  * This is the single place where legacy key names are known; nothing else may read or
  * write them.
@@ -49,7 +48,8 @@ object LegacyConfigMigrator {
      * Move the app-local keys into [UI_PREFS_NAME], per key and only when the target
      * does not already hold one. Runs from Application.onCreate, before any activity
      * reads them in attachBaseContext. The legacy file is kept here on purpose: its
-     * config may still be needed by [migrateToRemote] once the LSPosed service binds.
+     * config is still read as the seed of the store's binding transaction once the
+     * LSPosed service binds ([readLegacySeed]).
      */
     fun migrateUiPrefs(context: Context) {
         runCatching {
@@ -70,42 +70,61 @@ object LegacyConfigMigrator {
     }
 
     /**
-     * Seed the remote store from the legacy local file for installs that predate
-     * remote-only persistence, then delete the local file. Idempotent and cheap enough
-     * to run on every service bind: once the remote store holds config_json the legacy
-     * parse is skipped, and deleting an already-deleted file is a no-op.
+     * The configuration a pre-remote-pref install still holds in its local file, or null when
+     * that file carries no configuration at all.
+     *
+     * The null case matters: it separates "there is legacy data to migrate" from "the store
+     * reads empty", so an empty store is never seeded from a legacy file that holds nothing.
      */
-    fun migrateToRemote(context: Context, service: XposedService) {
-        runCatching {
-            val remote = service.getRemotePreferences(ConfigManager.PREFS_NAME)
-            val legacy = context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
-            if (!remote.contains(ConfigManager.PREF_KEY_CONFIG_JSON)) {
-                val config = readLegacyConfig(legacy)
-                val success = remote.edit()
-                    .putString(ConfigManager.PREF_KEY_CONFIG_JSON, ConfigManager.encode(config))
-                    .commit()
-                Log.d(TAG, "seeded remote store from legacy file success=$success")
-                if (!success) {
-                    Log.w(TAG, "remote config commit failed; aborting legacy prefs deletion")
-                    return@runCatching
-                }
-            }
-            if (!remote.contains(PodImagePrefs.PREF_KEY_EARPHONES)) {
-                legacy.getString(PodImagePrefs.PREF_KEY_EARPHONES, null)?.let { earphonesJson ->
-                    val success = remote.edit().putString(PodImagePrefs.PREF_KEY_EARPHONES, earphonesJson).commit()
-                    Log.d(TAG, "copied legacy earphone metadata (${earphonesJson.length} bytes) success=$success")
-                    if (!success) {
-                        Log.w(TAG, "remote earphones commit failed; aborting legacy prefs deletion")
-                        return@runCatching
-                    }
-                }
-            }
-            // The remote store is authoritative from here on; the local copy is redundant
-            // for migrated installs and empty for fresh ones.
-            val deleted = context.deleteSharedPreferences(ConfigManager.PREFS_NAME)
-            Log.d(TAG, "legacy local prefs ${ConfigManager.PREFS_NAME} deleted=$deleted")
-        }.onFailure { Log.w(TAG, "migrateToRemote failed", it) }
+    fun readLegacySeed(context: Context): AppConfig? {
+        val legacy = legacyPrefs(context)
+        if (LEGACY_CONFIG_KEYS.none { legacy.contains(it) }) return null
+        return readLegacyConfig(legacy)
     }
+
+    /** The metadata blob a pre-remote-pref install still holds locally. */
+    fun readLegacyEarphones(context: Context): String? =
+        runCatching { legacyPrefs(context).getString(PodImagePrefs.PREF_KEY_EARPHONES, null) }.getOrNull()
+
+    /**
+     * Drop the legacy local file. Only called once both stores hold a confirmed value — the
+     * file is the last place a pre-migration configuration exists.
+     */
+    fun deleteLegacyFile(context: Context) {
+        val deleted = context.deleteSharedPreferences(ConfigManager.PREFS_NAME)
+        Log.d(TAG, "legacy local prefs ${ConfigManager.PREFS_NAME} deleted=$deleted")
+    }
+
+    private fun legacyPrefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(ConfigManager.PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * Every key [readLegacyConfig] can read a configuration out of. A file holding only
+     * app-local appearance keys has nothing to migrate.
+     */
+    private val LEGACY_CONFIG_KEYS = listOf(
+        ConfigManager.PREF_KEY_CONFIG_JSON,
+        ConfigManager.PREF_KEY_LOG_LEVEL,
+        ConfigManager.PREF_KEY_SUPER_ISLAND_MODE,
+        ConfigManager.PREF_KEY_ISLAND_DURATION_SECONDS,
+        ConfigManager.PREF_KEY_NOTIFICATION_CLICK_ACTION,
+        ConfigManager.PREF_KEY_POPUP_ON_CONNECT,
+        ConfigManager.PREF_KEY_CONNECT_DIALOG_MODE,
+        ConfigManager.PREF_KEY_SUPPRESS_POPUP_IN_GAME_OR_LANDSCAPE,
+        ConfigManager.PREF_KEY_POPUP_ALLOWLIST,
+        ConfigManager.PREF_KEY_POPUP_DENYLIST,
+        ConfigManager.PREF_KEY_SUPPRESS_POPUP_ON_CONNECT_WHEN_FOREGROUND,
+        ConfigManager.PREF_KEY_MORE_CLICK_ACTION,
+        "open_heytap",
+        ConfigManager.PREF_KEY_FUSION_MORE_CLICK_ACTION,
+        ConfigManager.PREF_KEY_ADAPTIVE_CAPABILITY_OVERRIDE,
+        ConfigManager.PREF_KEY_SPATIAL_AUDIO_CAPABILITY_OVERRIDE,
+        ConfigManager.PREF_KEY_SPATIAL_SOUND_SWITCH_CAPABILITY_OVERRIDE,
+        ConfigManager.PREF_KEY_ANC_IMPLEMENTATION_CAPABILITY_OVERRIDE,
+        ConfigManager.PREF_KEY_ANC_CYCLE_MODES,
+        ConfigManager.PREF_KEY_STARTUP_TAB,
+        PodImagePrefs.PREF_KEY_EARPHONES,
+    )
 
     /** App-local prefs handle for the module UI's own appearance/startup settings. */
     fun appOnlyPrefs(context: Context): SharedPreferences =

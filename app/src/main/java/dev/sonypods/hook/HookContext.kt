@@ -19,16 +19,12 @@ import dev.sonypods.hook.symbols.TargetSymbolResolver
 abstract class HookContext {
     lateinit var module: XposedModule
     lateinit var appClassLoader: ClassLoader
-    lateinit var prefs: SharedPreferences
     /**
-     * Re-fetchable source of the framework-backed remote-preference store.
-     * `SharedPreferences` objects handed out by `XposedModule.getRemotePreferences(...)`
-     * are snapshots taken at call time; re-invoking the provider always returns a store
-     * reflecting the latest data the LSPosed framework has on disk. The engine uses this
-     * (instead of the single [prefs] instance captured at package-load) so a cold read that
-     * raced the framework bridge is corrected by a later re-read.
+     * The framework-backed remote-preference store handle for this hooked process, captured at
+     * package load. Read-only in hooked apps; the app writes it and the framework notifies this
+     * process through [registerRemoteConfigChangeListener], which re-reads on change.
      */
-    lateinit var prefsProvider: () -> SharedPreferences
+    lateinit var prefs: SharedPreferences
     /** Read-only access to libxposed Remote Files, installed by [HookEntry]. */
     lateinit var remoteFileReader: (String) -> ByteArray?
     lateinit var packageName: String
@@ -103,32 +99,24 @@ abstract class HookContext {
     private var remoteConfigListenerSource: SharedPreferences? = null
 
     /**
-     * Native config-change path (canonical libxposed pattern, see libxposed/example
-     * ModuleMainKt): the framework notifies this hooked process whenever the module app
-     * writes the shared remote-preference store. This replaces the former custom
-     * ACTION_CONFIG_CHANGED broadcast — the store itself is the propagation channel.
-     *
-     * The shared [ConfigManager] cache is refreshed from a freshly fetched store snapshot,
-     * then the concrete hook can react via [onRemoteConfigChanged]. Registration is
-     * idempotent; pair with [unregisterRemoteConfigChangeListener] in onBeforeReload.
+     * Config-change path (canonical libxposed pattern, see libxposed/example
+     * ModuleMainKt): the initial read already happened once at package load
+     * ([HookEntry] → [ConfigManager.attachStore]); here we only subscribe, and re-read the
+     * store on each change notification, then let the concrete hook react via
+     * [onRemoteConfigChanged]. Registration is idempotent; pair with
+     * [unregisterRemoteConfigChangeListener] in onBeforeReload.
      */
     protected fun registerRemoteConfigChangeListener() {
         if (remoteConfigListener != null) return
-        val source = runCatching { prefsProvider() }.getOrElse { prefs }
-        runCatching { ConfigManager.refreshFromPrefs(source) }
-            .onFailure { android.util.Log.w("SonyPods-Hook", "initial remote config refresh failed", it) }
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            // Re-fetch: getRemotePreferences returns a snapshot at call time, and a fresh
-            // fetch reflects the latest data the framework holds.
-            val fresh = runCatching { prefsProvider() }.getOrElse { source }
-            runCatching { ConfigManager.refreshFromPrefs(fresh) }
+            runCatching { ConfigManager.refreshFromPrefs(prefs) }
                 .onFailure { android.util.Log.w("SonyPods-Hook", "remote config refresh failed", it) }
             onRemoteConfigChanged()
         }
-        runCatching { source.registerOnSharedPreferenceChangeListener(listener) }
+        runCatching { prefs.registerOnSharedPreferenceChangeListener(listener) }
             .onSuccess {
                 remoteConfigListener = listener
-                remoteConfigListenerSource = source
+                remoteConfigListenerSource = prefs
             }
             .onFailure {
                 android.util.Log.w("SonyPods-Hook", "remote config listener registration failed", it)

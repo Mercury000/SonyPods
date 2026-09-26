@@ -3,6 +3,7 @@ package dev.sonypods.config
 import android.content.SharedPreferences
 import android.util.Log
 import com.mercury.sonypods.BuildConfig
+import io.github.libxposed.service.XposedService
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -140,13 +141,19 @@ data class AppConfig(
  * Cross-process configuration authority.
  *
  * The single persistence layer is the framework-backed remote-preference store
- * ([PREFS_NAME] group), following the canonical libxposed pattern: the module app
- * writes the serialized [AppConfig] under [PREF_KEY_CONFIG_JSON] with `.apply()`;
- * hooked processes read it via `XposedModule.getRemotePreferences` and observe changes
- * through `registerOnSharedPreferenceChangeListener`. No side keeps a local
- * SharedPreferences copy of these keys — legacy local storage is handled exclusively
- * by [LegacyConfigMigrator], which is also the only consumer of the direct per-key
- * constants below.
+ * ([PREFS_NAME] group), following the canonical libxposed pattern: the module app writes the
+ * serialized [AppConfig] under [PREF_KEY_CONFIG_JSON] with `.apply()`; hooked processes read
+ * it through `getRemotePreferences` and observe changes with an
+ * `OnSharedPreferenceChangeListener`, re-reading the store when notified. No side keeps a local
+ * SharedPreferences copy of these keys — legacy local storage is handled exclusively by
+ * [LegacyConfigMigrator], which is also the only consumer of the direct per-key constants below.
+ *
+ * One rule governs every write: **a write only ever mutates the value read back from the
+ * store.** The store is read once, synchronously, when the writable service binds (the
+ * libxposed example reads its value the same way); [save] then does a read-modify-write over
+ * that adopted value. The in-memory default is reachable from the read path only — there is no
+ * field holding it that a write could serialize — so the historical default-overwrite (a
+ * default-valued cache flushed before the store had been read) cannot happen.
  */
 object ConfigManager {
     private const val TAG = "SonyPods-App"
@@ -236,24 +243,20 @@ object ConfigManager {
         encodeDefaults = true
     }
 
-    @Volatile
-    private var cachedConfig: AppConfig = AppConfig()
-
-    /** The bound cross-process store. Writable app-side, read-only hook-side. */
-    @Volatile
-    private var store: SharedPreferences? = null
+    /** Read-path fallback only; never handed to a writer. */
+    private val DEFAULTS = AppConfig()
 
     /**
-     * Save-time mutations awaiting a remote-prefs write because the LSPosed service was
-     * unavailable at save time (app process only). Replayed over the config read from the
-     * store by [attachStore] once the service (re)binds. They are buffered as mutations
-     * rather than as a whole-config snapshot: before the store is attached the cache is
-     * still the untouched [AppConfig] default, so serializing a snapshot derived from it
-     * would overwrite the user's persisted config with defaults. Memory-only by design:
-     * no local prefs file may reappear.
+     * The adopted configuration together with the store it came from.
+     *
+     * `null` means the store has not been read yet: reads fall back to [DEFAULTS] and nothing
+     * may be written. A value is only ever written by mutating [Adopted.config] (the value read
+     * back from the store), so the process default can never be written over a real config.
      */
+    private class Adopted(val store: SharedPreferences, val config: AppConfig)
+
     @Volatile
-    private var pendingMutation: ((AppConfig) -> AppConfig)? = null
+    private var adopted: Adopted? = null
 
     internal fun encode(config: AppConfig): String = json.encodeToString(AppConfig.serializer(), config)
 
@@ -261,11 +264,11 @@ object ConfigManager {
         runCatching { json.decodeFromString(AppConfig.serializer(), raw) }.getOrNull()
 
     /**
-     * Bind the cross-process store and adopt whatever it holds.
-     *
-     * Hook processes pass their read-only `XposedModule.getRemotePreferences` handle;
-     * the app passes the writable `XposedService` one after running
-     * [LegacyConfigMigrator.migrateToRemote]. A failed bind leaves the cache untouched.
+     * Adopt whatever the read-only hook-side store holds (canonical libxposed pattern: a
+     * synchronous, complete read of the framework-backed store, see the libxposed example's
+     * `ModuleMainKt`). Invoked once per hooked process at load and again on every change
+     * notification. An absent or undecodable value leaves the process unadopted — reads fall
+     * back to defaults, nothing is written.
      */
     @Synchronized
     fun attachStore(prefs: SharedPreferences?) {
@@ -273,43 +276,80 @@ object ConfigManager {
             Log.w(TAG, "attachStore skipped: no remote-pref store available")
             return
         }
-        store = prefs
         refreshFromPrefs(prefs)
-        val buffered = pendingMutation
-        if (buffered != null) {
-            pendingMutation = null
-            val base = cachedConfig
-            val replayed = buffered(base).normalized()
-            cachedConfig = replayed
-            logConfigChange("flushPending", base, replayed)
-            writeToStore(prefs, replayed)
-            Log.d(TAG, "flushed buffered config mutations")
-        }
     }
 
+    /**
+     * Re-read the store and adopt the value if it decodes. A read that yields nothing, or a
+     * value that does not decode, keeps the last adopted value — a change notification that
+     * momentarily reads empty must not wipe the config to defaults.
+     */
+    @Synchronized
     fun refreshFromPrefs(prefs: SharedPreferences): AppConfig {
-        val oldConfig = cachedConfig
         val raw = runCatching { prefs.getString(PREF_KEY_CONFIG_JSON, null) }.getOrNull()
-        if (raw == null) {
-            if (runCatching { prefs.contains(PREF_KEY_CONFIG_JSON) }.getOrDefault(false)) {
-                Log.w(TAG, "config_json returned null despite key present; keeping current cache")
-            }
-            return cachedConfig
-        }
-        val loaded = decode(raw)
-        if (loaded == null) {
-            Log.w(TAG, "config_json failed to decode; keeping current cache")
-            return cachedConfig
-        }
-        cachedConfig = loaded.normalized()
-        logConfigChange("refreshFromPrefs", oldConfig, cachedConfig)
-        return cachedConfig
+        val loaded = raw?.let(::decode) ?: return current()
+        adopt(prefs, loaded)
+        return current()
     }
 
-    fun current(): AppConfig = cachedConfig
+    /**
+     * App process only: bind the writable store, following the libxposed example's own
+     * read-then-write pattern. The store is read once, synchronously, on the bound service (the
+     * example reads its value the same way in `MainActivity`); that read is the truth:
+     *
+     *  - decodes  → adopt it; later saves are read-modify-writes over this value;
+     *  - empty, but a legacy local file exists → adopt and migrate it once;
+     *  - empty     → adopt defaults in memory so the UI works, and leave the store untouched;
+     *                the first actual user change writes, exactly like the example only writes
+     *                on a button press.
+     *
+     * The historical default-overwrite came from writing before this read had happened (a
+     * default-valued cache being flushed to the store). That cannot happen now: [save] writes
+     * only after adoption, and adoption only ever carries a value read from the store or an
+     * explicit migration/seed.
+     */
+    @Synchronized
+    fun attachWritableStore(service: XposedService, legacySeed: () -> AppConfig?) {
+        val prefs = runCatching { service.getRemotePreferences(PREFS_NAME) }.getOrNull()
+        if (prefs == null) {
+            Log.w(TAG, "attachWritableStore skipped: remote-pref store unavailable")
+            return
+        }
+        val raw = runCatching { prefs.getString(PREF_KEY_CONFIG_JSON, null) }.getOrNull()
+        val decoded = raw?.let(::decode)
+        when {
+            decoded != null -> adopt(prefs, decoded)
+            raw != null -> {
+                Log.e(TAG, "config_json present but undecodable; adopting defaults without writing")
+                adopt(prefs, DEFAULTS)
+            }
+            else -> {
+                val legacy = legacySeed()
+                if (legacy != null) {
+                    Log.d(TAG, "seeding remote store from legacy local preferences")
+                    adopt(prefs, legacy)
+                    writeToStore(prefs, current())
+                } else {
+                    // Fresh/empty store: adopt defaults in memory so settings are editable, but
+                    // do not seed the store — the first user change writes it, like the example.
+                    adopt(prefs, DEFAULTS)
+                }
+            }
+        }
+    }
 
-    /** True after this process has adopted the framework-backed remote store. */
-    fun isStoreAttached(): Boolean = store != null
+    @Synchronized
+    private fun adopt(store: SharedPreferences, config: AppConfig) {
+        val normalized = config.normalized()
+        val previous = adopted
+        adopted = Adopted(store, normalized)
+        logConfigChange("adopt", previous?.config ?: DEFAULTS, normalized)
+    }
+
+    fun current(): AppConfig = adopted?.config ?: DEFAULTS
+
+    /** True once the store was read and adopted; until then nothing may be written. */
+    fun isConfigReady(): Boolean = adopted != null
 
     fun logLevel(): Int = current().logLevel.coerceIn(LOG_LEVEL_OFF, LOG_LEVEL_DEBUG)
 
@@ -394,46 +434,34 @@ object ConfigManager {
     }
 
     /**
-     * Mutate, normalize, cache, and persist the config to the cross-process store.
+     * Mutate, normalize, and persist the configuration.
      *
-     * While the store is attached the mutation is applied to the cached config right
-     * away and the whole config is written. Before the store is attached the cache has
-     * never seen the persisted config (it is still the default), so the mutation itself
-     * is buffered instead — building a snapshot now would later overwrite the user's
-     * real config with defaults when [attachStore] flushes it.
+     * A write needs a confirmed base value to build on, so it only happens after a source was
+     * adopted; before that the change is reported and dropped rather than becoming a
+     * default-valued snapshot. Surfaces that accept changes before the store is ready gate
+     * themselves on [isConfigReady].
      */
+    @Synchronized
     private fun save(mutate: (AppConfig) -> AppConfig) {
-        val target = store
-        if (target != null) {
-            val oldConfig = cachedConfig
-            val normalized = mutate(cachedConfig).normalized()
-            cachedConfig = normalized
-            logConfigChange("save", oldConfig, normalized)
-            writeToStore(target, normalized)
-        } else {
-            bufferMutation(mutate)
-            Log.w(TAG, "save before store bind; buffering mutation until LSPosed service connects")
+        val base = adopted
+        if (base == null) {
+            Log.e(TAG, "refusing config write before the store was read; change dropped")
+            return
         }
-    }
-
-    /**
-     * Compose a mutation onto the pre-bind buffer so buffered saves replay in call order
-     * over the store's config once [attachStore] reads it.
-     */
-    private fun bufferMutation(mutate: (AppConfig) -> AppConfig) {
-        synchronized(this) {
-            val previous = pendingMutation
-            pendingMutation = previous?.let { earlier -> { config -> mutate(earlier(config)) } } ?: mutate
-        }
+        val normalized = mutate(base.config).normalized()
+        adopted = Adopted(base.store, normalized)
+        logConfigChange("save", base.config, normalized)
+        writeToStore(base.store, normalized)
     }
 
     /**
      * Single-key async write, matching the libxposed example: the serialized [AppConfig]
-     * under [PREF_KEY_CONFIG_JSON] with `.apply()` (the framework's async remote write).
+     * under [PREF_KEY_CONFIG_JSON] with `.apply()` (the framework's async remote write). Hooked
+     * processes are notified through the framework's own change listener and re-read the store.
      */
-    private fun writeToStore(target: SharedPreferences, config: AppConfig) {
+    private fun writeToStore(store: SharedPreferences, config: AppConfig) {
         runCatching {
-            target.edit()
+            store.edit()
                 .putString(PREF_KEY_CONFIG_JSON, encode(config))
                 .apply()
         }.onFailure { Log.e(TAG, "remote config write failed", it) }

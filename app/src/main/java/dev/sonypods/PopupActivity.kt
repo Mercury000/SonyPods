@@ -75,12 +75,12 @@ class PopupActivity : ComponentActivity() {
         val bluetoothDevice = intent.parcelableDevice("android.bluetooth.device.extra.DEVICE")
 
         setContent {
-            var configReady by remember { mutableStateOf(ConfigManager.isStoreAttached()) }
+            var configReady by remember { mutableStateOf(ConfigManager.isConfigReady()) }
             DisposableEffect(Unit) {
-                // SonyPodsApp attaches the remote store before notifying listeners,
-                // so this transition cannot expose ConfigManager's process defaults.
+                // SonyPodsApp adopts the config before notifying listeners, so this
+                // transition cannot expose ConfigManager's process defaults.
                 val serviceListener: (io.github.libxposed.service.XposedService?) -> Unit = {
-                    configReady = ConfigManager.isStoreAttached()
+                    configReady = ConfigManager.isConfigReady()
                 }
                 SonyPodsApp.addServiceListener(serviceListener)
                 onDispose { SonyPodsApp.removeServiceListener(serviceListener) }

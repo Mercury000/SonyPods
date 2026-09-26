@@ -44,10 +44,12 @@ data class EarphonePref(
  *
  * Persisted ONLY in the framework-backed remote-preference store ([ConfigManager.PREFS_NAME]
  * group): the hooked processes read `earphone_prefs_json` from it to resolve images for the
- * notification/island/settings surfaces, and the module app reads and writes the same store
- * via its XposedService handle. No local SharedPreferences copy is kept anywhere; before the
- * LSPosed service binds, saves are buffered in memory by [pendingJson] and flushed by
- * [attachStore].
+ * notification/island/settings surfaces, and the module app reads and writes the store via its
+ * XposedService handle.
+ *
+ * Writes follow the same rule as [ConfigManager]: a mutation is always applied to the list read
+ * back from the store at bind time, so nothing is written before the store was read and the
+ * process default (an empty list) can never overwrite a real list.
  *
  * The image BYTES themselves live in libxposed Remote Files (see [remoteImageFileName] /
  * [writeBytesToRemote]); the paths stored here point at the app's cache copy used for
@@ -63,21 +65,49 @@ object PodImagePrefs {
         encodeDefaults = true
     }
 
-    @Volatile
-    private var store: SharedPreferences? = null
+    /** The adopted metadata list plus the store it came from. */
+    private class Adopted(val store: SharedPreferences, val earphones: List<EarphonePref>)
 
     @Volatile
-    private var pendingJson: String? = null
+    private var adopted: Adopted? = null
 
-    /** Bind the app-side handle on the shared store and flush anything buffered pre-bind. */
-    fun attachStore(prefs: SharedPreferences?) {
-        if (prefs == null) return
-        store = prefs
-        pendingJson?.let { pending ->
-            pendingJson = null
-            writeToStore(prefs, pending)
-            Log.d(TAG, "flushed buffered earphone metadata (${pending.length} bytes)")
+    /**
+     * App process only: bind the writable store, mirroring [ConfigManager.attachWritableStore].
+     * The store is read once at bind; that read is the truth. An empty read adopts an empty
+     * list in memory without writing, so a store that actually holds records is left intact and
+     * the process default never overwrites it.
+     */
+    @Synchronized
+    fun attachWritableStore(service: XposedService, legacySeed: () -> String?) {
+        val prefs = runCatching { service.getRemotePreferences(ConfigManager.PREFS_NAME) }.getOrNull()
+        if (prefs == null) {
+            Log.w(TAG, "attachWritableStore skipped: remote-pref store unavailable")
+            return
         }
+        val raw = runCatching { prefs.getString(PREF_KEY_EARPHONES, null) }.getOrNull()
+        val decoded = raw?.let(::decodeOrNull)
+        when {
+            decoded != null -> adopt(prefs, decoded)
+            raw != null -> {
+                Log.e(TAG, "earphone metadata present but undecodable; adopting empty without writing")
+                adopt(prefs, emptyList())
+            }
+            else -> {
+                val legacy = legacySeed()?.let(::decodeOrNull)
+                if (legacy != null) {
+                    Log.d(TAG, "seeding earphone metadata from legacy local preferences")
+                    adopt(prefs, legacy)
+                    writeToStore(prefs, encode(legacy))
+                } else {
+                    adopt(prefs, emptyList())
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun adopt(store: SharedPreferences, earphones: List<EarphonePref>) {
+        adopted = Adopted(store, earphones)
     }
 
     // ── Hook side (read-only store passed explicitly) and generic readers ──
@@ -98,12 +128,15 @@ object PodImagePrefs {
 
     // ── App process (uses the bound store handle) ──
 
-    fun loadCurrent(): List<EarphonePref> = load(store)
+    fun loadCurrent(): List<EarphonePref> = adopted?.earphones ?: emptyList()
 
-    /** True after this process has adopted the framework-backed metadata store. */
-    fun isStoreAttached(): Boolean = store != null
+    /** True once a confirmed metadata list was adopted; until then nothing may be written. */
+    fun isMetadataReady(): Boolean = adopted != null
 
-    fun findCurrent(address: String): EarphonePref? = find(store, address)
+    fun findCurrent(address: String): EarphonePref? {
+        if (address.isBlank()) return null
+        return loadCurrent().firstOrNull { it.address.equals(address, ignoreCase = true) }
+    }
 
     fun imageDir(context: Context): File = File(context.filesDir, IMAGE_DIR).apply { mkdirs() }
 
@@ -112,18 +145,18 @@ object PodImagePrefs {
         name: String,
     ): List<EarphonePref> {
         if (address.isBlank()) return loadCurrent()
-        val current = loadCurrent()
-        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        // Keep catalog-owned records and manual BOX overrides; only stale records with
-        // neither (leftovers of the pre-catalog custom-image era) are dropped on connect.
-        val base = existing?.takeIf { it.autoImageUrl != null || it.boxManual }
-            ?: EarphonePref(address = address, name = name)
-        val updated = base.copy(
-            name = name.ifBlank { existing?.name.orEmpty() },
-            lastConnectedAt = System.currentTimeMillis(),
-        )
-        val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        return persist(normalized)
+        return persist { current ->
+            val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
+            // Keep catalog-owned records and manual BOX overrides; only stale records with
+            // neither (leftovers of the pre-catalog custom-image era) are dropped on connect.
+            val base = existing?.takeIf { it.autoImageUrl != null || it.boxManual }
+                ?: EarphonePref(address = address, name = name)
+            val updated = base.copy(
+                name = name.ifBlank { existing?.name.orEmpty() },
+                lastConnectedAt = System.currentTimeMillis(),
+            )
+            listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
+        }
     }
 
     fun saveImageBytes(
@@ -135,28 +168,32 @@ object PodImagePrefs {
         autoImageUrl: String? = null,
     ): List<EarphonePref> {
         if (address.isBlank()) return loadCurrent()
-        val current = loadCurrent()
-        val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
-        // A manual BOX override is user-owned: automatic catalog bytes must not clobber it.
-        if (existing?.boxManual == true) return current
-        // Do not carry image paths from stale pre-catalog records into the automatic catalog cache.
-        var updated = existing?.takeIf { it.autoImageUrl != null }
-            ?: EarphonePref(address = address, name = name)
-        var imageUpdated = false
-        images.forEach { (resource, bytes) ->
-            if (bytes.isNotEmpty()) {
-                imageUpdated = true
-                updated = updated.withImagePath(resource, copyImage(context, service, address, resource, bytes))
+        return persist { current ->
+            val existing = current.firstOrNull { it.address.equals(address, ignoreCase = true) }
+            // A manual BOX override is user-owned: automatic catalog bytes must not clobber it.
+            if (existing?.boxManual == true) {
+                current
+            } else {
+                // Do not carry image paths from stale pre-catalog records into the automatic
+                // catalog cache.
+                var updated = existing?.takeIf { it.autoImageUrl != null }
+                    ?: EarphonePref(address = address, name = name)
+                var imageUpdated = false
+                images.forEach { (resource, bytes) ->
+                    if (bytes.isNotEmpty()) {
+                        imageUpdated = true
+                        updated = updated.withImagePath(resource, copyImage(context, service, address, resource, bytes))
+                    }
+                }
+                updated = updated.copy(
+                    name = name.ifBlank { updated.name },
+                    lastConnectedAt = System.currentTimeMillis(),
+                    autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
+                    imageRevision = if (imageUpdated) updated.imageRevision + 1L else updated.imageRevision,
+                )
+                listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
             }
         }
-        updated = updated.copy(
-            name = name.ifBlank { updated.name },
-            lastConnectedAt = System.currentTimeMillis(),
-            autoImageUrl = autoImageUrl ?: updated.autoImageUrl,
-            imageRevision = if (imageUpdated) updated.imageRevision + 1L else updated.imageRevision,
-        )
-        val normalized = listOf(updated) + current.filterNot { it.address.equals(address, ignoreCase = true) }
-        return persist(normalized)
     }
 
     /**
@@ -183,19 +220,20 @@ object PodImagePrefs {
         val primary = address.trim().uppercase()
         var primarySaved: EarphonePref? = null
         boxIdentityAddresses(primary).forEach { target ->
-            val current = loadCurrent()
-            val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
-            val base = existing ?: EarphonePref(address = target, name = name)
-            val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
-            val updated = base.copy(
-                boxImagePath = path,
-                boxManual = true,
-                name = name.ifBlank { base.name },
-                lastConnectedAt = System.currentTimeMillis(),
-                imageRevision = base.imageRevision + 1L,
-            )
-            persist(listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) })
-            if (target == primary) primarySaved = updated
+            val saved = persist { current ->
+                val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
+                val base = existing ?: EarphonePref(address = target, name = name)
+                val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
+                val updated = base.copy(
+                    boxImagePath = path,
+                    boxManual = true,
+                    name = name.ifBlank { base.name },
+                    lastConnectedAt = System.currentTimeMillis(),
+                    imageRevision = base.imageRevision + 1L,
+                )
+                listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) }
+            }.firstOrNull { it.address.equals(target, ignoreCase = true) }
+            if (target == primary) primarySaved = saved
         }
         return primarySaved
     }
@@ -217,20 +255,21 @@ object PodImagePrefs {
         val primary = address.trim().uppercase()
         var primaryStored: EarphonePref? = null
         boxIdentityAddresses(primary).forEach { target ->
-            val current = loadCurrent()
-            val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
-            val base = existing ?: EarphonePref(address = target, name = name)
-            val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
-            val updated = base.copy(
-                boxImagePath = path,
-                boxManual = false,
-                autoImageUrl = url,
-                name = name.ifBlank { base.name },
-                lastConnectedAt = System.currentTimeMillis(),
-                imageRevision = base.imageRevision + 1L,
-            )
-            persist(listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) })
-            if (target == primary) primaryStored = updated
+            val stored = persist { current ->
+                val existing = current.firstOrNull { it.address.equals(target, ignoreCase = true) }
+                val base = existing ?: EarphonePref(address = target, name = name)
+                val path = copyImage(context, service, target, PodImageResource.BOX, bytes)
+                val updated = base.copy(
+                    boxImagePath = path,
+                    boxManual = false,
+                    autoImageUrl = url,
+                    name = name.ifBlank { base.name },
+                    lastConnectedAt = System.currentTimeMillis(),
+                    imageRevision = base.imageRevision + 1L,
+                )
+                listOf(updated) + current.filterNot { it.address.equals(target, ignoreCase = true) }
+            }.firstOrNull { it.address.equals(target, ignoreCase = true) }
+            if (target == primary) primaryStored = stored
         }
         return primaryStored
     }
@@ -254,26 +293,38 @@ object PodImagePrefs {
         }
     }
 
-    private fun decode(raw: String): List<EarphonePref> = runCatching {
-        json.decodeFromString(ListSerializer(EarphonePref.serializer()), raw)
-    }.getOrDefault(emptyList())
+    private fun decode(raw: String): List<EarphonePref> = decodeOrNull(raw) ?: emptyList()
 
-    private fun persist(earphones: List<EarphonePref>): List<EarphonePref> {
-        val normalized = earphones.distinctBy { it.address.uppercase() }
-        val encoded = json.encodeToString(ListSerializer(EarphonePref.serializer()), normalized)
-        val target = store
-        if (target != null) {
-            writeToStore(target, encoded)
-        } else {
-            pendingJson = encoded
-            Log.w(TAG, "earphone metadata save before store bind; buffering until LSPosed service connects")
+    private fun decodeOrNull(raw: String): List<EarphonePref>? = runCatching {
+        json.decodeFromString(ListSerializer(EarphonePref.serializer()), raw)
+    }.getOrNull()
+
+    private fun encode(earphones: List<EarphonePref>): String =
+        json.encodeToString(ListSerializer(EarphonePref.serializer()), earphones)
+
+    /**
+     * Apply [mutate] to the adopted list and persist the outcome.
+     *
+     * Nothing is written — and [mutate] is not even run — before a source was adopted: the
+     * list it would build on does not exist yet, and inventing an empty one would drop every
+     * other headset's metadata.
+     */
+    @Synchronized
+    private fun persist(mutate: (List<EarphonePref>) -> List<EarphonePref>): List<EarphonePref> {
+        val base = adopted
+        if (base == null) {
+            Log.e(TAG, "refusing metadata write before a source was adopted; change dropped")
+            return emptyList()
         }
-        return normalized
+        val next = mutate(base.earphones).distinctBy { it.address.uppercase() }
+        adopted = Adopted(base.store, next)
+        writeToStore(base.store, encode(next))
+        return next
     }
 
-    private fun writeToStore(target: SharedPreferences, encoded: String) {
+    private fun writeToStore(store: SharedPreferences, encoded: String) {
         runCatching {
-            target.edit().putString(PREF_KEY_EARPHONES, encoded).apply()
+            store.edit().putString(PREF_KEY_EARPHONES, encoded).apply()
         }.onFailure { Log.w(TAG, "earphone metadata write failed", it) }
     }
 

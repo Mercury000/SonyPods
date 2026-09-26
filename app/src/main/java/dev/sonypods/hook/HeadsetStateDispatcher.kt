@@ -73,7 +73,7 @@ object HeadsetStateDispatcher : HookContext() {
         SonyEngineHost.start(
             context,
             null,
-            prefsProvider,
+            prefs,
             remoteModelInfoReader = cloudModelInfoReader(),
             remoteFileReader = remoteFileReader,
         )
@@ -123,7 +123,7 @@ object HeadsetStateDispatcher : HookContext() {
                 if (context != null) SonyEngineHost.start(
                     context,
                     instance,
-                    prefsProvider,
+                    prefs,
                     remoteModelInfoReader = cloudModelInfoReader(),
                     remoteFileReader = remoteFileReader,
                 )
@@ -151,7 +151,7 @@ object HeadsetStateDispatcher : HookContext() {
                 SonyEngineHost.start(
                     context,
                     null,
-                    prefsProvider,
+                    prefs,
                     remoteModelInfoReader = cloudModelInfoReader(),
                     remoteFileReader = remoteFileReader,
                 )

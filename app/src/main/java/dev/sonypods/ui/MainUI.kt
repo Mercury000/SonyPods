@@ -182,22 +182,6 @@ fun MainUI(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Sound Connect owns the persistent Safe Listening switch and the headphone has
-    // no readable copy of it, so mirror SC's own preference into the config the
-    // bluetooth process reads. Refreshing on every foreground also covers the return
-    // from Sound Connect, after its Tandem lease is released.
-    LaunchedEffect(appForeground) {
-        if (!appForeground) return@LaunchedEffect
-        val mode = withContext(Dispatchers.IO) { SoundConnectPrefs.readSafeListeningMode() }
-        ConfigManager.updateScSafeListeningMode(
-            when (mode) {
-                true -> ConfigManager.SC_SL_MODE_ON
-                false -> ConfigManager.SC_SL_MODE_OFF
-                null -> ConfigManager.SC_SL_MODE_UNKNOWN
-            }
-        )
-    }
-
         // State authority lives in the bluetooth process; mirror it here.
     LaunchedEffect(Unit) { SonyRemoteState.start(context) }
     val sonyState by SonyRemoteState.state.collectAsState()
@@ -240,6 +224,27 @@ fun MainUI(
     val ancCycleModes = remember { mutableStateOf(appConfig.ancCycleModes) }
     val startupTab = remember { mutableStateOf(LegacyConfigMigrator.readStartupTab(context)) }
     val visibility = remember { mutableStateOf(appConfig.visibility) }
+    // A config write needs an adopted base value to build on; until the store is adopted these
+    // rows are inert rather than accepted-and-dropped, so a toggle reflects what will persist.
+    // App-local settings (theme, language, startup tab, click actions) do not go through here.
+    val writeConfig: (() -> Unit) -> Unit = { block -> if (ConfigManager.isConfigReady()) block() }
+
+    // Sound Connect owns the persistent Safe Listening switch and the headphone has no
+    // readable copy of it, so mirror SC's own preference into the config the bluetooth process
+    // reads. Refreshing on every foreground also covers the return from Sound Connect, after
+    // its Tandem lease is released. Keyed on the service too so the mirror runs once the store
+    // is adopted; the write itself is gated on adoption so it is never dropped as a default.
+    LaunchedEffect(appForeground, xposedService) {
+        if (!appForeground || !ConfigManager.isConfigReady()) return@LaunchedEffect
+        val mode = withContext(Dispatchers.IO) { SoundConnectPrefs.readSafeListeningMode() }
+        ConfigManager.updateScSafeListeningMode(
+            when (mode) {
+                true -> ConfigManager.SC_SL_MODE_ON
+                false -> ConfigManager.SC_SL_MODE_OFF
+                null -> ConfigManager.SC_SL_MODE_UNKNOWN
+            }
+        )
+    }
     val earphonePrefs = remember { mutableStateOf(PodImagePrefs.loadCurrent()) }
     /**
      * Whether the per-device metadata store has been read at all.
@@ -249,7 +254,7 @@ fun MainUI(
      * Committing to a fallback in that window is what made the earphone tab open on the generic title
      * and placeholder image and then visibly swap both for the real ones.
      */
-    var earphonePrefsLoaded by remember { mutableStateOf(PodImagePrefs.isStoreAttached()) }
+    var earphonePrefsLoaded by remember { mutableStateOf(PodImagePrefs.isMetadataReady()) }
 
     val sonyConnected = sonyState.connected
     val connectedDeviceAddress = sonyState.deviceAddress.orEmpty()
@@ -508,12 +513,10 @@ fun MainUI(
         sonyState.initialValuesReady,
     ) {
         if (sonyConnected && connectedDeviceAddress.isNotBlank()) {
-            // The state broadcast can arrive before the app has adopted the
-            // framework-backed metadata store. Writing here in that window would
-            // buffer a new record without autoImageUrl and overwrite the existing
-            // image metadata when the store binds. ModelImageSync owns the
-            // connection-time metadata update until the store is available.
-            if (PodImagePrefs.isStoreAttached()) {
+            // Metadata writes need an adopted list to build on; upserting before the store was
+            // adopted would drop every other headset's record. ModelImageSync owns the
+            // connection-time metadata update until then.
+            if (PodImagePrefs.isMetadataReady()) {
                 earphonePrefs.value = PodImagePrefs.upsertConnected(
                     address = connectedDeviceAddress,
                     name = displayTitle,
@@ -557,9 +560,9 @@ fun MainUI(
         var configStore: android.content.SharedPreferences? = null
         // The control service downloads the cloud model image asynchronously; reload
         // the cached metadata so the built-in catalog image appears without a restart.
-        val storeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
+        val storeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == PodImagePrefs.PREF_KEY_EARPHONES || key == null) {
-                earphonePrefs.value = PodImagePrefs.load(changed)
+                earphonePrefs.value = PodImagePrefs.loadCurrent()
                 earphonePrefsLoaded = true
             }
         }
@@ -573,7 +576,7 @@ fun MainUI(
                 configStore = store
                 store?.let {
                     runCatching { it.registerOnSharedPreferenceChangeListener(storeListener) }
-                    earphonePrefs.value = PodImagePrefs.load(it)
+                    earphonePrefs.value = PodImagePrefs.loadCurrent()
                     earphonePrefsLoaded = true
                 }
             }
@@ -618,7 +621,7 @@ fun MainUI(
         ancCycleModes.value = c.ancCycleModes
         visibility.value = c.visibility
         earphonePrefs.value = PodImagePrefs.loadCurrent()
-        earphonePrefsLoaded = earphonePrefsLoaded || PodImagePrefs.isStoreAttached()
+        earphonePrefsLoaded = earphonePrefsLoaded || PodImagePrefs.isMetadataReady()
         // First launch after the app-only split: migrateAppOnlyPrefsToUi ran during
         // bind (before this listener fired), so local prefs now holds the startup tab
         // the user saved in the old remote config. Apply it if composition already
@@ -915,8 +918,10 @@ fun MainUI(
                                 ),
                                 visibility = visibility.value,
                                 onVisibilityChange = { newVisibility ->
-                                    visibility.value = newVisibility
-                                    ConfigManager.updateVisibility(newVisibility)
+                                    writeConfig {
+                                        visibility.value = newVisibility
+                                        ConfigManager.updateVisibility(newVisibility)
+                                    }
                                 },
                             )
                         }
@@ -1450,25 +1455,15 @@ fun MainUI(
                     setLauncherIconHidden(context, it)
                 },
                 logLevel = logLevel,
-                onLogLevelChange = {
-                    logLevel.value = it
-                    ConfigManager.updateLogLevel(it)
-                },
+                onLogLevelChange = { writeConfig { logLevel.value = it; ConfigManager.updateLogLevel(it) } },
                 islandMode = islandMode,
-                onIslandModeChange = {
-                    islandMode.value = it
-                    ConfigManager.updateIslandMode(it)
-                },
+                onIslandModeChange = { writeConfig { islandMode.value = it; ConfigManager.updateIslandMode(it) } },
                 islandDurationSeconds = islandDurationSeconds,
                 onIslandDurationSecondsChange = {
-                    islandDurationSeconds.value = it
-                    ConfigManager.updateIslandDurationSeconds(it)
+                    writeConfig { islandDurationSeconds.value = it; ConfigManager.updateIslandDurationSeconds(it) }
                 },
                 ancCycleModes = ancCycleModes,
-                onAncCycleModesChange = {
-                    ancCycleModes.value = it
-                    ConfigManager.updateAncCycleModes(it)
-                },
+                onAncCycleModesChange = { writeConfig { ancCycleModes.value = it; ConfigManager.updateAncCycleModes(it) } },
                 startupTab = startupTab,
                 onStartupTabChange = {
                     startupTab.value = it
@@ -1487,33 +1482,30 @@ fun MainUI(
                 },
                 notificationEnabled = notificationEnabled,
                 onNotificationEnabledChange = {
-                    notificationEnabled.value = it
-                    ConfigManager.updateNotificationEnabled(it)
+                    writeConfig { notificationEnabled.value = it; ConfigManager.updateNotificationEnabled(it) }
                 },
                 popupOnConnect = popupOnConnect,
                 onPopupOnConnectChange = {
-                    popupOnConnect.value = it
-                    ConfigManager.updatePopupOnConnect(it)
+                    writeConfig { popupOnConnect.value = it; ConfigManager.updatePopupOnConnect(it) }
                 },
                 connectDialogMode = connectDialogMode,
                 onConnectDialogModeChange = {
-                    connectDialogMode.value = it
-                    ConfigManager.updateConnectDialogMode(it)
+                    writeConfig { connectDialogMode.value = it; ConfigManager.updateConnectDialogMode(it) }
                 },
                 popupAllowlist = popupAllowlist,
                 onPopupAllowlistChange = {
-                    popupAllowlist.value = it
-                    ConfigManager.updatePopupAllowlist(it)
+                    writeConfig { popupAllowlist.value = it; ConfigManager.updatePopupAllowlist(it) }
                 },
                 popupDenylist = popupDenylist,
                 onPopupDenylistChange = {
-                    popupDenylist.value = it
-                    ConfigManager.updatePopupDenylist(it)
+                    writeConfig { popupDenylist.value = it; ConfigManager.updatePopupDenylist(it) }
                 },
                 suppressPopupInGameOrLandscape = suppressPopupInGameOrLandscape,
                 onSuppressPopupInGameOrLandscapeChange = {
-                    suppressPopupInGameOrLandscape.value = it
-                    ConfigManager.updateSuppressPopupInGameOrLandscape(it)
+                    writeConfig {
+                        suppressPopupInGameOrLandscape.value = it
+                        ConfigManager.updateSuppressPopupInGameOrLandscape(it)
+                    }
                 },
                 moreClickAction = moreClickAction,
                 onMoreClickActionChange = {
@@ -1522,8 +1514,7 @@ fun MainUI(
                 },
                 fusionMoreClickAction = fusionMoreClickAction,
                 onFusionMoreClickActionChange = {
-                    fusionMoreClickAction.value = it
-                    ConfigManager.updateFusionMoreClickAction(it)
+                    writeConfig { fusionMoreClickAction.value = it; ConfigManager.updateFusionMoreClickAction(it) }
                 },
                 onOpenTandemDebug = { openScreen(Screen.TandemDebug) },
                 onOpenTheme = { openScreen(Screen.Theme) },

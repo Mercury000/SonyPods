@@ -70,7 +70,7 @@ class SettingsRenderHook : HookContext() {
         }
         val task = Runnable {
             try {
-                val metadata = runCatching { PodImagePrefs.load(prefsProvider()) }.getOrDefault(emptyList())
+                val metadata = runCatching { PodImagePrefs.load(prefs) }.getOrDefault(emptyList())
                 cachedMetadata = metadata
                 metadata.forEach { earphone ->
                     if (earphone.autoImageUrl != null || earphone.boxManual) preloadDrawable(earphone)
