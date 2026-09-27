@@ -1,5 +1,5 @@
 [versions]
-agp = "9.4.0"
+agp = "9.4.1"
 focusApi = "1.4"
 kotlin = "2.4.20"
 ksp = "2.3.12"
