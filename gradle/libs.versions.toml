@@ -1,7 +1,7 @@
 [versions]
 agp = "9.4.1"
 focusApi = "1.4"
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 ksp = "2.3.12"
 coreKtx = "1.19.1"
 androidx-activity-compose = "1.13.0"
