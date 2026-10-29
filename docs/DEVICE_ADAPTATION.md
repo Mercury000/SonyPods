@@ -56,7 +56,7 @@ SPP 则使用 `SPP_MDR`。实际 endpoint、response marker 和功能 binding �
 
 不要先为型号硬编码 feature 集。连接后应确认：
 
-- protocol version 通过对应 whitelist；
+- 记录 protocol version；未知版本只记日志，继续能力探测；
 - connect capability counter；
 - `RET_SUPPORT_FUNCTION` 中的 V1/V2 FunctionType；
 - 由 `SonyCapabilityProbe` 发出的域 capability 请求及返回；

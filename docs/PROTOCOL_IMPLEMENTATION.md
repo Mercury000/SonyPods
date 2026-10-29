@@ -98,9 +98,9 @@ START | frameType | sequence | payloadLength(4-byte BE) | payload | checksum | E
 
 ## 5. 协议版本与表
 
-- V1 protocol whitelist：9 项；
-- V2 protocol whitelist：74 项；
-- 白名单与 Sound Connect 13.2.1 顺序一致；
+- V1 已知 protocol version：9 项，来自 Sound Connect 13.2.1；
+- V2 已知 protocol version：76 项，与 Sound Connect 13.3.0 列表一致；相较 13.2.1 新增 `0x03003033`（WF-1000XM6 固件 2.0.5，#34）和 `0x03003037`；
+- 版本列表仅供诊断；未知版本记录日志并继续 support-function 能力探测，未知功能码由解析器跳过；
 - V1 和 V2 的 FunctionType 必须按各自代次解释，不能用单一 byte map；
 - `NcAsmInquiredType=0x02` 在 V1/V2 语义不同，解析必须携带 variant 上下文；
 - V2 Table2 的 LEA table marker 为 `0x04`，Party 为 `0x05`。

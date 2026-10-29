@@ -297,9 +297,9 @@ data class DeviceInfoState(
     val modelImageUrl: String? = null,
     val modelImageSourceColor: String? = null,
     val protocolReady: Boolean = false,
-    /** Runtime protocol version reported by RET_PROTOCOL_INFO (2 bytes BE). */
+    /** Runtime protocol version reported by RET_PROTOCOL_INFO (V1: 2 bytes BE; V2: 4). */
     val protocolVersion: Int? = null,
-    /** Whether [protocolVersion] passed the SC whitelist check (null until checked). */
+    /** Whether protocol info was accepted for probing (null until received). */
     val protocolVersionAccepted: Boolean? = null,
 )
 
@@ -692,6 +692,16 @@ data class SonyHeadphoneUiState(
     val capabilitiesKnown: Boolean
         get() = connectedProfile?.capabilitiesKnown == true
 }
+
+/** Keep protocol-version metadata separate from support-function capability discovery. */
+internal fun SonyHeadphoneUiState.withProtocolInfo(version: Int): SonyHeadphoneUiState =
+    copy(
+        deviceInfo = deviceInfo.copy(
+            protocolVersion = version,
+            protocolVersionAccepted = true,
+        ),
+        connectedProfile = connectedProfile?.withProtocolVersion(version),
+    )
 
 /** Direction of a debug-log frame: what the module sent, what it received, or a state line. */
 enum class DebugLogKind { TX, RX, INFO }
@@ -4900,43 +4910,20 @@ class SonyHeadphoneRepository private constructor(
 
     private fun applyProtocolInfo(response: ParsedTandemResponse.ProtocolInfo) {
         val version = response.protocolVersion
-        // V1 (2-byte BE, C29903d.f85968b) and V2 (4-byte BE, C30916e.f88128b)
-        // whitelists are disjoint, so a single membership test covers both.
-        val accepted = SonyTandemConstants.PROTOCOL_VERSIONS.contains(version) ||
+        // Known versions are diagnostic only. Firmware can add versions while
+        // retaining the support-function layout; unknown function codes are skipped.
+        val known = SonyTandemConstants.PROTOCOL_VERSIONS.contains(version) ||
             SonyTandemConstants.PROTOCOL_VERSIONS_V2.contains(version)
-        if (accepted) {
-            appendLog("Protocol version 0x%08X accepted (SC whitelist V1/V2)".format(version))
+        if (known) {
+            appendLog("Protocol version 0x%08X accepted (known V1/V2 version)".format(version))
         } else {
-            appendLog("Protocol version 0x%08X rejected: not in SC whitelist".format(version))
+            appendLog("Protocol version 0x%08X unknown; continuing capability probing".format(version))
         }
-        _state.update { current ->
-            current.copy(
-                deviceInfo = current.deviceInfo.copy(
-                    protocolVersion = version,
-                    protocolVersionAccepted = accepted,
-                ),
-                connectedProfile = if (accepted) {
-                    current.connectedProfile?.withProtocolVersion(version)
-                } else {
-                    current.connectedProfile
-                },
-            )
-        }
+        _state.update { it.withProtocolInfo(version) }
     }
 
     private fun applySupportFunction(response: ParsedTandemResponse.SupportFunction) {
         appendLog("Support function list=${response.functions.size} functions=${response.functions.joinToString { it.toString() }}")
-        // SC aborts initialization for out-of-whitelist protocol versions
-        // (InitializationFailedCause); mirror that by skipping capability probing.
-        if (_state.value.deviceInfo.protocolVersionAccepted == false) {
-            appendLog("Protocol version rejected; capability probing aborted (SC C29903d/C30916e)")
-            clearSupportFunctionProbeState()
-            // No refresh burst follows this abort, so nothing would ever answer the
-            // initial-value gate. Release it instead of leaving every consumer waiting
-            // for values this session is never going to ask for.
-            markInitialValuesReady("capability probing aborted")
-            return
-        }
         val table = response.table.takeIf { it != dev.sonypods.protocol.SonyTable.INVALID }
             ?: dev.sonypods.protocol.SonyTable.NO_1
         val session = capabilitySession

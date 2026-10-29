@@ -13,8 +13,8 @@
 |---|---|---|
 | V2 Table1 Command 字节总表（全 172 值含未实现域） | `p069v2.table1.Command` | ✅ 全部一致 |
 | V1 Table1 Command 字节总表 | `p068v1.table1.Command` | ✅ 全部一致 |
-| V1 协议版本白名单（9 项 2 字节 BE） | `p573uv.C29903d.f85968b` | ✅ 逐值一致 |
-| V2 协议版本白名单（74 项 4 字节 BE） | `p636wv.C30916e.f88128b` | ✅ 逐值一致 |
+| V1 已知协议版本（9 项 2 字节 BE，仅诊断） | `p573uv.C29903d.f85968b` | 保留 SC 13.2.1 列表；未知版本继续探测 |
+| V2 已知协议版本（76 项 4 字节 BE，仅诊断） | SC 13.3.0 `p602vv.C31621e.f89900b` | 相较 13.2.1 新增 `0x03003033`、`0x03003037`；未知版本继续探测 |
 | ASSIGNABLE_SETTINGS V1（枚举/能力/SET_PARAM/解析） | `se0.d` `te0.b/d/a` `p068v1…AssignableSettings*` | ✅ 逐字节一致 |
 | ASSIGNABLE_SETTINGS V2（枚举/能力/SET/SET_EXT） | `cg0.c/d/a/b` `bg0.a/b` `p069v2…Preset/Action/Function/Key/Type` | ✅ 逐字节一致 |
 | NCASM SET 写入器（NA 变体 0x19） | `rf0.C27214g` | ✅ 逐字节一致 |
@@ -26,7 +26,7 @@
 
 其余域的布局在源码注释中逐条标注 SC 类出处（各功能提交时经 jadx 核对），
 并有 byte-level 单测覆盖（`app/src/test/…/protocol/`，321+ 项）。
-未发现任何与 Sound Connect 不一致的已实现项。
+命令构造与响应布局保持上述基线；版本列表现仅供诊断，未知版本继续能力探测（#34）。
 
 ## 1. 传输层
 
@@ -58,19 +58,19 @@
 - BLE 建连握手顺序：enable DETERMINE_MTU 通知 → 等待 `[0x01]` → 读 WRITABLE_VALUE_LENGTH → 开业务通知。
   裸写 Tandem payload（不经帧封装）会被耳机静默丢弃。
 
-## 2. 初始化序列与版本门控
+## 2. 初始化序列与版本诊断
 
 1. `0E 00 00` — CONNECT_GET_PROTOCOL_INFO（体 `[FIXED_VALUE 0x00]`，SC `qe0.C26634y` / `ff0.C16469c`）。
 2. RET_PROTOCOL_INFO：
    - V1（SC `qe0.C26580m2`）体 `[0x01][type 0x00][vhi][vlo]` → 2 字节 BE 版本；
    - V2（SC `ff0.C16477k`）体 `[0x01][0x00][v3][v2][v1][v0][ena][ena]` → 4 字节 BE 版本（`m69436c`）。
-3. 版本必须命中白名单（V1 9 项 / V2 74 项，逐字节来自 SC 初始化器），否则终止握手。
+3. 记录版本；已知列表仅供诊断（V1 9 项 / V2 76 项，V2 与 SC 13.3.0 一致，包含 #34 的 `0x03003033`）。未知版本记录日志并继续探测，不提前放行初始值就绪门控。
 4. `0E 02 00` — CONNECT_GET_CAPABILITY_INFO；RET `[0x00][counter][idLen][identifier]`
    （SC `qe0.C26624v1` / `ff0.C16471e`；identifier 截断至 128 字节）——能力缓存对账键。
 5. `0E 06 00` — CONNECT_GET_SUPPORT_FUNCTION；RET：
    - V1 `[0x00][count][code…]` 扁平单字节表（SC `qe0.C26610s2`）；
    - V2 `[0x00][count]{(code, order)×2 字节对}`（SC `ff0.C16478l`，按 order 排序）。
-   该表驱动后续按 FunctionType 动态能力探测。
+   该表驱动后续按 FunctionType 动态能力探测；未知功能码由解析器跳过，已知功能继续处理。
 
 ## 3. 通用消息格式
 
@@ -163,7 +163,7 @@ Preset 项目采用 V2 超集表（V1 设备不会上报多余项，SET 由能�
 
 ### 8.1 已实现且逐字节一致（本次/既往 jadx 核对）
 
-- 帧层、GATT/SPP 传输行为、握手序列、版本白名单（V1 9 / V2 74）；
+- 帧层、GATT/SPP 传输行为、握手请求序列；
 - V1/V2 全部已实现命令字节（两套 Command 总表核对）；
 - 电量（含 0x09 扩展 NTFY 与占位语义）、关机、设备信息；
 - 降噪/环境声（V1 全套 + V2 十二种写入布局 + NA 灵敏度 + 抗风噪单/双麦语义）；

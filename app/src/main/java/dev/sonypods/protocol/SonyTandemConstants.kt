@@ -5,23 +5,24 @@ object SonyTandemConstants {
     const val DATA_MDR_NO2: Byte = 0x0F
 
     /**
-     * Runtime protocol-version whitelist, byte-for-byte from Sound Connect
+     * Known V1 protocol versions, byte-for-byte from Sound Connect
      * 13.2.1 `p573uv.C29903d.f85968b` (the V1 Table-1 initializer). Every
-     * device is asked for its protocol version at connection time
-     * (CONNECT_GET_PROTOCOL_INFO) and must answer with one of these 2-byte BE
-     * values; anything else aborts the handshake (SC
-     * `InitializationFailedCause.UNAVAILABLE_PROTOCOL_VERSION`).
+     * device is asked for its 2-byte BE protocol version at connection time
+     * (CONNECT_GET_PROTOCOL_INFO). This list is used for diagnostics only;
+     * unknown versions still proceed with support-function capability probing.
      */
     val PROTOCOL_VERSIONS: IntArray = intArrayOf(
         0x1000, 0x2000, 0x3000, 0x4000, 0x4010, 0x5000, 0x6000, 0x7000, 0x7010,
     )
 
     /**
-     * V2 Table-1 protocol-version whitelist, byte-for-byte from Sound Connect
-     * 13.2.1 `p636wv.C30916e.f88128b` (the V2 Table-1 initializer). V2 reports
-     * the version as a 4-byte BE value (SC `ff0.C16477k.m69436c()` reads
-     * body[2..5]); a V2 device reporting a value outside this list aborts
-     * initialization exactly like the V1 gate does.
+     * Known V2 Table-1 protocol versions, byte-for-byte from Sound Connect
+     * 13.3.0 `p602vv.C31621e.f89900b` (the V2 Table-1 initializer). This adds
+     * 0x03003033 (WF-1000XM6 firmware 2.0.5, issue #34) and 0x03003037 to
+     * the 13.2.1 list. V2 reports the version as a 4-byte BE value
+     * (SC 13.2.1 `ff0.C16477k.m69436c()` reads
+     * body[2..5]). As with V1, list membership is diagnostic and never gates
+     * capability probing; the parsers skip unknown support-function codes.
      */
     val PROTOCOL_VERSIONS_V2: IntArray = intArrayOf(
         0x01000000,
@@ -40,6 +41,6 @@ object SonyTandemConstants {
         0x03003010, 0x03003011, 0x03003012, 0x03003013, 0x03003014, 0x03003015,
         0x03003016, 0x03003017, 0x03003018, 0x03003019,
         0x03003020, 0x03003021, 0x03003023, 0x03003024, 0x03003025, 0x03003026,
-        0x03003032,
+        0x03003032, 0x03003033, 0x03003037,
     )
 }

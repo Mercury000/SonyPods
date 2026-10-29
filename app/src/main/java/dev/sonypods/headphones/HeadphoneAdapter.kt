@@ -280,8 +280,8 @@ data class ConnectedHeadphoneProfile(
      * "MULTIPOINT_SETTING" — the "同时连接2台设备" toggle slot. Discovered via
      * GS GET_CAPABILITY, mirroring SC `DeviceCapabilityTableset2.E1()`. */
     val multipointGsSlot: Int? = null,
-    /** Runtime protocol version reported by CONNECT_RET_PROTOCOL_INFO (2 bytes BE),
-     * validated against [dev.sonypods.protocol.SonyTandemConstants.PROTOCOL_VERSIONS]. */
+    /** Runtime protocol version reported by CONNECT_RET_PROTOCOL_INFO
+     * (V1: 2 bytes BE; V2: 4). Unknown versions are retained for diagnostics. */
     val protocolVersion: Int? = null,
     /** Bumped whenever the profile is rebound to a different protocol generation
      * or transport; stale probe-derived evidence is discarded on a rebind. */
@@ -320,12 +320,12 @@ data class ConnectedHeadphoneProfile(
             ?: featureBindings.values.firstOrNull()?.channel
             ?: TandemChannel.SPP_MDR
 
-    /** Record the validated runtime protocol version from RET_PROTOCOL_INFO. */
+    /** Record the runtime protocol version from RET_PROTOCOL_INFO. */
     fun withProtocolVersion(version: Int): ConnectedHeadphoneProfile =
         copy(protocolVersion = version)
 
     /** Mark this profile as rebound (new generation/transport); clears the
-     * protocol version so a stale whitelist verdict is never reused, and the
+     * protocol version so stale version metadata is never reused, and the
      * capability table with it — its function codes are specific to the generation
      * that answered, so it says nothing about the one now bound. */
     fun rebounded(): ConnectedHeadphoneProfile =
