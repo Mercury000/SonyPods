@@ -203,6 +203,7 @@ fun MainUI(
     // meaningful while the floating bar itself is on.
     val useIosBottomBar = floatingBottomBar.value && floatingBottomBarStyle.value == 1
     val useRail = shouldShowSplitPane() && !floatingBottomBar.value && !useIosBottomBar
+    val blurRootForBack = !useRail && (predictiveBack.value || floatingBottomBar.value)
     // Constant page bottom padding like the reference (28dp); the vertical give comes
     // from the bottom-bar slot itself collapsing when the bar hides, not extra padding.
     val pageBottomContentPadding = 28.dp
@@ -1184,14 +1185,14 @@ fun MainUI(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) {
-        // The root capture contains the pager only; rail navigation dims the live
-        // main page instead of replaying a snapshot that would cover the rail.
+        // The root capture excludes navigation; rails and classic bars using ordinary
+        // back are dimmed with the live main page instead of being covered by the snapshot.
         val rootEngaged = layers.isNotEmpty() || motion[0].predictiveActive ||
             motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD
         BarBlurHost(
             bottomBarBlurEnabled = blurBottomBar.value,
             topBarBlurEnabled = false,
-            captureForEffects = !useRail && rootEngaged,
+            captureForEffects = blurRootForBack && rootEngaged,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (!hasAppliedDefaultTab) {
@@ -1228,8 +1229,10 @@ fun MainUI(
                 floatingBottomBar = floatingBottomBar.value,
                 blurBottomBar = blurBottomBar.value,
                 iosBottomBar = useIosBottomBar,
-                bottomBarVisible = layers.isEmpty() && !motion[0].predictiveActive &&
-                    motion[0].coveredDepth.value < EFFECT_VISIBILITY_THRESHOLD,
+                // With ordinary back, the classic bar returns as part of the main page.
+                bottomBarVisible = (!predictiveBack.value && !floatingBottomBar.value) ||
+                    (layers.isEmpty() && !motion[0].predictiveActive &&
+                        motion[0].coveredDepth.value < EFFECT_VISIBILITY_THRESHOLD),
                 blurTopBar = blurTopBar,
                 backgroundColor = backgroundColor,
                 pageBottomContentPadding = pageBottomContentPadding,
@@ -1535,7 +1538,7 @@ fun MainUI(
                     intensity = motion[0].backdropIntensity.value,
                     visible = motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD,
                     modifier = Modifier.fillMaxSize(),
-                    blurEnabled = !useRail,
+                    blurEnabled = blurRootForBack,
                 )
                 BarBlurHost(
                     bottomBarBlurEnabled = false,

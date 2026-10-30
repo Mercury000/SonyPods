@@ -4,10 +4,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.zIndex
+import dev.sonypods.config.LegacyConfigMigrator
 import dev.sonypods.ui.components.barBlurBackground
 import dev.sonypods.ui.components.liquid.IosLiquidGlassNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
@@ -101,11 +104,15 @@ internal fun MainNavigationRail(
     expandRail: Boolean,
     onTabClick: (MainTab) -> Unit,
 ) {
+    val context = LocalContext.current
+    val prefs = remember { LegacyConfigMigrator.appOnlyPrefs(context) }
+    // Keep the user's choice when rotation temporarily replaces the rail with a bottom bar.
+    val initiallyExpanded = remember { prefs.getBoolean("navigation_rail_expanded", expandRail) }
     val railState = rememberNavigationRailState(
-        initialValue = if (expandRail) NavigationRailValue.Expanded else NavigationRailValue.Collapsed,
+        initialValue = if (initiallyExpanded) NavigationRailValue.Expanded else NavigationRailValue.Collapsed,
     )
-    LaunchedEffect(expandRail) {
-        if (expandRail) railState.expand() else railState.collapse()
+    LaunchedEffect(railState.currentValue) {
+        prefs.edit().putBoolean("navigation_rail_expanded", railState.isExpanded).apply()
     }
     NavigationRail(
         state = railState,
