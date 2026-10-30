@@ -1184,14 +1184,14 @@ fun MainUI(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) {
-        // The reference's root host: captures the root for the bottom bar's glass and
-        // the predictive backdrop, exactly like AppShell's root BarBlurHost.
+        // The root capture contains the pager only; rail navigation dims the live
+        // main page instead of replaying a snapshot that would cover the rail.
         val rootEngaged = layers.isNotEmpty() || motion[0].predictiveActive ||
             motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD
         BarBlurHost(
             bottomBarBlurEnabled = blurBottomBar.value,
             topBarBlurEnabled = false,
-            captureForEffects = rootEngaged,
+            captureForEffects = !useRail && rootEngaged,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (!hasAppliedDefaultTab) {
@@ -1213,10 +1213,13 @@ fun MainUI(
                                         // page slides as one visible unit.
                                         translationX = -size.width * depth * 0.25f
                                         alpha = 1f - 0.1f * depth
+                                        scaleX = 1f
+                                        scaleY = 1f
                                     } else {
                                         scaleX = 1f - depth * BACKGROUND_SCALE_REDUCTION
                                         scaleY = scaleX
                                         translationX = -size.width * depth * BACKGROUND_PARALLAX
+                                        alpha = 1f
                                     }
                                 },
                     tabs = tabs,
@@ -1532,6 +1535,7 @@ fun MainUI(
                     intensity = motion[0].backdropIntensity.value,
                     visible = motion[0].backdropIntensity.value > EFFECT_VISIBILITY_THRESHOLD,
                     modifier = Modifier.fillMaxSize(),
+                    blurEnabled = !useRail,
                 )
                 BarBlurHost(
                     bottomBarBlurEnabled = false,

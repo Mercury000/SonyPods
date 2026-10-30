@@ -87,8 +87,9 @@ internal fun PredictiveBackBackdrop(
     intensity: Float,
     visible: Boolean,
     modifier: Modifier = Modifier,
+    blurEnabled: Boolean = true,
 ) {
-    val backdrop = LocalBarBlurBackdrop.current
+    val backdrop = LocalBarBlurBackdrop.current.takeIf { blurEnabled }
     if (!visible) return
     val effectIntensity = intensity.coerceIn(0f, 1f)
     val dimColor = MiuixTheme.colorScheme.windowDimming.copy(
