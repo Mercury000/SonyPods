@@ -12,7 +12,7 @@ libxposedService = "102.0.0"
 miuix = "0.9.4-rc01"
 junit = "4.13.2"
 dexkit = "2.2.0"
-aboutLibraries = "15.2.0"
+aboutLibraries = "15.3.0"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
